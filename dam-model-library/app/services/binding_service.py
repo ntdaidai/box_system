@@ -3,6 +3,7 @@
 from typing import Optional
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
+from loguru import logger
 
 from app.models.model_registry import ModelRegistry
 from app.models.model_deploy_binding import ModelDeployBinding
@@ -32,6 +33,15 @@ class BindingService:
         except ValueError as e:
             raise HTTPException(status_code=404, detail=str(e))
 
+        # 自动分配端口
+        host_port = data.host_port
+        if not host_port or host_port == 0:
+            try:
+                host_port = docker_service.find_available_port()
+                logger.info(f"自动分配端口: {host_port}")
+            except ValueError as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
         # 创建绑定
         binding = ModelDeployBinding(
             model_id=model_id,
@@ -40,11 +50,12 @@ class BindingService:
             container_name=container_info["name"],
             image_name=container_info["image"],
             host_ip="127.0.0.1",
-            host_port=data.host_port,
+            host_port=host_port,
             container_port=data.container_port,
             inference_path=data.inference_path,
             health_check_url=data.health_check_url,
             gpu_device=data.gpu_device,
+            container_config=data.container_config.model_dump() if data.container_config else None,
             remark=data.remark,
         )
         db.add(binding)
@@ -73,19 +84,29 @@ class BindingService:
         if existing:
             raise HTTPException(status_code=400, detail="模型已有部署绑定，请先解绑")
 
+        # 自动分配端口
+        host_port = data.host_port
+        if not host_port or host_port == 0:
+            try:
+                host_port = docker_service.find_available_port()
+                logger.info(f"自动分配端口: {host_port}")
+            except ValueError as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
         # 创建绑定
         binding = ModelDeployBinding(
             model_id=model_id,
             bind_type="image",
             image_name=data.image_name,
             host_ip="127.0.0.1",
-            host_port=data.host_port,
+            host_port=host_port,
             container_port=data.container_port,
             inference_path=data.inference_path,
             health_check_url=data.health_check_url,
             gpu_device=data.gpu_device,
             extra_mounts=data.extra_mounts,
             extra_env=data.extra_env,
+            container_config=data.container_config.model_dump() if data.container_config else None,
             remark=data.remark,
         )
         db.add(binding)
@@ -115,6 +136,15 @@ class BindingService:
         except ValueError as e:
             raise HTTPException(status_code=404, detail=str(e))
 
+        # 自动分配端口
+        host_port = data.host_port
+        if not host_port or host_port == 0:
+            try:
+                host_port = docker_service.find_available_port()
+                logger.info(f"自动分配端口: {host_port}")
+            except ValueError as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
         # 创建绑定
         binding = ModelDeployBinding(
             model_id=model_id,
@@ -123,11 +153,12 @@ class BindingService:
             container_name=container_info["name"],
             image_name=data.image_name,
             host_ip="127.0.0.1",
-            host_port=data.host_port,
+            host_port=host_port,
             container_port=data.container_port,
             inference_path=data.inference_path,
             health_check_url=data.health_check_url,
             gpu_device=data.gpu_device,
+            container_config=data.container_config.model_dump() if data.container_config else None,
         )
         db.add(binding)
         db.commit()
@@ -151,6 +182,11 @@ class BindingService:
 
         # 仅更新非空字段
         update_data = data.model_dump(exclude_unset=True)
+
+        # 特殊处理 container_config（嵌套模型）
+        if "container_config" in update_data and update_data["container_config"] is not None:
+            update_data["container_config"] = update_data["container_config"]
+
         for key, value in update_data.items():
             setattr(binding, key, value)
 

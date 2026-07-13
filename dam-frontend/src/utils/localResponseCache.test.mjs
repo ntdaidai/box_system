@@ -45,6 +45,21 @@ import {
 }
 
 {
+  const implicitOneHour = buildCacheKey({
+    method: 'get',
+    baseURL: '/api',
+    url: '/v1/sensor/vibration/trends',
+  })
+  const explicitOneHour = buildCacheKey({
+    method: 'get',
+    baseURL: '/api',
+    url: '/v1/sensor/vibration/trends',
+    params: { range: '1h' },
+  })
+  assert.equal(implicitOneHour, explicitOneHour)
+}
+
+{
   clearResponseCache()
   const config = {
     method: 'get',

@@ -23,6 +23,7 @@ build/
 # Logs
 *.log
 logs/
+dam-ai-service/data/
 
 # OS
 .DS_Store

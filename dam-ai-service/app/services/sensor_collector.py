@@ -17,6 +17,7 @@ from app.sensors.wind import WindSensor
 from app.sensors.rain import RainSensor
 from app.sensors.vibration import VibrationSensor
 from app.services.iotdb_service import iotdb_service
+from app.services.durable_sensor_queue import DurableSensorQueue
 from app.services.vibration_processor import vibration_processor
 
 
@@ -32,7 +33,8 @@ class SensorCollector:
 
         # 批量写入配置
         self.batch_interval = 5.0  # 每5秒批量写入一次
-        self.batch_records = defaultdict(list)
+        self.batch_write_limit = 1000  # 单轮上限，故障恢复后可持续追赶积压
+        self.pending_store = DurableSensorQueue()
         self.history_maintenance_interval = 60.0
 
         # 历史数据缓冲区 (最近12小时, 约1440个数据点, 每30秒采样一次)
@@ -98,9 +100,6 @@ class SensorCollector:
         self.running = True
         self.init_sensors()
 
-        # 连接 IoTDB
-        iotdb_service.connect()
-
         # 为每个传感器启动采集线程
         for name, sensor_info in self.sensors.items():
             thread = threading.Thread(
@@ -131,6 +130,7 @@ class SensorCollector:
         self.running = False
         self._flush_batch()
         iotdb_service.disconnect()
+        self.pending_store.close()
         logger.info("数据采集已停止")
 
     def _update_period_max(self, name: str, data: Dict[str, Any], now: float):
@@ -164,7 +164,7 @@ class SensorCollector:
 
         数据流向：
         1. 每次读取 → 更新 latest_data（实时数据）
-        2. 每次读取 → 追加到 batch_records（IoTDB批量写入）
+        2. 每次读取 → 写入本地持久队列（IoTDB确认后删除）
         3. 每次读取 → 更新 period_max_values（周期峰值）
         4. 每30秒 → 将周期最大值存入 history_data（历史缓冲区）
         """
@@ -180,6 +180,26 @@ class SensorCollector:
                 try:
                     data = sensor.read_once()
                     now = time.time()
+                    timestamp_ms = int(now * 1000)
+
+                    # 振动历史必须保存与实时卡片一致的处理结果。旧历史仍可由
+                    # API 从三轴字段兼容推导，新写入数据则直接使用准确 RMS。
+                    processed = None
+                    history_data = data
+                    if name == "vibration":
+                        try:
+                            processed = vibration_processor.process_raw_data(data)
+                            history_data = {
+                                **data,
+                                **{key: value for key, value in processed.items() if key != "timestamp"},
+                            }
+                        except Exception as error:
+                            # Processing failure must not break raw telemetry durability.
+                            logger.warning(f"振动数据处理失败，保留原始历史数据: {error}")
+
+                    # Raw telemetry crosses the durability boundary before it
+                    # is exposed as successfully collected realtime data.
+                    self.pending_store.enqueue(device_id, timestamp_ms, history_data)
 
                     with self.lock:
                         # 1. 更新最新数据
@@ -190,8 +210,7 @@ class SensorCollector:
                         }
 
                         # 2. 振动数据特殊处理
-                        if name == "vibration":
-                            processed = vibration_processor.process_raw_data(data)
+                        if name == "vibration" and processed is not None:
                             self.processed_vibration = {
                                 "device_id": device_id,
                                 "data": processed,
@@ -199,16 +218,10 @@ class SensorCollector:
                                 "timestamp": now,
                             }
 
-                        # 3. 缓存到IoTDB批量写入队列
-                        self.batch_records[device_id].append({
-                            "timestamp_ms": int(now * 1000),
-                            "data": data.copy(),
-                        })
-
-                        # 4. 更新当前周期的最大值
+                        # 3. 更新当前周期的最大值
                         self._update_period_max(name, data, now)
 
-                        # 5. 按采样间隔保存历史数据（记录周期内最大值）
+                        # 4. 按采样间隔保存历史数据（记录周期内最大值）
                         self.history_sample_counter[name] += 1
                         if self.history_sample_counter[name] >= self.history_sample_interval:
                             self.history_sample_counter[name] = 0
@@ -246,41 +259,75 @@ class SensorCollector:
             self._flush_batch()
 
     def _flush_batch(self):
-        """将缓存数据批量写入IoTDB"""
-        with self.lock:
-            if not self.batch_records:
-                return
+        """将持久队列写入 IoTDB；只有确认成功的记录才从队列删除。"""
+        pending = self.pending_store.fetch_pending(self.batch_write_limit)
+        if not pending:
+            return
 
-            records_to_write = {
-                device_id: records[:]
-                for device_id, records in self.batch_records.items()
-            }
-            self.batch_records.clear()
+        records_to_write = defaultdict(list)
+        for record in pending:
+            records_to_write[record["device_id"]].append(record)
 
         total_records = 0
+        total_success = 0
+        total_failure = 0
+        acknowledged_ids = []
+        failed_ids = []
         for device_id, records in records_to_write.items():
             total_records += len(records)
-            iotdb_service.insert_sensor_records(device_id, records)
+            if iotdb_service.retry_suppressed():
+                total_failure += len(records)
+                failed_ids.extend(record["_queue_id"] for record in records)
+                continue
+            result = iotdb_service.insert_sensor_records(device_id, records)
+            total_success += result["success"]
+            total_failure += result["failure"]
+            failed_queue_ids = {
+                item.get("_queue_id") for item in result.get("failed_records", [])
+            }
+            for record in records:
+                queue_id = record["_queue_id"]
+                if queue_id in failed_queue_ids:
+                    failed_ids.append(queue_id)
+                else:
+                    acknowledged_ids.append(queue_id)
 
-        logger.debug(f"批量写入完成: {len(records_to_write)}个设备, {total_records}条记录")
+        self.pending_store.acknowledge(acknowledged_ids)
+        self.pending_store.mark_failed(failed_ids, iotdb_service.last_error or "IoTDB write failed")
+
+        if total_failure:
+            logger.warning(
+                f"IoTDB批量写入未完成: 请求{total_records}条, "
+                f"成功{total_success}条, 待重试{total_failure}条"
+            )
+        else:
+            logger.debug(f"批量写入完成: {len(records_to_write)}个设备, {total_success}条记录")
+
+    def get_history_queue_status(self) -> dict:
+        return self.pending_store.status()
 
     def _history_maintenance_loop(self):
         from app.services.sensor_history_service import get_sensor_history_service
 
         service = get_sensor_history_service()
         while self.running:
-            time.sleep(self.history_maintenance_interval)
+            cycle_started = time.monotonic()
             try:
                 rollups = service.build_due_rollups()
                 if rollups:
                     logger.debug(f"历史rollup写入完成: {rollups}")
-                archives = service.archive_yesterday_once()
+                archives = service.archive_due_days(max_days=1)
                 if archives:
                     logger.info(f"原始历史归档完成: {archives}")
-                retention = service.enforce_retention()
+                archive_backlog = service.has_pending_archives()
+                retention = service.enforce_retention(include_raw=not archive_backlog)
+                if archive_backlog:
+                    logger.info("原始历史归档仍有积压，暂缓清理IoTDB原始数据")
                 logger.debug(f"历史保留清理完成: {retention}")
             except Exception as e:
                 logger.warning(f"历史rollup维护失败: {e}")
+            elapsed = time.monotonic() - cycle_started
+            time.sleep(max(5.0, self.history_maintenance_interval - elapsed))
 
     def get_latest_data(self, name: str = None) -> Dict[str, Any]:
         """获取最新数据"""

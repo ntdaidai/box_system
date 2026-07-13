@@ -1,6 +1,10 @@
 import unittest
+import os
 import sys
 import types
+
+os.environ.setdefault("JWT_SECRET", "unit-test-secret")
+os.environ.setdefault("DEFAULT_ADMIN_PASSWORD", "unit-test-admin-password")
 
 
 class FakeLogger:

@@ -50,6 +50,7 @@ class LifecycleService:
                     gpu_device=binding.gpu_device,
                     extra_mounts=binding.extra_mounts,
                     extra_env=binding.extra_env,
+                    container_config=binding.container_config,
                 )
                 # 更新绑定记录：填入容器信息，bind_type 改为 both
                 binding.container_id = container_id

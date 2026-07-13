@@ -27,7 +27,11 @@ class HistoryAggregationTest(unittest.TestCase):
         window = build_history_window("6mo", now_ms)
         self.assertEqual(window["sample_ms"], 24 * 60 * 60 * 1000)
         self.assertEqual(window["rollup_level"], "1d")
-        self.assertEqual((window["end_ms"] % (24 * 60 * 60 * 1000)), 0)
+        utc_8_offset_ms = 8 * 60 * 60 * 1000
+        self.assertEqual(
+            ((window["end_ms"] + utc_8_offset_ms) % (24 * 60 * 60 * 1000)),
+            0,
+        )
 
     def test_circular_mean_wraps_across_zero_degrees(self):
         self.assertAlmostEqual(circular_mean_degrees([350, 10]), 0.0, places=6)
@@ -73,4 +77,3 @@ class HistoryAggregationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

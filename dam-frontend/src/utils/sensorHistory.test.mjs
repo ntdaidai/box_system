@@ -14,8 +14,8 @@ const now = new Date('2026-07-01T21:17:35+08:00')
 
 {
   const window = buildHistoryWindow('1h', now)
-  assert.equal(new Date(window.endMs).toISOString(), new Date('2026-07-01T21:10:00+08:00').toISOString())
-  assert.equal(new Date(window.startMs).toISOString(), new Date('2026-07-01T20:10:00+08:00').toISOString())
+  assert.equal(new Date(window.endMs).toISOString(), new Date('2026-07-01T21:17:00+08:00').toISOString())
+  assert.equal(new Date(window.startMs).toISOString(), new Date('2026-07-01T20:17:00+08:00').toISOString())
   assert.equal(getHistoryRangeConfig('1h').sampleMs, 60 * 1000)
   assert.equal(getHistoryRangeConfig('1h').majorTickMs, 10 * 60 * 1000)
 }
@@ -23,18 +23,18 @@ const now = new Date('2026-07-01T21:17:35+08:00')
 {
   const window = buildHistoryWindow('1h', now)
   const axisWindow = buildChartAxisWindow(window)
-  assert.equal(new Date(axisWindow.min).toISOString(), new Date('2026-07-01T20:08:00+08:00').toISOString())
-  assert.equal(new Date(axisWindow.max).toISOString(), new Date('2026-07-01T21:12:00+08:00').toISOString())
+  assert.equal(new Date(axisWindow.min).toISOString(), new Date('2026-07-01T20:15:00+08:00').toISOString())
+  assert.equal(new Date(axisWindow.max).toISOString(), new Date('2026-07-01T21:19:00+08:00').toISOString())
   assert.equal(formatChartAxisLabel(axisWindow.min, '1h', window), '')
-  assert.equal(formatChartAxisLabel(window.startMs, '1h', window), '20:10')
-  assert.equal(formatChartAxisLabel(window.endMs, '1h', window), '21:10')
+  assert.equal(formatChartAxisLabel(window.startMs, '1h', window), '20:17')
+  assert.equal(formatChartAxisLabel(window.endMs, '1h', window), '21:17')
   assert.equal(formatChartAxisLabel(axisWindow.max, '1h', window), '')
 }
 
 {
   const window = buildHistoryWindow('6h', new Date('2026-07-01T21:50:00+08:00'))
-  assert.equal(new Date(window.endMs).toISOString(), new Date('2026-07-01T21:30:00+08:00').toISOString())
-  assert.equal(new Date(window.startMs).toISOString(), new Date('2026-07-01T15:30:00+08:00').toISOString())
+  assert.equal(new Date(window.endMs).toISOString(), new Date('2026-07-01T21:50:00+08:00').toISOString())
+  assert.equal(new Date(window.startMs).toISOString(), new Date('2026-07-01T15:50:00+08:00').toISOString())
   assert.equal(getHistoryRangeConfig('6h').sampleMs, 10 * 60 * 1000)
   assert.equal(getHistoryRangeConfig('6h').majorTickMs, 60 * 60 * 1000)
 }
@@ -71,20 +71,20 @@ const now = new Date('2026-07-01T21:17:35+08:00')
 {
   const points = buildTimeSeries('1h', now)
   assert.equal(points.length, 60)
-  assert.equal(new Date(points[0].start).toISOString(), new Date('2026-07-01T20:10:00+08:00').toISOString())
-  assert.equal(new Date(points[0].time).toISOString(), new Date('2026-07-01T20:10:00+08:00').toISOString())
-  assert.equal(new Date(points.at(-1).time).toISOString(), new Date('2026-07-01T21:09:00+08:00').toISOString())
+  assert.equal(new Date(points[0].start).toISOString(), new Date('2026-07-01T20:17:00+08:00').toISOString())
+  assert.equal(new Date(points[0].time).toISOString(), new Date('2026-07-01T20:17:00+08:00').toISOString())
+  assert.equal(new Date(points.at(-1).time).toISOString(), new Date('2026-07-01T21:16:00+08:00').toISOString())
 }
 
 {
   const history = [
-    { timestamp: new Date('2026-07-01T20:10:20+08:00').getTime() / 1000, data: { temperature: 10 } },
-    { timestamp: new Date('2026-07-01T20:10:45+08:00').getTime() / 1000, data: { temperature: 20 } },
-    { timestamp: new Date('2026-07-01T20:11:10+08:00').getTime() / 1000, data: { temperature: 30 } },
+    { timestamp: new Date('2026-07-01T20:17:20+08:00').getTime() / 1000, data: { temperature: 10 } },
+    { timestamp: new Date('2026-07-01T20:17:45+08:00').getTime() / 1000, data: { temperature: 20 } },
+    { timestamp: new Date('2026-07-01T20:18:10+08:00').getTime() / 1000, data: { temperature: 30 } },
   ]
   const result = normalizeHistorySeries(history, '1h', { temp: 'temperature' }, now)
-  assert.deepEqual(result.series.temp[0], [new Date('2026-07-01T20:10:00+08:00').getTime(), 20])
-  assert.deepEqual(result.series.temp[1], [new Date('2026-07-01T20:11:00+08:00').getTime(), 30])
+  assert.deepEqual(result.series.temp[0], [new Date('2026-07-01T20:17:00+08:00').getTime(), 20])
+  assert.deepEqual(result.series.temp[1], [new Date('2026-07-01T20:18:00+08:00').getTime(), 30])
   assert.equal(result.series.temp[2][1], null)
 }
 
@@ -96,7 +96,7 @@ const now = new Date('2026-07-01T21:17:35+08:00')
   const result = normalizeHistorySeries(history, '1h', { temp: 'temperature' }, now)
   const values = result.series.temp.map(point => point[1]).filter(value => value != null)
   assert.deepEqual(values, [])
-  assert.equal(new Date(result.window.endMs).toISOString(), new Date('2026-07-01T21:10:00+08:00').toISOString())
+  assert.equal(new Date(result.window.endMs).toISOString(), new Date('2026-07-01T21:17:00+08:00').toISOString())
 }
 
 {
@@ -125,23 +125,23 @@ const now = new Date('2026-07-01T21:17:35+08:00')
 
 {
   const history = [
-    { timestamp: new Date('2026-07-01T16:00:10+08:00').getTime() / 1000, data: { temperature: 16 } },
+    { timestamp: new Date('2026-07-01T16:10:10+08:00').getTime() / 1000, data: { temperature: 16 } },
     { timestamp: new Date('2026-07-01T22:18:00+08:00').getTime() / 1000, data: { temperature: 22 } },
   ]
   const result = normalizeHistorySeries(history, '6h', { temp: 'temperature' }, new Date('2026-07-01T22:18:00+08:00'))
-  assert.equal(new Date(result.window.startMs).toISOString(), new Date('2026-07-01T16:00:00+08:00').toISOString())
-  assert.equal(new Date(result.window.endMs).toISOString(), new Date('2026-07-01T22:00:00+08:00').toISOString())
-  assert.deepEqual(result.series.temp[0], [new Date('2026-07-01T16:00:00+08:00').getTime(), 16])
+  assert.equal(new Date(result.window.startMs).toISOString(), new Date('2026-07-01T16:10:00+08:00').toISOString())
+  assert.equal(new Date(result.window.endMs).toISOString(), new Date('2026-07-01T22:10:00+08:00').toISOString())
+  assert.deepEqual(result.series.temp[0], [new Date('2026-07-01T16:10:00+08:00').getTime(), 16])
 }
 
 {
   const delay = getNextHistoryRefreshMs('1h', new Date('2026-07-01T22:21:00+08:00'))
-  assert.equal(delay, 9 * 60 * 1000)
+  assert.equal(delay, 60 * 1000)
 }
 
 {
   const delay = getNextHistoryRefreshMs('6h', new Date('2026-07-01T22:32:00+08:00'))
-  assert.equal(delay, 28 * 60 * 1000)
+  assert.equal(delay, 8 * 60 * 1000)
 }
 
 {

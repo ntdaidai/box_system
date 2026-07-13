@@ -21,9 +21,10 @@ class ModelDeployBinding(Base):
     container_port: Mapped[int | None] = mapped_column(Integer, default=None, comment="容器内部端口")
     inference_path: Mapped[str | None] = mapped_column(String(256), default=None, comment="推理接口路径")
     health_check_url: Mapped[str | None] = mapped_column(String(512), default=None, comment="健康检查路径")
-    gpu_device: Mapped[str | None] = mapped_column(String(64), default=None, comment="GPU设备映射")
+    gpu_device: Mapped[str | None] = mapped_column(String(64), default=None, comment="GPU设备映射（已废弃，请使用 container_config.gpus）")
     extra_mounts: Mapped[dict | None] = mapped_column(JSON, default=None, comment="挂载卷")
     extra_env: Mapped[dict | None] = mapped_column(JSON, default=None, comment="环境变量")
+    container_config: Mapped[dict | None] = mapped_column(JSON, default=None, comment="Docker容器运行时配置")
     remark: Mapped[str | None] = mapped_column(String(256), default=None, comment="备注")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now, comment="创建时间")
     update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now, comment="更新时间")
@@ -47,6 +48,7 @@ class ModelDeployBinding(Base):
             "gpu_device": self.gpu_device,
             "extra_mounts": self.extra_mounts,
             "extra_env": self.extra_env,
+            "container_config": self.container_config,
             "remark": self.remark,
             "create_time": self.create_time.isoformat() if self.create_time else None,
             "update_time": self.update_time.isoformat() if self.update_time else None,

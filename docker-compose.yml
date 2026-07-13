@@ -26,6 +26,12 @@ services:
       dockerfile: Dockerfile
     container_name: dam-server-python
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "/app/scripts/check_history_health.py", "--max-queue-age", "120", "--max-rollup-lag", "10"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 90s
     # 挂载源码目录，修改后只需 docker compose restart 即可生效
     volumes:
       - ./dam-ai-service:/app

@@ -4,6 +4,7 @@
 """
 
 from typing import Optional
+import socket
 import docker
 from docker.errors import NotFound, APIError
 from loguru import logger
@@ -14,6 +15,47 @@ class DockerService:
 
     def __init__(self):
         self.client = docker.from_env()
+
+    def find_available_port(self, start_port: int = 8000, end_port: int = 9000) -> int:
+        """从 start_port 开始找第一个可用端口
+
+        Args:
+            start_port: 起始端口
+            end_port: 结束端口
+
+        Returns:
+            可用端口号
+
+        Raises:
+            ValueError: 没有可用端口
+        """
+        for port in range(start_port, end_port):
+            if self._is_port_available(port):
+                return port
+        raise ValueError(f"在 {start_port}-{end_port} 范围内没有可用端口")
+
+    def _is_port_available(self, port: int) -> bool:
+        """检查端口是否可用"""
+        # 检查是否有容器在使用该端口
+        try:
+            containers = self.client.containers.list()
+            for container in containers:
+                if container.ports:
+                    for _, bindings in container.ports.items():
+                        if bindings:
+                            for binding in bindings:
+                                if binding.get("HostPort") == str(port):
+                                    return False
+        except Exception:
+            pass
+
+        # 检查主机端口是否被占用
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('', port))
+                return True
+        except OSError:
+            return False
 
     def check_connection(self) -> str:
         """检查 Docker daemon 连接状态"""
@@ -87,10 +129,29 @@ class DockerService:
         gpu_device: Optional[str] = None,
         extra_mounts: Optional[list[dict]] = None,
         extra_env: Optional[dict] = None,
+        container_config: Optional[dict] = None,
     ) -> str:
-        """创建并启动容器，返回容器 ID"""
-        # 端口映射
-        ports = {f"{container_port}/tcp": host_port}
+        """创建并启动容器，返回容器 ID
+
+        Args:
+            image_name: 镜像名称
+            container_name: 容器名称
+            host_port: 宿主机端口
+            container_port: 容器端口
+            gpu_device: GPU 设备（已废弃，使用 container_config.gpus）
+            extra_mounts: 挂载卷
+            extra_env: 环境变量
+            container_config: Docker 容器运行时配置
+        """
+        config = container_config or {}
+
+        # 网络模式
+        network_mode = config.get("network_mode", "host")
+
+        # 端口映射（host 模式下不需要端口映射）
+        ports = None
+        if network_mode != "host":
+            ports = {f"{container_port}/tcp": host_port}
 
         # 挂载卷
         volumes = {}
@@ -101,30 +162,122 @@ class DockerService:
         # 环境变量
         environment = extra_env or {}
 
-        # GPU 设备请求
+        # GPU 设备请求（优先使用 container_config.gpus，兼容旧的 gpu_device）
         device_requests = None
-        if gpu_device and gpu_device.strip():
-            device_requests = [
-                docker.types.DeviceRequest(
-                    device_ids=[g.strip() for g in gpu_device.split(",") if g.strip()],
-                    capabilities=[["gpu"]]
+        gpus = config.get("gpus") or gpu_device
+        if gpus and gpus.strip():
+            if gpus.strip().lower() == "all":
+                # 请求所有 GPU
+                device_requests = [
+                    docker.types.DeviceRequest(
+                        count=-1,  # -1 表示所有 GPU
+                        capabilities=[["gpu"]]
+                    )
+                ]
+            else:
+                # 指定 GPU 设备
+                device_requests = [
+                    docker.types.DeviceRequest(
+                        device_ids=[g.strip() for g in gpus.split(",") if g.strip()],
+                        capabilities=[["gpu"]]
+                    )
+                ]
+
+        # 容器运行时
+        runtime = config.get("runtime")
+
+        # IPC 模式
+        ipc_mode = config.get("ipc_mode")
+
+        # 共享内存大小
+        shm_size = config.get("shm_size")
+
+        # 特权模式
+        privileged = config.get("privileged", False)
+
+        # Linux 能力
+        cap_add = config.get("cap_add")
+
+        # 设备映射
+        devices = config.get("devices")
+
+        # 资源限制
+        ulimits = config.get("ulimits")
+
+        # 容器标签
+        labels = config.get("labels")
+
+        # 重启策略
+        restart_policy = config.get("restart_policy")
+
+        # 构建 containers.run 参数
+        run_kwargs = {
+            "image": image_name,
+            "name": container_name,
+            "detach": True,
+            "ports": ports,
+            "volumes": volumes,
+            "environment": environment,
+            "network_mode": network_mode,
+            "privileged": privileged,
+        }
+
+        if device_requests:
+            run_kwargs["device_requests"] = device_requests
+
+        if runtime:
+            run_kwargs["runtime"] = runtime
+
+        if ipc_mode:
+            run_kwargs["ipc_mode"] = ipc_mode
+
+        if shm_size:
+            # 转换 "16g" 为字节数
+            run_kwargs["shm_size"] = self._parse_size(shm_size)
+
+        if cap_add:
+            run_kwargs["cap_add"] = cap_add
+
+        if devices:
+            run_kwargs["devices"] = devices
+
+        if ulimits:
+            run_kwargs["ulimits"] = [
+                docker.types.Ulimit(
+                    name=u["name"],
+                    soft=u.get("soft"),
+                    hard=u.get("hard"),
                 )
+                for u in ulimits
             ]
 
+        if labels:
+            run_kwargs["labels"] = labels
+
+        if restart_policy:
+            run_kwargs["restart_policy"] = restart_policy
+
         try:
-            container = self.client.containers.run(
-                image=image_name,
-                name=container_name,
-                detach=True,
-                ports=ports,
-                volumes=volumes,
-                environment=environment,
-                device_requests=device_requests,
-            )
+            container = self.client.containers.run(**run_kwargs)
             logger.info(f"容器已创建并启动: {container.name} ({container.id[:12]})")
             return container.id
         except APIError as e:
             raise ValueError(f"创建容器失败: {e}")
+
+    def _parse_size(self, size_str: str) -> int:
+        """解析大小字符串为字节数
+
+        支持格式: 16g, 512m, 1024k, 1024
+        """
+        size_str = size_str.strip().lower()
+        if size_str.endswith("g"):
+            return int(size_str[:-1]) * 1024 * 1024 * 1024
+        elif size_str.endswith("m"):
+            return int(size_str[:-1]) * 1024 * 1024
+        elif size_str.endswith("k"):
+            return int(size_str[:-1]) * 1024
+        else:
+            return int(size_str)
 
     def remove_container(self, container_id: str) -> None:
         """强制删除容器"""

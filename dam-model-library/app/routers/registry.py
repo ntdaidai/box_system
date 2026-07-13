@@ -1,15 +1,50 @@
 """模型注册接口"""
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from typing import Optional
+from typing import Optional, List
 
 from app.database import get_db
 from app.schemas.common import Result, PageResult
 from app.schemas.registry import RegistryCreate, RegistryUpdate, RegistryResponse, RegistryDetailResponse
 from app.services.registry_service import registry_service
+from app.services.lifecycle_service import lifecycle_service
 
 router = APIRouter()
+
+
+class BatchRequest(BaseModel):
+    """批量操作请求"""
+    model_ids: List[int] = Field(..., description="模型 ID 列表")
+
+
+@router.post("/batch/start", response_model=Result)
+async def batch_start(data: BatchRequest, db: Session = Depends(get_db)):
+    """批量启动模型"""
+    results = []
+    for model_id in data.model_ids:
+        try:
+            result = lifecycle_service.start_model(db, model_id)
+            results.append({"model_id": model_id, "status": "success", "data": result})
+        except Exception as e:
+            results.append({"model_id": model_id, "status": "failed", "error": str(e)})
+
+    return Result(code=200, message="批量启动完成", data=results)
+
+
+@router.post("/batch/stop", response_model=Result)
+async def batch_stop(data: BatchRequest, db: Session = Depends(get_db)):
+    """批量停止模型"""
+    results = []
+    for model_id in data.model_ids:
+        try:
+            result = lifecycle_service.stop_model(db, model_id)
+            results.append({"model_id": model_id, "status": "success", "data": result})
+        except Exception as e:
+            results.append({"model_id": model_id, "status": "failed", "error": str(e)})
+
+    return Result(code=200, message="批量停止完成", data=results)
 
 
 @router.post("", response_model=Result)

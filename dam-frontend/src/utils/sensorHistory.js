@@ -7,21 +7,21 @@ const RANGE_CONFIG = {
     durationMs: HOUR,
     sampleMs: MINUTE,
     majorTickMs: 10 * MINUTE,
-    alignMs: 10 * MINUTE,
+    alignMs: MINUTE,
     labelMode: 'time',
   },
   '6h': {
     durationMs: 6 * HOUR,
     sampleMs: 10 * MINUTE,
     majorTickMs: HOUR,
-    alignMs: 30 * MINUTE,
+    alignMs: 10 * MINUTE,
     labelMode: 'time',
   },
   '1d': {
     durationMs: DAY,
     sampleMs: 30 * MINUTE,
     majorTickMs: 4 * HOUR,
-    alignMs: HOUR,
+    alignMs: 30 * MINUTE,
     labelMode: 'date-time',
   },
   '7d': {
@@ -36,6 +36,7 @@ const RANGE_CONFIG = {
     sampleMs: DAY,
     majorTickMs: 30 * DAY,
     alignMs: DAY,
+    alignOffsetMs: 8 * HOUR,
     labelMode: 'date',
   },
 }
@@ -44,14 +45,14 @@ export const getHistoryRangeConfig = (range = '1h') => {
   return RANGE_CONFIG[range] || RANGE_CONFIG['1h']
 }
 
-const alignDown = (timeMs, alignMs) => {
-  return Math.floor(timeMs / alignMs) * alignMs
+const alignDown = (timeMs, alignMs, alignOffsetMs = 0) => {
+  return Math.floor((timeMs + alignOffsetMs) / alignMs) * alignMs - alignOffsetMs
 }
 
 export const buildHistoryWindow = (range = '1h', now = new Date(), overrideConfig = null) => {
   const config = overrideConfig || getHistoryRangeConfig(range)
   const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime()
-  const endMs = alignDown(nowMs, config.alignMs)
+  const endMs = alignDown(nowMs, config.alignMs, config.alignOffsetMs || 0)
   return {
     startMs: endMs - config.durationMs,
     endMs,

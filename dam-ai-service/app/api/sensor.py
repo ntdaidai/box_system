@@ -14,17 +14,13 @@ from app.core.cache import cached
 from app.core.security import require_auth, get_current_user, decode_token
 from app.models.user import User
 from app.core.database import get_db
-from app.services.history_config import get_range_config
 from app.services.sensor_history_service import get_sensor_history_service
+from app.services.iotdb_service import IoTDBUnavailableError
 
 # 用于阻塞 I/O 操作的线程池
 _io_executor = ThreadPoolExecutor(max_workers=4)
 
 router = APIRouter()
-
-def _history_cache_ttl(*_args, **kwargs):
-    return max(60, get_range_config(kwargs.get("range", "1h")).bucket_ms // 1000)
-
 
 def _to_float(value):
     if isinstance(value, bool) or value is None:
@@ -181,19 +177,29 @@ async def get_realtime_data(device_name: str):
 # ── 历史数据（免鉴权，用于系统概览大屏展示）─────────────────────────
 
 @router.get("/history/status", response_model=SensorDataResponse)
-@cached(ttl=10, prefix="sensor:history:status")
+@cached(ttl=10, prefix="sensor:history:status:v2")
 async def get_history_status():
     """获取历史链路写入状态（免鉴权）"""
     from app.services.iotdb_service import iotdb_service
 
+    loop = asyncio.get_event_loop()
+    service = get_sensor_history_service()
+    try:
+        storage_status = await loop.run_in_executor(_io_executor, service.get_health_status)
+    except IoTDBUnavailableError as error:
+        storage_status = {"status": "unavailable", "error": str(error)}
+
     return SensorDataResponse(
         code=200,
-        data={"iotdb_write": iotdb_service.get_write_status()}
+        data={
+            "iotdb_write": iotdb_service.get_write_status(),
+            "pending_queue": sensor_collector.get_history_queue_status(),
+            "history_storage": storage_status,
+        }
     )
 
 
 @router.get("/history/{device_name}", response_model=SensorDataResponse)
-@cached(ttl=_history_cache_ttl, prefix="sensor:history")
 async def get_sensor_history(device_name: str, range: str = "1h"):
     """获取传感器历史数据
 
@@ -201,7 +207,11 @@ async def get_sensor_history(device_name: str, range: str = "1h"):
     """
     loop = asyncio.get_event_loop()
     service = get_sensor_history_service()
-    payload = await loop.run_in_executor(_io_executor, service.query_history, device_name, range)
+    try:
+        payload = await loop.run_in_executor(_io_executor, service.query_history, device_name, range)
+    except IoTDBUnavailableError as error:
+        logger.error(f"历史数据服务不可用 [{device_name}/{range}]: {error}")
+        raise HTTPException(status_code=503, detail="历史数据服务暂时不可用，请稍后重试")
     return SensorDataResponse(code=200, data=payload)
 
 
@@ -269,11 +279,31 @@ async def get_vibration_trends(range: str = Query("1h", regex="^(1h|6h|24h|1d|7d
     normalized_range = "1d" if range == "24h" else range
     loop = asyncio.get_event_loop()
     service = get_sensor_history_service()
-    payload = await loop.run_in_executor(_io_executor, service.query_history, "vibration", normalized_range)
+    try:
+        payload = await loop.run_in_executor(_io_executor, service.query_history, "vibration", normalized_range)
+    except IoTDBUnavailableError as error:
+        logger.error(f"振动历史服务不可用 [{normalized_range}]: {error}")
+        raise HTTPException(status_code=503, detail="历史数据服务暂时不可用，请稍后重试")
     history = [
         item for item in (_vibration_history_point(point) for point in payload.get("history", []))
         if item.get("timestamp") is not None and (item.get("rms") is not None or item.get("freq") is not None)
     ]
+    window = payload.get("window") or {}
+    window_start = _to_float(window.get("start"))
+    window_end = _to_float(window.get("end"))
+    if window_start is not None and window_end is not None:
+        # Rollup timestamps represent bucket ends, so the visible window is
+        # (start, end]. Excluding the start boundary prevents N+1 points.
+        history = [
+            item for item in history
+            if window_start < float(item["timestamp"]) <= window_end
+        ]
+    point_count = sum(item.get("rms") is not None for item in history)
+    max_point_count = payload.get("max_point_count")
+    coverage_ratio = (
+        round(min(point_count, int(max_point_count)) / int(max_point_count), 4)
+        if max_point_count else 0.0
+    )
 
     return SensorDataResponse(
         code=200,
@@ -282,6 +312,10 @@ async def get_vibration_trends(range: str = Query("1h", regex="^(1h|6h|24h|1d|7d
             "source": payload.get("source"),
             "rollup_level": payload.get("rollup_level"),
             "sample_interval": payload.get("sample_interval"),
+            "window": window,
+            "max_point_count": max_point_count,
+            "point_count": point_count,
+            "coverage_ratio": coverage_ratio,
             "history": history,
         }
     )

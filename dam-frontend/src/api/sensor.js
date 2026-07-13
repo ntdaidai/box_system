@@ -42,3 +42,24 @@ export function getSensorHistory(deviceName, range = '1h') {
     localCacheMaxAge: HISTORY_CACHE_MAX_AGE[range] ?? HISTORY_CACHE_MAX_AGE['1h'],
   })
 }
+
+/**
+ * 获取振动 RMS 历史趋势。后端沿用统一历史窗口和分层降采样，
+ * 仅在输出阶段把振动原始字段转换为 rms/freq/temperature。
+ */
+export function getVibrationTrends(range = '1h') {
+  return request.get('/v1/sensor/vibration/trends', {
+    params: { range },
+    timeout: 60000,
+    silentError: true,
+    localCacheAllowStale: false,
+    localCacheMaxAge: HISTORY_CACHE_MAX_AGE[range] ?? HISTORY_CACHE_MAX_AGE['1h'],
+  })
+}
+
+export function getVibrationProcessed() {
+  return request.get('/v1/sensor/vibration/processed', {
+    localCache: false,
+    silentError: true,
+  })
+}

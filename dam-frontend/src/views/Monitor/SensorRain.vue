@@ -89,6 +89,12 @@
           <div class="loading-spinner"></div>
           <div class="loading-text">加载中 ...</div>
         </div>
+        <div v-else-if="historyError" class="chart-loading-overlay">
+          <div class="loading-text">{{ historyError }}</div>
+        </div>
+        <div v-else-if="historyEmpty" class="chart-loading-overlay">
+          <div class="loading-text">当前时间范围暂无历史数据</div>
+        </div>
       </div>
     </div>
   </div>
@@ -110,6 +116,8 @@ const selectedRange = ref('1h')
 const selectedChart = ref('hour')
 const lastTimestamp = ref(0)
 const historyLoading = ref(false)
+const historyError = ref('')
+const historyEmpty = ref(false)
 let chart = null, timer = null, historyRefreshTimer = null, preloadIdleTask = null
 let resizeHandler = null
 const chartData = ref({ today: [], hour: [], instant: [], window: null, config: null })
@@ -203,10 +211,15 @@ const loadHistory = async (range = '1h', apply = true) => {
   try {
     if (historyCache.has(range)) {
       const cached = historyCache.get(range)
-      if (apply) chartData.value = cached
+      if (apply) {
+        chartData.value = cached
+        historyError.value = ''
+        historyEmpty.value = cached.pointCount === 0
+      }
       return cached
     }
     historyLoading.value = true
+    if (apply) historyError.value = ''
     const res = await getSensorHistory('rain', range)
     if (res.code === 200) {
       const normalized = normalizeHistorySeries(res.data?.history || [], range, historyFields, new Date(), res.data || {})
@@ -216,12 +229,19 @@ const loadHistory = async (range = '1h', apply = true) => {
         instant: normalized.series.instant,
         window: normalized.window,
         config: normalized.config,
+        pointCount: Number(res.data?.point_count || 0),
       }
       historyCache.set(range, nextData)
-      if (apply) chartData.value = nextData
+      if (apply) {
+        chartData.value = nextData
+        historyEmpty.value = nextData.pointCount === 0
+      }
       return nextData
     }
-  } catch (e) { console.warn('加载历史数据失败:', e) }
+  } catch (e) {
+    console.warn('加载历史数据失败:', e)
+    if (apply) historyError.value = '历史数据服务暂时不可用，请稍后重试'
+  }
   finally {
     historyLoading.value = false
   }
@@ -236,9 +256,12 @@ const applyHistoryResponse = (range, res) => {
     instant: normalized.series.instant,
     window: normalized.window,
     config: normalized.config,
+    pointCount: Number(res.data?.point_count || 0),
   }
   historyCache.set(range, nextData)
   chartData.value = nextData
+  historyError.value = ''
+  historyEmpty.value = nextData.pointCount === 0
   return nextData
 }
 

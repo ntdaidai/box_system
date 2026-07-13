@@ -6,6 +6,7 @@ Build a durable sensor history module that separates raw telemetry, archived raw
 
 ## Data Layers
 
+- Raw telemetry is first committed to a local SQLite WAL queue and is removed only after IoTDB acknowledges the original timestamped write.
 - Raw online data remains in IoTDB under `root.dam.sensor.{device_id}`.
 - Raw archive data is exported as daily CSV files under `/home/jetson/data/archive/sensors/YYYY-MM-DD/{device_id}.csv`.
 - Rollup data is stored in IoTDB under `root.dam.rollup_{level}.{device_id}`.
@@ -61,6 +62,8 @@ The response returns normalized chart-ready points:
 
 Frontend history utilities should only fill missing buckets and format axes. They must not re-aggregate returned values.
 
+The history response itself is not cached in Redis. Rollup queries are the backend acceleration layer; this prevents repaired data from remaining hidden behind a stale server-side response cache.
+
 ## Background Processing
 
 The backend owns a rollup service that can:
@@ -73,7 +76,12 @@ The backend owns a rollup service that can:
 
 For implementation, the service should expose synchronous methods that are easy to unit test. Scheduling can run in a lightweight background thread from application startup.
 
+Rollup checkpoints and archive completion manifests are durable. A restart resumes missing buckets and archive days instead of treating in-memory scheduler state as completion. Raw retention is paused while any archive day is incomplete.
+
+## Operations
+
+`GET /v1/sensor/history/status` reports raw-device freshness, durable queue age, rollup lag, and archive backlog. Docker runs `scripts/check_history_health.py` every 30 seconds and marks the backend unhealthy when freshness, queue age, storage access, or rollup lag crosses its threshold.
+
 ## Migration
 
 The initial implementation should support rebuilding rollups from existing raw IoTDB data. The history API should fall back to raw aggregation only when rollup data is missing, and should report that fallback through the `source` field.
-

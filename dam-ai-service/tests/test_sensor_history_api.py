@@ -7,6 +7,7 @@ import unittest
 
 
 os.environ.setdefault("JWT_SECRET", "unit-test-secret")
+os.environ.setdefault("DEFAULT_ADMIN_PASSWORD", "unit-test-admin-password")
 
 
 class FakeLogger:
@@ -28,6 +29,13 @@ class FakeBaseModel:
             setattr(self, key, value)
 
 
+class FakeHTTPException(Exception):
+    def __init__(self, status_code, detail):
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+
+
 class FakeCollector:
     def get_latest_data(self, *_args, **_kwargs):
         return {}
@@ -38,12 +46,15 @@ class FakeCollector:
     def get_all_devices_status(self):
         return {}
 
+    def get_history_queue_status(self):
+        return {"pending_count": 0}
+
 
 sys.modules.setdefault(
     "fastapi",
     types.SimpleNamespace(
         APIRouter=lambda *args, **kwargs: FakeAPIRouter(),
-        HTTPException=Exception,
+        HTTPException=FakeHTTPException,
         Depends=lambda *args, **kwargs: None,
         Query=lambda *args, **kwargs: None,
     ),
@@ -103,6 +114,12 @@ class FakeHistoryService:
         }
 
 
+class BrokenHistoryService:
+    def query_history(self, *_args, **_kwargs):
+        from app.services.iotdb_service import IoTDBUnavailableError
+        raise IoTDBUnavailableError("transport unavailable")
+
+
 class InlineExecutor:
     def submit(self, fn, *args, **kwargs):
         future = concurrent.futures.Future()
@@ -121,13 +138,6 @@ class SensorHistoryApiTest(unittest.TestCase):
     def tearDown(self):
         sensor_api._io_executor = self.original_executor
 
-    def test_history_cache_ttl_uses_bucket_size(self):
-        self.assertEqual(sensor_api._history_cache_ttl(range="1h"), 60)
-        self.assertEqual(sensor_api._history_cache_ttl(range="6h"), 600)
-        self.assertEqual(sensor_api._history_cache_ttl(range="1d"), 1800)
-        self.assertEqual(sensor_api._history_cache_ttl(range="7d"), 3600)
-        self.assertEqual(sensor_api._history_cache_ttl(range="6mo"), 86400)
-
     def test_history_route_returns_service_payload(self):
         original = sensor_api.get_sensor_history_service
         sensor_api.get_sensor_history_service = lambda: FakeHistoryService()
@@ -141,6 +151,17 @@ class SensorHistoryApiTest(unittest.TestCase):
         self.assertEqual(response.data["rollup_level"], "1d")
         self.assertEqual(response.data["sample_interval"], 86400)
 
+    def test_history_route_returns_503_when_iotdb_is_unavailable(self):
+        original = sensor_api.get_sensor_history_service
+        sensor_api.get_sensor_history_service = lambda: BrokenHistoryService()
+        try:
+            with self.assertRaises(FakeHTTPException) as raised:
+                asyncio.run(sensor_api.get_sensor_history("temp_humidity", range="1h"))
+        finally:
+            sensor_api.get_sensor_history_service = original
+
+        self.assertEqual(raised.exception.status_code, 503)
+
     def test_vibration_trends_delegates_to_unified_history_service(self):
         original = sensor_api.get_sensor_history_service
         sensor_api.get_sensor_history_service = lambda: FakeHistoryService()
@@ -153,9 +174,25 @@ class SensorHistoryApiTest(unittest.TestCase):
         self.assertEqual(response.data["range"], "1d")
         self.assertEqual(response.data["source"], "rollup")
         self.assertEqual(response.data["rollup_level"], "30m")
+        self.assertEqual(response.data["point_count"], 1)
+        self.assertEqual(response.data["max_point_count"], 48)
+        self.assertEqual(response.data["coverage_ratio"], 0.0208)
+        self.assertEqual(response.data["window"], {"start": 1.0, "end": 2.0})
         self.assertEqual(response.data["history"][0]["rms"], 5.0)
         self.assertEqual(response.data["history"][0]["freq"], 3.0)
         self.assertEqual(response.data["history"][0]["temperature"], 26.5)
+
+    def test_vibration_history_prefers_persisted_rms(self):
+        point = sensor_api._vibration_history_point({
+            "timestamp": 10.0,
+            "data": {
+                "total_rms": 0.1234,
+                "加速度幅值X": 3,
+                "加速度幅值Y": 4,
+            },
+        })
+
+        self.assertEqual(point["rms"], 0.1234)
 
 if __name__ == "__main__":
     unittest.main()

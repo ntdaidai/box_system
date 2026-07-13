@@ -124,7 +124,12 @@
             <span>振动趋势</span>
             <span class="panel-subtitle">RMS值变化曲线</span>
           </div>
-          <div ref="rmsChartRef" class="chart-container"></div>
+          <div class="chart-wrap">
+            <div ref="rmsChartRef" class="chart-container"></div>
+            <div v-if="historyLoading" class="chart-state-overlay">加载中 ...</div>
+            <div v-else-if="historyError" class="chart-state-overlay chart-state-error">{{ historyError }}</div>
+            <div v-else-if="historyEmpty" class="chart-state-overlay">当前时间范围暂无振动 RMS 数据</div>
+          </div>
           <div class="chart-legend">
             <span class="legend-item"><span class="legend-line" style="background:#00e5ff"></span>振动RMS</span>
             <span class="legend-threshold"><span class="threshold-line" style="background:#67c23a"></span>关注线 0.05g</span>
@@ -205,11 +210,11 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { getVibrationProcessed, getVibrationTrends } from '@/api/sensor'
+import { buildChartAxisWindow, formatChartAxisLabel, getNextHistoryRefreshMs, normalizeHistorySeries } from '@/utils/sensorHistory'
+import { cancelIdleTask, createSensorDetailStartup, preloadHistoryRanges, runWhenIdle } from '@/utils/sensorDetailStartup'
 import * as echarts from 'echarts'
-
-// API配置
-const API_BASE = '/api/v1/sensor'
 
 // 状态数据
 const processedData = reactive({
@@ -226,10 +231,14 @@ const processedData = reactive({
 const lastTimestamp = ref(0)
 const statusClass = ref('online')
 const statusText = ref('在线')
-const selectedRange = ref('24h')
+const selectedRange = ref('1h')
 const showAlertBanner = ref(false)
 const isAlertFlashing = ref(false)
-const isLoading = ref(false)
+const historyLoading = ref(false)
+const historyError = ref('')
+const historyEmpty = ref(false)
+const chartData = ref({ rms: [], window: null, config: null, pointCount: 0 })
+const historyCache = new Map()
 
 // 图表引用
 const rmsChartRef = ref(null)
@@ -239,13 +248,16 @@ let rmsChart = null
 
 // 定时器
 let realtimeTimer = null
+let historyRefreshTimer = null
+let preloadIdleTask = null
 
 // 时间范围选项
 const timeRanges = [
   { label: '1小时', value: '1h' },
   { label: '6小时', value: '6h' },
-  { label: '24小时', value: '24h' },
+  { label: '1天', value: '1d' },
   { label: '7天', value: '7d' },
+  { label: '6个月', value: '6mo' },
 ]
 
 // 计算属性
@@ -314,8 +326,7 @@ const formatCommTime = (ts) => {
 // API调用
 const fetchProcessedData = async () => {
   try {
-    const response = await fetch(`${API_BASE}/vibration/processed`)
-    const result = await response.json()
+    const result = await getVibrationProcessed()
 
     if (result.code === 200 && result.data) {
       const data = result.data.data || result.data
@@ -339,86 +350,103 @@ const fetchProcessedData = async () => {
   }
 }
 
-const fetchTrends = async () => {
-  if (isLoading.value) return
-  isLoading.value = true
-  showLoadingChart()
-
-  try {
-    const response = await fetch(`${API_BASE}/vibration/trends?range=${selectedRange.value}`)
-    const result = await response.json()
-
-    if (result.code === 200 && result.data) {
-      const history = result.data.history || []
-      if (history.length > 0) {
-        updateChart(history)
-      } else {
-        showEmptyChart()
-      }
-    }
-  } catch (error) {
-    console.error('获取趋势数据失败:', error)
-    showEmptyChart()
-  } finally {
-    isLoading.value = false
+const normalizeTrendResponse = (range, result) => {
+  if (result?.code !== 200) return null
+  const rawHistory = result.data?.history || []
+  const rmsHistory = rawHistory.filter(
+    point => point.rms != null && Number.isFinite(Number(point.rms)),
+  )
+  const nestedHistory = rmsHistory.map(point => ({
+    timestamp: point.timestamp,
+    data: { rms: Number(point.rms) },
+  }))
+  const normalized = normalizeHistorySeries(
+    nestedHistory,
+    range,
+    { rms: 'rms' },
+    new Date(),
+    result.data || {},
+  )
+  return {
+    rms: normalized.series.rms,
+    window: normalized.window,
+    config: normalized.config,
+    pointCount: rmsHistory.length,
   }
 }
 
-// 图表相关
-const showLoadingChart = () => {
-  if (!rmsChart) return
+const applyTrendResponse = (range, result) => {
+  const nextData = normalizeTrendResponse(range, result)
+  if (!nextData) return null
+  historyCache.set(range, nextData)
+  chartData.value = nextData
+  historyError.value = ''
+  historyEmpty.value = nextData.pointCount === 0
+  return nextData
+}
 
-  rmsChart.setOption({
-    graphic: {
-      type: 'text',
-      left: 'center',
-      top: 'middle',
-      style: {
-        text: '加载中 ...',
-        fontSize: 14,
-        fill: '#8aa8c7'
+const loadHistory = async (range = '1h', apply = true) => {
+  try {
+    if (historyCache.has(range)) {
+      const cached = historyCache.get(range)
+      if (apply) {
+        chartData.value = cached
+        historyError.value = ''
+        historyEmpty.value = cached.pointCount === 0
       }
+      return cached
     }
-  })
-}
-
-const showEmptyChart = () => {
-  if (!rmsChart) return
-
-  rmsChart.setOption({
-    xAxis: { data: [] },
-    series: [{ data: [] }],
-    graphic: {
-      type: 'text',
-      left: 'center',
-      top: 'middle',
-      style: {
-        text: '暂无历史数据',
-        fontSize: 14,
-        fill: '#8aa8c7'
-      }
+    if (apply) {
+      historyLoading.value = true
+      historyError.value = ''
     }
-  })
+    const result = await getVibrationTrends(range)
+    const nextData = normalizeTrendResponse(range, result)
+    if (!nextData) throw new Error('振动历史响应无效')
+    historyCache.set(range, nextData)
+    if (apply) {
+      chartData.value = nextData
+      historyEmpty.value = nextData.pointCount === 0
+    }
+    return nextData
+  } catch (error) {
+    console.error('获取趋势数据失败:', error)
+    if (apply) historyError.value = '历史数据服务暂时不可用，请稍后重试'
+  } finally {
+    if (apply) historyLoading.value = false
+  }
 }
 
-const updateChart = (trendData) => {
-  if (!rmsChart || !trendData || trendData.length === 0) return
-
-  const timestamps = trendData.map(d => new Date(d.timestamp * 1000))
-  const rmsValues = trendData.map(d => d.rms || 0)
-
-  rmsChart.setOption({
-    graphic: { show: false },
-    xAxis: { data: timestamps },
-    series: [{ data: rmsValues }]
-  })
+const handleHistoryCacheUpdate = (event) => {
+  const detail = event.detail || {}
+  if (detail.url !== '/v1/sensor/vibration/trends') return
+  const range = detail.params?.range || '1h'
+  if (range !== selectedRange.value) return
+  if (applyTrendResponse(range, detail.data)) renderChart()
 }
 
-const initChart = () => {
-  if (!rmsChartRef.value) return
+const preloadHistoryLater = () => {
+  if (preloadIdleTask) cancelIdleTask(preloadIdleTask)
+  preloadIdleTask = runWhenIdle(() => {
+    preloadIdleTask = null
+    preloadHistoryRanges(['6h'], loadHistory)
+  }, 1200)
+}
 
-  rmsChart = echarts.init(rmsChartRef.value)
-  rmsChart.setOption({
+const scheduleHistoryRefresh = () => {
+  if (historyRefreshTimer) clearTimeout(historyRefreshTimer)
+  historyRefreshTimer = setTimeout(async () => {
+    historyCache.clear()
+    await loadHistory(selectedRange.value)
+    renderChart()
+    preloadHistoryLater()
+    scheduleHistoryRefresh()
+  }, getNextHistoryRefreshMs(selectedRange.value) + 1000)
+}
+
+const fullChartOption = () => {
+  const xAxisWindow = buildChartAxisWindow(chartData.value.window)
+  return {
     backgroundColor: 'transparent',
     tooltip: {
       trigger: 'axis',
@@ -427,21 +455,26 @@ const initChart = () => {
       textStyle: { color: '#E2F0FE' },
       formatter: function(params) {
         if (!params || params.length === 0) return ''
-        const time = new Date(params[0].value).toLocaleString('zh-CN')
-        const value = params[0].data
-        return `${time}<br/>振动RMS: ${value?.toFixed(4) || '--'} g`
+        const point = params[0].data
+        const time = new Date(point?.[0]).toLocaleString('zh-CN', { hour12: false })
+        const value = point?.[1]
+        return `${time}<br/>振动RMS: ${value == null ? '--' : Number(value).toFixed(4)} g`
       }
     },
     grid: { left: '3%', right: '4%', bottom: '3%', top: '10%', containLabel: true },
     xAxis: {
       type: 'time',
+      min: xAxisWindow.min,
+      max: xAxisWindow.max,
+      interval: chartData.value.config?.majorTickMs,
+      minInterval: chartData.value.config?.majorTickMs,
+      maxInterval: chartData.value.config?.majorTickMs,
       axisLine: { lineStyle: { color: '#2a4a6a' } },
       axisLabel: {
         color: '#AECAF5',
-        formatter: function(value) {
-          const date = new Date(value)
-          return `${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`
-        }
+        hideOverlap: true,
+        showMaxLabel: true,
+        formatter: value => formatChartAxisLabel(value, selectedRange.value, chartData.value.window),
       }
     },
     yAxis: {
@@ -455,8 +488,10 @@ const initChart = () => {
     },
     series: [{
       type: 'line',
+      name: '振动RMS',
       smooth: true,
       symbol: 'none',
+      connectNulls: false,
       lineStyle: { color: '#00e5ff', width: 2 },
       areaStyle: {
         color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
@@ -473,24 +508,26 @@ const initChart = () => {
           { yAxis: 0.15, lineStyle: { color: '#f56c6c' }, label: { show: false } }
         ]
       },
-      data: []
+      data: chartData.value.rms,
     }],
-    graphic: {
-      type: 'text',
-      left: 'center',
-      top: 'middle',
-      style: {
-        text: '加载中...',
-        fontSize: 14,
-        fill: '#8aa8c7'
-      }
-    }
-  })
+  }
 }
 
-const changeRange = (range) => {
+const renderChart = () => {
+  if (rmsChart) rmsChart.setOption(fullChartOption(), true)
+}
+
+const initChart = () => {
+  if (!rmsChartRef.value) return
+  rmsChart = echarts.init(rmsChartRef.value)
+  renderChart()
+}
+
+const changeRange = async (range) => {
   selectedRange.value = range
-  fetchTrends()
+  await loadHistory(range)
+  renderChart()
+  scheduleHistoryRefresh()
 }
 
 const dismissAlert = () => {
@@ -498,14 +535,16 @@ const dismissAlert = () => {
 }
 
 // 生命周期
-onMounted(async () => {
-  // 初始化图表
-  await nextTick()
-  initChart()
-
-  // 获取数据
-  await fetchProcessedData()
-  await fetchTrends()
+onMounted(() => {
+  const startup = createSensorDetailStartup({
+    initChart,
+    fetchRealtime: fetchProcessedData,
+    loadInitialHistory: () => loadHistory('1h'),
+    renderHistory: renderChart,
+    scheduleHistoryRefresh,
+    preloadHistoryLater,
+  })
+  startup.start()
 
   // 设置定时刷新（每5秒刷新实时数据）
   realtimeTimer = setInterval(() => {
@@ -514,17 +553,21 @@ onMounted(async () => {
 
   // 窗口大小变化时重绘图表
   window.addEventListener('resize', handleResize)
+  window.addEventListener('dam-api-cache-updated', handleHistoryCacheUpdate)
 })
 
 onUnmounted(() => {
   // 清理定时器
   if (realtimeTimer) clearInterval(realtimeTimer)
+  if (historyRefreshTimer) clearTimeout(historyRefreshTimer)
+  if (preloadIdleTask) cancelIdleTask(preloadIdleTask)
 
   // 销毁图表
   if (rmsChart) rmsChart.dispose()
 
   // 移除事件监听
   window.removeEventListener('resize', handleResize)
+  window.removeEventListener('dam-api-cache-updated', handleHistoryCacheUpdate)
 })
 
 const handleResize = () => {
@@ -877,6 +920,26 @@ const handleResize = () => {
 
 .chart-container {
   height: 300px;
+}
+
+.chart-wrap {
+  position: relative;
+}
+
+.chart-state-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #8aa8c7;
+  font-size: 14px;
+  background: rgba(10, 31, 55, 0.38);
+  pointer-events: none;
+}
+
+.chart-state-error {
+  color: #f5a7a7;
 }
 
 .chart-legend {

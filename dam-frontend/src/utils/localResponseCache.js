@@ -1,4 +1,6 @@
-const CACHE_NAMESPACE = 'dam:api-cache:v2'
+// Bump when response validity rules change so previously cached broken/empty
+// history responses cannot survive a backend repair.
+const CACHE_NAMESPACE = 'dam:api-cache:v4'
 const DEFAULT_MAX_AGE = 24 * 60 * 60 * 1000
 const URL_MAX_AGE = [
   [/^\/v1\/sensor\/realtime/, 15 * 1000],
@@ -7,6 +9,7 @@ const URL_MAX_AGE = [
   [/^\/alarm\/statistics$/, 60 * 1000],
   [/^\/alarm\/list$/, 2 * 60 * 1000],
   [/^\/v1\/sensor\/history\//, 10 * 60 * 1000],
+  [/^\/v1\/sensor\/vibration\/trends$/, 10 * 60 * 1000],
   [/^\/device\//, 5 * 60 * 1000],
   [/^\/rule\//, 5 * 60 * 1000],
   [/^\/analysis\//, 5 * 60 * 1000],
@@ -45,7 +48,7 @@ function stableStringify(value) {
 }
 
 function normalizeParams(url, params) {
-  if (/^\/v1\/sensor\/history\//.test(url) && !params?.range) {
+  if (/^\/v1\/sensor\/(?:history\/|vibration\/trends$)/.test(url) && !params?.range) {
     return { ...(params || {}), range: '1h' }
   }
   return params
