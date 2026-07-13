@@ -1,0 +1,89 @@
+# 注意: MySQL、Redis、IoTDB 已独立部署，不需要在此定义
+# MySQL:  /home/jetson/mysql/docker-compose.yml
+# Redis:  /home/jetson/redis/docker-compose.yml
+# IoTDB:  /home/jetson/iotdb/docker-compose-standalone.yml
+
+services:
+  # ========== 前端（Vite 开发服务器） ==========
+  dam-frontend:
+    build:
+      context: ./dam-frontend
+      dockerfile: Dockerfile
+    container_name: dam-frontend
+    restart: unless-stopped
+    # 挂载源码目录，修改后 docker compose restart dam-frontend 即可生效
+    volumes:
+      - ./dam-frontend/src:/app/src
+      - ./dam-frontend/public:/app/public
+      - ./dam-frontend/index.html:/app/index.html
+      - ./dam-frontend/vite.config.js:/app/vite.config.js
+    network_mode: host
+
+  # ========== Python后端（一体化服务） ==========
+  dam-server-python:
+    build:
+      context: ./dam-ai-service
+      dockerfile: Dockerfile
+    container_name: dam-server-python
+    restart: unless-stopped
+    # 挂载源码目录，修改后只需 docker compose restart 即可生效
+    volumes:
+      - ./dam-ai-service:/app
+      # 挂载 Jetson 平台工具和设备树，用于读取 GPU/温度/功耗
+      - /usr/bin/tegrastats:/usr/bin/tegrastats:ro
+      - /usr/sbin/nvidia-smi:/usr/sbin/nvidia-smi:ro
+      - /usr/lib/aarch64-linux-gnu/nvidia:/usr/lib/aarch64-linux-gnu/nvidia:ro
+      - /proc/device-tree:/proc/device-tree:ro
+    environment:
+      # vLLM 视觉模型
+      VLLM_QWEN3VL_URL: http://localhost:8000
+      # IoTDB
+      IOTDB_HOST: 127.0.0.1
+      IOTDB_PORT: 6667
+      # MySQL
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_PORT: 3306
+      MYSQL_USER: root
+      MYSQL_PASSWORD: root
+      MYSQL_DATABASE: dam_system
+      # Redis 缓存
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: 6379
+      REDIS_DB: 0
+      REDIS_PASSWORD: redis
+      # JWT —— 必须设置为强随机字符串（至少 32 字符），否则服务无法启动
+      # 生成方法: python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ALGORITHM: HS256
+      JWT_EXPIRE_SECONDS: "86400"
+      # 默认管理员（仅在首次启动且用户不存在时创建）
+      # 密码必须设置，否则服务无法启动
+      DEFAULT_ADMIN_USERNAME: admin
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD}
+      DEFAULT_ADMIN_REALNAME: "管理员"
+    devices:
+      - "/dev/ttyCH341USB0:/dev/ttyCH341USB0"
+      - "/dev/ttyCH341USB1:/dev/ttyCH341USB1"
+      - "/dev/ttyCH341USB2:/dev/ttyCH341USB2"
+      - "/dev/ttyCH341USB3:/dev/ttyCH341USB3"
+    network_mode: host
+
+  # ========== 轻量级模型库服务 ==========
+  dam-model-library:
+    build:
+      context: ./dam-model-library
+      dockerfile: Dockerfile
+    container_name: dam-model-library
+    restart: unless-stopped
+    # 挂载源码目录和 docker.sock（操作宿主机 Docker）
+    volumes:
+      - ./dam-model-library:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      # MySQL
+      DB_HOST: 127.0.0.1
+      DB_PORT: "3306"
+      DB_USER: root
+      DB_PASSWORD: root
+      DB_NAME: model_registry
+    network_mode: host

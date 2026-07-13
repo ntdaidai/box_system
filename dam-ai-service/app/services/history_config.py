@@ -1,0 +1,69 @@
+"""Sensor history range and rollup configuration."""
+
+from dataclasses import dataclass
+import time
+
+
+MINUTE_MS = 60 * 1000
+HOUR_MS = 60 * MINUTE_MS
+DAY_MS = 24 * HOUR_MS
+
+
+@dataclass(frozen=True)
+class HistoryRangeConfig:
+    key: str
+    duration_ms: int
+    bucket_ms: int
+    align_ms: int
+    rollup_level: str
+    max_point_count: int
+
+
+HISTORY_RANGES = {
+    "1h": HistoryRangeConfig("1h", HOUR_MS, MINUTE_MS, 10 * MINUTE_MS, "1m", 60),
+    "6h": HistoryRangeConfig("6h", 6 * HOUR_MS, 10 * MINUTE_MS, 30 * MINUTE_MS, "10m", 36),
+    "1d": HistoryRangeConfig("1d", DAY_MS, 30 * MINUTE_MS, HOUR_MS, "30m", 48),
+    "7d": HistoryRangeConfig("7d", 7 * DAY_MS, HOUR_MS, HOUR_MS, "1h", 168),
+    "6mo": HistoryRangeConfig("6mo", 180 * DAY_MS, DAY_MS, DAY_MS, "1d", 180),
+}
+
+
+ROLLUP_LEVELS = {
+    "1m": {"bucket_ms": MINUTE_MS, "retention_ms": 14 * DAY_MS},
+    "10m": {"bucket_ms": 10 * MINUTE_MS, "retention_ms": 30 * DAY_MS},
+    "30m": {"bucket_ms": 30 * MINUTE_MS, "retention_ms": 90 * DAY_MS},
+    "1h": {"bucket_ms": HOUR_MS, "retention_ms": 365 * DAY_MS},
+    "1d": {"bucket_ms": DAY_MS, "retention_ms": 5 * 365 * DAY_MS},
+}
+
+
+RAW_ONLINE_RETENTION_MS = 14 * DAY_MS
+ARCHIVE_BASE_DIR = "/home/jetson/data/archive/sensors"
+
+
+DEVICE_MAP = {
+    "temp_humidity": "temp_001",
+    "wind": "wind_001",
+    "rain": "rain_001",
+    "vibration": "vib_001",
+}
+
+
+def get_range_config(range_key: str = "1h") -> HistoryRangeConfig:
+    return HISTORY_RANGES.get(range_key, HISTORY_RANGES["1h"])
+
+
+def build_history_window(range_key: str = "1h", now_ms: int = None) -> dict:
+    config = get_range_config(range_key)
+    current_ms = int(now_ms if now_ms is not None else time.time() * 1000)
+    end_ms = (current_ms // config.align_ms) * config.align_ms
+    return {
+        "start_ms": end_ms - config.duration_ms,
+        "end_ms": end_ms,
+        "sample_ms": config.bucket_ms,
+        "align_ms": config.align_ms,
+        "max_point_count": config.max_point_count,
+        "range": config.key,
+        "rollup_level": config.rollup_level,
+    }
+

@@ -1,0 +1,276 @@
+// ========================================
+// 库坝巡查系统 - 深色科技风全局样式
+// ========================================
+
+// CSS 变量定义
+:root {
+  --bg-color: #0B1426;
+  --bg-card: rgba(13, 32, 61, 0.72);
+  --bg-panel: rgba(16, 38, 72, 0.62);
+  --border-color: rgba(0, 200, 255, 0.24);
+  --border-light: rgba(0, 200, 255, 0.15);
+  --text-primary: #E2F0FE;
+  --text-secondary: #AECAF5;
+  --text-muted: #7a9cc0;
+  --accent-color: #00e5ff;
+  --accent-glow: rgba(0, 229, 255, 0.5);
+  --success-color: #67c23a;
+  --danger-color: #f56c6c;
+  --warning-color: #e6a23c;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #app {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", Arial, sans-serif;
+  background-color: var(--bg-color);
+  color: var(--text-primary);
+  font-size: 15px;
+}
+
+.stat-value,
+.metric-value,
+.sensor-value-num,
+.health-value,
+.strip-value,
+.col-value {
+  font-family: "Oswald", "DIN Alternate", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+}
+
+// 滚动条
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 200, 255, 0.3);
+  border-radius: 3px;
+}
+
+// ========================================
+// Element Plus 深色主题
+// ========================================
+
+// 菜单
+.el-menu {
+  background-color: transparent !important;
+  border-right: none !important;
+
+  .el-menu-item,
+  .el-sub-menu__title {
+    color: #c8daf0 !important;
+    text-align: left !important;
+
+    .el-icon {
+      color: #8cb8d8;
+      margin-right: 8px;
+    }
+
+    &:hover {
+      background: rgba(0, 200, 255, 0.1) !important;
+      .el-icon { color: #00e5ff; }
+    }
+
+    &.is-active {
+      background: rgba(0, 200, 255, 0.15) !important;
+      color: #00e5ff !important;
+      .el-icon { color: #00e5ff; }
+    }
+  }
+
+  .el-sub-menu .el-menu {
+    background-color: rgba(0, 0, 0, 0.15) !important;
+  }
+}
+
+// 卡片
+.el-card {
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 10px !important;
+  color: var(--text-primary) !important;
+
+  .el-card__header {
+    border-bottom: 1px solid var(--border-light) !important;
+    padding: 14px 20px;
+  }
+}
+
+// 表格
+.el-table {
+  --el-table-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
+  --el-table-header-bg-color: rgba(30, 58, 95, 0.5);
+  --el-table-row-hover-bg-color: rgba(0, 200, 255, 0.08);
+  --el-table-border-color: rgba(0, 200, 255, 0.1);
+  --el-table-text-color: #E2F0FE;
+  --el-table-header-text-color: #AECAF5;
+}
+
+// 按钮
+.el-button {
+  &--primary {
+    --el-button-bg-color: rgba(0, 200, 255, 0.25);
+    --el-button-border-color: rgba(0, 200, 255, 0.5);
+    --el-button-text-color: #E2F0FE;
+    &:hover {
+      --el-button-bg-color: rgba(0, 200, 255, 0.4);
+      --el-button-border-color: #00e5ff;
+    }
+  }
+}
+
+// 输入框
+.el-input__wrapper {
+  background-color: rgba(0, 0, 0, 0.25) !important;
+  border-color: rgba(0, 200, 255, 0.2) !important;
+  box-shadow: none !important;
+  .el-input__inner {
+    color: #E2F0FE !important;
+    &::placeholder { color: rgba(200, 218, 240, 0.4) !important; }
+  }
+}
+
+// 标签
+.el-tag { border-color: transparent !important; }
+
+// 对话框
+.el-dialog {
+  background-color: #1e3a5f !important;
+  border: 1px solid rgba(0, 200, 255, 0.3) !important;
+  border-radius: 12px !important;
+  .el-dialog__title { color: #E2F0FE !important; }
+}
+
+// Radio 按钮组
+.el-radio-button__inner {
+  background: rgba(30, 58, 95, 0.5) !important;
+  border-color: rgba(0, 200, 255, 0.3) !important;
+  color: #AECAF5 !important;
+}
+.el-radio-button__original-radio:checked + .el-radio-button__inner {
+  background: rgba(0, 200, 255, 0.3) !important;
+  border-color: #00e5ff !important;
+  color: #00e5ff !important;
+}
+
+// ========================================
+// 通用页面组件
+// ========================================
+
+// 数据面板
+.data-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 16px;
+  position: relative;
+  box-shadow: inset 0 0 18px rgba(0, 200, 255, 0.025);
+}
+
+// 面板标题
+.panel-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-light);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+// 页面标题
+.page-title {
+  text-align: center;
+  font-size: 26px;
+  font-weight: bold;
+  color: var(--accent-color);
+  text-shadow: 0 0 20px var(--accent-glow);
+  margin-bottom: 30px;
+  letter-spacing: 4px;
+}
+
+// 数据行
+.data-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(0, 200, 255, 0.06);
+
+  &:last-child { border-bottom: none; }
+
+  .label {
+    color: var(--text-secondary);
+    font-size: 13px;
+  }
+  .value {
+    color: var(--text-primary);
+    font-size: 18px;
+    font-weight: 600;
+
+    i {
+      font-style: normal;
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-left: 3px;
+    }
+  }
+}
+
+// 状态指示器
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 6px;
+
+  &.online { background: var(--success-color); box-shadow: 0 0 8px var(--success-color); }
+  &.offline { background: var(--danger-color); box-shadow: 0 0 8px var(--danger-color); }
+  &.unknown { background: #909399; }
+}
+
+// 占位页面
+.placeholder-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100vh - 150px);
+  color: var(--text-secondary);
+
+  .placeholder-icon {
+    font-size: 64px;
+    color: rgba(0, 200, 255, 0.3);
+    margin-bottom: 20px;
+  }
+
+  h2 {
+    font-size: 20px;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+  }
+
+  p {
+    font-size: 14px;
+    color: var(--text-muted);
+  }
+}
