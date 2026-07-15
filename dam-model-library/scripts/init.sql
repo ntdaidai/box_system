@@ -5,7 +5,7 @@
 -- ============================================================
 
 -- 使用数据库
-USE model_registry;
+USE dam_system;
 
 -- 模型注册表
 CREATE TABLE IF NOT EXISTS `model_registry` (
@@ -38,9 +38,10 @@ CREATE TABLE IF NOT EXISTS `model_deploy_binding` (
   `container_port`    INT           DEFAULT NULL COMMENT '容器内部端口',
   `inference_path`    VARCHAR(256)  DEFAULT NULL COMMENT '推理接口路径（如 /predict）',
   `health_check_url`  VARCHAR(512)  DEFAULT NULL COMMENT '健康检查路径（如 /health）',
-  `gpu_device`        VARCHAR(64)   DEFAULT NULL COMMENT 'GPU 设备映射（如 0 或 0,1）',
+  `gpu_device`        VARCHAR(64)   DEFAULT NULL COMMENT 'GPU 设备映射（已废弃，请使用 container_config.gpus）',
   `extra_mounts`      JSON          DEFAULT NULL COMMENT '挂载卷 [{"host":"...","container":"..."}]',
   `extra_env`         JSON          DEFAULT NULL COMMENT '环境变量 {"KEY":"VALUE"}',
+  `container_config`  JSON          DEFAULT NULL COMMENT 'Docker 容器运行时配置',
   `remark`            VARCHAR(256)  DEFAULT NULL COMMENT '备注',
   `create_time`       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_time`       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',

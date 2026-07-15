@@ -26,7 +26,7 @@ class InferService:
     def __init__(self):
         self.client = httpx.Client(timeout=300.0)  # 5 分钟超时
 
-    def infer(self, db: Session, model_id: int, request_data: dict, validate: bool = False) -> dict:
+    def infer(self, db: Session, model_id: int, request_data: dict, validate: bool = False, filter_output: bool = False) -> dict:
         """推理（容器必须已运行）
 
         Args:
@@ -34,6 +34,7 @@ class InferService:
             model_id: 模型 ID
             request_data: 推理请求数据
             validate: 是否校验输入
+            filter_output: 是否过滤输出（只返回 Schema 定义的字段）
 
         Returns:
             推理结果
@@ -73,7 +74,13 @@ class InferService:
         try:
             response = self.client.post(inference_url, json=request_data)
             response.raise_for_status()
-            return response.json()
+            result = response.json()
+
+            # 过滤输出（如果启用）
+            if filter_output:
+                result = self._filter_output(db, model_id, result)
+
+            return result
         except httpx.ConnectError:
             raise HTTPException(status_code=502, detail="推理服务不可达")
         except httpx.HTTPStatusError as e:
@@ -81,7 +88,7 @@ class InferService:
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"推理失败: {str(e)}")
 
-    def run(self, db: Session, model_id: int, request_data: dict, wait_timeout: int = 120, validate: bool = False) -> dict:
+    def run(self, db: Session, model_id: int, request_data: dict, wait_timeout: int = 600, validate: bool = False, filter_output: bool = False) -> dict:
         """一次性运行（自动启动→探活→推理→停止）
 
         Args:
@@ -90,6 +97,7 @@ class InferService:
             request_data: 推理请求数据
             wait_timeout: 等待服务就绪的超时时间（秒）
             validate: 是否校验输入
+            filter_output: 是否过滤输出（只返回 Schema 定义的字段）
 
         Returns:
             推理结果 + 运行信息
@@ -111,64 +119,49 @@ class InferService:
         auto_started = False
         start_time = None
         stop_time = None
+        inference_result = None
 
-        # 如果未运行，自动启动
-        if model.runtime_status != "running":
-            logger.info(f"模型 {model_id} 未运行，自动启动...")
-            start_time = time.time()
-            try:
+        try:
+            # 如果未运行，自动启动
+            if model.runtime_status != "running":
+                logger.info(f"模型 {model_id} 未运行，自动启动...")
+                start_time = time.time()
                 lifecycle_service.start_model(db, model_id)
                 auto_started = True
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=f"自动启动失败: {str(e)}")
 
-        # 探活：等待服务就绪
-        logger.info(f"等待推理服务就绪...")
-        if not self._wait_for_ready(binding, timeout=wait_timeout):
-            # 启动失败，停止容器
-            if auto_started:
-                try:
-                    lifecycle_service.stop_model(db, model_id)
-                except Exception:
-                    pass
-            raise HTTPException(status_code=504, detail="模型启动超时，推理服务未就绪")
+            # 探活：等待服务就绪
+            logger.info(f"等待推理服务就绪...")
+            if not self._wait_for_ready(binding, timeout=wait_timeout):
+                raise HTTPException(status_code=504, detail="模型启动超时，推理服务未就绪")
 
-        # 执行推理
-        inference_url = f"http://{binding.host_ip}:{binding.host_port}{binding.inference_path}"
-        try:
+            # 执行推理
+            inference_url = f"http://{binding.host_ip}:{binding.host_port}{binding.inference_path}"
             response = self.client.post(inference_url, json=request_data)
             response.raise_for_status()
             inference_result = response.json()
+
+            # 过滤输出（如果启用）
+            if filter_output:
+                inference_result = self._filter_output(db, model_id, inference_result)
+
+        except HTTPException:
+            # 重新抛出 HTTP 异常
+            raise
         except httpx.ConnectError:
-            if auto_started:
-                try:
-                    lifecycle_service.stop_model(db, model_id)
-                except Exception:
-                    pass
             raise HTTPException(status_code=502, detail="推理服务不可达")
         except httpx.HTTPStatusError as e:
-            if auto_started:
-                try:
-                    lifecycle_service.stop_model(db, model_id)
-                except Exception:
-                    pass
             raise HTTPException(status_code=502, detail=f"推理服务返回错误: {e.response.status_code}")
         except Exception as e:
+            raise HTTPException(status_code=500, detail=f"推理失败: {str(e)}")
+        finally:
+            # 无论成功失败，只要是自动启动的，都停止容器
             if auto_started:
+                stop_time = time.time()
+                logger.info(f"停止容器...")
                 try:
                     lifecycle_service.stop_model(db, model_id)
-                except Exception:
-                    pass
-            raise HTTPException(status_code=500, detail=f"推理失败: {str(e)}")
-
-        # 如果是自动启动的，停止容器
-        if auto_started:
-            stop_time = time.time()
-            logger.info(f"推理完成，停止容器...")
-            try:
-                lifecycle_service.stop_model(db, model_id)
-            except Exception as e:
-                logger.warning(f"停止容器失败: {e}")
+                except Exception as e:
+                    logger.warning(f"停止容器失败: {e}")
 
         # 构建返回结果
         result = {
@@ -186,12 +179,12 @@ class InferService:
 
         return result
 
-    def _wait_for_ready(self, binding: ModelDeployBinding, timeout: int = 120) -> bool:
+    def _wait_for_ready(self, binding: ModelDeployBinding, timeout: int = 600) -> bool:
         """探活：等待推理服务就绪
 
         Args:
             binding: 绑定信息
-            timeout: 超时时间（秒）
+            timeout: 超时时间（秒），默认 10 分钟
 
         Returns:
             是否就绪
@@ -199,12 +192,14 @@ class InferService:
         if not binding.health_check_url:
             # 没有配置健康检查，直接检查容器状态
             if binding.container_id:
-                return docker_service.is_container_running(binding.container_id)
+                # 没有健康检查时，等待 3 分钟让服务启动
+                container_timeout = min(timeout, 180)
+                return self._wait_container_ready(binding.container_id, timeout=container_timeout)
             return False
 
         health_url = f"http://{binding.host_ip}:{binding.host_port}{binding.health_check_url}"
         deadline = time.time() + timeout
-        interval = 2  # 每 2 秒检查一次
+        interval = 5  # 每 5 秒检查一次（设备较慢，减少检查频率）
 
         logger.info(f"探活: {health_url}")
 
@@ -220,6 +215,30 @@ class InferService:
             time.sleep(interval)
 
         logger.warning(f"探活超时: {health_url}")
+        return False
+
+    def _wait_container_ready(self, container_id: str, timeout: int = 180) -> bool:
+        """探活：等待容器运行（无健康检查时使用）
+
+        Args:
+            container_id: 容器 ID
+            timeout: 超时时间（秒），默认 3 分钟
+
+        Returns:
+            是否就绪
+        """
+        deadline = time.time() + timeout
+        interval = 5
+
+        logger.info(f"探活: 容器 {container_id[:12]}")
+
+        while time.time() < deadline:
+            if docker_service.is_container_running(container_id):
+                logger.info(f"容器已运行")
+                return True
+            time.sleep(interval)
+
+        logger.warning(f"探活超时: 容器 {container_id[:12]}")
         return False
 
     def _validate_and_fill_defaults(self, db: Session, model_id: int, request_data: dict) -> dict:
@@ -292,6 +311,67 @@ class InferService:
                 raise HTTPException(status_code=400, detail=f"字段 {field_name} 必须是 JSON 对象或数组")
 
         logger.info(f"输入校验通过")
+        return result
+
+    def _filter_output(self, db: Session, model_id: int, response_data: dict) -> dict:
+        """根据 IO Schema 过滤输出，只保留定义的字段
+
+        Args:
+            db: 数据库会话
+            model_id: 模型 ID
+            response_data: 模型返回的原始数据
+
+        Returns:
+            过滤后的数据
+        """
+        # 获取 IO Schema
+        schema = db.query(ModelIOSchema).filter(ModelIOSchema.model_id == model_id).first()
+        if not schema:
+            # 没有 Schema，返回原始数据
+            return response_data
+
+        outputs = schema.outputs or []
+        if not outputs:
+            return response_data
+
+        # 构建输出字段定义
+        output_fields = {field_def.get("field"): field_def for field_def in outputs}
+
+        # 过滤并类型匹配
+        result = {}
+        for field_name, field_def in output_fields.items():
+            if field_name not in response_data:
+                continue
+
+            value = response_data[field_name]
+            field_type = field_def.get("type")
+
+            # 类型匹配
+            if field_type == "integer" and isinstance(value, (int, float)):
+                result[field_name] = int(value)
+            elif field_type == "float" and isinstance(value, (int, float)):
+                result[field_name] = float(value)
+            elif field_type == "text" and isinstance(value, str):
+                result[field_name] = value
+            elif field_type == "json" and isinstance(value, (dict, list)):
+                result[field_name] = value
+            else:
+                # 类型不匹配，尝试转换
+                try:
+                    if field_type == "integer":
+                        result[field_name] = int(value)
+                    elif field_type == "float":
+                        result[field_name] = float(value)
+                    elif field_type == "text":
+                        result[field_name] = str(value)
+                    elif field_type == "json":
+                        result[field_name] = value
+                    else:
+                        result[field_name] = value
+                except (ValueError, TypeError):
+                    # 转换失败，跳过该字段
+                    logger.warning(f"输出字段 {field_name} 类型不匹配，已跳过")
+
         return result
 
 

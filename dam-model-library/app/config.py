@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     db_port: int = 3306
     db_user: str = "root"
     db_password: str = ""
-    db_name: str = "model_registry"
+    db_name: str = "dam_system"
 
     # Docker
     docker_host: str = "unix:///var/run/docker.sock"

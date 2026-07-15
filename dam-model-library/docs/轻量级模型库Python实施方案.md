@@ -103,9 +103,10 @@ CREATE TABLE `model_deploy_binding` (
   `container_port`    INT           DEFAULT NULL COMMENT '容器内部端口',
   `inference_path`    VARCHAR(256)  DEFAULT NULL COMMENT '推理接口路径（如 /predict）',
   `health_check_url`  VARCHAR(512)  DEFAULT NULL COMMENT '健康检查路径（如 /health）',
-  `gpu_device`        VARCHAR(64)   DEFAULT NULL COMMENT 'GPU 设备映射（如 0 或 0,1）',
+  `gpu_device`        VARCHAR(64)   DEFAULT NULL COMMENT 'GPU 设备映射（已废弃，请使用 container_config.gpus）',
   `extra_mounts`      JSON          DEFAULT NULL COMMENT '挂载卷 [{"host":"...","container":"..."}]',
   `extra_env`         JSON          DEFAULT NULL COMMENT '环境变量 {"KEY":"VALUE"}',
+  `container_config`  JSON          DEFAULT NULL COMMENT 'Docker 容器运行时配置',
   `remark`            VARCHAR(256)  DEFAULT NULL COMMENT '备注',
   `create_time`       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_time`       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -168,6 +169,31 @@ stopped (默认) → starting → running → stopping → stopped
 | `container` | 必填 | 可选 | 已有容器，直接纳入管理 | docker start |
 | `image` | 空 | 必填 | 仅有镜像，启动时创建容器 | docker run → 自动填入 container_id，bind_type 改为 both |
 | `both` | 必填 | 必填 | 容器已存在 + 记录镜像来源 | docker start（可 rebuild 用镜像重建） |
+
+#### model_deploy_binding — container_config 结构
+
+`container_config` 是一个 JSON 字段，用于存储 Docker 容器的运行时配置。相比固定的 `gpu_device` 字段，它更灵活，支持任意 Docker 参数。
+
+```json
+{
+  "runtime": "nvidia",          // 容器运行时
+  "gpus": "all",               // GPU 分配: "all", "0", "0,1"
+  "ipc_mode": "host",          // IPC 命名空间
+  "shm_size": "16g",           // 共享内存大小
+  "network_mode": "host",      // 网络模式（host/bridge）
+  "cap_add": [],               // 添加 Linux 能力
+  "devices": [],               // 映射设备
+  "privileged": false,         // 特权模式
+  "ulimits": [],               // 资源限制
+  "labels": {},                // 容器标签
+  "restart_policy": {}         // 重启策略
+}
+```
+
+**优势：**
+- 新增配置不需要改表结构
+- 支持任意 Docker 参数
+- `extra = "allow"` 允许自定义字段
 
 #### model_deploy_binding — 推理地址拼接
 
@@ -981,28 +1007,46 @@ uvicorn app.main:app --host 0.0.0.0 --port 5001
 
 | 方法 | 路径 | 说明 | 请求体 |
 |------|------|------|--------|
-| POST | `/api/model-registry` | 注册模型 | `{name, description?, framework?, architecture?, modelType?, modelSize?, ownerId?}` |
-| PUT | `/api/model-registry/{id}` | 更新模型 | `{name?, description?, framework?, ...}` 部分更新 |
+| POST | `/api/model-registry` | 注册模型 | `{name, description?, framework?, architecture?, model_type?, model_size?, owner_id?}` |
+| PUT | `/api/model-registry/{id}` | 更新模型 | `{name?, description?, framework?, architecture?, model_type?, model_size?}` 部分更新 |
 | DELETE | `/api/model-registry/{id}` | 删除模型 | 无（running 禁删） |
-| GET | `/api/model-registry/{id}` | 查询详情 | 无（含绑定信息 + inferenceUrl） |
-| GET | `/api/model-registry` | 分页列表 | Query: `pageNum, pageSize, keyword?, runtimeStatus?, framework?, ownerId?` |
+| GET | `/api/model-registry/{id}` | 查询详情 | 无（含绑定信息 + inference_url） |
+| GET | `/api/model-registry` | 分页列表 | Query: `page_num, page_size, keyword?, runtime_status?, framework?, owner_id?` |
 
 ### 4.2 部署绑定
 
 | 方法 | 路径 | 说明 | 请求体 |
 |------|------|------|--------|
-| POST | `/api/model-registry/{id}/bind-container` | 绑定已有容器 | `{containerId, hostPort, containerPort, inferencePath?, healthCheckUrl?, gpuDevice?, remark?}` |
-| POST | `/api/model-registry/{id}/bind-image` | 绑定镜像 | `{imageName, hostPort, containerPort, inferencePath?, healthCheckUrl?, gpuDevice?, extraMounts?, extraEnv?, remark?}` |
-| POST | `/api/model-registry/{id}/bind-both` | 绑定容器+镜像 | `{containerId, imageName, hostPort, containerPort, inferencePath?, gpuDevice?}` |
-| PUT | `/api/model-registry/{id}/binding` | 更新绑定配置 | 部分更新 |
+| POST | `/api/model-registry/{id}/bind-container` | 绑定已有容器 | `{container_id, container_port, host_port?, inference_path?, health_check_url?, gpu_device?, container_config?, remark?}` |
+| POST | `/api/model-registry/{id}/bind-image` | 绑定镜像 | `{image_name, container_port, host_port?, inference_path?, health_check_url?, gpu_device?, extra_mounts?, extra_env?, container_config?, remark?}` |
+| POST | `/api/model-registry/{id}/bind-both` | 绑定容器+镜像 | `{container_id, image_name, container_port, host_port?, inference_path?, health_check_url?, gpu_device?, container_config?}` |
+| PUT | `/api/model-registry/{id}/binding` | 更新绑定配置 | `{host_port?, container_port?, inference_path?, health_check_url?, gpu_device?, extra_mounts?, extra_env?, container_config?, remark?}` 部分更新 |
 | DELETE | `/api/model-registry/{id}/binding` | 解绑 | 无（running 禁解绑） |
+
+**container_config 结构（可选）：**
+
+```json
+{
+  "runtime": "nvidia",          // 容器运行时
+  "gpus": "all",               // GPU 分配: "all", "0", "0,1"
+  "ipc_mode": "host",          // IPC 命名空间
+  "shm_size": "16g",           // 共享内存大小
+  "network_mode": "host",      // 网络模式
+  "cap_add": [],               // 添加 Linux 能力
+  "devices": [],               // 映射设备
+  "privileged": false,         // 特权模式
+  "ulimits": [],               // 资源限制
+  "labels": {},                // 容器标签
+  "restart_policy": {}         // 重启策略
+}
+```
 
 ### 4.3 容器生命周期
 
 | 方法 | 路径 | 说明 | 请求体 |
 |------|------|------|--------|
 | POST | `/api/model-registry/{id}/start` | 启动模型 | 无 |
-| POST | `/api/model-registry/{id}/stop` | 停止模型 | `{timeout?}` 默认 30s |
+| POST | `/api/model-registry/{id}/stop` | 停止模型 | Query: `timeout?` 默认 30s |
 | POST | `/api/model-registry/{id}/restart` | 重启模型 | 无 |
 | POST | `/api/model-registry/{id}/rebuild` | 重建容器 | 无（需有镜像绑定） |
 | GET | `/api/model-registry/{id}/status` | 实时状态 | 无（含资源监控） |
@@ -1022,15 +1066,54 @@ follow=true 时返回 SSE 流。
 | POST | `/api/model-registry/{id}/io-schema` | 设置 | `{inputs: [...], outputs: [...]}` |
 | GET | `/api/model-registry/{id}/io-schema` | 获取 | 无 |
 | PUT | `/api/model-registry/{id}/io-schema` | 更新 | `{inputs?, outputs?}` |
+| DELETE | `/api/model-registry/{id}/io-schema` | 删除 | 无 |
 
 ### 4.6 批量操作
 
 | 方法 | 路径 | 说明 | 请求体 |
 |------|------|------|--------|
-| POST | `/api/model-registry/batch/start` | 批量启动 | `{modelIds: [1,2,3]}` |
-| POST | `/api/model-registry/batch/stop` | 批量停止 | `{modelIds: [1,2,3]}` |
+| POST | `/api/model-registry/batch/start` | 批量启动 | `{model_ids: [1,2,3]}` |
+| POST | `/api/model-registry/batch/stop` | 批量停止 | `{model_ids: [1,2,3]}` |
 
-### 4.7 响应格式
+### 4.7 推理接口
+
+| 方法 | 路径 | 说明 | 请求体 |
+|------|------|------|--------|
+| POST | `/api/model-registry/{id}/infer` | 推理（容器必须已运行） | `{request_data: {...}}` |
+| POST | `/api/model-registry/{id}/run` | 一次性运行（自动启动→推理→停止） | `{request_data: {...}}` |
+
+**推理接口 `/infer` 参数：**
+- 请求体：`{request_data: {...}}` — 推理请求数据（透传给模型服务）
+- Query 参数：
+  - `validate`: 是否校验输入（基于 IO Schema），默认 false
+  - `filter_output`: 是否过滤输出（只返回 Schema 定义的字段），默认 false
+
+**一次性运行接口 `/run` 参数：**
+- 请求体：`{request_data: {...}}` — 推理请求数据（透传给模型服务）
+- Query 参数：
+  - `wait_timeout`: 等待服务就绪的超时时间（秒），默认 600（10 分钟）
+  - `validate`: 是否校验输入（基于 IO Schema），默认 false
+  - `filter_output`: 是否过滤输出（只返回 Schema 定义的字段），默认 false
+
+**推理响应：** 透传模型服务的响应
+
+**一次性运行响应：**
+```json
+{
+  "code": 200,
+  "data": {
+    "inference_result": { ... },
+    "runtime_info": {
+      "auto_started": true,
+      "start_time": "2026-07-13T10:00:00",
+      "stop_time": "2026-07-13T10:00:05",
+      "duration_ms": 5000
+    }
+  }
+}
+```
+
+### 4.8 响应格式
 
 统一响应格式：
 ```json
@@ -1038,6 +1121,18 @@ follow=true 时返回 SSE 流。
   "code": 200,
   "message": "success",
   "data": { ... }
+}
+```
+
+分页响应格式：
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": [...],
+  "total": 100,
+  "page_num": 1,
+  "page_size": 10
 }
 ```
 
@@ -1060,7 +1155,7 @@ follow=true 时返回 SSE 流。
 
 ```
 轮询 GET http://{host_ip}:{host_port}{health_check_url}
-间隔：2 秒
+间隔：5 秒
 超时：120 秒（可通过配置调整）
 成功条件：HTTP 状态码 < 400
 超时处理：更新 runtime_status = error，抛出异常

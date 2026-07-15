@@ -91,5 +91,35 @@ services:
       DB_PORT: "3306"
       DB_USER: root
       DB_PASSWORD: root
-      DB_NAME: model_registry
+      DB_NAME: dam_system
+    network_mode: host
+
+  # ========== DAM 工作流生成服务 ==========
+  dam-workflow:
+    build:
+      context: ./dam-workflow
+      dockerfile: Dockerfile
+    container_name: dam-workflow
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    # 挂载源码目录，修改后只需 docker compose restart 即可生效
+    volumes:
+      - ./dam-workflow:/app
+    environment:
+      # MySQL（模型库数据库）
+      MODEL_REGISTRY_DB_HOST: 127.0.0.1
+      MODEL_REGISTRY_DB_PORT: "3306"
+      MODEL_REGISTRY_DB_USER: root
+      MODEL_REGISTRY_DB_PASSWORD: root
+      MODEL_REGISTRY_DB_NAME: dam_system
+      # 模型库 API
+      MODEL_REGISTRY_API_BASE: http://127.0.0.1:5001
+      # 服务配置
+      HOST: "0.0.0.0"
+      PORT: "5002"
     network_mode: host

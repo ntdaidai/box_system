@@ -22,6 +22,7 @@ async def infer(
     model_id: int,
     data: InferRequest,
     validate: bool = Query(False, description="是否校验输入（基于 IO Schema）"),
+    filter_output: bool = Query(False, description="是否过滤输出（只返回 Schema 定义的字段）"),
     db: Session = Depends(get_db),
 ):
     """推理（容器必须已运行）
@@ -34,8 +35,9 @@ async def infer(
 
     参数：
     - validate: 是否校验输入（基于 IO Schema）
+    - filter_output: 是否过滤输出（只返回 Schema 定义的字段）
     """
-    result = infer_service.infer(db, model_id, data.request_data, validate=validate)
+    result = infer_service.infer(db, model_id, data.request_data, validate=validate, filter_output=filter_output)
     return Result(code=200, data=result)
 
 
@@ -43,8 +45,9 @@ async def infer(
 async def run(
     model_id: int,
     data: InferRequest,
-    wait_timeout: int = Query(120, description="等待服务就绪的超时时间（秒）"),
+    wait_timeout: int = Query(600, description="等待服务就绪的超时时间（秒），默认10分钟"),
     validate: bool = Query(False, description="是否校验输入（基于 IO Schema）"),
+    filter_output: bool = Query(False, description="是否过滤输出（只返回 Schema 定义的字段）"),
     db: Session = Depends(get_db),
 ):
     """一次性运行（自动启动→探活→推理→停止）
@@ -58,6 +61,7 @@ async def run(
     参数：
     - wait_timeout: 等待服务就绪的超时时间（秒）
     - validate: 是否校验输入（基于 IO Schema）
+    - filter_output: 是否过滤输出（只返回 Schema 定义的字段）
     """
-    result = infer_service.run(db, model_id, data.request_data, wait_timeout=wait_timeout, validate=validate)
+    result = infer_service.run(db, model_id, data.request_data, wait_timeout=wait_timeout, validate=validate, filter_output=filter_output)
     return Result(code=200, data=result)
