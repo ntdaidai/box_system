@@ -14,6 +14,7 @@ const service = axios.create({
 })
 
 const pendingRefreshes = new Map()
+let authRedirecting = false
 
 function withRequestDefaults(url, config = {}) {
   const next = { ...config }
@@ -67,8 +68,26 @@ service.interceptors.response.use(
     return res
   },
   (error) => {
+    // dai: Convert an expired/missing token into one clear login flow. This
+    // also clears cached authenticated responses before leaving the page.
+    if (error.response?.status === 401) {
+      localStorage.removeItem('token')
+      clearResponseCache()
+      const detail = error.response?.data?.detail || '登录状态已失效，请重新登录'
+      if (window.location.pathname !== '/login' && !authRedirecting) {
+        authRedirecting = true
+        ElMessage.warning(detail)
+        const redirect = encodeURIComponent(
+          `${window.location.pathname}${window.location.search}${window.location.hash}`,
+        )
+        window.setTimeout(() => window.location.replace(`/login?redirect=${redirect}`), 250)
+      } else if (window.location.pathname === '/login' && !error.config?.silentError) {
+        ElMessage.error(detail)
+      }
+      return Promise.reject(error)
+    }
     if (!error.config?.silentError) {
-      ElMessage.error(error.message || '网络错误')
+      ElMessage.error(error.response?.data?.detail || error.message || '网络错误')
     }
     return Promise.reject(error)
   }

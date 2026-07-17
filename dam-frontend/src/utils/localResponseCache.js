@@ -1,6 +1,6 @@
 // Bump when response validity rules change so previously cached broken/empty
 // history responses cannot survive a backend repair.
-const CACHE_NAMESPACE = 'dam:api-cache:v4'
+const CACHE_NAMESPACE = 'dam:api-cache:v5'
 const DEFAULT_MAX_AGE = 24 * 60 * 60 * 1000
 const URL_MAX_AGE = [
   [/^\/v1\/sensor\/realtime/, 15 * 1000],

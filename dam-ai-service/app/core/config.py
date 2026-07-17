@@ -33,6 +33,13 @@ class Settings:
 
     # ── 请求限制 ───────────────────────────────────────────────
     MAX_IMAGE_SIZE_MB: int = int(_get_env("MAX_IMAGE_SIZE_MB", "10"))
+    MAX_IMAGE_PIXELS: int = int(_get_env("MAX_IMAGE_PIXELS", "25000000"))
+    # dai: Uploaded videos are temporary jobs; no source video is retained.
+    MAX_VIDEO_SIZE_MB: int = int(_get_env("MAX_VIDEO_SIZE_MB", "200"))
+    MAX_VIDEO_DURATION_SECONDS: int = int(
+        _get_env("MAX_VIDEO_DURATION_SECONDS", "600")
+    )
+    VIDEO_DETECTION_FPS: float = float(_get_env("VIDEO_DETECTION_FPS", "2"))
 
     # ── IoTDB ─────────────────────────────────────────────────
     IOTDB_HOST: str = _get_env("IOTDB_HOST", "127.0.0.1")
@@ -84,6 +91,33 @@ class Settings:
     MINIO_ACCESS_KEY: str = _get_env("MINIO_ACCESS_KEY", "minioadmin")
     MINIO_SECRET_KEY: str = _get_env("MINIO_SECRET_KEY", "minioadmin")
     MINIO_SECURE: bool = _get_env("MINIO_SECURE", "false").lower() == "true"
+
+    # ── YOLO 目标检测 ──────────────────────────────────────
+    YOLO_MODEL_PATH: str = _get_env(
+        "YOLO_MODEL_PATH",
+        "/home/jetson/wh_test/roboflow/runs/yolo26x_continue/weights/best.pt",
+    )
+    YOLO_CONFIDENCE: float = float(_get_env("YOLO_CONFIDENCE", "0.5"))
+    YOLO_IOU: float = float(_get_env("YOLO_IOU", "0.45"))
+
+    # dai: 单摄像头可直接配置 URL，多摄像头可通过 JSON 数组统一配置。
+    # 默认不携带任何摄像头账号，部署时再传入实际海康 RTSP 地址。
+    CAMERA_RTSP_URL: str = _get_env("CAMERA_RTSP_URL", "")
+    CAMERA_SOURCE: str = _get_env("CAMERA_SOURCE", "")
+    CAMERA_CONFIGS_JSON: str = _get_env("CAMERA_CONFIGS_JSON", "")
+    CAMERA_ID: str = _get_env("CAMERA_ID", "camera_001")
+    CAMERA_NAME: str = _get_env("CAMERA_NAME", "主摄像头")
+    CAMERA_AUTO_START: bool = _get_env("CAMERA_AUTO_START", "true").lower() == "true"
+    CAMERA_DETECTION_FPS: float = float(_get_env("CAMERA_DETECTION_FPS", "5"))
+    CAMERA_JPEG_QUALITY: int = int(_get_env("CAMERA_JPEG_QUALITY", "80"))
+
+    # WebRTC Streamer 的 HTTP API 不直接暴露给浏览器，由 camera API 代理信令。
+    WEBRTC_STREAMER_URL: str = _get_env(
+        "WEBRTC_STREAMER_URL", "http://127.0.0.1:8002"
+    ).rstrip("/")
+    WEBRTC_STREAM_OPTIONS: str = _get_env(
+        "WEBRTC_STREAM_OPTIONS", "rtptransport=tcp&timeout=10"
+    )
 
 
 settings = Settings()

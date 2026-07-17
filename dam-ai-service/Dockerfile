@@ -1,12 +1,14 @@
-FROM docker.m.daocloud.io/library/python:3.10-slim
+# dai
+# Jetson-compatible PyTorch/CUDA base. The previous slim image caused pip to
+# download a generic CUDA toolchain that was not the device's JetPack runtime.
+ARG JETSON_AI_BASE=ghcr.nju.edu.cn/nvidia-ai-iot/vllm:latest-jetson-orin
+FROM ${JETSON_AI_BASE}
 
 WORKDIR /app
 
-# 安装系统依赖（MySQL 客户端库 + 串口通信 + 编译工具以支持 psutil 等 C 扩展）
+# 安装系统依赖（基础镜像已包含 Jetson PyTorch、CUDA 与编译工具）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libusb-1.0-0 \
-    gcc \
-    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # 安装 Python 依赖

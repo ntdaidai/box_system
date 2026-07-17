@@ -4,6 +4,30 @@
 # IoTDB:  /home/jetson/iotdb/docker-compose-standalone.yml
 
 services:
+  # ========== RTSP -> WebRTC 低延迟网关 ==========
+  webrtc-streamer:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/mpromonet/webrtc-streamer:master-arm64-linuxarm64
+    container_name: dam-webrtc-streamer
+    restart: unless-stopped
+    platform: linux/arm64
+    # host 网络让 WebRTC 正确发布 Jetson 的 LAN ICE 候选；HTTP 信令只监听
+    # 回环地址，由 Python 后端做认证代理，避免暴露 RTSP 凭据和任意拉流接口。
+    network_mode: host
+    command:
+      - -H
+      - 127.0.0.1:8002
+      - -s-
+      - -R
+      - 50000:50100
+      # 海康子码流建议设为 H.264；透传编码可显著降低 Jetson CPU 和延迟。
+      - -o
+    healthcheck:
+      test: ["CMD", "/usr/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8002"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   # ========== 前端（Vite 开发服务器） ==========
   dam-frontend:
     build:
@@ -17,6 +41,8 @@ services:
       - ./dam-frontend/public:/app/public
       - ./dam-frontend/index.html:/app/index.html
       - ./dam-frontend/vite.config.js:/app/vite.config.js
+    environment:
+      TZ: Asia/Shanghai
     network_mode: host
 
   # ========== Python后端（一体化服务） ==========
@@ -26,6 +52,11 @@ services:
       dockerfile: Dockerfile
     container_name: dam-server-python
     restart: unless-stopped
+    depends_on:
+      webrtc-streamer:
+        condition: service_healthy
+    # dai: YOLO 使用 Jetson CUDA；NVIDIA 官方要求 GPU 容器启用 nvidia runtime。
+    runtime: nvidia
     healthcheck:
       test: ["CMD", "python", "/app/scripts/check_history_health.py", "--max-queue-age", "120", "--max-rollup-lag", "10"]
       interval: 30s
@@ -40,6 +71,8 @@ services:
       - /usr/sbin/nvidia-smi:/usr/sbin/nvidia-smi:ro
       - /usr/lib/aarch64-linux-gnu/nvidia:/usr/lib/aarch64-linux-gnu/nvidia:ro
       - /proc/device-tree:/proc/device-tree:ro
+      # 挂载 YOLO 模型权重目录
+      - /home/jetson/wh_test/roboflow/runs:/models/runs:ro
     environment:
       # vLLM 视觉模型
       VLLM_QWEN3VL_URL: http://localhost:8000
@@ -67,7 +100,30 @@ services:
       DEFAULT_ADMIN_USERNAME: admin
       DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD}
       DEFAULT_ADMIN_REALNAME: "管理员"
+      # YOLO 目标检测模型
+      YOLO_MODEL_PATH: /models/runs/yolo26x_continue/weights/best.pt
+      YOLO_CONFIDENCE: "0.5"
+      YOLO_IOU: "0.45"
+      # dai: 未接入摄像头时保持为空；接入后在 .env 中填写真实海康地址。
+      # 多路模式可改用 CAMERA_CONFIGS_JSON，格式见 README 的摄像头章节。
+      CAMERA_RTSP_URL: "${CAMERA_RTSP_URL:-}"
+      CAMERA_SOURCE: "${CAMERA_SOURCE:-}"
+      CAMERA_CONFIGS_JSON: "${CAMERA_CONFIGS_JSON:-}"
+      CAMERA_ID: "${CAMERA_ID:-camera_001}"
+      CAMERA_NAME: "${CAMERA_NAME:-主摄像头}"
+      CAMERA_AUTO_START: "${CAMERA_AUTO_START:-true}"
+      CAMERA_DETECTION_FPS: "${CAMERA_DETECTION_FPS:-5}"
+      CAMERA_JPEG_QUALITY: "${CAMERA_JPEG_QUALITY:-80}"
+      # WebRTC Streamer 仅监听宿主机回环地址，信令通过后端认证代理。
+      WEBRTC_STREAMER_URL: "${WEBRTC_STREAMER_URL:-http://127.0.0.1:8002}"
+      WEBRTC_STREAM_OPTIONS: "${WEBRTC_STREAM_OPTIONS:-rtptransport=tcp&timeout=10}"
+      MAX_VIDEO_SIZE_MB: "${MAX_VIDEO_SIZE_MB:-200}"
+      MAX_VIDEO_DURATION_SECONDS: "${MAX_VIDEO_DURATION_SECONDS:-600}"
+      VIDEO_DETECTION_FPS: "${VIDEO_DETECTION_FPS:-2}"
     devices:
+      # dai: 海康网络摄像头不需要设备映射；USB/UVC 摄像头接入 Jetson
+      # 时，在 .env 同时设置 CAMERA_DEVICE=/dev/video0 和 CAMERA_SOURCE=/dev/video0。
+      - "${CAMERA_DEVICE:-/dev/null}:${CAMERA_DEVICE:-/dev/null}"
       - "/dev/ttyCH341USB0:/dev/ttyCH341USB0"
       - "/dev/ttyCH341USB1:/dev/ttyCH341USB1"
       - "/dev/ttyCH341USB2:/dev/ttyCH341USB2"

@@ -32,6 +32,21 @@ def average_values(values):
     return round(sum(numeric) / len(numeric), 4)
 
 
+def minimum_value(values):
+    numeric = _numeric_values(values)
+    return round(min(numeric), 4) if numeric else None
+
+
+def maximum_value(values):
+    numeric = _numeric_values(values)
+    return round(max(numeric), 4) if numeric else None
+
+
+def sum_values(values):
+    numeric = _numeric_values(values)
+    return int(sum(numeric)) if numeric else None
+
+
 def circular_mean_degrees(values):
     numeric = _numeric_values(values)
     if not numeric:
@@ -57,7 +72,11 @@ def wind_direction_from_angle(angle):
     return code, WIND_DIRECTION_16.get(code, f"未知({code})")
 
 
-def aggregate_bucket_values(device_name: str, values_by_field: dict) -> dict:
+def aggregate_bucket_values(
+    device_name: str,
+    values_by_field: dict,
+    include_extrema: bool = False,
+) -> dict:
     result = {}
 
     for field, values in values_by_field.items():
@@ -65,11 +84,59 @@ def aggregate_bucket_values(device_name: str, values_by_field: dict) -> dict:
             value = circular_mean_degrees(values)
         elif field in {"wind_direction", "wind_dir_code"}:
             continue
+        elif field.endswith("_min"):
+            value = minimum_value(values)
+        elif field.endswith("_max"):
+            value = maximum_value(values)
+        elif field.endswith("_sample_count"):
+            value = sum_values(values)
         else:
             value = average_values(values)
 
         if value is not None:
             result[field] = value
+
+    # Calendar history needs true daily extremes. Keeping this opt-in avoids
+    # inflating every short-range rollup while still allowing extrema to be
+    # propagated correctly when a daily bucket is rebuilt from lower layers.
+    if device_name == "temp_humidity" and include_extrema:
+        for field in ("temperature", "humidity"):
+            values = values_by_field.get(field, [])
+            field_min = f"{field}_min"
+            field_max = f"{field}_max"
+            sample_count = f"{field}_sample_count"
+
+            if field_min not in result:
+                value = minimum_value(values)
+                if value is not None:
+                    result[field_min] = value
+            if field_max not in result:
+                value = maximum_value(values)
+                if value is not None:
+                    result[field_max] = value
+            if sample_count not in result:
+                count = len(_numeric_values(values))
+                if count:
+                    result[sample_count] = count
+
+    # ``today_rain`` is a running total that resets at local midnight. Its
+    # daily average is not the daily rainfall; the highest observed value is.
+    # Persist a dedicated field so calendar charts never confuse the two.
+    if device_name == "rain" and include_extrema:
+        propagated = values_by_field.get("daily_rain", [])
+        source_values = propagated or values_by_field.get("today_rain", [])
+        daily_rain = maximum_value(source_values)
+        if daily_rain is not None:
+            result["daily_rain"] = daily_rain
+
+        propagated_counts = values_by_field.get("daily_rain_sample_count", [])
+        sample_count = (
+            sum_values(propagated_counts)
+            if propagated_counts
+            else len(_numeric_values(values_by_field.get("today_rain", [])))
+        )
+        if sample_count:
+            result["daily_rain_sample_count"] = sample_count
 
     if device_name == "wind" and "wind_angle" in result:
         code, direction = wind_direction_from_angle(result["wind_angle"])
@@ -79,4 +146,3 @@ def aggregate_bucket_values(device_name: str, values_by_field: dict) -> dict:
             result["wind_direction"] = direction
 
     return result
-

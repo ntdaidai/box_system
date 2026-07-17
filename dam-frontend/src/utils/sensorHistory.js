@@ -222,3 +222,42 @@ export const calcYAxisRange = (values = [], padding = 0.2, fallback = { min: 0, 
     max: Number((max + pad).toFixed(2)),
   }
 }
+
+/**
+ * Calculate human-friendly chart bounds while ignoring missing buckets.
+ * Values inside the fallback range keep that stable range; real overflows
+ * expand to a 1/2/5 × 10^n boundary instead of arbitrary decimal padding.
+ */
+export const calcNiceYAxisRange = (
+  values = [],
+  fallback = { min: 0, max: 1 },
+  targetTickCount = 5,
+) => {
+  const valid = values
+    .map(value => Array.isArray(value) ? value[1] : value)
+    .filter(value => value !== null && value !== undefined && value !== '' && typeof value !== 'boolean')
+    .map(Number)
+    .filter(Number.isFinite)
+  const baseMin = Number(fallback.min)
+  const baseMax = Number(fallback.max)
+
+  const niceStep = (span) => {
+    const roughStep = Math.max(span / targetTickCount, Number.EPSILON)
+    const magnitude = 10 ** Math.floor(Math.log10(roughStep))
+    const fraction = roughStep / magnitude
+    const niceFraction = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10
+    return niceFraction * magnitude
+  }
+
+  const baselineStep = niceStep(baseMax - baseMin)
+  if (!valid.length) return { min: baseMin, max: baseMax, interval: baselineStep }
+
+  const dataMin = Math.min(...valid)
+  const dataMax = Math.max(...valid)
+  const step = niceStep(Math.max(baseMax, dataMax) - Math.min(baseMin, dataMin))
+  return {
+    min: dataMin < baseMin ? Math.floor(dataMin / step) * step : baseMin,
+    max: dataMax > baseMax ? Math.ceil(dataMax / step) * step : baseMax,
+    interval: step,
+  }
+}

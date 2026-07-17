@@ -65,35 +65,56 @@
       </div>
     </div>
 
-    <!-- 历史曲线: 全宽 -->
-    <div class="data-panel">
-      <div class="chart-top-row">
-        <span class="panel-title">历史记录</span>
-        <div class="chart-tabs">
-          <button v-for="c in chartList" :key="c.key"
-            class="chart-tab" :class="{ active: selectedChart === c.key }"
-            :style="{ '--tab-color': c.color }"
-            @click="selectChart(c.key)">{{ c.name }}</button>
+    <!-- 逐日雨量历史 -->
+    <div class="data-panel history-panel">
+      <div class="history-panel-header">
+        <span class="panel-title">降水趋势</span>
+        <div class="calendar-controls">
+          <el-select v-model="selectedYear" class="history-select year-select" @change="onYearChange">
+            <el-option
+              v-for="year in yearOptions"
+              :key="year"
+              :label="`${year}年`"
+              :value="year"
+            />
+          </el-select>
+          <el-select v-model="selectedMonth" class="history-select month-select" @change="onMonthChange">
+            <el-option label="所有月份" value="all" />
+            <el-option
+              v-for="month in monthOptions"
+              :key="month"
+              :label="`${month}月`"
+              :value="month"
+            />
+          </el-select>
         </div>
-        <el-radio-group v-model="selectedRange" size="small" @change="onRangeChange">
-          <el-radio-button value="1h">1小时</el-radio-button>
-          <el-radio-button value="6h">6小时</el-radio-button>
-          <el-radio-button value="1d">1天</el-radio-button>
-          <el-radio-button value="7d">7天</el-radio-button>
-          <el-radio-button value="6mo">6个月</el-radio-button>
-        </el-radio-group>
       </div>
-      <div class="chart-wrap">
-        <div class="chart-container" ref="chartRef"></div>
-        <div v-if="historyLoading" class="chart-loading-overlay">
-          <div class="loading-spinner"></div>
-          <div class="loading-text">加载中 ...</div>
+
+      <div class="trend-shell">
+        <div class="history-stat-strip">
+          <div v-for="item in historyStats" :key="item.label" class="history-stat">
+            <span>{{ item.label }}</span>
+            <strong :class="item.tone">{{ item.value }}</strong>
+          </div>
         </div>
-        <div v-else-if="historyError" class="chart-loading-overlay">
-          <div class="loading-text">{{ historyError }}</div>
+
+        <div class="chart-wrap history-chart-wrap">
+          <div class="chart-container" ref="chartRef"></div>
+          <div v-if="historyLoading" class="chart-loading-overlay">
+            <div class="loading-spinner"></div>
+            <div class="loading-text">正在读取逐日雨量...</div>
+          </div>
+          <div v-else-if="historyError" class="chart-loading-overlay">
+            <div class="loading-text">{{ historyError }}</div>
+          </div>
+          <div v-else-if="historyEmpty" class="chart-loading-overlay chart-hint-overlay">
+            <div class="loading-text">该时间范围暂无逐日雨量数据</div>
+          </div>
         </div>
-        <div v-else-if="historyEmpty" class="chart-loading-overlay">
-          <div class="loading-text">当前时间范围暂无历史数据</div>
+
+        <div class="rain-series-legend">
+          <i></i>
+          <span>逐日雨量</span>
         </div>
       </div>
     </div>
@@ -101,43 +122,83 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { getSensorRealtime, getSensorHistory } from '@/api/sensor'
-import { buildChartAxisWindow, calcYAxisRange, formatChartAxisLabel, getNextHistoryRefreshMs, normalizeHistorySeries } from '@/utils/sensorHistory'
-import { cancelIdleTask, createSensorDetailStartup, preloadHistoryRanges, runWhenIdle } from '@/utils/sensorDetailStartup'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { getRainTrends, getSensorRealtime } from '@/api/sensor'
+import { calcNiceYAxisRange } from '@/utils/sensorHistory'
+import { cancelIdleTask, createSensorDetailStartup, runWhenIdle } from '@/utils/sensorDetailStartup'
 import { Pouring } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
+
+const TREND_URL = '/v1/sensor/history/rain/trends'
 
 const data = ref({})
 const chartRef = ref(null)
 const statusClass = ref('online')
 const statusText = ref('在线')
-const selectedRange = ref('1h')
-const selectedChart = ref('hour')
+const selectedYear = ref(new Date().getFullYear())
+const selectedMonth = ref('all')
+const availablePeriods = ref([])
 const lastTimestamp = ref(0)
 const historyLoading = ref(false)
 const historyError = ref('')
-const historyEmpty = ref(false)
-let chart = null, timer = null, historyRefreshTimer = null, preloadIdleTask = null
-let resizeHandler = null
-const chartData = ref({ today: [], hour: [], instant: [], window: null, config: null })
+const chartData = ref({ view: 'calendar', history: [], window: null })
 const historyCache = new Map()
-const deviceMeta = {
-  sn: 'DAM-RG-3018',
-  location: '库区左岸雨量站',
-  power: '太阳能 / 92%',
-}
-const historyFields = {
-  today: 'today_rain',
-  hour: 'hour_rain',
-  instant: 'instant_rain',
+
+let chart = null
+let timer = null
+let historyRefreshTimer = null
+let preloadIdleTask = null
+let resizeHandler = null
+
+const yearOptions = computed(() => {
+  const years = availablePeriods.value.map(item => Number(item.year)).filter(Number.isFinite)
+  return years.length ? years : [new Date().getFullYear()]
+})
+
+const monthOptions = computed(() => {
+  const period = availablePeriods.value.find(item => Number(item.year) === Number(selectedYear.value))
+  return (period?.months || []).map(Number).filter(month => month >= 1 && month <= 12)
+})
+
+const toNumericValue = (value) => {
+  if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : null
 }
 
-const chartList = [
-  { key: 'instant',  name: '瞬时降雨量 (mm)',   color: '#00e5ff' },
-  { key: 'hour',     name: '小时降雨量 (mm)',   color: '#409eff' },
-  { key: 'today',    name: '当天降雨量 (mm)',   color: '#67c23a' },
-]
+const dailyRainRows = computed(() => (chartData.value.history || [])
+  .map(row => ({ ...row, value: toNumericValue(row.data?.daily_rain) }))
+  .filter(row => row.value !== null))
+
+const historyEmpty = computed(() => dailyRainRows.value.length === 0)
+
+const formatRain = (value) => {
+  const numeric = toNumericValue(value)
+  return numeric === null ? '--' : `${numeric.toFixed(1)} mm`
+}
+
+const formatRainDate = (dateValue) => {
+  if (!dateValue) return '--'
+  const value = new Date(`${dateValue}T00:00:00+08:00`)
+  return value.toLocaleDateString('zh-CN', {
+    month: 'numeric', day: 'numeric',
+    ...(selectedMonth.value === 'all' ? { year: 'numeric' } : {}),
+  })
+}
+
+const historyStats = computed(() => {
+  const rows = dailyRainRows.value
+  const wetDays = rows.filter(row => row.value > 0).length
+  const maximum = rows.reduce((result, row) => (
+    !result || row.value > result.value ? row : result
+  ), null)
+  return [
+    { label: '最大日雨量', value: formatRain(maximum?.value), tone: 'maximum' },
+    { label: '最大雨量日期', value: maximum?.value > 0 ? formatRainDate(maximum.date) : '--', tone: 'date' },
+    { label: '有雨天数', value: `${wetDays} 天`, tone: 'wet-days' },
+    { label: '有效数据', value: `${rows.length} 天`, tone: '' },
+  ]
+})
 
 // 防汛预警条（0-100mm 映射）
 const rainWarnPosition = computed(() => {
@@ -176,20 +237,6 @@ const yesterdayRainPosition = computed(() => {
   return Math.max(12, Math.min(100, (v / 50) * 100))
 })
 
-const getSeriesData = (key) => {
-  const map = { today: [chartData.value.today], hour: [chartData.value.hour], instant: [chartData.value.instant] }
-  return map[key] || map.hour
-}
-const getChartUnit = () => 'mm'
-const getYAxisFallback = (key) => {
-  const map = {
-    hour: { min: 0, max: 20 },
-    instant: { min: 0, max: 20 },
-    today: { min: 0, max: 100 },
-  }
-  return map[key] || map.hour
-}
-
 const formatCommTime = (ts) => {
   if (!ts) return '--'
   return new Date(ts * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
@@ -204,132 +251,233 @@ const fetchData = async () => {
       lastTimestamp.value = res.data.timestamp || lastTimestamp.value
       statusClass.value = res.data.mock ? 'offline' : 'online'; statusText.value = res.data.mock ? '离线' : '在线'
     }
-  } catch (e) { statusClass.value = 'offline'; statusText.value = '离线' }
+  } catch {
+    statusClass.value = 'offline'
+    statusText.value = '离线'
+  }
 }
 
-const loadHistory = async (range = '1h', apply = true) => {
-  try {
-    if (historyCache.has(range)) {
-      const cached = historyCache.get(range)
-      if (apply) {
-        chartData.value = cached
-        historyError.value = ''
-        historyEmpty.value = cached.pointCount === 0
-      }
-      return cached
-    }
+const queryKey = ({ year, month }) => [year, month || 'all'].join(':')
+
+const currentQuery = () => ({
+  year: Number(selectedYear.value),
+  month: selectedMonth.value === 'all' ? null : Number(selectedMonth.value),
+})
+
+const syncAvailablePeriods = (periods = []) => {
+  if (!Array.isArray(periods) || !periods.length) return
+  availablePeriods.value = periods
+  const selected = periods.find(item => Number(item.year) === Number(selectedYear.value))
+  if (!selected) {
+    selectedYear.value = Number(periods[0].year)
+    selectedMonth.value = 'all'
+    return
+  }
+  if (selectedMonth.value !== 'all' && !selected.months?.map(Number).includes(Number(selectedMonth.value))) {
+    selectedMonth.value = 'all'
+  }
+}
+
+const applyTrendPayload = (payload, query, apply = true) => {
+  if (!payload) return null
+  syncAvailablePeriods(payload.available_periods)
+  const normalized = { ...payload, history: payload.history || [] }
+  historyCache.set(queryKey(query), normalized)
+  if (apply) {
+    chartData.value = normalized
+    historyError.value = ''
+  }
+  return normalized
+}
+
+const loadTrends = async (query = currentQuery(), apply = true, force = false) => {
+  const key = queryKey(query)
+  if (!force && historyCache.has(key)) {
+    return applyTrendPayload(historyCache.get(key), query, apply)
+  }
+
+  if (apply) {
     historyLoading.value = true
-    if (apply) historyError.value = ''
-    const res = await getSensorHistory('rain', range)
-    if (res.code === 200) {
-      const normalized = normalizeHistorySeries(res.data?.history || [], range, historyFields, new Date(), res.data || {})
-      const nextData = {
-        today: normalized.series.today,
-        hour: normalized.series.hour,
-        instant: normalized.series.instant,
-        window: normalized.window,
-        config: normalized.config,
-        pointCount: Number(res.data?.point_count || 0),
-      }
-      historyCache.set(range, nextData)
-      if (apply) {
-        chartData.value = nextData
-        historyEmpty.value = nextData.pointCount === 0
-      }
-      return nextData
-    }
-  } catch (e) {
-    console.warn('加载历史数据失败:', e)
+    historyError.value = ''
+  }
+  try {
+    const res = await getRainTrends(query)
+    if (res.code !== 200) throw new Error('逐日雨量响应无效')
+    return applyTrendPayload(res.data, query, apply)
+  } catch (error) {
+    console.warn('加载逐日雨量失败:', error)
     if (apply) historyError.value = '历史数据服务暂时不可用，请稍后重试'
+    return null
+  } finally {
+    if (apply) historyLoading.value = false
   }
-  finally {
-    historyLoading.value = false
-  }
-}
-
-const applyHistoryResponse = (range, res) => {
-  if (res?.code !== 200) return null
-  const normalized = normalizeHistorySeries(res.data?.history || [], range, historyFields, new Date(), res.data || {})
-  const nextData = {
-    today: normalized.series.today,
-    hour: normalized.series.hour,
-    instant: normalized.series.instant,
-    window: normalized.window,
-    config: normalized.config,
-    pointCount: Number(res.data?.point_count || 0),
-  }
-  historyCache.set(range, nextData)
-  chartData.value = nextData
-  historyError.value = ''
-  historyEmpty.value = nextData.pointCount === 0
-  return nextData
 }
 
 const handleHistoryCacheUpdate = (event) => {
   const detail = event.detail || {}
-  if (detail.url !== '/v1/sensor/history/rain') return
-  const range = detail.params?.range || '1h'
-  if (range !== selectedRange.value) return
-  if (applyHistoryResponse(range, detail.data)) renderChart()
-}
-
-const preloadHistory = () => {
-  preloadHistoryRanges(['6h'], loadHistory)
+  if (detail.url !== TREND_URL || detail.data?.code !== 200) return
+  const params = detail.params || {}
+  const query = {
+    year: params.year != null ? Number(params.year) : new Date().getFullYear(),
+    month: params.month != null ? Number(params.month) : null,
+  }
+  const shouldApply = queryKey(query) === queryKey(currentQuery())
+  applyTrendPayload(detail.data.data, query, shouldApply)
+  if (shouldApply) renderChart()
 }
 
 const preloadHistoryLater = () => {
   if (preloadIdleTask) cancelIdleTask(preloadIdleTask)
   preloadIdleTask = runWhenIdle(() => {
     preloadIdleTask = null
-    preloadHistory()
+    if (selectedMonth.value !== 'all') {
+      loadTrends({ year: Number(selectedYear.value), month: null }, false)
+    }
   }, 1200)
 }
 
 const scheduleHistoryRefresh = () => {
   if (historyRefreshTimer) clearTimeout(historyRefreshTimer)
   historyRefreshTimer = setTimeout(async () => {
-    historyCache.clear()
-    await loadHistory(selectedRange.value)
+    const query = currentQuery()
+    historyCache.delete(queryKey(query))
+    await loadTrends(query, true, true)
     renderChart()
     preloadHistoryLater()
     scheduleHistoryRefresh()
-  }, getNextHistoryRefreshMs(selectedRange.value) + 1000)
+  }, 30 * 60 * 1000)
 }
 
-const selectChart = (key) => { selectedChart.value = key; renderChart() }
+const onYearChange = async () => {
+  if (selectedMonth.value !== 'all' && !monthOptions.value.includes(Number(selectedMonth.value))) {
+    selectedMonth.value = 'all'
+  }
+  await loadTrends(currentQuery())
+  renderChart()
+  preloadHistoryLater()
+  scheduleHistoryRefresh()
+}
 
-const onRangeChange = async (range) => {
-  await loadHistory(range); renderChart(); scheduleHistoryRefresh()
+const onMonthChange = async () => {
+  await loadTrends(currentQuery())
+  renderChart()
+  preloadHistoryLater()
+  scheduleHistoryRefresh()
+}
+
+const chartDates = () => (chartData.value.history || []).map(row => row.date)
+
+const chartValues = () => (chartData.value.history || []).map(row => toNumericValue(row.data?.daily_rain))
+
+const formatXAxisLabel = (dateValue) => {
+  const value = new Date(`${dateValue}T00:00:00+08:00`)
+  return selectedMonth.value === 'all' ? `${value.getMonth() + 1}月` : `${value.getDate()}日`
+}
+
+const shouldShowXAxisLabel = (_index, dateValue) => {
+  const day = Number(String(dateValue).slice(8, 10))
+  if (selectedMonth.value === 'all') return day === 1
+  return day === 1 || day % 4 === 1
+}
+
+const tooltipFormatter = (params) => {
+  const item = (Array.isArray(params) ? params : [params]).find(entry => entry?.data != null)
+  if (!item || item.data === null) return ''
+  const dateValue = new Date(`${item.axisValue}T00:00:00+08:00`)
+  const heading = dateValue.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })
+  return `<div style="min-width:160px"><strong>${heading}</strong>`
+    + `<div style="display:flex;justify-content:space-between;gap:24px;margin-top:8px">`
+    + `<span>${item.marker}逐日雨量</span><strong>${Number(item.data).toFixed(1)} mm</strong></div></div>`
 }
 
 const fullChartOption = () => {
-  const dataArr = getSeriesData(selectedChart.value)
-  const color = chartList.find(c => c.key === selectedChart.value)?.color || '#409eff'
-  const xAxisWindow = buildChartAxisWindow(chartData.value.window)
-  return {
-    backgroundColor: 'transparent',
-    tooltip: { trigger: 'axis', backgroundColor: 'rgba(0,0,0,0.85)', borderColor: '#00e5ff', textStyle: { color: '#E2F0FE', fontSize: 13 } },
-    legend: { show: false },
-    grid: { left: '3%', right: '5%', bottom: '3%', top: '8%', containLabel: true },
-    xAxis: {
-      type: 'time',
-      min: xAxisWindow.min,
-      max: xAxisWindow.max,
-      interval: chartData.value.config?.majorTickMs,
-      minInterval: chartData.value.config?.majorTickMs,
-      maxInterval: chartData.value.config?.majorTickMs,
-      axisLine: { lineStyle: { color: '#2a4a6a' } },
-      axisLabel: { color: '#AECAF5', hideOverlap: true, showMaxLabel: true, formatter: value => formatChartAxisLabel(value, selectedRange.value, chartData.value.window) },
+  const values = chartValues()
+  const yRange = calcNiceYAxisRange(values, { min: 0, max: 20 }, 7)
+  const today = new Date()
+  const todayDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+  const dates = chartDates()
+  const todayVisible = dates.includes(todayDate)
+  const series = {
+    id: 'daily-rainfall',
+    name: '逐日雨量',
+    type: 'bar',
+    data: values,
+    barMaxWidth: selectedMonth.value === 'all' ? 6 : 22,
+    z: 3,
+    itemStyle: {
+      borderRadius: [3, 3, 0, 0],
+      color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+        { offset: 0, color: '#16c5ff' },
+        { offset: 0.5, color: '#168dff' },
+        { offset: 1, color: '#1762d5' },
+      ]),
+      shadowBlur: 6,
+      shadowColor: 'rgba(22, 149, 255, 0.24)',
     },
-    yAxis: { type: 'value', scale: true, name: 'mm', ...calcYAxisRange(dataArr[0], 0.2, getYAxisFallback(selectedChart.value)), nameLocation: 'end', nameGap: 8, nameTextStyle: { color: '#AECAF5', fontSize: 12 }, axisLine: { lineStyle: { color: '#2a4a6a' } }, axisLabel: { color: '#AECAF5' }, splitLine: { lineStyle: { color: 'rgba(0,200,255,0.06)' } } },
-    series: [{ type: 'line', smooth: true, data: dataArr[0], itemStyle: { color }, symbol: 'circle', symbolSize: 8, lineStyle: { width: 2 } }],
+    emphasis: {
+      itemStyle: { color: '#43d7ff', shadowBlur: 12, shadowColor: 'rgba(31, 180, 255, 0.52)' },
+    },
+    animationDuration: 850,
+    animationDurationUpdate: 550,
+    animationEasing: 'cubicOut',
+    animationEasingUpdate: 'cubicInOut',
+    animationDelay: index => Math.min(index * 3, 420),
+    universalTransition: true,
+  }
+
+  if (todayVisible) {
+    series.markLine = {
+      silent: true,
+      symbol: ['none', 'none'],
+      lineStyle: { color: 'rgba(255,255,255,0.48)', width: 1 },
+      label: {
+        show: true, formatter: '今天', position: 'insideEndTop', color: '#fff',
+        backgroundColor: '#343b4d', borderRadius: 10, padding: [3, 9], fontWeight: 600,
+      },
+      data: [{ xAxis: todayDate }],
+    }
+  }
+
+  return {
+    animation: true,
+    animationDuration: 850,
+    animationDurationUpdate: 550,
+    animationEasing: 'cubicOut',
+    animationEasingUpdate: 'cubicInOut',
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'axis', confine: true, formatter: tooltipFormatter,
+      backgroundColor: 'rgba(5, 11, 24, 0.95)', borderColor: 'rgba(89, 155, 255, 0.55)', borderWidth: 1,
+      padding: [11, 13], textStyle: { color: '#f1f6ff', fontSize: 13 },
+      axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(47, 151, 255, 0.08)' } },
+    },
+    grid: { left: 18, right: 22, bottom: 18, top: 24, containLabel: true },
+    xAxis: {
+      type: 'category', data: dates, boundaryGap: true,
+      axisLine: { lineStyle: { color: 'rgba(121, 155, 202, 0.42)' } },
+      axisTick: { show: true, alignWithLabel: true, interval: shouldShowXAxisLabel, lineStyle: { color: 'rgba(121, 155, 202, 0.42)' } },
+      axisLabel: { color: '#91a9ca', margin: 12, interval: shouldShowXAxisLabel, formatter: formatXAxisLabel },
+      splitLine: { show: false },
+    },
+    yAxis: {
+      type: 'value', min: yRange.min, max: yRange.max, interval: yRange.interval,
+      axisLine: { show: false }, axisTick: { show: false },
+      axisLabel: { color: '#b6c7df', margin: 12, formatter: value => `${value}\n毫米` },
+      splitLine: { lineStyle: { color: 'rgba(151, 177, 215, 0.18)', width: 1 } },
+    },
+    series: [series],
   }
 }
-const renderChart = () => { if (chart) chart.setOption(fullChartOption(), true) }
-const updateChart = () => {
+
+const renderChart = () => {
   if (!chart) return
-  renderChart()
+  chart.setOption(fullChartOption(), {
+    notMerge: false,
+    replaceMerge: ['series'],
+    lazyUpdate: false,
+  })
 }
+
 const initChart = () => {
   if (!chartRef.value) return
   chart = echarts.init(chartRef.value)
@@ -342,9 +490,7 @@ onMounted(() => {
   const startup = createSensorDetailStartup({
     initChart,
     fetchRealtime: fetchData,
-    loadInitialHistory: async () => {
-      await loadHistory('1h')
-    },
+    loadInitialHistory: async () => loadTrends(currentQuery()),
     renderHistory: renderChart,
     scheduleHistoryRefresh,
     preloadHistoryLater,
@@ -354,6 +500,7 @@ onMounted(() => {
   timer = setInterval(fetchData, 3000)
   window.addEventListener('dam-api-cache-updated', handleHistoryCacheUpdate)
 })
+
 onUnmounted(() => {
   if (timer) clearInterval(timer)
   if (historyRefreshTimer) clearTimeout(historyRefreshTimer)
@@ -494,22 +641,94 @@ onUnmounted(() => {
   transition: height 0.4s ease;
 }
 
-/* 图表 */
-.chart-top-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 6px; }
-.chart-top-row .panel-title { margin-bottom: 0; }
-.chart-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
-.chart-tab {
-  padding: 4px 12px; border: 1px solid rgba(0, 200, 255, 0.2); border-radius: 14px;
-  background: rgba(0, 0, 0, 0.2); color: #AECAF5; font-size: 12px;
-  cursor: pointer; transition: all 0.25s; white-space: nowrap;
+/* 气象站式逐日雨量 */
+.history-panel {
+  margin-top: 12px;
+  padding: 0;
+  overflow: hidden;
+  border-color: rgba(84, 130, 202, 0.25);
+  background:
+    radial-gradient(circle at 100% 0%, rgba(34, 132, 217, 0.14), transparent 34%),
+    linear-gradient(145deg, rgba(15, 31, 57, 0.98), rgba(10, 23, 43, 0.98));
+  box-shadow: 0 14px 36px rgba(0, 8, 24, 0.18);
 }
-.chart-tab:hover { border-color: var(--tab-color, #00e5ff); color: var(--tab-color, #00e5ff); background: rgba(0, 0, 0, 0.35); }
-.chart-tab.active {
-  border-color: var(--tab-color, #00e5ff); background: color-mix(in srgb, var(--tab-color, #00e5ff) 15%, transparent);
-  color: var(--tab-color, #00e5ff); font-weight: 600;
-  box-shadow: 0 0 10px color-mix(in srgb, var(--tab-color, #00e5ff) 25%, transparent);
+.history-panel-header {
+  min-height: 66px;
+  padding: 16px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border-bottom: 1px solid rgba(124, 157, 207, 0.14);
 }
-.chart-wrap { position: relative; height: 380px; }
+.history-panel-header .panel-title {
+  display: block;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: #f4f8ff;
+  font-size: 22px;
+  font-weight: 750;
+  letter-spacing: 0.03em;
+  text-shadow: 0 2px 14px rgba(74, 139, 255, 0.18);
+}
+.calendar-controls {
+  display: flex;
+  gap: 7px;
+  padding: 3px;
+  border: 1px solid rgba(77, 141, 234, 0.28);
+  border-radius: 9px;
+  background: rgba(26, 49, 83, 0.38);
+}
+.history-select.year-select { width: 112px; }
+.history-select.month-select { width: 126px; }
+.history-select :deep(.el-select__wrapper) {
+  min-height: 30px;
+  border: 0;
+  border-radius: 7px;
+  background: rgba(31, 53, 88, 0.82);
+  box-shadow: 0 0 0 1px rgba(120, 155, 211, 0.18) inset;
+}
+.history-select :deep(.el-select__selected-item) { color: #dce9fa; font-size: 13px; }
+.history-select :deep(.el-select__caret) { color: #91a8c9; }
+
+.trend-shell { padding: 12px 18px 14px; }
+.history-stat-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 3px;
+}
+.history-stat {
+  min-width: 0;
+  padding: 9px 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-radius: 8px;
+  background: rgba(5, 17, 36, 0.34);
+  border: 1px solid rgba(120, 155, 211, 0.11);
+}
+.history-stat span {
+  overflow: hidden;
+  color: #738cac;
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.history-stat strong {
+  color: #dbe9fb;
+  font-family: "Consolas", "Monaco", monospace;
+  font-size: 14px;
+  white-space: nowrap;
+}
+.history-stat strong.maximum { color: #38c9ff; }
+.history-stat strong.date { color: #ffd552; }
+.history-stat strong.wet-days { color: #60a5ff; }
+
+.chart-wrap { position: relative; }
+.history-chart-wrap { height: 420px; }
 .chart-container { height: 100%; }
 .chart-loading-overlay {
   position: absolute;
@@ -525,11 +744,16 @@ onUnmounted(() => {
   border-radius: 8px;
   z-index: 10;
 }
+.history-chart-wrap .chart-loading-overlay {
+  background: rgba(8, 22, 43, 0.78);
+  backdrop-filter: blur(3px);
+}
+.history-chart-wrap .chart-hint-overlay { background: rgba(8, 22, 43, 0.5); }
 .loading-spinner {
-  width: 40px;
-  height: 40px;
+  width: 34px;
+  height: 34px;
   border: 3px solid rgba(0, 200, 255, 0.2);
-  border-top-color: #00e5ff;
+  border-top-color: #438fff;
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
@@ -540,5 +764,38 @@ onUnmounted(() => {
   margin-top: 12px;
   color: #AECAF5;
   font-size: 14px;
+}
+.rain-series-legend {
+  min-height: 38px;
+  padding: 4px 10px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid rgba(123, 154, 201, 0.1);
+  color: #b7cae4;
+  font-size: 12px;
+}
+.rain-series-legend i {
+  width: 18px;
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #1762d5, #16c5ff);
+  box-shadow: 0 0 8px rgba(22, 149, 255, 0.45);
+}
+
+@media (max-width: 900px) {
+  .history-panel-header { align-items: flex-start; flex-wrap: wrap; }
+  .history-stat-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .history-chart-wrap { height: 360px; }
+}
+
+@media (max-width: 620px) {
+  .rain-data-card { flex-direction: column; }
+  .rain-main-row { flex-direction: column; gap: 16px; }
+  .rain-main-divider { width: 100%; height: 1px; }
+  .rain-yesterday-card { flex-basis: auto; }
+  .calendar-controls { width: 100%; }
+  .history-select.year-select, .history-select.month-select { flex: 1; width: auto; }
+  .history-stat { padding: 8px; flex-direction: column; align-items: flex-start; }
 }
 </style>

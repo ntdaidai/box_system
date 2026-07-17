@@ -3,6 +3,7 @@
 import csv
 from datetime import date, datetime, time as datetime_time, timedelta
 import json
+import math
 from pathlib import Path
 import time
 from zoneinfo import ZoneInfo
@@ -20,6 +21,10 @@ from app.services.history_config import (
     ROLLUP_CATCHUP_BUCKETS_PER_RUN,
     build_history_window,
 )
+
+
+TEMP_EXTREMA_SCHEMA_VERSION = 1
+RAIN_DAILY_SCHEMA_VERSION = 1
 
 
 class SensorHistoryService:
@@ -85,6 +90,293 @@ class SensorHistoryService:
             return self._payload(device_name, window, "rollup_partial", rollup_points)
 
         return self._payload(device_name, window, "empty", [])
+
+    def query_temp_humidity_trends(
+        self,
+        view: str = "recent24h",
+        year: int | None = None,
+        month: int | None = None,
+        now_ms: int = None,
+    ) -> dict:
+        """Return chart-ready recent or calendar temperature/humidity data."""
+        available_periods = self.available_calendar_periods()
+        if view == "recent24h":
+            payload = self.query_history("temp_humidity", "1d", now_ms=now_ms)
+            start_seconds = float(payload["window"]["start"])
+            end_seconds = float(payload["window"]["end"])
+            max_points = int(payload["max_point_count"])
+            # IoTDB range queries are inclusive at both ends. Rollup points are
+            # bucket-end timestamps, so the start boundary belongs to the
+            # preceding 24 hours and must not become a 49th point.
+            recent_history = [
+                point
+                for point in payload.get("history", [])
+                if start_seconds < float(point.get("timestamp", 0)) <= end_seconds
+            ][-max_points:]
+            payload = {
+                **payload,
+                "history": recent_history,
+                "point_count": len(recent_history),
+                "coverage_ratio": round(len(recent_history) / max_points, 4) if max_points else 0.0,
+            }
+            return {
+                **payload,
+                "view": "recent24h",
+                "aggregation": "30m_average",
+                "available_periods": available_periods,
+            }
+
+        if view != "calendar":
+            raise ValueError("view must be recent24h or calendar")
+
+        current = datetime.now(self.timezone)
+        selected_year = int(year if year is not None else current.year)
+        selected_month = int(month) if month not in (None, 0) else None
+        payload = self.query_temp_humidity_calendar(selected_year, selected_month)
+        payload["available_periods"] = available_periods
+        return payload
+
+    def query_temp_humidity_calendar(self, year: int, month: int | None = None) -> dict:
+        """Read one calendar month or year from the daily extrema rollup."""
+        year = int(year)
+        if year < 2000 or year > 2100:
+            raise ValueError("year must be between 2000 and 2100")
+        if month is not None and (int(month) < 1 or int(month) > 12):
+            raise ValueError("month must be between 1 and 12")
+
+        month = int(month) if month is not None else None
+        start_date = date(year, month or 1, 1)
+        if month is None:
+            end_date = date(year + 1, 1, 1)
+        elif month == 12:
+            end_date = date(year + 1, 1, 1)
+        else:
+            end_date = date(year, month + 1, 1)
+
+        start_dt = datetime.combine(start_date, datetime_time.min, tzinfo=self.timezone)
+        end_dt = datetime.combine(end_date, datetime_time.min, tzinfo=self.timezone)
+        start_ms = int(start_dt.timestamp() * 1000)
+        end_ms = int(end_dt.timestamp() * 1000)
+        points = self.iotdb.query_points(
+            self.rollup_path("1d", self.get_device_id("temp_humidity")),
+            start_ms,
+            end_ms,
+        )
+
+        rows_by_date = {}
+        wanted_fields = {
+            "temperature",
+            "temperature_min",
+            "temperature_max",
+            "temperature_sample_count",
+            "humidity",
+            "humidity_min",
+            "humidity_max",
+            "humidity_sample_count",
+        }
+        for point in points:
+            try:
+                # Daily rollups are timestamped at the bucket end (next local
+                # midnight), so subtract one millisecond to recover its date.
+                point_dt = datetime.fromtimestamp(
+                    float(point.get("timestamp", 0)) - 0.001,
+                    tz=self.timezone,
+                )
+            except (TypeError, ValueError, OSError):
+                continue
+            point_date = point_dt.date()
+            if point_date < start_date or point_date >= end_date:
+                continue
+
+            data = {
+                key: value
+                for key, value in (point.get("data") or {}).items()
+                if key in wanted_fields and value is not None
+            }
+            rows_by_date[point_date.isoformat()] = {
+                "date": point_date.isoformat(),
+                "timestamp": float(point.get("timestamp", 0)),
+                "data": data,
+            }
+
+        # Materialize every calendar day. Explicit empty rows keep ECharts from
+        # drawing a misleading line across sensor outages or future dates.
+        history = []
+        cursor = start_date
+        while cursor < end_date:
+            date_key = cursor.isoformat()
+            row = rows_by_date.get(date_key)
+            if row is None:
+                bucket_end = datetime.combine(
+                    cursor + timedelta(days=1),
+                    datetime_time.min,
+                    tzinfo=self.timezone,
+                )
+                row = {
+                    "date": date_key,
+                    "timestamp": bucket_end.timestamp(),
+                    "data": {},
+                }
+            history.append(row)
+            cursor += timedelta(days=1)
+
+        metric_counts = {
+            metric: sum(
+                1
+                for row in history
+                if row["data"].get(f"{metric}_min") is not None
+                or row["data"].get(f"{metric}_max") is not None
+            )
+            for metric in ("temperature", "humidity")
+        }
+        max_point_count = (end_date - start_date).days
+        populated_days = sum(
+            1
+            for row in history
+            if any(
+                row["data"].get(field) is not None
+                for field in (
+                    "temperature_min",
+                    "temperature_max",
+                    "humidity_min",
+                    "humidity_max",
+                )
+            )
+        )
+        return {
+            "device_name": "temp_humidity",
+            "view": "calendar",
+            "year": year,
+            "month": month,
+            "source": "rollup",
+            "rollup_level": "1d",
+            "aggregation": "daily_extrema",
+            "window": {"start": start_ms / 1000.0, "end": end_ms / 1000.0},
+            "sample_interval": 24 * 60 * 60,
+            "max_point_count": max_point_count,
+            "history": history,
+            "point_count": populated_days,
+            "metric_point_counts": metric_counts,
+            "coverage_ratio": round(populated_days / max_point_count, 4) if max_point_count else 0.0,
+        }
+
+    def query_rain_calendar(self, year: int, month: int | None = None) -> dict:
+        """Read exact daily rainfall for one calendar month or year."""
+        year = int(year)
+        if year < 2000 or year > 2100:
+            raise ValueError("year must be between 2000 and 2100")
+        if month is not None and (int(month) < 1 or int(month) > 12):
+            raise ValueError("month must be between 1 and 12")
+
+        month = int(month) if month is not None else None
+        start_date = date(year, month or 1, 1)
+        if month is None:
+            end_date = date(year + 1, 1, 1)
+        elif month == 12:
+            end_date = date(year + 1, 1, 1)
+        else:
+            end_date = date(year, month + 1, 1)
+
+        start_dt = datetime.combine(start_date, datetime_time.min, tzinfo=self.timezone)
+        end_dt = datetime.combine(end_date, datetime_time.min, tzinfo=self.timezone)
+        start_ms = int(start_dt.timestamp() * 1000)
+        end_ms = int(end_dt.timestamp() * 1000)
+        points = self.iotdb.query_points(
+            self.rollup_path("1d", self.get_device_id("rain")),
+            start_ms,
+            end_ms,
+        )
+
+        rows_by_date = {}
+        for point in points:
+            try:
+                point_dt = datetime.fromtimestamp(
+                    float(point.get("timestamp", 0)) - 0.001,
+                    tz=self.timezone,
+                )
+            except (TypeError, ValueError, OSError):
+                continue
+            point_date = point_dt.date()
+            if point_date < start_date or point_date >= end_date:
+                continue
+
+            source = point.get("data") or {}
+            data = {
+                key: source[key]
+                for key in ("daily_rain", "daily_rain_sample_count")
+                if source.get(key) is not None
+            }
+            rows_by_date[point_date.isoformat()] = {
+                "date": point_date.isoformat(),
+                "timestamp": float(point.get("timestamp", 0)),
+                "data": data,
+            }
+
+        history = []
+        cursor = start_date
+        while cursor < end_date:
+            date_key = cursor.isoformat()
+            row = rows_by_date.get(date_key)
+            if row is None:
+                bucket_end = datetime.combine(
+                    cursor + timedelta(days=1),
+                    datetime_time.min,
+                    tzinfo=self.timezone,
+                )
+                row = {
+                    "date": date_key,
+                    "timestamp": bucket_end.timestamp(),
+                    "data": {},
+                }
+            history.append(row)
+            cursor += timedelta(days=1)
+
+        point_count = sum(
+            1 for row in history if row["data"].get("daily_rain") is not None
+        )
+        max_point_count = (end_date - start_date).days
+        return {
+            "device_name": "rain",
+            "view": "calendar",
+            "year": year,
+            "month": month,
+            "source": "rollup",
+            "rollup_level": "1d",
+            "aggregation": "daily_rainfall",
+            "window": {"start": start_ms / 1000.0, "end": end_ms / 1000.0},
+            "sample_interval": 24 * 60 * 60,
+            "max_point_count": max_point_count,
+            "history": history,
+            "point_count": point_count,
+            "coverage_ratio": round(point_count / max_point_count, 4) if max_point_count else 0.0,
+            "available_periods": self.available_calendar_periods("rain"),
+        }
+
+    def available_calendar_periods(self, device_name: str = "temp_humidity") -> list[dict]:
+        """List archived years/months for selector options without scanning IoTDB."""
+        periods = {}
+        base = Path(self.archive_base_dir)
+        device_id = self.get_device_id(device_name)
+        if not device_id:
+            return []
+        try:
+            candidates = base.iterdir()
+        except OSError:
+            return []
+
+        for directory in candidates:
+            if not directory.is_dir() or not (directory / f"{device_id}.csv").exists():
+                continue
+            try:
+                archive_date = date.fromisoformat(directory.name)
+            except ValueError:
+                continue
+            periods.setdefault(archive_date.year, set()).add(archive_date.month)
+
+        return [
+            {"year": year, "months": sorted(periods[year])}
+            for year in sorted(periods, reverse=True)
+        ]
 
     def build_and_write_rollup(self, device_name: str, rollup_level: str, window: dict) -> int:
         device_id = self.get_device_id(device_name)
@@ -193,6 +485,8 @@ class SensorHistoryService:
                     "archive_date": archive_key,
                     "files": outputs,
                     "rollups_built": True,
+                    "temp_extrema_schema": TEMP_EXTREMA_SCHEMA_VERSION,
+                    "rain_daily_schema": RAIN_DAILY_SCHEMA_VERSION,
                     "rollup_counts": rollup_counts,
                 },
                 ensure_ascii=False,
@@ -200,6 +494,155 @@ class SensorHistoryService:
             encoding="utf-8",
         )
         return outputs
+
+    @staticmethod
+    def _summarize_temp_archive(path: Path) -> dict:
+        stats = {
+            field: {"sum": 0.0, "count": 0, "min": None, "max": None}
+            for field in ("temperature", "humidity")
+        }
+        with path.open(newline="", encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                for field, target in stats.items():
+                    try:
+                        value = float(row.get(field, ""))
+                    except (TypeError, ValueError):
+                        continue
+                    if not math.isfinite(value):
+                        continue
+                    target["sum"] += value
+                    target["count"] += 1
+                    target["min"] = value if target["min"] is None else min(target["min"], value)
+                    target["max"] = value if target["max"] is None else max(target["max"], value)
+
+        summary = {}
+        for field, target in stats.items():
+            if not target["count"]:
+                continue
+            summary[field] = round(target["sum"] / target["count"], 4)
+            summary[f"{field}_min"] = round(target["min"], 4)
+            summary[f"{field}_max"] = round(target["max"], 4)
+            summary[f"{field}_sample_count"] = target["count"]
+        return summary
+
+    @staticmethod
+    def _summarize_rain_archive(path: Path) -> dict:
+        values = []
+        with path.open(newline="", encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                try:
+                    value = float(row.get("today_rain", ""))
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(value):
+                    values.append(value)
+
+        if not values:
+            return {}
+        return {
+            "daily_rain": round(max(values), 4),
+            "daily_rain_sample_count": len(values),
+        }
+
+    def backfill_temp_extrema_due_days(self, max_days: int = 1) -> list[str]:
+        """Backfill old archive manifests into exact daily extrema rollups."""
+        completed = []
+        base = Path(self.archive_base_dir)
+        try:
+            candidates = sorted(path for path in base.iterdir() if path.is_dir())
+        except OSError:
+            return completed
+
+        for directory in candidates:
+            if len(completed) >= max(1, int(max_days)):
+                break
+            manifest_path = directory / "_SUCCESS"
+            csv_path = directory / "temp_001.csv"
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                archive_date = date.fromisoformat(directory.name)
+            except (FileNotFoundError, ValueError, TypeError, OSError):
+                continue
+            if int(manifest.get("temp_extrema_schema", 0) or 0) >= TEMP_EXTREMA_SCHEMA_VERSION:
+                continue
+            if not csv_path.exists():
+                continue
+
+            summary = self._summarize_temp_archive(csv_path)
+            if summary:
+                bucket_end = datetime.combine(
+                    archive_date + timedelta(days=1),
+                    datetime_time.min,
+                    tzinfo=self.timezone,
+                )
+                written = self.iotdb.insert_record_at_path(
+                    self.rollup_path("1d", self.get_device_id("temp_humidity")),
+                    int(bucket_end.timestamp() * 1000),
+                    summary,
+                )
+                if not written:
+                    raise RuntimeError(f"温湿度日极值回填失败 [{archive_date.isoformat()}]")
+
+            manifest["temp_extrema_schema"] = TEMP_EXTREMA_SCHEMA_VERSION
+            manifest["temp_extrema_fields"] = sorted(summary)
+            temporary_path = manifest_path.with_suffix(".tmp")
+            temporary_path.write_text(
+                json.dumps(manifest, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            temporary_path.replace(manifest_path)
+            completed.append(archive_date.isoformat())
+        return completed
+
+    def backfill_rain_daily_due_days(self, max_days: int = 1) -> list[str]:
+        """Backfill archived rain CSVs into exact daily-rain rollups."""
+        completed = []
+        base = Path(self.archive_base_dir)
+        try:
+            candidates = sorted(path for path in base.iterdir() if path.is_dir())
+        except OSError:
+            return completed
+
+        for directory in candidates:
+            if len(completed) >= max(1, int(max_days)):
+                break
+            manifest_path = directory / "_SUCCESS"
+            csv_path = directory / "rain_001.csv"
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                archive_date = date.fromisoformat(directory.name)
+            except (FileNotFoundError, ValueError, TypeError, OSError):
+                continue
+            if int(manifest.get("rain_daily_schema", 0) or 0) >= RAIN_DAILY_SCHEMA_VERSION:
+                continue
+            if not csv_path.exists():
+                continue
+
+            summary = self._summarize_rain_archive(csv_path)
+            if summary:
+                bucket_end = datetime.combine(
+                    archive_date + timedelta(days=1),
+                    datetime_time.min,
+                    tzinfo=self.timezone,
+                )
+                written = self.iotdb.insert_record_at_path(
+                    self.rollup_path("1d", self.get_device_id("rain")),
+                    int(bucket_end.timestamp() * 1000),
+                    summary,
+                )
+                if not written:
+                    raise RuntimeError(f"逐日雨量回填失败 [{archive_date.isoformat()}]")
+
+            manifest["rain_daily_schema"] = RAIN_DAILY_SCHEMA_VERSION
+            manifest["rain_daily_fields"] = sorted(summary)
+            temporary_path = manifest_path.with_suffix(".tmp")
+            temporary_path.write_text(
+                json.dumps(manifest, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            temporary_path.replace(manifest_path)
+            completed.append(archive_date.isoformat())
+        return completed
 
     def rebuild_rollups_from_points(
         self,
@@ -441,7 +884,11 @@ def aggregate_points_to_window(points: list, device_name: str, window: dict) -> 
             field: [point.get("data", {}).get(field) for point in bucket_points if field in point.get("data", {})]
             for field in fields
         }
-        data = aggregate_bucket_values(device_name, values_by_field)
+        data = aggregate_bucket_values(
+            device_name,
+            values_by_field,
+            include_extrema=(window.get("rollup_level") == "1d"),
+        )
         if data:
             result.append({"timestamp": bucket_end / 1000.0, "data": data})
 

@@ -44,6 +44,46 @@ export function getSensorHistory(deviceName, range = '1h') {
 }
 
 /**
+ * 温湿度趋势专用接口。
+ * recent24h 返回半小时平均值；calendar 返回每日最高/最低值。
+ */
+export function getTempHumidityTrends({ view = 'recent24h', year, month } = {}) {
+  const params = { view }
+  if (view === 'calendar') {
+    if (year != null) params.year = year
+    if (month != null && month !== 'all') params.month = month
+  }
+
+  const recent = view === 'recent24h'
+  return request.get('/v1/sensor/history/temp-humidity/trends', {
+    params,
+    timeout: 30000,
+    silentError: true,
+    localCacheMaxAge: recent ? 5 * 60 * 1000 : 30 * 60 * 1000,
+    localCacheAllowStale: true,
+    localCacheStaleMaxAge: recent ? 2 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000,
+  })
+}
+
+/**
+ * 降水逐日雨量趋势。只返回日雨量，不包含预测或累计模式。
+ */
+export function getRainTrends({ year, month } = {}) {
+  const params = {}
+  if (year != null) params.year = year
+  if (month != null && month !== 'all') params.month = month
+
+  return request.get('/v1/sensor/history/rain/trends', {
+    params,
+    timeout: 30000,
+    silentError: true,
+    localCacheMaxAge: 30 * 60 * 1000,
+    localCacheAllowStale: true,
+    localCacheStaleMaxAge: 7 * 24 * 60 * 60 * 1000,
+  })
+}
+
+/**
  * 获取振动 RMS 历史趋势。后端沿用统一历史窗口和分层降采样，
  * 仅在输出阶段把振动原始字段转换为 rms/freq/temperature。
  */

@@ -60,6 +60,37 @@ class HistoryAggregationTest(unittest.TestCase):
         )
         self.assertEqual(result, {"temperature": 22.0, "humidity": 55.0})
 
+    def test_temperature_humidity_daily_rollup_keeps_extrema_and_counts(self):
+        result = aggregate_bucket_values(
+            "temp_humidity",
+            {"temperature": [20, 22, 24], "humidity": [50, 55, 60]},
+            include_extrema=True,
+        )
+
+        self.assertEqual(result["temperature"], 22.0)
+        self.assertEqual(result["temperature_min"], 20.0)
+        self.assertEqual(result["temperature_max"], 24.0)
+        self.assertEqual(result["temperature_sample_count"], 3)
+        self.assertEqual(result["humidity_min"], 50.0)
+        self.assertEqual(result["humidity_max"], 60.0)
+        self.assertEqual(result["humidity_sample_count"], 3)
+
+    def test_daily_extrema_propagate_from_lower_rollup_fields(self):
+        result = aggregate_bucket_values(
+            "temp_humidity",
+            {
+                "temperature": [21, 23],
+                "temperature_min": [18, 20],
+                "temperature_max": [25, 27],
+                "temperature_sample_count": [100, 120],
+            },
+            include_extrema=True,
+        )
+
+        self.assertEqual(result["temperature_min"], 18.0)
+        self.assertEqual(result["temperature_max"], 27.0)
+        self.assertEqual(result["temperature_sample_count"], 220)
+
     def test_rain_uses_average_for_selected_bucket(self):
         result = aggregate_bucket_values(
             "rain",
@@ -68,6 +99,30 @@ class HistoryAggregationTest(unittest.TestCase):
         self.assertEqual(result["instant_rain"], 0.3)
         self.assertEqual(result["hour_rain"], 1.5)
         self.assertEqual(result["today_rain"], 9.0)
+
+    def test_rain_daily_rollup_uses_maximum_running_total(self):
+        result = aggregate_bucket_values(
+            "rain",
+            {"today_rain": [0.0, 4.2, 12.8, 12.8]},
+            include_extrema=True,
+        )
+
+        self.assertEqual(result["daily_rain"], 12.8)
+        self.assertEqual(result["daily_rain_sample_count"], 4)
+
+    def test_rain_daily_rollup_propagates_existing_daily_value(self):
+        result = aggregate_bucket_values(
+            "rain",
+            {
+                "today_rain": [5.0, 6.0],
+                "daily_rain": [18.5, 12.0],
+                "daily_rain_sample_count": [80, 90],
+            },
+            include_extrema=True,
+        )
+
+        self.assertEqual(result["daily_rain"], 18.5)
+        self.assertEqual(result["daily_rain_sample_count"], 170)
 
     def test_vibration_uses_average_for_current_template(self):
         result = aggregate_bucket_values("vibration", {"加速度X": [0.1, 0.3], "频率X": [40, 44]})

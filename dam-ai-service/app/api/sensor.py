@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import Dict, Any, Optional
 from loguru import logger
 import asyncio
+from datetime import datetime
 import json
 import math
 import time
@@ -21,6 +22,23 @@ from app.services.iotdb_service import IoTDBUnavailableError
 _io_executor = ThreadPoolExecutor(max_workers=4)
 
 router = APIRouter()
+
+
+def _temp_trends_cache_ttl(
+    view: str = "recent24h",
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+) -> int:
+    # Recent data changes at half-hour boundaries. Calendar extrema are much
+    # more stable, but a 30-minute TTL also lets archive backfills appear soon.
+    return 300 if view == "recent24h" else 1800
+
+
+def _rain_trends_cache_ttl(
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+) -> int:
+    return 1800
 
 def _to_float(value):
     if isinstance(value, bool) or value is None:
@@ -197,6 +215,57 @@ async def get_history_status():
             "history_storage": storage_status,
         }
     )
+
+
+@router.get("/history/temp-humidity/trends", response_model=SensorDataResponse)
+@cached(ttl=_temp_trends_cache_ttl, prefix="sensor:temp-history:v4", jitter=False)
+async def get_temp_humidity_trends(
+    view: str = "recent24h",
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+):
+    """Temperature/humidity trends: recent 24h or calendar daily extrema."""
+    loop = asyncio.get_event_loop()
+    service = get_sensor_history_service()
+    try:
+        payload = await loop.run_in_executor(
+            _io_executor,
+            service.query_temp_humidity_trends,
+            view,
+            year,
+            month,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except IoTDBUnavailableError as error:
+        logger.error(f"温湿度趋势服务不可用 [{view}/{year}/{month}]: {error}")
+        raise HTTPException(status_code=503, detail="历史数据服务暂时不可用，请稍后重试")
+    return SensorDataResponse(code=200, data=payload)
+
+
+@router.get("/history/rain/trends", response_model=SensorDataResponse)
+@cached(ttl=_rain_trends_cache_ttl, prefix="sensor:rain-history:v1", jitter=False)
+async def get_rain_trends(
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+):
+    """Daily rainfall calendar history; no forecasts or cumulative mode."""
+    loop = asyncio.get_event_loop()
+    service = get_sensor_history_service()
+    current_year = datetime.now().year if year is None else year
+    try:
+        payload = await loop.run_in_executor(
+            _io_executor,
+            service.query_rain_calendar,
+            current_year,
+            month,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except IoTDBUnavailableError as error:
+        logger.error(f"逐日雨量服务不可用 [{current_year}/{month}]: {error}")
+        raise HTTPException(status_code=503, detail="历史数据服务暂时不可用，请稍后重试")
+    return SensorDataResponse(code=200, data=payload)
 
 
 @router.get("/history/{device_name}", response_model=SensorDataResponse)

@@ -3,6 +3,7 @@ import {
   buildChartAxisWindow,
   buildHistoryWindow,
   buildTimeSeries,
+  calcNiceYAxisRange,
   calcYAxisRange,
   formatChartAxisLabel,
   getNextHistoryRefreshMs,
@@ -152,4 +153,23 @@ const now = new Date('2026-07-01T21:17:35+08:00')
 {
   const range = calcYAxisRange([[1, 8], [2, 33]], 0.2, { min: 10, max: 30 })
   assert.deepEqual(range, { min: 3, max: 38 })
+}
+
+{
+  const range = calcNiceYAxisRange(
+    [[1, null], [2, 21.9], [3, 29.8], [4, undefined]],
+    { min: 10, max: 30 },
+    5,
+  )
+  assert.deepEqual(range, { min: 10, max: 30, interval: 5 })
+}
+
+{
+  const range = calcNiceYAxisRange([21.9, 33.6], { min: 10, max: 30 }, 5)
+  assert.deepEqual(range, { min: 10, max: 35, interval: 5 })
+}
+
+{
+  const range = calcNiceYAxisRange([-3.6, 33.6], { min: 10, max: 30 }, 5)
+  assert.deepEqual(range, { min: -10, max: 40, interval: 10 })
 }

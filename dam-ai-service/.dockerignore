@@ -1,0 +1,14 @@
+# dai
+# Keep runtime sensor archives, local secrets, caches, and test artifacts out
+# of the deployable backend image. Runtime directories are created on demand.
+data/
+.env
+.env.*
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+*.log
+.git/

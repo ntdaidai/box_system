@@ -1,11 +1,12 @@
 import csv
-from datetime import date
+from datetime import date, datetime
 import json
 import sys
 import tempfile
 import types
 import unittest
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 
 class FakeLogger:
@@ -15,7 +16,11 @@ class FakeLogger:
 
 sys.modules.setdefault("loguru", types.SimpleNamespace(logger=FakeLogger()))
 
-from app.services.sensor_history_service import SensorHistoryService, merge_history_points
+from app.services.sensor_history_service import (
+    SensorHistoryService,
+    aggregate_points_to_window,
+    merge_history_points,
+)
 
 
 class FakeIoTDB:
@@ -78,6 +83,29 @@ class SensorHistoryServiceTest(unittest.TestCase):
         self.assertEqual(payload["sample_interval"], 60)
         self.assertEqual(payload["history"], fake.rollup_points)
 
+    def test_recent_24h_excludes_inclusive_start_boundary(self):
+        fake = FakeIoTDB()
+        now_ms = 1782957600000
+        start_seconds = (now_ms - 24 * 60 * 60 * 1000) / 1000.0
+        fake.rollup_points = [
+            {
+                "timestamp": start_seconds + index * 30 * 60,
+                "data": {"temperature": 20 + index / 10, "humidity": 50},
+            }
+            for index in range(49)
+        ]
+        service = SensorHistoryService(iotdb=fake)
+
+        payload = service.query_temp_humidity_trends(
+            "recent24h",
+            now_ms=now_ms,
+        )
+
+        self.assertEqual(payload["point_count"], 48)
+        self.assertEqual(len(payload["history"]), 48)
+        self.assertGreater(payload["history"][0]["timestamp"], payload["window"]["start"])
+        self.assertEqual(payload["coverage_ratio"], 1.0)
+
     def test_query_history_rebuilds_rollup_from_raw_when_rollup_empty(self):
         fake = FakeIoTDB()
         fake.raw_points = [
@@ -110,6 +138,122 @@ class SensorHistoryServiceTest(unittest.TestCase):
         self.assertEqual(len(fake.inserted), 2)
         self.assertEqual(payload["history"][0]["data"]["temperature"], 21.0)
         self.assertEqual(payload["history"][1]["data"]["temperature"], 24.0)
+
+    def test_daily_rollup_contains_true_temperature_humidity_extrema(self):
+        timezone = ZoneInfo("Asia/Shanghai")
+        start = datetime(2026, 7, 1, tzinfo=timezone)
+        start_ms = int(start.timestamp() * 1000)
+        window = {
+            "start_ms": start_ms,
+            "end_ms": start_ms + 24 * 60 * 60 * 1000,
+            "sample_ms": 24 * 60 * 60 * 1000,
+            "rollup_level": "1d",
+        }
+        points = [
+            {"timestamp": start.timestamp() + 60, "data": {"temperature": 20, "humidity": 48}},
+            {"timestamp": start.timestamp() + 120, "data": {"temperature": 27, "humidity": 66}},
+        ]
+
+        result = aggregate_points_to_window(points, "temp_humidity", window)
+
+        self.assertEqual(result[0]["data"]["temperature"], 23.5)
+        self.assertEqual(result[0]["data"]["temperature_min"], 20.0)
+        self.assertEqual(result[0]["data"]["temperature_max"], 27.0)
+        self.assertEqual(result[0]["data"]["humidity_min"], 48.0)
+        self.assertEqual(result[0]["data"]["humidity_max"], 66.0)
+
+    def test_daily_rollup_contains_final_daily_rainfall(self):
+        timezone = ZoneInfo("Asia/Shanghai")
+        start = datetime(2026, 7, 1, tzinfo=timezone)
+        start_ms = int(start.timestamp() * 1000)
+        window = {
+            "start_ms": start_ms,
+            "end_ms": start_ms + 24 * 60 * 60 * 1000,
+            "sample_ms": 24 * 60 * 60 * 1000,
+            "rollup_level": "1d",
+        }
+        points = [
+            {"timestamp": start.timestamp() + 60, "data": {"today_rain": 0.0}},
+            {"timestamp": start.timestamp() + 120, "data": {"today_rain": 8.4}},
+            {"timestamp": start.timestamp() + 180, "data": {"today_rain": 15.2}},
+        ]
+
+        result = aggregate_points_to_window(points, "rain", window)
+
+        self.assertEqual(result[0]["data"]["daily_rain"], 15.2)
+        self.assertEqual(result[0]["data"]["daily_rain_sample_count"], 3)
+
+    def test_calendar_query_returns_daily_extrema_with_calendar_dates(self):
+        fake = FakeIoTDB()
+        timezone = ZoneInfo("Asia/Shanghai")
+        first_bucket_end = datetime(2026, 7, 2, tzinfo=timezone).timestamp()
+        second_bucket_end = datetime(2026, 7, 3, tzinfo=timezone).timestamp()
+        fake.points_by_path["root.dam.rollup_1d.temp_001"] = [
+            {
+                "timestamp": first_bucket_end,
+                "data": {
+                    "temperature_min": 20,
+                    "temperature_max": 28,
+                    "humidity_min": 45,
+                    "humidity_max": 70,
+                },
+            },
+            {
+                "timestamp": second_bucket_end,
+                "data": {
+                    "temperature_min": 21,
+                    "temperature_max": 29,
+                    "humidity_min": 46,
+                    "humidity_max": 72,
+                },
+            },
+        ]
+        service = SensorHistoryService(iotdb=fake)
+
+        payload = service.query_temp_humidity_calendar(2026, 7)
+
+        self.assertEqual(payload["aggregation"], "daily_extrema")
+        self.assertEqual(payload["max_point_count"], 31)
+        self.assertEqual(payload["point_count"], 2)
+        self.assertEqual(payload["metric_point_counts"], {"temperature": 2, "humidity": 2})
+        self.assertEqual(len(payload["history"]), 31)
+        self.assertEqual([item["date"] for item in payload["history"][:2]], ["2026-07-01", "2026-07-02"])
+        self.assertEqual(payload["history"][1]["data"]["temperature_max"], 29)
+        self.assertEqual(payload["history"][2]["data"], {})
+
+    def test_rain_calendar_returns_only_daily_rainfall(self):
+        fake = FakeIoTDB()
+        timezone = ZoneInfo("Asia/Shanghai")
+        first_bucket_end = datetime(2026, 7, 2, tzinfo=timezone).timestamp()
+        second_bucket_end = datetime(2026, 7, 3, tzinfo=timezone).timestamp()
+        fake.points_by_path["root.dam.rollup_1d.rain_001"] = [
+            {
+                "timestamp": first_bucket_end,
+                "data": {
+                    "daily_rain": 18.6,
+                    "daily_rain_sample_count": 1440,
+                    "total_rain": 300.0,
+                    "today_rain": 9.3,
+                },
+            },
+            {
+                "timestamp": second_bucket_end,
+                "data": {"daily_rain": 0.0, "daily_rain_sample_count": 1440},
+            },
+        ]
+        service = SensorHistoryService(iotdb=fake)
+
+        payload = service.query_rain_calendar(2026, 7)
+
+        self.assertEqual(payload["aggregation"], "daily_rainfall")
+        self.assertEqual(payload["max_point_count"], 31)
+        self.assertEqual(payload["point_count"], 2)
+        self.assertEqual(len(payload["history"]), 31)
+        self.assertEqual(payload["history"][0]["data"]["daily_rain"], 18.6)
+        self.assertEqual(payload["history"][1]["data"]["daily_rain"], 0.0)
+        self.assertNotIn("total_rain", payload["history"][0]["data"])
+        self.assertNotIn("today_rain", payload["history"][0]["data"])
+        self.assertEqual(payload["history"][2]["data"], {})
 
     def test_long_range_rebuild_uses_lower_rollup_instead_of_raw(self):
         fake = FakeIoTDB()
@@ -179,6 +323,72 @@ class SensorHistoryServiceTest(unittest.TestCase):
             self.assertEqual(len(first), 4)
             self.assertEqual(second, [])
             self.assertTrue((Path(tmpdir) / "2026-07-02" / "_SUCCESS").exists())
+
+    def test_backfill_temp_extrema_reads_existing_archive_once(self):
+        fake = FakeIoTDB()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            archive_dir = Path(tmpdir) / "2026-07-02"
+            archive_dir.mkdir(parents=True)
+            with (archive_dir / "temp_001.csv").open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["timestamp", "temperature", "humidity"])
+                writer.writeheader()
+                writer.writerow({"timestamp": "1", "temperature": "20", "humidity": "50"})
+                writer.writerow({"timestamp": "2", "temperature": "28", "humidity": "70"})
+            (archive_dir / "_SUCCESS").write_text(
+                json.dumps({"archive_date": "2026-07-02", "rollups_built": True}),
+                encoding="utf-8",
+            )
+            service = SensorHistoryService(
+                iotdb=fake,
+                archive_base_dir=tmpdir,
+                state_path=str(Path(tmpdir) / "state.json"),
+            )
+
+            first = service.backfill_temp_extrema_due_days(max_days=1)
+            second = service.backfill_temp_extrema_due_days(max_days=1)
+
+            self.assertEqual(first, ["2026-07-02"])
+            self.assertEqual(second, [])
+            self.assertEqual(fake.inserted[0]["path"], "root.dam.rollup_1d.temp_001")
+            self.assertEqual(fake.inserted[0]["data"]["temperature_min"], 20.0)
+            self.assertEqual(fake.inserted[0]["data"]["temperature_max"], 28.0)
+            self.assertEqual(fake.inserted[0]["data"]["humidity_min"], 50.0)
+            self.assertEqual(fake.inserted[0]["data"]["humidity_max"], 70.0)
+            manifest = json.loads((archive_dir / "_SUCCESS").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["temp_extrema_schema"], 1)
+
+    def test_backfill_rain_daily_reads_existing_archive_once(self):
+        fake = FakeIoTDB()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            archive_dir = Path(tmpdir) / "2026-07-02"
+            archive_dir.mkdir(parents=True)
+            with (archive_dir / "rain_001.csv").open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["timestamp", "today_rain", "total_rain"])
+                writer.writeheader()
+                writer.writerow({"timestamp": "1", "today_rain": "0", "total_rain": "100"})
+                writer.writerow({"timestamp": "2", "today_rain": "17.4", "total_rain": "117.4"})
+                writer.writerow({"timestamp": "3", "today_rain": "16.9", "total_rain": "117.4"})
+            (archive_dir / "_SUCCESS").write_text(
+                json.dumps({"archive_date": "2026-07-02", "rollups_built": True}),
+                encoding="utf-8",
+            )
+            service = SensorHistoryService(
+                iotdb=fake,
+                archive_base_dir=tmpdir,
+                state_path=str(Path(tmpdir) / "state.json"),
+            )
+
+            first = service.backfill_rain_daily_due_days(max_days=1)
+            second = service.backfill_rain_daily_due_days(max_days=1)
+
+            self.assertEqual(first, ["2026-07-02"])
+            self.assertEqual(second, [])
+            self.assertEqual(fake.inserted[0]["path"], "root.dam.rollup_1d.rain_001")
+            self.assertEqual(fake.inserted[0]["data"]["daily_rain"], 17.4)
+            self.assertEqual(fake.inserted[0]["data"]["daily_rain_sample_count"], 3)
+            self.assertNotIn("total_rain", fake.inserted[0]["data"])
+            manifest = json.loads((archive_dir / "_SUCCESS").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["rain_daily_schema"], 1)
 
     def test_archive_rebuilds_all_long_range_rollup_levels_from_same_raw_scan(self):
         fake = FakeIoTDB()

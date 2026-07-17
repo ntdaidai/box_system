@@ -71,6 +71,28 @@ from app.api import sensor as sensor_api
 
 
 class FakeHistoryService:
+    def query_temp_humidity_trends(self, view, year, month):
+        return {
+            "device_name": "temp_humidity",
+            "view": view,
+            "year": year,
+            "month": month,
+            "aggregation": "daily_extrema" if view == "calendar" else "30m_average",
+            "history": [],
+            "point_count": 0,
+        }
+
+    def query_rain_calendar(self, year, month):
+        return {
+            "device_name": "rain",
+            "view": "calendar",
+            "year": year,
+            "month": month,
+            "aggregation": "daily_rainfall",
+            "history": [],
+            "point_count": 0,
+        }
+
     def query_history(self, device_name, range_key):
         if device_name == "vibration":
             return {
@@ -151,11 +173,44 @@ class SensorHistoryApiTest(unittest.TestCase):
         self.assertEqual(response.data["rollup_level"], "1d")
         self.assertEqual(response.data["sample_interval"], 86400)
 
+    def test_temp_humidity_trends_route_supports_calendar_selection(self):
+        original = sensor_api.get_sensor_history_service
+        sensor_api.get_sensor_history_service = lambda: FakeHistoryService()
+        try:
+            response = asyncio.run(
+                sensor_api.get_temp_humidity_trends(view="calendar", year=2026, month=7)
+            )
+        finally:
+            sensor_api.get_sensor_history_service = original
+
+        self.assertEqual(response.code, 200)
+        self.assertEqual(response.data["view"], "calendar")
+        self.assertEqual(response.data["year"], 2026)
+        self.assertEqual(response.data["month"], 7)
+        self.assertEqual(response.data["aggregation"], "daily_extrema")
+
+    def test_rain_trends_route_supports_calendar_selection(self):
+        original = sensor_api.get_sensor_history_service
+        sensor_api.get_sensor_history_service = lambda: FakeHistoryService()
+        try:
+            response = asyncio.run(sensor_api.get_rain_trends(year=2026, month=7))
+        finally:
+            sensor_api.get_sensor_history_service = original
+
+        self.assertEqual(response.code, 200)
+        self.assertEqual(response.data["device_name"], "rain")
+        self.assertEqual(response.data["view"], "calendar")
+        self.assertEqual(response.data["year"], 2026)
+        self.assertEqual(response.data["month"], 7)
+        self.assertEqual(response.data["aggregation"], "daily_rainfall")
+
     def test_history_route_returns_503_when_iotdb_is_unavailable(self):
         original = sensor_api.get_sensor_history_service
         sensor_api.get_sensor_history_service = lambda: BrokenHistoryService()
         try:
-            with self.assertRaises(FakeHTTPException) as raised:
+            # dai: Full-suite discovery may import the real FastAPI module in an
+            # earlier test; assert the exception class actually bound by sensor.py.
+            with self.assertRaises(sensor_api.HTTPException) as raised:
                 asyncio.run(sensor_api.get_sensor_history("temp_humidity", range="1h"))
         finally:
             sensor_api.get_sensor_history_service = original

@@ -319,6 +319,15 @@ class SensorCollector:
                 archives = service.archive_due_days(max_days=1)
                 if archives:
                     logger.info(f"原始历史归档完成: {archives}")
+                extrema_backfill = service.backfill_temp_extrema_due_days(max_days=1)
+                if extrema_backfill:
+                    logger.info(f"温湿度日极值回填完成: {extrema_backfill}")
+                # Rain archives need a one-time schema upgrade. Processing a
+                # month per cycle makes the calendar useful immediately after
+                # deployment; manifest markers skip CSV scans in later cycles.
+                rain_backfill = service.backfill_rain_daily_due_days(max_days=30)
+                if rain_backfill:
+                    logger.info(f"逐日雨量回填完成: {rain_backfill}")
                 archive_backlog = service.has_pending_archives()
                 retention = service.enforce_retention(include_raw=not archive_backlog)
                 if archive_backlog:

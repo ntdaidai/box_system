@@ -5,12 +5,16 @@ from loguru import logger
 from contextlib import asynccontextmanager
 import asyncio
 
-from app.api import vision, health, sensor, auth, device, alarm, rule, eca, vision_detect, image
+from app.api import vision, health, sensor, auth, device, alarm, rule, eca, vision_detect, image, camera
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.redis import redis_manager
 from app.services.sensor_collector import sensor_collector
 from app.services.vision_detector import vision_detector
+from app.services.yolo_detector import yolo_detector
+from app.services.camera_stream import camera_manager
+from app.services.camera_config import load_camera_configs
+from app.services.video_detection import video_detection_service
 from app.services.eca_engine import set_main_event_loop, eca_scheduler, eca_engine
 
 import httpx
@@ -21,6 +25,20 @@ import traceback
 
 async def catch_all_exceptions(request: Request, call_next):
     """捕获全部未处理异常，返回统一 JSON 格式，避免泄漏堆栈信息"""
+    # dai: Reject oversized video bodies before Starlette's multipart parser
+    # spools them to disk. The endpoint still enforces the streamed byte count.
+    if request.url.path == "/api/v1/camera/detect/video":
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                max_bytes = settings.MAX_VIDEO_SIZE_MB * 1024 * 1024 + 1024 * 1024
+                if int(content_length) > max_bytes:
+                    return JSONResponse(
+                        status_code=413,
+                        content={"detail": "视频文件大小超过限制"},
+                    )
+            except ValueError:
+                return JSONResponse(status_code=400, content={"detail": "Content-Length 无效"})
     try:
         return await call_next(request)
     except Exception:
@@ -59,6 +77,27 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"MinIO 连接失败，图片上传功能将不可用: {e}")
 
+    # 加载 YOLO 检测模型
+    try:
+        yolo_detector.load_model(settings.YOLO_MODEL_PATH)
+    except Exception as e:
+        logger.warning(f"YOLO 模型加载失败，检测功能将不可用: {e}")
+
+    # dai: 同一份启动逻辑兼容单摄像头环境变量和多摄像头 JSON 配置。
+    # 未配置真实地址时保持空列表，页面会明确展示待接入状态。
+    try:
+        camera_configs = load_camera_configs(settings)
+        for camera_config in camera_configs:
+            camera_manager.add_camera(
+                camera_id=camera_config["camera_id"],
+                source=camera_config["source"],
+                name=camera_config["name"],
+                auto_start=camera_config["auto_start"],
+            )
+        logger.info(f"已加载 {len(camera_configs)} 路摄像头配置")
+    except Exception as e:
+        logger.error(f"摄像头配置加载失败，本次不启动视频源: {e}")
+
     # 注册传感器数据变化回调（实时触发 ECA 检查）
     sensor_collector.register_data_callback(eca_engine.on_sensor_data_updated)
 
@@ -78,6 +117,8 @@ async def lifespan(app: FastAPI):
     # 关闭阶段
     await eca_scheduler.stop()
     sensor_collector.stop_collection()
+    camera_manager.stop_all()
+    video_detection_service.shutdown()
     await app.state.http_client.aclose()
     await redis_manager.disconnect()
     logger.info("Python后端服务已关闭")
@@ -116,6 +157,7 @@ app.include_router(rule.router, prefix="/api/rule", tags=["规则管理"])
 app.include_router(eca.router, prefix="/api/v1/eca", tags=["ECA规则引擎"])
 app.include_router(vision_detect.router, prefix="/api/v1/vision/detect", tags=["视觉检测结果"])
 app.include_router(image.router, prefix="/api/v1/image", tags=["图片管理"])
+app.include_router(camera.router, prefix="/api/v1/camera", tags=["摄像头与检测"])
 
 
 # ── 共享 HTTP 客户端依赖 ─────────────────────────────────────
