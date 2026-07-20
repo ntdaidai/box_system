@@ -84,13 +84,13 @@ class FakeHistoryService:
             "point_count": 0,
         }
 
-    def query_rain_calendar(self, year, month):
+    def query_rain_trends(self, view, year, month):
         return {
             "device_name": "rain",
-            "view": "calendar",
+            "view": view,
             "year": year,
             "month": month,
-            "aggregation": "daily_rainfall",
+            "aggregation": "30m_increment" if view == "recent24h" else "daily_rainfall",
             "history": [],
             "point_count": 0,
         }
@@ -206,7 +206,7 @@ class SensorHistoryApiTest(unittest.TestCase):
         original = sensor_api.get_sensor_history_service
         sensor_api.get_sensor_history_service = lambda: FakeHistoryService()
         try:
-            response = asyncio.run(sensor_api.get_rain_trends(year=2026, month=7))
+            response = asyncio.run(sensor_api.get_rain_trends(view="calendar", year=2026, month=7))
         finally:
             sensor_api.get_sensor_history_service = original
 
@@ -216,6 +216,18 @@ class SensorHistoryApiTest(unittest.TestCase):
         self.assertEqual(response.data["year"], 2026)
         self.assertEqual(response.data["month"], 7)
         self.assertEqual(response.data["aggregation"], "daily_rainfall")
+
+    def test_rain_trends_route_supports_recent_24h(self):
+        original = sensor_api.get_sensor_history_service
+        sensor_api.get_sensor_history_service = lambda: FakeHistoryService()
+        try:
+            response = asyncio.run(sensor_api.get_rain_trends(view="recent24h"))
+        finally:
+            sensor_api.get_sensor_history_service = original
+
+        self.assertEqual(response.code, 200)
+        self.assertEqual(response.data["view"], "recent24h")
+        self.assertEqual(response.data["aggregation"], "30m_increment")
 
     def test_wind_trends_route_supports_calendar_selection(self):
         original = sensor_api.get_sensor_history_service
@@ -279,14 +291,35 @@ class SensorHistoryApiTest(unittest.TestCase):
 
         self.assertEqual(result, payload)
 
+    def test_current_rain_can_fill_rolling_twelve_month_view(self):
+        current_date = date(2026, 7, 18)
+        observed_at = datetime(2026, 7, 18, 9, 30, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp()
+        payload = {
+            "view": "rolling12",
+            "year": None,
+            "month": None,
+            "history": [{"date": "2026-07-18", "data": {}}],
+            "max_point_count": 365,
+            "point_count": 0,
+        }
+
+        result = sensor_api._with_current_rain_day(
+            payload,
+            {"timestamp": observed_at, "data": {"today_rain": 0.8}},
+            current_date=current_date,
+        )
+
+        self.assertEqual(result["history"][0]["data"]["daily_rain"], 0.8)
+
     def test_current_rain_calendar_uses_shorter_cache_ttl(self):
         current = datetime.now(sensor_api._HISTORY_TIMEZONE)
         other_month = 1 if current.month != 1 else 2
 
-        self.assertEqual(sensor_api._rain_trends_cache_ttl(current.year, None), 300)
-        self.assertEqual(sensor_api._rain_trends_cache_ttl(current.year, current.month), 300)
-        self.assertEqual(sensor_api._rain_trends_cache_ttl(current.year, other_month), 1800)
-        self.assertEqual(sensor_api._rain_trends_cache_ttl(current.year - 1, None), 1800)
+        self.assertEqual(sensor_api._rain_trends_cache_ttl("recent24h", current.year, None), 300)
+        self.assertEqual(sensor_api._rain_trends_cache_ttl("calendar", current.year, current.month), 300)
+        self.assertEqual(sensor_api._rain_trends_cache_ttl("calendar", current.year, other_month), 1800)
+        self.assertEqual(sensor_api._rain_trends_cache_ttl("calendar", current.year - 1, None), 1800)
+        self.assertEqual(sensor_api._rain_trends_cache_ttl("rolling12", None, None), 300)
 
     def test_history_route_returns_503_when_iotdb_is_unavailable(self):
         original = sensor_api.get_sensor_history_service

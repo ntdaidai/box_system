@@ -65,56 +65,74 @@
       </div>
     </div>
 
-    <!-- 逐日雨量历史 -->
+    <!-- 雨量历史 -->
     <div class="data-panel history-panel">
       <div class="history-panel-header">
-        <span class="panel-title">降水趋势</span>
-        <div class="calendar-controls">
-          <el-select v-model="selectedYear" class="history-select year-select" @change="onYearChange">
-            <el-option
-              v-for="year in yearOptions"
-              :key="year"
-              :label="`${year}年`"
-              :value="year"
-            />
-          </el-select>
-          <el-select v-model="selectedMonth" class="history-select month-select" @change="onMonthChange">
-            <el-option label="所有月份" value="all" />
-            <el-option
-              v-for="month in monthOptions"
-              :key="month"
-              :label="`${month}月`"
-              :value="month"
-            />
-          </el-select>
+        <div class="history-heading">
+          <span class="panel-title">雨量趋势</span>
+          <div class="metric-switch" aria-label="雨量指标">
+            <button type="button" class="active"><el-icon><Pouring /></el-icon>雨量</button>
+          </div>
+        </div>
+        <div class="history-controls">
+          <button
+            type="button"
+            class="period-button"
+            :class="{ active: historyMode === 'recent24h' }"
+            @click="selectRecent24h"
+          >
+            <span class="control-icon">◷</span>近24小时
+          </button>
+          <div class="calendar-controls" :class="{ active: historyMode === 'calendar' }">
+            <el-select v-model="selectedYear" class="history-select year-select" @change="onYearChange">
+              <el-option
+                v-for="year in yearOptions"
+                :key="year"
+                :label="year === 'last12' ? '过去12个月' : `${year}年`"
+                :value="year"
+              />
+            </el-select>
+            <el-select
+              v-model="selectedMonth"
+              class="history-select month-select"
+              :disabled="selectedYear === 'last12'"
+              @change="onMonthChange"
+            >
+              <el-option label="所有月份" value="all" />
+              <el-option
+                v-for="month in monthOptions"
+                :key="month"
+                :label="`${month}月`"
+                :value="month"
+              />
+            </el-select>
+          </div>
         </div>
       </div>
 
       <div class="trend-shell">
-        <div class="history-stat-strip">
-          <div v-for="item in historyStats" :key="item.label" class="history-stat">
-            <span>{{ item.label }}</span>
-            <strong :class="item.tone">{{ item.value }}</strong>
-          </div>
-        </div>
-
         <div class="chart-wrap history-chart-wrap">
           <div class="chart-container" ref="chartRef"></div>
+          <div v-if="historyError && !historyEmpty" class="chart-error-banner">
+            <span>{{ historyError }}，当前显示上一次成功加载的数据</span>
+            <button type="button" @click="retryHistory">重试</button>
+          </div>
           <div v-if="historyLoading" class="chart-loading-overlay">
             <div class="loading-spinner"></div>
-            <div class="loading-text">正在读取逐日雨量...</div>
+            <div class="loading-text">正在读取雨量数据...</div>
           </div>
-          <div v-else-if="historyError" class="chart-loading-overlay">
+          <div v-else-if="historyError && historyEmpty" class="chart-loading-overlay">
             <div class="loading-text">{{ historyError }}</div>
+            <button type="button" class="chart-retry-button" @click="retryHistory">重新加载</button>
           </div>
           <div v-else-if="historyEmpty" class="chart-loading-overlay chart-hint-overlay">
-            <div class="loading-text">该时间范围暂无逐日雨量数据</div>
+            <div class="loading-text">该时间范围暂无雨量数据</div>
           </div>
         </div>
 
         <div class="rain-series-legend">
           <i></i>
-          <span>逐日雨量</span>
+          <span>{{ historyLegendLabel }}</span>
         </div>
       </div>
     </div>
@@ -125,9 +143,9 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { getRainTrends, getSensorRealtime } from '@/api/sensor'
 import {
-  buildDailyRainChartValues,
-  buildDailyRainRows,
-  resolveRainCalendarSelection,
+  buildRainChartValues,
+  rainBarMinHeight,
+  rainLegendLabel,
   toRainNumber,
 } from '@/utils/rainHistory'
 import { calcNiceYAxisRange } from '@/utils/sensorHistory'
@@ -135,19 +153,31 @@ import { cancelIdleTask, createSensorDetailStartup, runWhenIdle } from '@/utils/
 import { Pouring } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 
+const MINUTE = 60 * 1000
+const HOUR = 60 * MINUTE
+const DAY = 24 * HOUR
 const TREND_URL = '/v1/sensor/history/rain/trends'
+const shanghaiDateKey = (value) => {
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date(value))
+  const get = type => parts.find(part => part.type === type)?.value || ''
+  return `${get('year')}-${get('month')}-${get('day')}`
+}
+const initialShanghaiYear = Number(shanghaiDateKey(Date.now()).slice(0, 4))
 
 const data = ref({})
 const chartRef = ref(null)
 const statusClass = ref('online')
 const statusText = ref('在线')
-const selectedYear = ref(new Date().getFullYear())
+const historyMode = ref('recent24h')
+const selectedYear = ref(initialShanghaiYear)
 const selectedMonth = ref('all')
 const availablePeriods = ref([])
 const lastTimestamp = ref(0)
 const historyLoading = ref(false)
 const historyError = ref('')
-const chartData = ref({ view: 'calendar', history: [], window: null })
+const chartData = ref({ view: 'recent24h', history: [], window: null })
 const historyCache = new Map()
 
 let chart = null
@@ -155,48 +185,29 @@ let timer = null
 let historyRefreshTimer = null
 let preloadIdleTask = null
 let resizeHandler = null
+let resizeFrame = null
+let historyRequestSerial = 0
+let isMounted = false
 
 const yearOptions = computed(() => {
   const years = availablePeriods.value.map(item => Number(item.year)).filter(Number.isFinite)
-  return years.length ? years : [new Date().getFullYear()]
+  const selected = Number(selectedYear.value)
+  if (Number.isInteger(selected) && !years.includes(selected)) years.push(selected)
+  return ['last12', ...(years.length ? [...new Set(years)].sort((a, b) => b - a) : [initialShanghaiYear])]
 })
 
 const monthOptions = computed(() => {
   const period = availablePeriods.value.find(item => Number(item.year) === Number(selectedYear.value))
+  if (!period) return Array.from({ length: 12 }, (_, index) => index + 1)
   return (period?.months || []).map(Number).filter(month => month >= 1 && month <= 12)
 })
 
-const dailyRainRows = computed(() => buildDailyRainRows(chartData.value.history || []))
-
-const historyEmpty = computed(() => dailyRainRows.value.length === 0)
-
-const formatRain = (value) => {
-  const numeric = toRainNumber(value)
-  return numeric === null ? '--' : `${numeric.toFixed(1)} mm`
-}
-
-const formatRainDate = (dateValue) => {
-  if (!dateValue) return '--'
-  const value = new Date(`${dateValue}T00:00:00+08:00`)
-  return value.toLocaleDateString('zh-CN', {
-    month: 'numeric', day: 'numeric',
-    ...(selectedMonth.value === 'all' ? { year: 'numeric' } : {}),
-  })
-}
-
-const historyStats = computed(() => {
-  const rows = dailyRainRows.value
-  const wetDays = rows.filter(row => row.value > 0).length
-  const maximum = rows.reduce((result, row) => (
-    !result || row.value > result.value ? row : result
-  ), null)
-  return [
-    { label: '最大日雨量', value: formatRain(maximum?.value), tone: 'maximum' },
-    { label: '最大雨量日期', value: maximum?.value > 0 ? formatRainDate(maximum.date) : '--', tone: 'date' },
-    { label: '有雨天数', value: `${wetDays} 天`, tone: 'wet-days' },
-    { label: '有效数据', value: `${rows.length} 天`, tone: '' },
-  ]
-})
+const historyValues = computed(() => buildRainChartValues(
+  chartData.value.history || [],
+  chartData.value.view,
+).filter(value => value !== null))
+const historyEmpty = computed(() => historyValues.value.length === 0)
+const historyLegendLabel = computed(() => rainLegendLabel(chartData.value.view))
 
 // 防汛预警条（0-100mm 映射）
 const rainWarnPosition = computed(() => {
@@ -255,26 +266,37 @@ const fetchData = async () => {
   }
 }
 
-const queryKey = ({ year, month }) => [year, month || 'all'].join(':')
+const queryKey = ({ view, year, month }) => [view, year || '', month || 'all'].join(':')
+const historyCacheMaxAge = query => query.view === 'recent24h' ? 5 * MINUTE : 30 * MINUTE
 
-const currentQuery = () => ({
-  year: Number(selectedYear.value),
-  month: selectedMonth.value === 'all' ? null : Number(selectedMonth.value),
-})
-
-const syncAvailablePeriods = (periods = []) => {
-  if (!Array.isArray(periods) || !periods.length) return
-  availablePeriods.value = periods
-  const selection = resolveRainCalendarSelection(periods, selectedYear.value, selectedMonth.value)
-  selectedYear.value = selection.year
-  selectedMonth.value = selection.month
+const readHistoryCache = (query) => {
+  const key = queryKey(query)
+  const cached = historyCache.get(key)
+  if (!cached) return null
+  if (Date.now() - cached.updatedAt <= historyCacheMaxAge(query)) return cached.payload
+  historyCache.delete(key)
+  return null
 }
 
-const applyTrendPayload = (payload, query, apply = true) => {
+const currentQuery = () => historyMode.value === 'recent24h'
+  ? { view: 'recent24h' }
+  : selectedYear.value === 'last12'
+    ? { view: 'rolling12' }
+    : {
+      view: 'calendar',
+      year: Number(selectedYear.value),
+      month: selectedMonth.value === 'all' ? null : Number(selectedMonth.value),
+    }
+
+const syncAvailablePeriods = (periods = []) => {
+  if (Array.isArray(periods) && periods.length) availablePeriods.value = periods
+}
+
+const applyTrendPayload = (payload, query, apply = true, cacheResult = true) => {
   if (!payload) return null
   syncAvailablePeriods(payload.available_periods)
-  const normalized = { ...payload, history: payload.history || [] }
-  historyCache.set(queryKey(query), normalized)
+  const normalized = { ...payload, history: Array.isArray(payload.history) ? payload.history : [] }
+  if (cacheResult) historyCache.set(queryKey(query), { payload: normalized, updatedAt: Date.now() })
   if (apply && queryKey(query) === queryKey(currentQuery())) {
     chartData.value = normalized
     historyError.value = ''
@@ -284,32 +306,37 @@ const applyTrendPayload = (payload, query, apply = true) => {
 
 const loadTrends = async (query = currentQuery(), apply = true, force = false) => {
   const key = queryKey(query)
-  if (!force && historyCache.has(key)) {
-    const normalized = applyTrendPayload(historyCache.get(key), query, apply)
-    if (apply && key !== queryKey(currentQuery())) {
-      return loadTrends(currentQuery(), true, force)
-    }
-    return normalized
+  const requestId = apply ? ++historyRequestSerial : 0
+  const isCurrentRequest = () => !apply || (
+    isMounted && requestId === historyRequestSerial && key === queryKey(currentQuery())
+  )
+  const cached = force ? null : readHistoryCache(query)
+  if (cached) {
+    const shouldApply = apply && isCurrentRequest()
+    const normalized = applyTrendPayload(cached, query, shouldApply, false)
+    if (shouldApply) historyLoading.value = false
+    return { payload: normalized, applied: shouldApply, error: false }
   }
 
-  if (apply) {
+  if (apply && isMounted) {
     historyLoading.value = true
     historyError.value = ''
   }
   try {
     const res = await getRainTrends(query)
-    if (res.code !== 200) throw new Error('逐日雨量响应无效')
-    const normalized = applyTrendPayload(res.data, query, apply)
-    if (apply && key !== queryKey(currentQuery())) {
-      return await loadTrends(currentQuery(), true, force)
+    if (res.code !== 200 || !res.data || !Array.isArray(res.data.history)) {
+      throw new Error('雨量趋势响应无效')
     }
-    return normalized
+    const shouldApply = apply && isCurrentRequest()
+    const normalized = applyTrendPayload(res.data, query, shouldApply)
+    return { payload: normalized, applied: shouldApply, error: false }
   } catch (error) {
-    console.warn('加载逐日雨量失败:', error)
-    if (apply) historyError.value = '历史数据服务暂时不可用，请稍后重试'
-    return null
+    console.warn('加载雨量趋势失败:', error)
+    const currentError = apply && isCurrentRequest()
+    if (currentError) historyError.value = '历史数据服务暂时不可用，请稍后重试'
+    return { payload: null, applied: false, error: currentError }
   } finally {
-    if (apply) historyLoading.value = false
+    if (apply && isCurrentRequest()) historyLoading.value = false
   }
 }
 
@@ -318,139 +345,197 @@ const handleHistoryCacheUpdate = (event) => {
   if (detail.url !== TREND_URL || detail.data?.code !== 200) return
   const params = detail.params || {}
   const query = {
-    year: params.year != null ? Number(params.year) : new Date().getFullYear(),
+    view: params.view || 'recent24h',
+    year: params.year != null ? Number(params.year) : undefined,
     month: params.month != null ? Number(params.month) : null,
   }
   const shouldApply = queryKey(query) === queryKey(currentQuery())
   applyTrendPayload(detail.data.data, query, shouldApply)
-  if (shouldApply && queryKey(query) === queryKey(currentQuery())) {
-    renderChart()
-  } else if (shouldApply) {
-    void loadTrends(currentQuery()).then(renderChart)
-  }
+  if (shouldApply && queryKey(query) === queryKey(currentQuery())) renderChart()
 }
 
-const preloadHistoryLater = () => {
+const preloadCalendarLater = () => {
   if (preloadIdleTask) cancelIdleTask(preloadIdleTask)
+  const preloadYear = Number.isInteger(Number(selectedYear.value))
+    ? Number(selectedYear.value)
+    : initialShanghaiYear
   preloadIdleTask = runWhenIdle(() => {
     preloadIdleTask = null
-    if (selectedMonth.value !== 'all') {
-      loadTrends({ year: Number(selectedYear.value), month: null }, false)
-    }
+    loadTrends({ view: 'calendar', year: preloadYear, month: null }, false)
   }, 1200)
+}
+
+const millisecondsToNextHalfHour = () => {
+  const now = Date.now()
+  const interval = 30 * MINUTE
+  return Math.floor(now / interval) * interval + interval - now
+}
+
+const restoreSelectionFromChart = () => {
+  const view = chartData.value.view
+  if (view === 'recent24h') {
+    historyMode.value = 'recent24h'
+    return
+  }
+  historyMode.value = 'calendar'
+  if (view === 'rolling12') {
+    selectedYear.value = 'last12'
+    selectedMonth.value = 'all'
+    return
+  }
+  const year = Number(chartData.value.year)
+  selectedYear.value = Number.isInteger(year) ? year : initialShanghaiYear
+  const month = Number(chartData.value.month)
+  selectedMonth.value = Number.isInteger(month) && month >= 1 && month <= 12 ? month : 'all'
+}
+
+const finishHistorySelection = (query, result) => {
+  if (!isMounted || queryKey(query) !== queryKey(currentQuery())) return
+  if (!result?.applied && !result?.error) return
+  if (result.error) restoreSelectionFromChart()
+  renderChart()
+  scheduleHistoryRefresh()
 }
 
 const scheduleHistoryRefresh = () => {
   if (historyRefreshTimer) clearTimeout(historyRefreshTimer)
+  if (!isMounted) return
+  const delay = historyMode.value === 'recent24h'
+    ? millisecondsToNextHalfHour() + 1000
+    : 30 * MINUTE
   historyRefreshTimer = setTimeout(async () => {
+    if (!isMounted) return
     const query = currentQuery()
     historyCache.delete(queryKey(query))
-    await loadTrends(query, true, true)
-    renderChart()
-    preloadHistoryLater()
-    scheduleHistoryRefresh()
-  }, 30 * 60 * 1000)
+    const result = await loadTrends(query, true, true)
+    finishHistorySelection(query, result)
+  }, delay)
+}
+
+const selectRecent24h = async () => {
+  if (historyMode.value === 'recent24h' && !historyError.value) return
+  historyMode.value = 'recent24h'
+  const query = currentQuery()
+  const result = await loadTrends(query, true, Boolean(historyError.value))
+  finishHistorySelection(query, result)
 }
 
 const onYearChange = async () => {
+  historyMode.value = 'calendar'
+  if (selectedYear.value === 'last12') selectedMonth.value = 'all'
   if (selectedMonth.value !== 'all' && !monthOptions.value.includes(Number(selectedMonth.value))) {
     selectedMonth.value = 'all'
   }
-  await loadTrends(currentQuery())
-  renderChart()
-  preloadHistoryLater()
-  scheduleHistoryRefresh()
+  const query = currentQuery()
+  const result = await loadTrends(query)
+  finishHistorySelection(query, result)
 }
 
 const onMonthChange = async () => {
-  await loadTrends(currentQuery())
-  renderChart()
-  preloadHistoryLater()
-  scheduleHistoryRefresh()
+  historyMode.value = 'calendar'
+  const query = currentQuery()
+  const result = await loadTrends(query)
+  finishHistorySelection(query, result)
 }
 
-const chartDates = () => (chartData.value.history || []).map(row => row.date)
-
-const chartValues = () => buildDailyRainChartValues(chartData.value.history || [])
-
-const formatXAxisLabel = (dateValue) => {
-  const value = new Date(`${dateValue}T00:00:00+08:00`)
-  return selectedMonth.value === 'all' ? `${value.getMonth() + 1}月` : `${value.getDate()}日`
+const retryHistory = async () => {
+  const query = currentQuery()
+  historyCache.delete(queryKey(query))
+  const result = await loadTrends(query, true, true)
+  finishHistorySelection(query, result)
 }
 
-const shouldShowXAxisLabel = (_index, dateValue) => {
-  const day = Number(String(dateValue).slice(8, 10))
-  if (selectedMonth.value === 'all') return day === 1
-  return day === 1 || day % 4 === 1
+const chartSeriesData = () => {
+  const recent = chartData.value.view === 'recent24h'
+  return (chartData.value.history || []).map(point => {
+    const value = toRainNumber(point?.data?.[recent ? 'rain_increment' : 'daily_rain'])
+    return {
+      value: recent ? [Number(point.timestamp) * 1000, value] : value,
+      date: point?.date || '',
+      inProgress: Boolean(point?.data?.in_progress),
+    }
+  })
 }
+
+const formatXAxisLabel = (value) => {
+  if (chartData.value.view === 'recent24h') {
+    return new Date(value).toLocaleTimeString('zh-CN', {
+      timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false,
+    })
+  }
+  const [, month, day] = String(value).split('-').map(Number)
+  return selectedMonth.value === 'all' ? `${month}月` : `${day}日`
+}
+
+const escapeTooltipHtml = value => String(value).replace(/[&<>"']/g, character => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+})[character])
 
 const tooltipFormatter = (params) => {
-  const item = (Array.isArray(params) ? params : [params]).find(entry => entry?.data != null)
-  if (!item || item.data === null) return ''
-  const dateValue = new Date(`${item.axisValue}T00:00:00+08:00`)
-  const heading = dateValue.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })
-  const source = (chartData.value.history || []).find(row => row.date === item.axisValue)
-  const seriesLabel = source?.data?.in_progress ? '今日雨量（截至当前）' : '逐日雨量'
-  return `<div style="min-width:160px"><strong>${heading}</strong>`
-    + `<div style="display:flex;justify-content:space-between;gap:24px;margin-top:8px">`
-    + `<span>${item.marker}${seriesLabel}</span><strong>${Number(item.data).toFixed(1)} mm</strong></div></div>`
+  const recent = chartData.value.view === 'recent24h'
+  const item = (Array.isArray(params) ? params : [params]).find(entry => {
+    const value = recent ? entry.value?.[1] : entry.value
+    return value !== null && value !== undefined
+  })
+  if (!item) return ''
+  const dateValue = recent ? new Date(item.value[0]) : new Date(`${item.axisValue}T00:00:00+08:00`)
+  const heading = recent
+    ? dateValue.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
+    : dateValue.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: 'long', day: 'numeric' })
+  const value = recent ? item.value[1] : item.value
+  const label = recent ? '30分钟新增雨量' : (item.data?.inProgress ? '今日雨量（截至当前）' : '逐日雨量')
+  return `<div style="min-width:190px"><strong>${escapeTooltipHtml(heading)}</strong>`
+    + `<div style="display:flex;justify-content:space-between;gap:22px;margin-top:8px">`
+    + `<span>${item.marker}${label}</span><strong>${Number(value).toFixed(1)} 毫米</strong></div></div>`
+}
+
+const currentDayMark = () => {
+  if (chartData.value.view === 'recent24h') return undefined
+  const dateKey = shanghaiDateKey(Date.now())
+  const dates = (chartData.value.history || []).map(point => point?.date)
+  if (!dates.includes(dateKey)) return undefined
+  return {
+    silent: true,
+    symbol: ['none', 'none'],
+    lineStyle: { color: 'rgba(255,255,255,0.5)', width: 1 },
+    label: {
+      show: true, formatter: '今天', position: 'insideEndTop', rotate: 0, color: '#fff',
+      backgroundColor: '#343b4d', borderRadius: 10, padding: [3, 9], fontWeight: 600,
+    },
+    data: [{ xAxis: dateKey }],
+  }
 }
 
 const fullChartOption = () => {
-  const values = chartValues()
-  const yRange = calcNiceYAxisRange(values, { min: 0, max: 20 }, 7)
-  const today = new Date()
-  const todayDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
-  const dates = chartDates()
-  const todayVisible = dates.includes(todayDate)
-  const series = {
-    id: 'daily-rainfall',
-    name: '逐日雨量',
-    type: 'bar',
-    data: values,
-    barMaxWidth: selectedMonth.value === 'all' ? 6 : 22,
-    barMinHeight: 3,
-    z: 3,
-    itemStyle: {
-      borderRadius: [3, 3, 0, 0],
-      color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-        { offset: 0, color: '#16c5ff' },
-        { offset: 0.5, color: '#168dff' },
-        { offset: 1, color: '#1762d5' },
-      ]),
-      shadowBlur: 6,
-      shadowColor: 'rgba(22, 149, 255, 0.24)',
-    },
-    emphasis: {
-      itemStyle: { color: '#43d7ff', shadowBlur: 12, shadowColor: 'rgba(31, 180, 255, 0.52)' },
-    },
-    animationDuration: 850,
-    animationDurationUpdate: 550,
-    animationEasing: 'cubicOut',
-    animationEasingUpdate: 'cubicInOut',
-    animationDelay: index => Math.min(index * 3, 420),
-    universalTransition: true,
+  const recent = chartData.value.view === 'recent24h'
+  const monthly = !recent && selectedMonth.value !== 'all'
+  const points = chartSeriesData()
+  const values = points
+    .map(point => recent ? point.value[1] : point.value)
+    .filter(value => value !== null)
+  const observedMax = values.length ? Math.max(...values) : 0
+  const fallbackMax = observedMax <= 1 ? 1 : (observedMax <= 5 ? 5 : 20)
+  const yRange = calcNiceYAxisRange(values, { min: 0, max: fallbackMax }, 5)
+  const calendarDates = recent ? [] : (chartData.value.history || []).map(point => point?.date || '')
+  const chartWidth = chartRef.value?.clientWidth || 1000
+  const monthlyLabelStep = chartWidth < 400 ? 6 : (chartWidth < 700 ? 4 : 2)
+  const [firstYear, firstMonth] = String(calendarDates[0] || '').split('-').map(Number)
+  const firstMonthIndex = firstYear * 12 + firstMonth
+  const calendarLabelInterval = (index, value) => {
+    const day = Number(String(value).slice(-2))
+    if (monthly) return index % monthlyLabelStep === 0
+    if (day !== 1) return false
+    if (chartWidth >= 480 || !Number.isFinite(firstMonthIndex)) return true
+    const [year, month] = String(value).split('-').map(Number)
+    return (year * 12 + month - firstMonthIndex) % 2 === 0
   }
-
-  if (todayVisible) {
-    series.markLine = {
-      silent: true,
-      symbol: ['none', 'none'],
-      lineStyle: { color: 'rgba(255,255,255,0.48)', width: 1 },
-      label: {
-        show: true, formatter: '今天', position: 'insideEndTop', color: '#fff',
-        backgroundColor: '#343b4d', borderRadius: 10, padding: [3, 9], fontWeight: 600,
-      },
-      data: [{ xAxis: todayDate }],
-    }
-  }
+  const windowStart = Number(chartData.value.window?.start) * 1000
+  const windowEnd = Number(chartData.value.window?.end) * 1000
 
   return {
     animation: true,
     animationDuration: 850,
     animationDurationUpdate: 550,
-    animationEasing: 'cubicOut',
-    animationEasingUpdate: 'cubicInOut',
     backgroundColor: 'transparent',
     tooltip: {
       trigger: 'axis', confine: true, formatter: tooltipFormatter,
@@ -459,28 +544,60 @@ const fullChartOption = () => {
       axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(47, 151, 255, 0.08)' } },
     },
     grid: { left: 18, right: 22, bottom: 18, top: 24, containLabel: true },
-    xAxis: {
-      type: 'category', data: dates, boundaryGap: true,
-      axisLine: { lineStyle: { color: 'rgba(121, 155, 202, 0.42)' } },
-      axisTick: { show: true, alignWithLabel: true, interval: shouldShowXAxisLabel, lineStyle: { color: 'rgba(121, 155, 202, 0.42)' } },
-      axisLabel: { color: '#91a9ca', margin: 12, interval: shouldShowXAxisLabel, formatter: formatXAxisLabel },
+    xAxis: recent ? {
+      type: 'time',
+      min: Number.isFinite(windowStart) ? windowStart : Date.now() - DAY,
+      max: Number.isFinite(windowEnd) ? windowEnd : Date.now(),
+      interval: 3 * HOUR,
+      minInterval: 3 * HOUR,
+      axisLine: { lineStyle: { color: 'rgba(151, 177, 215, 0.55)' } },
+      axisTick: { show: true, lineStyle: { color: 'rgba(151, 177, 215, 0.45)' } },
+      axisLabel: { color: '#aebdd1', margin: 11, hideOverlap: true, formatter: formatXAxisLabel },
+      splitLine: { show: false },
+    } : {
+      type: 'category', data: calendarDates, boundaryGap: true,
+      axisLine: { lineStyle: { color: 'rgba(151, 177, 215, 0.55)' } },
+      axisTick: { show: true, alignWithLabel: true, interval: calendarLabelInterval, lineStyle: { color: 'rgba(151, 177, 215, 0.45)' } },
+      axisLabel: { color: '#aebdd1', margin: 11, interval: calendarLabelInterval, formatter: formatXAxisLabel },
       splitLine: { show: false },
     },
     yAxis: {
       type: 'value', min: yRange.min, max: yRange.max, interval: yRange.interval,
       axisLine: { show: false }, axisTick: { show: false },
-      axisLabel: { color: '#b6c7df', margin: 12, formatter: value => `${value}\n毫米` },
-      splitLine: { lineStyle: { color: 'rgba(151, 177, 215, 0.18)', width: 1 } },
+      axisLabel: { color: '#d4deec', margin: 12, formatter: value => `${value}\n毫米`, lineHeight: 17 },
+      splitLine: { lineStyle: { color: 'rgba(187, 204, 229, 0.38)', width: 1 } },
     },
-    series: [series],
+    series: [{
+      id: 'rainfall',
+      name: rainLegendLabel(chartData.value.view),
+      type: 'bar',
+      data: points,
+      barMaxWidth: recent ? 18 : (monthly ? 22 : 7),
+      barMinHeight: rainBarMinHeight(values),
+      z: 3,
+      itemStyle: {
+        borderRadius: [3, 3, 0, 0],
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: '#16c5ff' },
+          { offset: 0.5, color: '#168dff' },
+          { offset: 1, color: '#1762d5' },
+        ]),
+        shadowBlur: 6,
+        shadowColor: 'rgba(22, 149, 255, 0.24)',
+      },
+      emphasis: {
+        itemStyle: { color: '#43d7ff', shadowBlur: 12, shadowColor: 'rgba(31, 180, 255, 0.52)' },
+      },
+      markLine: currentDayMark(),
+    }],
   }
 }
 
 const renderChart = () => {
-  if (!chart) return
+  if (!isMounted || !chart || chart.isDisposed()) return
   chart.setOption(fullChartOption(), {
     notMerge: false,
-    replaceMerge: ['series'],
+    replaceMerge: ['xAxis', 'yAxis', 'series'],
     lazyUpdate: false,
   })
 }
@@ -489,18 +606,27 @@ const initChart = () => {
   if (!chartRef.value) return
   chart = echarts.init(chartRef.value)
   chart.setOption(fullChartOption(), true)
-  resizeHandler = () => chart?.resize()
+  resizeHandler = () => {
+    if (resizeFrame != null) cancelAnimationFrame(resizeFrame)
+    resizeFrame = requestAnimationFrame(() => {
+      resizeFrame = null
+      if (!chart || chart.isDisposed()) return
+      chart.resize()
+      renderChart()
+    })
+  }
   window.addEventListener('resize', resizeHandler)
 }
 
 onMounted(() => {
+  isMounted = true
   const startup = createSensorDetailStartup({
     initChart,
     fetchRealtime: fetchData,
-    loadInitialHistory: async () => loadTrends(currentQuery()),
+    loadInitialHistory: async () => loadTrends({ view: 'recent24h' }),
     renderHistory: renderChart,
     scheduleHistoryRefresh,
-    preloadHistoryLater,
+    preloadHistoryLater: preloadCalendarLater,
   })
 
   startup.start()
@@ -509,12 +635,16 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  isMounted = false
+  historyRequestSerial += 1
   if (timer) clearInterval(timer)
   if (historyRefreshTimer) clearTimeout(historyRefreshTimer)
   if (preloadIdleTask) cancelIdleTask(preloadIdleTask)
   window.removeEventListener('dam-api-cache-updated', handleHistoryCacheUpdate)
   if (resizeHandler) window.removeEventListener('resize', resizeHandler)
-  if (chart) chart.dispose()
+  if (resizeFrame != null) cancelAnimationFrame(resizeFrame)
+  if (chart && !chart.isDisposed()) chart.dispose()
+  chart = null
 })
 </script>
 
@@ -655,7 +785,7 @@ onUnmounted(() => {
   overflow: hidden;
   border-color: rgba(84, 130, 202, 0.25);
   background:
-    radial-gradient(circle at 100% 0%, rgba(34, 132, 217, 0.14), transparent 34%),
+    radial-gradient(circle at 100% 0%, rgba(50, 138, 210, 0.15), transparent 34%),
     linear-gradient(145deg, rgba(15, 31, 57, 0.98), rgba(10, 23, 43, 0.98));
   box-shadow: 0 14px 36px rgba(0, 8, 24, 0.18);
 }
@@ -668,7 +798,8 @@ onUnmounted(() => {
   gap: 18px;
   border-bottom: 1px solid rgba(124, 157, 207, 0.14);
 }
-.history-panel-header .panel-title {
+.history-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
+.history-heading .panel-title {
   display: block;
   margin: 0;
   padding: 0;
@@ -679,18 +810,74 @@ onUnmounted(() => {
   letter-spacing: 0.03em;
   text-shadow: 0 2px 14px rgba(74, 139, 255, 0.18);
 }
+.metric-switch {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px;
+  border: 1px solid rgba(119, 153, 204, 0.13);
+  border-radius: 10px;
+  background: rgba(4, 15, 33, 0.44);
+}
+.metric-switch button {
+  min-width: 86px;
+  height: 32px;
+  padding: 0 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 7px;
+  color: #091426;
+  background: linear-gradient(135deg, #ffd84a, #ffbc27);
+  box-shadow: 0 4px 14px rgba(255, 190, 35, 0.24);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+}
+.history-controls { display: flex; align-items: center; gap: 9px; }
+.period-button {
+  height: 34px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid rgba(120, 155, 211, 0.24);
+  border-radius: 8px;
+  background: rgba(33, 57, 94, 0.55);
+  color: #a8bddb;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+.period-button:hover { color: #fff; border-color: rgba(65, 147, 255, 0.6); }
+.period-button.active {
+  color: #fff;
+  border-color: #378cff;
+  background: linear-gradient(135deg, #1d70e8, #245ac4);
+  box-shadow: 0 5px 16px rgba(20, 100, 230, 0.3);
+}
+.control-icon { font-size: 16px; line-height: 1; }
 .calendar-controls {
   display: flex;
   gap: 7px;
   padding: 3px;
-  border: 1px solid rgba(77, 141, 234, 0.28);
+  border: 1px solid transparent;
   border-radius: 9px;
+  opacity: 0.72;
+  transition: 0.2s ease;
+}
+.calendar-controls:hover,
+.calendar-controls.active {
+  opacity: 1;
+  border-color: rgba(77, 141, 234, 0.28);
   background: rgba(26, 49, 83, 0.38);
 }
 .history-select.year-select { width: 112px; }
 .history-select.month-select { width: 126px; }
 .history-select :deep(.el-select__wrapper) {
-  min-height: 30px;
+  min-height: 28px;
   border: 0;
   border-radius: 7px;
   background: rgba(31, 53, 88, 0.82);
@@ -700,42 +887,8 @@ onUnmounted(() => {
 .history-select :deep(.el-select__caret) { color: #91a8c9; }
 
 .trend-shell { padding: 12px 18px 14px; }
-.history-stat-strip {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-  margin-bottom: 3px;
-}
-.history-stat {
-  min-width: 0;
-  padding: 9px 11px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  border-radius: 8px;
-  background: rgba(5, 17, 36, 0.34);
-  border: 1px solid rgba(120, 155, 211, 0.11);
-}
-.history-stat span {
-  overflow: hidden;
-  color: #738cac;
-  font-size: 11px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.history-stat strong {
-  color: #dbe9fb;
-  font-family: "Consolas", "Monaco", monospace;
-  font-size: 14px;
-  white-space: nowrap;
-}
-.history-stat strong.maximum { color: #38c9ff; }
-.history-stat strong.date { color: #ffd552; }
-.history-stat strong.wet-days { color: #60a5ff; }
-
-.chart-wrap { position: relative; }
-.history-chart-wrap { height: 420px; }
+.chart-wrap { position: relative; height: 310px; }
+.history-chart-wrap { height: 392px; }
 .chart-container { height: 100%; }
 .chart-loading-overlay {
   position: absolute;
@@ -756,6 +909,41 @@ onUnmounted(() => {
   backdrop-filter: blur(3px);
 }
 .history-chart-wrap .chart-hint-overlay { background: rgba(8, 22, 43, 0.5); }
+.chart-error-banner {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 9;
+  max-width: calc(100% - 20px);
+  padding: 7px 11px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(255, 190, 82, 0.35);
+  border-radius: 6px;
+  background: rgba(66, 43, 17, 0.9);
+  color: #ffd58a;
+  font-size: 12px;
+  line-height: 18px;
+}
+.chart-error-banner button,
+.chart-retry-button {
+  flex: 0 0 auto;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 213, 138, 0.55);
+  border-radius: 5px;
+  background: rgba(255, 213, 138, 0.12);
+  color: #ffe4b4;
+  font: inherit;
+  cursor: pointer;
+}
+.chart-error-banner button:hover,
+.chart-retry-button:hover {
+  border-color: rgba(255, 226, 174, 0.9);
+  background: rgba(255, 213, 138, 0.2);
+}
+.chart-retry-button { margin-top: 12px; }
 .loading-spinner {
   width: 34px;
   height: 34px;
@@ -792,8 +980,8 @@ onUnmounted(() => {
 
 @media (max-width: 900px) {
   .history-panel-header { align-items: flex-start; flex-wrap: wrap; }
-  .history-stat-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .history-chart-wrap { height: 360px; }
+  .history-controls { width: 100%; flex-wrap: wrap; }
+  .history-chart-wrap { height: 340px; }
 }
 
 @media (max-width: 620px) {
@@ -801,8 +989,8 @@ onUnmounted(() => {
   .rain-main-row { flex-direction: column; gap: 16px; }
   .rain-main-divider { width: 100%; height: 1px; }
   .rain-yesterday-card { flex-basis: auto; }
+  .history-heading { width: 100%; align-items: flex-start; flex-direction: column; gap: 12px; }
   .calendar-controls { width: 100%; }
   .history-select.year-select, .history-select.month-select { flex: 1; width: auto; }
-  .history-stat { padding: 8px; flex-direction: column; align-items: flex-start; }
 }
 </style>

@@ -11,17 +11,14 @@
       </div>
 
       <div class="header-status">
-        <div class="status-pill" :class="selectedModelReady ? 'online' : 'offline'">
-          <i></i>
-          <span>{{ selectedModelReady ? `${analysisTaskLabel}模型就绪` : `${analysisTaskLabel}模型未加载` }}</span>
-        </div>
-        <div class="status-pill" :class="currentCamera?.connected ? 'online' : 'offline'">
-          <i></i>
-          <span>{{ currentCamera?.connected ? '视频源在线' : '视频源离线' }}</span>
-        </div>
-        <div class="clock-block">
-          <div class="clock-title"><i></i><strong>当前时间</strong></div>
-          <span>{{ currentTime }}</span>
+        <div class="camera-connection-status" :class="currentCamera?.connected ? 'online' : 'offline'">
+          <div class="connection-main">
+            <i class="connection-dot" aria-hidden="true"></i>
+            <span>{{ currentCamera?.connected ? '在线' : '离线' }}</span>
+          </div>
+          <div class="connection-time">
+            最后通讯: {{ formatDeviceCommTime(currentCamera?.last_frame_time) }}
+          </div>
         </div>
       </div>
     </header>
@@ -507,7 +504,7 @@ import {
 } from '@/api/camera'
 import {
   classColor as getClassColor, confidencePercent, detectionName,
-  findVideoSample, isValidDetection, normalizeClassifications,
+  findVideoSample, formatDeviceCommTime, isValidDetection, normalizeClassifications,
   normalizeDetections, primaryClassification,
 } from '@/utils/cameraDetectionView'
 import { CameraWebRtcPlayer } from '@/utils/cameraWebRtc'
@@ -527,7 +524,6 @@ const liveVideoRef = ref(null)
 const streamMode = ref('webrtc')
 const streamUrl = ref('')
 const streamLoading = ref(false)
-const currentTime = ref('')
 const showAddDialog = ref(false)
 const addingCamera = ref(false)
 const addForm = ref({ camera_id: '', name: '', source_type: 'rtsp', source: '' })
@@ -543,7 +539,6 @@ const videoSample = ref(null)
 const videoDetections = ref([])
 const videoUploadProgress = ref(0)
 
-let timeTimer = null
 let statusTimer = null
 let streamRetryTimer = null
 let videoPollTimer = null
@@ -605,10 +600,6 @@ const sourceHelp = computed(() => ({
   rtsp: '海康网络摄像头接在 Jetson 网口或同一网络后，填写摄像头 RTSP 地址。',
   usb: 'USB/UVC 摄像头需同时在 .env 设置 CAMERA_DEVICE=/dev/video0。',
 }[addForm.value.source_type]))
-
-function updateClock() {
-  currentTime.value = new Date().toLocaleString('zh-CN', { hour12: false })
-}
 
 function sourceTypeLabel(type) {
   return ({ rtsp: 'RTSP', usb: 'USB / V4L2' })[type] || 'VIDEO'
@@ -995,8 +986,6 @@ function formatSeconds(value) {
 }
 
 onMounted(async () => {
-  updateClock()
-  timeTimer = setInterval(updateClock, 1000)
   try {
     await Promise.all([fetchModelStatus(), fetchCameras()])
     if (currentCameraId.value) await activateCamera(currentCameraId.value)
@@ -1007,7 +996,6 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  clearInterval(timeTimer)
   clearInterval(statusTimer)
   stopLiveStream()
   stopDetectionSubscription()
@@ -1043,17 +1031,36 @@ onBeforeUnmount(() => {
 h1, h2, h3, p { margin-top: 0; }
 .title-block h1 { margin: 0; font-size: 24px; letter-spacing: 0.04em; }
 .title-description { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
-.header-status { display: flex; align-items: center; gap: 10px; }
-.status-pill { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; color: #8aa2b5; font-size: 12px; border: 1px solid rgba(105, 170, 199, 0.15); border-radius: 18px; background: rgba(4, 20, 33, 0.58); }
-.status-pill i { width: 7px; height: 7px; border-radius: 50%; background: #6b7882; }
-.status-pill.online { color: #a8f6db; }
-.status-pill.online i { background: var(--mint); box-shadow: 0 0 10px var(--mint); }
-.status-pill.offline i { background: #ff7180; }
-.clock-block { min-width: 190px; display: flex; flex-direction: column; gap: 6px; margin-left: 4px; padding: 10px 14px; border: 1px solid rgba(82, 192, 226, 0.2); border-radius: 12px; background: rgba(4, 23, 38, 0.66); }
-.clock-title { display: flex; align-items: center; gap: 8px; }
-.clock-title i { width: 8px; height: 8px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 11px var(--cyan); }
-.clock-title strong { color: #d6f1fb; font-size: 14px; }
-.clock-block > span { padding-left: 16px; color: #87b7cd; font: 12px monospace; font-variant-numeric: tabular-nums; }
+.header-status { display: flex; align-items: center; justify-content: flex-end; }
+.camera-connection-status {
+  min-width: 152px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  text-align: right;
+}
+.connection-main {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.connection-dot { width: 10px; height: 10px; flex: 0 0 10px; border-radius: 50%; }
+.camera-connection-status.online .connection-main { color: var(--success-color, #67c23a); }
+.camera-connection-status.online .connection-dot { background: var(--success-color, #67c23a); box-shadow: 0 0 6px var(--success-color, #67c23a); }
+.camera-connection-status.offline .connection-main { color: var(--danger-color, #f56c6c); }
+.camera-connection-status.offline .connection-dot { background: var(--danger-color, #f56c6c); box-shadow: 0 0 6px var(--danger-color, #f56c6c); }
+.connection-time {
+  color: #8aa8c7;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+}
 
 .source-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-top: 12px; padding: 12px 16px; }
 .source-control, .task-control, .toolbar-actions { display: flex; align-items: center; gap: 10px; }
@@ -1210,7 +1217,6 @@ h1, h2, h3, p { margin-top: 0; }
 .source-help { margin: -6px 0 0; color: #71899a; font-size: 11px; line-height: 1.6; }
 
 @media (max-width: 1200px) {
-  .header-status .status-pill { display: none; }
   .live-workspace { grid-template-columns: minmax(0, 1fr) 300px; }
   .image-result.has-result { grid-template-columns: minmax(0, 1fr) 250px; }
   .source-toolbar { align-items: flex-start; flex-wrap: wrap; }
@@ -1219,9 +1225,9 @@ h1, h2, h3, p { margin-top: 0; }
 @media (max-width: 900px) {
   .vision-page { padding: 10px; }
   .command-header, .source-toolbar, .lab-heading { align-items: stretch; flex-direction: column; }
+  .header-status { align-self: flex-end; }
   .header-status, .source-control, .task-control, .toolbar-actions { flex-wrap: wrap; }
   .task-control { padding: 0; border: none; }
-  .clock-block { margin-left: 0; }
   .live-workspace, .image-lab, .video-lab { grid-template-columns: 1fr; }
   .image-result.has-result { grid-template-columns: 1fr; }
   .image-target-panel { min-height: 250px; border-top: 1px solid rgba(75, 175, 211, 0.16); border-left: none; }

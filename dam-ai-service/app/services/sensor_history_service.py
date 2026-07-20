@@ -443,6 +443,119 @@ class SensorHistoryService:
             "coverage_ratio": round(point_count / max_point_count, 4) if max_point_count else 0.0,
         }
 
+    def query_rain_trends(
+        self,
+        view: str = "recent24h",
+        year: int | None = None,
+        month: int | None = None,
+        now_ms: int = None,
+    ) -> dict:
+        """Return half-hour increments or exact daily rainfall."""
+        available_periods = self.available_calendar_periods("rain")
+        if view == "recent24h":
+            payload = self.query_rain_recent_24h(now_ms=now_ms)
+        elif view == "rolling12":
+            payload = self.query_rain_rolling_12_months(now_ms=now_ms)
+        elif view == "calendar":
+            current = datetime.now(self.timezone)
+            selected_year = int(year if year is not None else current.year)
+            selected_month = int(month) if month not in (None, 0) else None
+            payload = self.query_rain_calendar(selected_year, selected_month)
+        else:
+            raise ValueError("view must be recent24h, rolling12 or calendar")
+        payload["available_periods"] = available_periods
+        return payload
+
+    def query_rain_recent_24h(self, now_ms: int = None) -> dict:
+        """Derive 48 half-hour rainfall increments from the daily counter."""
+        window = build_history_window("1d", now_ms)
+        start_ms = int(window["start_ms"])
+        end_ms = int(window["end_ms"])
+        sample_ms = int(window["sample_ms"])
+        max_points = int(window["max_point_count"])
+        device_id = self.get_device_id("rain")
+        points = self.iotdb.query_points(
+            self.rollup_path("1m", device_id),
+            start_ms - sample_ms,
+            end_ms,
+        )
+
+        def normalize(source_points):
+            result = []
+            for point in source_points:
+                try:
+                    timestamp_ms = int(float(point.get("timestamp", 0)) * 1000)
+                    value = float((point.get("data") or {}).get("today_rain"))
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if not math.isfinite(value) or timestamp_ms > end_ms:
+                    continue
+                result.append((timestamp_ms, value))
+            return result
+
+        normalized = normalize(points)
+        source = "rollup_derived"
+        if not normalized:
+            points = self.iotdb.query_points(
+                self.raw_path(device_id),
+                start_ms - sample_ms,
+                end_ms,
+            )
+            normalized = normalize(points)
+            source = "raw_derived"
+        normalized.sort(key=lambda item: item[0])
+
+        increments = [None] * max_points
+        previous = None
+        for timestamp_ms, value in normalized:
+            if timestamp_ms <= start_ms:
+                previous = (timestamp_ms, value)
+                continue
+            if previous is None:
+                previous = (timestamp_ms, value)
+                continue
+
+            previous_ms, previous_value = previous
+            current_date = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=self.timezone).date()
+            previous_date = datetime.fromtimestamp(previous_ms / 1000.0, tz=self.timezone).date()
+            if value >= previous_value:
+                delta = value - previous_value
+            elif current_date != previous_date:
+                delta = max(0.0, value)
+            else:
+                delta = 0.0
+
+            bucket_index = max(0, (timestamp_ms - start_ms - 1) // sample_ms)
+            if bucket_index < max_points:
+                current = increments[bucket_index] or 0.0
+                increments[bucket_index] = round(current + delta, 4)
+            previous = (timestamp_ms, value)
+
+        history = []
+        for index, increment in enumerate(increments):
+            bucket_end_ms = start_ms + (index + 1) * sample_ms
+            history.append({
+                "timestamp": bucket_end_ms / 1000.0,
+                "data": {} if increment is None else {"rain_increment": increment},
+            })
+
+        point_count = sum(increment is not None for increment in increments)
+        return {
+            "device_name": "rain",
+            "view": "recent24h",
+            "year": None,
+            "month": None,
+            "source": source,
+            "rollup_level": "30m",
+            "aggregation": "30m_increment",
+            "window": {"start": start_ms / 1000.0, "end": end_ms / 1000.0},
+            "sample_interval": sample_ms // 1000,
+            "max_point_count": max_points,
+            "history": history,
+            "point_count": point_count,
+            "coverage_ratio": round(point_count / max_points, 4) if max_points else 0.0,
+        }
+
     def query_rain_calendar(self, year: int, month: int | None = None) -> dict:
         """Read exact daily rainfall for one calendar month or year."""
         year = int(year)
@@ -460,6 +573,41 @@ class SensorHistoryService:
         else:
             end_date = date(year, month + 1, 1)
 
+        return self._query_rain_calendar_window(
+            start_date,
+            end_date,
+            view="calendar",
+            year=year,
+            month=month,
+        )
+
+    def query_rain_rolling_12_months(self, now_ms: int = None) -> dict:
+        current = (
+            datetime.fromtimestamp(now_ms / 1000.0, tz=self.timezone)
+            if now_ms is not None
+            else datetime.now(self.timezone)
+        )
+        if current.month == 12:
+            end_date = date(current.year + 1, 1, 1)
+        else:
+            end_date = date(current.year, current.month + 1, 1)
+        start_date = date(end_date.year - 1, end_date.month, 1)
+        return self._query_rain_calendar_window(
+            start_date,
+            end_date,
+            view="rolling12",
+            year=None,
+            month=None,
+        )
+
+    def _query_rain_calendar_window(
+        self,
+        start_date: date,
+        end_date: date,
+        view: str,
+        year: int | None,
+        month: int | None,
+    ) -> dict:
         start_dt = datetime.combine(start_date, datetime_time.min, tzinfo=self.timezone)
         end_dt = datetime.combine(end_date, datetime_time.min, tzinfo=self.timezone)
         start_ms = int(start_dt.timestamp() * 1000)
@@ -520,7 +668,7 @@ class SensorHistoryService:
         max_point_count = (end_date - start_date).days
         return {
             "device_name": "rain",
-            "view": "calendar",
+            "view": view,
             "year": year,
             "month": month,
             "source": "rollup",
@@ -532,7 +680,6 @@ class SensorHistoryService:
             "history": history,
             "point_count": point_count,
             "coverage_ratio": round(point_count / max_point_count, 4) if max_point_count else 0.0,
-            "available_periods": self.available_calendar_periods("rain"),
         }
 
     def available_calendar_periods(self, device_name: str = "temp_humidity") -> list[dict]:

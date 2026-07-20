@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
+import * as rainHistory from './rainHistory.js'
 import {
   buildDailyRainChartValues,
   buildDailyRainRows,
+  buildRainChartValues,
+  rainLegendLabel,
   resolveRainCalendarSelection,
   toRainNumber,
 } from './rainHistory.js'
@@ -13,6 +16,40 @@ import {
   assert.equal(toRainNumber(undefined), null)
   assert.equal(toRainNumber(''), null)
   assert.equal(toRainNumber(false), null)
+}
+
+{
+  assert.equal(typeof rainHistory.rainBarMinHeight, 'function')
+  assert.equal(rainHistory.rainBarMinHeight([0, 0, null]), 2)
+  assert.equal(rainHistory.rainBarMinHeight([0, 0.2, null]), 0)
+  assert.equal(rainHistory.rainBarMinHeight([null, null]), 0)
+}
+
+{
+  assert.equal(typeof rainHistory.buildRainTrendParams, 'function')
+  assert.deepEqual(rainHistory.buildRainTrendParams({ view: 'recent24h' }), { view: 'recent24h' })
+  assert.deepEqual(
+    rainHistory.buildRainTrendParams({ view: 'calendar', year: 2026, month: 7 }),
+    { view: 'calendar', year: 2026, month: 7 },
+  )
+  assert.deepEqual(
+    rainHistory.buildRainTrendParams({ view: 'rolling12', year: 2025, month: 3 }),
+    { view: 'rolling12' },
+  )
+}
+
+{
+  const history = [
+    { timestamp: 100, data: { rain_increment: 0 } },
+    { timestamp: 200, data: {} },
+    { timestamp: 300, data: { rain_increment: 1.25 } },
+  ]
+
+  assert.deepEqual(buildRainChartValues(history, 'recent24h'), [0, null, 1.25])
+  assert.deepEqual(buildRainChartValues(history, 'calendar'), [null, null, null])
+  assert.equal(rainLegendLabel('recent24h'), '30分钟新增雨量')
+  assert.equal(rainLegendLabel('calendar'), '逐日雨量')
+  assert.equal(rainLegendLabel('rolling12'), '逐日雨量')
 }
 
 {

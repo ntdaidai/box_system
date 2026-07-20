@@ -28,10 +28,12 @@ class FakeIoTDB:
         self.rollup_points = []
         self.raw_points = []
         self.points_by_path = {}
+        self.queries = []
         self.inserted = []
         self.deleted = []
 
     def query_points(self, path, start_ms, end_ms):
+        self.queries.append({"path": path, "start_ms": start_ms, "end_ms": end_ms})
         if path in self.points_by_path:
             return list(self.points_by_path[path])
         if path.startswith("root.dam.rollup_"):
@@ -341,6 +343,103 @@ class SensorHistoryServiceTest(unittest.TestCase):
         self.assertNotIn("total_rain", payload["history"][0]["data"])
         self.assertNotIn("today_rain", payload["history"][0]["data"])
         self.assertEqual(payload["history"][2]["data"], {})
+
+    def test_rain_recent_24h_returns_half_hour_increments_and_keeps_zero(self):
+        fake = FakeIoTDB()
+        timezone = ZoneInfo("Asia/Shanghai")
+        now = datetime(2026, 7, 18, 12, 0, tzinfo=timezone)
+        now_ms = int(now.timestamp() * 1000)
+        start = now.timestamp() - 24 * 60 * 60
+        fake.points_by_path["root.dam.sensor.rain_001"] = [
+            {"timestamp": start - 60, "data": {"today_rain": 1.0}},
+            {"timestamp": start + 10 * 60, "data": {"today_rain": 1.0}},
+            {"timestamp": start + 40 * 60, "data": {"today_rain": 1.6}},
+        ]
+        service = SensorHistoryService(iotdb=fake)
+
+        payload = service.query_rain_trends("recent24h", now_ms=now_ms)
+
+        self.assertEqual(payload["aggregation"], "30m_increment")
+        self.assertEqual(payload["sample_interval"], 30 * 60)
+        self.assertEqual(payload["max_point_count"], 48)
+        self.assertEqual(len(payload["history"]), 48)
+        self.assertEqual(payload["history"][0]["data"]["rain_increment"], 0.0)
+        self.assertEqual(payload["history"][1]["data"]["rain_increment"], 0.6)
+        self.assertEqual(payload["point_count"], 2)
+
+    def test_rain_recent_24h_prefers_one_minute_rollup_over_raw_scan(self):
+        fake = FakeIoTDB()
+        timezone = ZoneInfo("Asia/Shanghai")
+        now = datetime(2026, 7, 18, 12, 0, tzinfo=timezone)
+        now_ms = int(now.timestamp() * 1000)
+        start = now.timestamp() - 24 * 60 * 60
+        fake.points_by_path["root.dam.rollup_1m.rain_001"] = [
+            {"timestamp": start - 60, "data": {"today_rain": 1.0}},
+            {"timestamp": start + 10 * 60, "data": {"today_rain": 1.0}},
+            {"timestamp": start + 40 * 60, "data": {"today_rain": 1.6}},
+        ]
+        fake.points_by_path["root.dam.sensor.rain_001"] = [
+            {"timestamp": start + 10 * 60, "data": {"today_rain": 99.0}},
+        ]
+        service = SensorHistoryService(iotdb=fake)
+
+        payload = service.query_rain_trends("recent24h", now_ms=now_ms)
+
+        self.assertEqual(payload["source"], "rollup_derived")
+        self.assertEqual(payload["history"][1]["data"]["rain_increment"], 0.6)
+        self.assertNotIn(
+            "root.dam.sensor.rain_001",
+            [query["path"] for query in fake.queries],
+        )
+
+    def test_rain_recent_24h_handles_midnight_counter_reset_without_spike(self):
+        fake = FakeIoTDB()
+        timezone = ZoneInfo("Asia/Shanghai")
+        now = datetime(2026, 7, 18, 0, 30, tzinfo=timezone)
+        now_ms = int(now.timestamp() * 1000)
+        start = now.timestamp() - 24 * 60 * 60
+        fake.points_by_path["root.dam.sensor.rain_001"] = [
+            {"timestamp": start - 60, "data": {"today_rain": 2.0}},
+            {
+                "timestamp": datetime(2026, 7, 17, 23, 59, tzinfo=timezone).timestamp(),
+                "data": {"today_rain": 5.0},
+            },
+            {
+                "timestamp": datetime(2026, 7, 18, 0, 5, tzinfo=timezone).timestamp(),
+                "data": {"today_rain": 0.4},
+            },
+        ]
+        service = SensorHistoryService(iotdb=fake)
+
+        payload = service.query_rain_trends("recent24h", now_ms=now_ms)
+
+        self.assertEqual(payload["history"][-1]["data"]["rain_increment"], 0.4)
+
+    def test_rain_rolling_view_covers_twelve_calendar_months(self):
+        fake = FakeIoTDB()
+        timezone = ZoneInfo("Asia/Shanghai")
+        bucket_end = datetime(2026, 7, 2, tzinfo=timezone).timestamp()
+        fake.points_by_path["root.dam.rollup_1d.rain_001"] = [{
+            "timestamp": bucket_end,
+            "data": {"daily_rain": 6.8, "daily_rain_sample_count": 1440},
+        }]
+        service = SensorHistoryService(iotdb=fake)
+        now_ms = int(datetime(2026, 7, 18, 12, tzinfo=timezone).timestamp() * 1000)
+
+        payload = service.query_rain_trends("rolling12", now_ms=now_ms)
+
+        self.assertEqual(payload["view"], "rolling12")
+        self.assertEqual(payload["history"][0]["date"], "2025-08-01")
+        self.assertEqual(payload["history"][-1]["date"], "2026-07-31")
+        self.assertEqual(payload["max_point_count"], 365)
+        july_first = next(row for row in payload["history"] if row["date"] == "2026-07-01")
+        self.assertEqual(july_first["data"]["daily_rain"], 6.8)
+
+    def test_rain_trends_rejects_unknown_view(self):
+        service = SensorHistoryService(iotdb=FakeIoTDB())
+
+        with self.assertRaisesRegex(ValueError, "view must be"):
+            service.query_rain_trends("unexpected")
 
     def test_long_range_rebuild_uses_lower_rollup_instead_of_raw(self):
         fake = FakeIoTDB()

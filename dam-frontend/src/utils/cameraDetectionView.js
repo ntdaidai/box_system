@@ -41,6 +41,27 @@ export function confidencePercent(detection) {
   return Math.max(0, Math.min(100, Math.round(confidence * 100)))
 }
 
+export function formatDeviceCommTime(timestamp) {
+  const numeric = Number(timestamp)
+  if (!Number.isFinite(numeric) || numeric <= 0) return '--'
+
+  const milliseconds = numeric >= 1e12 ? numeric : numeric * 1000
+  const date = new Date(milliseconds)
+  if (Number.isNaN(date.getTime())) return '--'
+
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Shanghai',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date)
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]))
+  return `${values.month}/${values.day} ${values.hour}:${values.minute}:${values.second}`
+}
+
 export function classColor(classId) {
   const fixed = ['#43d69b', '#ff9f43', '#ff5d6c', '#32c5ff']
   const numericId = Number(classId)

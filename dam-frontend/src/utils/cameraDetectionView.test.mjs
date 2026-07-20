@@ -1,6 +1,7 @@
 // dai
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import * as cameraDetectionView from './cameraDetectionView.js'
 
 import {
   classColor,
@@ -69,4 +70,13 @@ test('normalizes whole-image classifications without requiring bounding boxes', 
   assert.equal(primaryClassification(payload), flood)
   assert.equal(primaryClassification({ classifications: [flood] }), flood)
   assert.equal(primaryClassification(null), null)
+})
+
+
+test('formats camera communication timestamps as fixed Shanghai month-day time', () => {
+  assert.equal(typeof cameraDetectionView.formatDeviceCommTime, 'function')
+  const timestampMs = Date.UTC(2026, 6, 20, 3, 11, 12)
+  assert.equal(cameraDetectionView.formatDeviceCommTime(timestampMs / 1000), '07/20 11:11:12')
+  assert.equal(cameraDetectionView.formatDeviceCommTime(timestampMs), '07/20 11:11:12')
+  assert.equal(cameraDetectionView.formatDeviceCommTime(0), '--')
 })

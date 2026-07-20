@@ -1,4 +1,5 @@
 import request from '@/utils/request'
+import { buildRainTrendParams } from '@/utils/rainHistory'
 
 /**
  * 获取所有传感器实时数据
@@ -87,26 +88,18 @@ export function getWindTrends({ view = 'recent24h', year, month } = {}) {
   })
 }
 
-/**
- * 降水逐日雨量趋势。只返回日雨量，不包含预测或累计模式。
- */
-export function getRainTrends({ year, month } = {}) {
-  const params = { schema: 'daily-rain-v2' }
-  if (year != null) params.year = year
-  if (month != null && month !== 'all') params.month = month
-  const now = new Date()
-  const selectedYear = year == null ? now.getFullYear() : Number(year)
-  const selectedMonth = month == null || month === 'all' ? null : Number(month)
-  const includesToday = selectedYear === now.getFullYear()
-    && (selectedMonth === null || selectedMonth === now.getMonth() + 1)
+/** 雨量趋势：近24小时半小时新增量，或逐日雨量。 */
+export function getRainTrends({ view = 'recent24h', year, month } = {}) {
+  const params = buildRainTrendParams({ view, year, month })
+  const recent = view === 'recent24h'
 
   return request.get('/v1/sensor/history/rain/trends', {
     params,
     timeout: 30000,
     silentError: true,
-    localCacheMaxAge: includesToday ? 5 * 60 * 1000 : 30 * 60 * 1000,
+    localCacheMaxAge: recent ? 5 * 60 * 1000 : 30 * 60 * 1000,
     localCacheAllowStale: true,
-    localCacheStaleMaxAge: includesToday ? 2 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000,
+    localCacheStaleMaxAge: recent ? 2 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000,
   })
 }
 

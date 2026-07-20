@@ -635,16 +635,20 @@ const handleResize = () => {
 }
 
 .header-status {
-  display: flex;
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
-  gap: 8px;
+  column-gap: 6px;
+  row-gap: 2px;
   font-size: 16px;
   font-weight: 600;
+  text-align: right;
 }
 
 .header-status .dot {
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
 }
 
@@ -654,8 +658,7 @@ const handleResize = () => {
 
 .header-status.online .dot {
   background: #67c23a;
-  box-shadow: 0 0 10px #67c23a;
-  animation: pulse 2s infinite;
+  box-shadow: 0 0 6px #67c23a;
 }
 
 .header-status.offline {
@@ -664,18 +667,16 @@ const handleResize = () => {
 
 .header-status.offline .dot {
   background: #f56c6c;
-  box-shadow: 0 0 10px #f56c6c;
+  box-shadow: 0 0 6px #f56c6c;
 }
 
 .header-comm {
-  font-size: 12px;
+  width: 100%;
+  margin-top: 4px;
+  text-align: right;
+  font-size: 11px;
   font-weight: 400;
   color: #8aa8c7;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
 }
 
 /* 指标卡片区 */

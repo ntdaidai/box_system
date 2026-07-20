@@ -11,6 +11,23 @@ export const buildDailyRainRows = (history = []) => history
 export const buildDailyRainChartValues = (history = []) => history
   .map(row => toRainNumber(row?.data?.daily_rain))
 
+export const buildRainChartValues = (history = [], view = 'calendar') => history
+  .map(row => toRainNumber(row?.data?.[view === 'recent24h' ? 'rain_increment' : 'daily_rain']))
+
+export const rainLegendLabel = view => view === 'recent24h' ? '30分钟新增雨量' : '逐日雨量'
+
+export const rainBarMinHeight = (values = []) => {
+  const numeric = values.map(toRainNumber).filter(value => value !== null)
+  return numeric.length > 0 && numeric.every(value => value === 0) ? 2 : 0
+}
+
+export const buildRainTrendParams = ({ view = 'recent24h', year, month } = {}) => {
+  const params = { view }
+  if (view === 'calendar' && year != null) params.year = year
+  if (view === 'calendar' && month != null && month !== 'all') params.month = month
+  return params
+}
+
 export const resolveRainCalendarSelection = (
   periods = [],
   selectedYear,

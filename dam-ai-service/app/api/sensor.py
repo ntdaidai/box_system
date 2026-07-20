@@ -45,9 +45,12 @@ def _wind_trends_cache_ttl(
 
 
 def _rain_trends_cache_ttl(
+    view: str = "recent24h",
     year: Optional[int] = None,
     month: Optional[int] = None,
 ) -> int:
+    if view in {"recent24h", "rolling12"}:
+        return 300
     current = datetime.now(_HISTORY_TIMEZONE)
     selected_year = current.year if year is None else int(year)
     selected_month = int(month) if month is not None else None
@@ -65,12 +68,16 @@ def _with_current_rain_day(
 ) -> dict:
     """Overlay today's running rain total without turning missing data into zero."""
     current_date = current_date or datetime.now(_HISTORY_TIMEZONE).date()
-    selected_year = int(payload.get("year", current_date.year))
-    selected_month = payload.get("month")
-    if selected_year != current_date.year:
+    view = payload.get("view", "calendar")
+    if view == "recent24h":
         return payload
-    if selected_month is not None and int(selected_month) != current_date.month:
-        return payload
+    if view == "calendar":
+        selected_year = int(payload.get("year", current_date.year))
+        selected_month = payload.get("month")
+        if selected_year != current_date.year:
+            return payload
+        if selected_month is not None and int(selected_month) != current_date.month:
+            return payload
 
     latest_timestamp = _to_float((latest or {}).get("timestamp"))
     latest_data = (latest or {}).get("data") or {}
@@ -315,30 +322,32 @@ async def get_temp_humidity_trends(
 
 
 @router.get("/history/rain/trends", response_model=SensorDataResponse)
-@cached(ttl=_rain_trends_cache_ttl, prefix="sensor:rain-history:v2", jitter=False)
+@cached(ttl=_rain_trends_cache_ttl, prefix="sensor:rain-history:v3", jitter=False)
 async def get_rain_trends(
+    view: str = "recent24h",
     year: Optional[int] = None,
     month: Optional[int] = None,
 ):
-    """Daily rainfall calendar history; no forecasts or cumulative mode."""
+    """Rain trends with half-hour increments and exact daily views."""
     loop = asyncio.get_event_loop()
     service = get_sensor_history_service()
-    current_year = datetime.now(_HISTORY_TIMEZONE).year if year is None else year
     try:
         payload = await loop.run_in_executor(
             _io_executor,
-            service.query_rain_calendar,
-            current_year,
+            service.query_rain_trends,
+            view,
+            year,
             month,
         )
-        payload = _with_current_rain_day(
-            payload,
-            sensor_collector.get_latest_data("rain") or {},
-        )
+        if view != "recent24h":
+            payload = _with_current_rain_day(
+                payload,
+                sensor_collector.get_latest_data("rain") or {},
+            )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
     except IoTDBUnavailableError as error:
-        logger.error(f"逐日雨量服务不可用 [{current_year}/{month}]: {error}")
+        logger.error(f"雨量趋势服务不可用 [{view}/{year}/{month}]: {error}")
         raise HTTPException(status_code=503, detail="历史数据服务暂时不可用，请稍后重试")
     return SensorDataResponse(code=200, data=payload)
 
