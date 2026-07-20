@@ -1,5 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import * as windHistoryModule from './windHistory.js'
 
 import {
   formatWindSource,
@@ -10,6 +12,37 @@ import {
   windForceFromKmh,
   windForceFromMs,
 } from './windHistory.js'
+
+test('wind calendar axis uses sparse date-only monthly labels', () => {
+  assert.equal(typeof windHistoryModule.formatWindCalendarAxisLabel, 'function')
+  assert.equal(typeof windHistoryModule.shouldShowWindCalendarLabel, 'function')
+
+  assert.equal(windHistoryModule.formatWindCalendarAxisLabel('2026-07-01', true), '1日')
+  assert.equal(windHistoryModule.formatWindCalendarAxisLabel('2026-07-29', true), '29日')
+  assert.equal(windHistoryModule.shouldShowWindCalendarLabel(0, '2026-07-01', true, 1000, 0), true)
+  assert.equal(windHistoryModule.shouldShowWindCalendarLabel(1, '2026-07-02', true, 1000, 0), false)
+  assert.equal(windHistoryModule.shouldShowWindCalendarLabel(4, '2026-07-05', true, 1000, 0), true)
+  assert.equal(windHistoryModule.shouldShowWindCalendarLabel(28, '2026-07-29', true, 1000, 0), true)
+  assert.equal(windHistoryModule.shouldShowWindCalendarLabel(29, '2026-07-30', true, 1000, 0), false)
+})
+
+test('wind calendar axis retains month labels for annual views', () => {
+  const firstMonthIndex = 2026 * 12 + 1
+
+  assert.equal(windHistoryModule.formatWindCalendarAxisLabel('2026-01-01', false), '1月')
+  assert.equal(windHistoryModule.shouldShowWindCalendarLabel(0, '2026-01-01', false, 1000, firstMonthIndex), true)
+  assert.equal(windHistoryModule.shouldShowWindCalendarLabel(1, '2026-01-02', false, 1000, firstMonthIndex), false)
+  assert.equal(windHistoryModule.shouldShowWindCalendarLabel(31, '2026-02-01', false, 320, firstMonthIndex), false)
+  assert.equal(windHistoryModule.shouldShowWindCalendarLabel(59, '2026-03-01', false, 320, firstMonthIndex), true)
+})
+
+test('wind trend keeps data symbols hidden until hover', () => {
+  const source = readFileSync(new URL('../views/Monitor/SensorWind.vue', import.meta.url), 'utf8')
+  const seriesBlock = source.match(/id: 'wind-speed'[\s\S]*?smooth:/)?.[0] || ''
+
+  assert.match(seriesBlock, /showSymbol:\s*false/)
+  assert.doesNotMatch(seriesBlock, /showSymbol:\s*!recent/)
+})
 
 test('wind level prefers measured value and rounds daily averages', () => {
   assert.equal(resolveWindLevel({ wind_level: 2.6, wind_speed_kmh: 4 }), 3)

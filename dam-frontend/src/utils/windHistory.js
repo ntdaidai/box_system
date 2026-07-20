@@ -58,6 +58,27 @@ export const windDirectionByDate = (history = []) => new Map(
     .map(row => [row.date, row.data.wind_direction]),
 )
 
+const calendarDateParts = (value) => {
+  const [year, month, day] = String(value || '').split('-').map(Number)
+  if (![year, month, day].every(Number.isInteger)) return null
+  return { year, month, day }
+}
+
+export const formatWindCalendarAxisLabel = (value, monthly) => {
+  const parts = calendarDateParts(value)
+  if (!parts) return ''
+  return monthly ? `${parts.day}日` : `${parts.month}月`
+}
+
+export const shouldShowWindCalendarLabel = (_index, value, monthly, chartWidth, firstMonthIndex) => {
+  const parts = calendarDateParts(value)
+  if (!parts) return false
+  if (monthly) return (parts.day - 1) % 4 === 0
+  if (parts.day !== 1) return false
+  if (chartWidth >= 480 || !Number.isFinite(firstMonthIndex)) return true
+  return (parts.year * 12 + parts.month - firstMonthIndex) % 2 === 0
+}
+
 const calendarDateKeys = (year, month = null) => {
   const startMonth = month == null ? 0 : Number(month) - 1
   const endMonth = month == null ? 12 : startMonth + 1

@@ -168,12 +168,13 @@ import { calcNiceYAxisRange } from '@/utils/sensorHistory'
 import { cancelIdleTask, createSensorDetailStartup, runWhenIdle } from '@/utils/sensorDetailStartup'
 import { getWindCompassState } from '@/utils/sensorWindView'
 import {
+  formatWindCalendarAxisLabel,
   formatWindSource,
   normalizeLegacyWindTrend,
   resolveWindLevel,
   shanghaiDateKey,
+  shouldShowWindCalendarLabel,
   toWindNumber,
-  windDirectionByDate,
 } from '@/utils/windHistory'
 import * as echarts from 'echarts'
 
@@ -516,10 +517,7 @@ const formatXAxisLabel = (value) => {
       timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false,
     })
   }
-  const [, month, day] = String(value).split('-').map(Number)
-  if (selectedMonth.value === 'all') return `${month}月`
-  const direction = windDirectionByDate(chartData.value.history).get(String(value)) || ' '
-  return `{direction|${direction}}\n{day|${day}}`
+  return formatWindCalendarAxisLabel(value, selectedMonth.value !== 'all')
 }
 
 const escapeTooltipHtml = value => String(value).replace(/[&<>"']/g, character => ({
@@ -586,17 +584,15 @@ const fullChartOption = () => {
   const xMax = Number.isFinite(windowEnd) ? windowEnd - (recent ? 0 : DAY) : Date.now()
   const calendarDates = recent ? [] : (chartData.value.history || []).map(point => point?.date || '')
   const chartWidth = chartRef.value?.clientWidth || 1000
-  const monthlyLabelStep = chartWidth < 400 ? 6 : (chartWidth < 700 ? 4 : 2)
   const [firstYear, firstMonth] = String(calendarDates[0] || '').split('-').map(Number)
   const firstMonthIndex = firstYear * 12 + firstMonth
-  const calendarLabelInterval = (index, value) => {
-    const day = Number(String(value).slice(-2))
-    if (monthly) return index % monthlyLabelStep === 0
-    if (day !== 1) return false
-    if (chartWidth >= 480 || !Number.isFinite(firstMonthIndex)) return true
-    const [year, month] = String(value).split('-').map(Number)
-    return (year * 12 + month - firstMonthIndex) % 2 === 0
-  }
+  const calendarLabelInterval = (index, value) => shouldShowWindCalendarLabel(
+    index,
+    value,
+    monthly,
+    chartWidth,
+    firstMonthIndex,
+  )
 
   return {
     animation: true,
@@ -609,7 +605,7 @@ const fullChartOption = () => {
       padding: [11, 13], textStyle: { color: '#f1f6ff', fontSize: 13 },
       axisPointer: { type: 'line', lineStyle: { color: 'rgba(185, 208, 239, 0.56)', type: 'dashed' } },
     },
-    grid: { left: 18, right: 22, bottom: monthly ? 34 : 18, top: 24, containLabel: true },
+    grid: { left: 18, right: 22, bottom: 18, top: 24, containLabel: true },
     xAxis: recent ? {
       type: 'time', min: xMin, max: xMax, interval: 3 * HOUR, minInterval: 3 * HOUR,
       axisLine: { lineStyle: { color: 'rgba(151, 177, 215, 0.55)' } },
@@ -626,13 +622,7 @@ const fullChartOption = () => {
       type: 'category', data: calendarDates, boundaryGap: false,
       axisLine: { lineStyle: { color: 'rgba(151, 177, 215, 0.55)' } },
       axisTick: { show: true, alignWithLabel: true, interval: calendarLabelInterval, lineStyle: { color: 'rgba(151, 177, 215, 0.45)' } },
-      axisLabel: {
-        color: '#aebdd1', margin: 11, interval: calendarLabelInterval, formatter: formatXAxisLabel,
-        rich: {
-          direction: { width: 38, align: 'center', color: '#b7c6db', fontSize: 12, lineHeight: 16 },
-          day: { width: 38, align: 'center', color: '#a8b8ce', fontSize: 12, fontWeight: 700, lineHeight: 15 },
-        },
-      },
+      axisLabel: { color: '#aebdd1', margin: 11, interval: calendarLabelInterval, formatter: formatXAxisLabel },
       splitLine: { show: false },
     },
     yAxis: {
@@ -646,7 +636,7 @@ const fullChartOption = () => {
       name: recent ? '风速（30分钟平均）' : '每日平均风速',
       type: 'line',
       data: points,
-      showSymbol: !recent && observedMax <= 1,
+      showSymbol: false,
       showAllSymbol: false,
       symbol: 'circle',
       symbolSize: 7,
