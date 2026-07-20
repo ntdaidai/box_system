@@ -92,10 +92,22 @@ class Settings:
     MINIO_SECRET_KEY: str = _get_env("MINIO_SECRET_KEY", "minioadmin")
     MINIO_SECURE: bool = _get_env("MINIO_SECURE", "false").lower() == "true"
 
-    # ── YOLO 目标检测 ──────────────────────────────────────
+    # ── 可扩展视觉模型 ──────────────────────────────────────
+    # YOLO_MODEL_PATH remains a compatibility fallback for older deployments.
     YOLO_MODEL_PATH: str = _get_env(
         "YOLO_MODEL_PATH",
         "/home/jetson/wh_test/roboflow/runs/yolo26x_continue/weights/best.pt",
+    )
+    YOLO_DETECT_MODEL_PATH: str = _get_env(
+        "YOLO_DETECT_MODEL_PATH", YOLO_MODEL_PATH
+    )
+    YOLO_CLASSIFY_MODEL_PATH: str = _get_env(
+        "YOLO_CLASSIFY_MODEL_PATH",
+        "/models/disaster-classifier/best.pt",
+    )
+    YOLO_CLASSIFY_FALLBACK_PATH: str = _get_env(
+        "YOLO_CLASSIFY_FALLBACK_PATH",
+        "",
     )
     YOLO_CONFIDENCE: float = float(_get_env("YOLO_CONFIDENCE", "0.5"))
     YOLO_IOU: float = float(_get_env("YOLO_IOU", "0.45"))

@@ -17,6 +17,19 @@ export function normalizeDetections(payload) {
     : []
 }
 
+export function normalizeClassifications(payload) {
+  return Array.isArray(payload?.classifications)
+    ? payload.classifications.filter((item) => (
+      Number.isInteger(Number(item?.class_id))
+      && Number.isFinite(Number(item?.confidence))
+    ))
+    : []
+}
+
+export function primaryClassification(payload) {
+  return payload?.prediction || normalizeClassifications(payload)[0] || null
+}
+
 export function detectionName(detection) {
   return detection?.class_name_cn
     || detection?.class_name

@@ -27,10 +27,11 @@ from app.services.camera_stream import CameraStream, camera_manager
 from app.services.camera_config import normalize_camera_source
 from app.services.stream_ticket import stream_ticket_store
 from app.services.video_detection import video_detection_service
-from app.services.yolo_detector import yolo_detector
+from app.services.vision_model_registry import vision_model_registry
 
 
 router = APIRouter()
+AnalysisTask = Literal["detect", "classify"]
 
 
 class CameraAddRequest(BaseModel):
@@ -49,6 +50,7 @@ class CameraAddRequest(BaseModel):
 
 class DetectionToggleRequest(BaseModel):
     enabled: bool
+    task_type: AnalysisTask = "detect"
     confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
     iou: Optional[float] = Field(None, ge=0.0, le=1.0)
     target_fps: Optional[float] = Field(None, ge=0.2, le=30.0)
@@ -57,6 +59,7 @@ class DetectionToggleRequest(BaseModel):
 class DetectImageRequest(BaseModel):
     image: str = Field(..., max_length=15 * 1024 * 1024)
     confidence: float = Field(0.5, ge=0.0, le=1.0)
+    task_type: AnalysisTask = "detect"
 
 
 class StreamTicketRequest(BaseModel):
@@ -118,6 +121,25 @@ def _get_camera_or_404(camera_id: str) -> CameraStream:
     if not camera:
         raise HTTPException(status_code=404, detail="摄像头不存在")
     return camera
+
+
+def _get_model_or_503(task_type: AnalysisTask):
+    model = vision_model_registry.get(task_type)
+    if model is None or not model.loaded:
+        label = "目标检测" if task_type == "detect" else "图片分类"
+        raise HTTPException(status_code=503, detail=f"{label}模型未加载")
+    return model
+
+
+def _encode_jpeg(image: np.ndarray, quality: int = 90) -> bytes:
+    encoded, buffer = cv2.imencode(
+        ".jpg",
+        image,
+        [int(cv2.IMWRITE_JPEG_QUALITY), quality],
+    )
+    if not encoded:
+        raise HTTPException(status_code=500, detail="结果图片编码失败")
+    return buffer.tobytes()
 
 
 def _validate_stream_ticket(ticket: str, camera_id: str, detected: bool) -> None:
@@ -244,19 +266,34 @@ async def list_cameras(_user: User = Depends(require_auth)):
 
 @router.get("/model/status", response_model=DetectResponse, summary="获取模型状态")
 async def get_model_status(_user: User = Depends(require_auth)):
-    return DetectResponse(code=200, data=yolo_detector.get_status())
+    return DetectResponse(code=200, data=vision_model_registry.get_status())
 
 
 @router.post("/model/reload", response_model=DetectResponse, summary="重新加载模型")
 async def reload_model(
-    model_path: Optional[str] = Query(None, description="模型路径，为空则使用配置路径"),
+    task_type: AnalysisTask = Query("detect", description="模型任务类型"),
+    model_path: Optional[str] = Query(
+        None,
+        description="模型路径，为空则使用配置路径",
+    ),
     _user: User = Depends(require_auth),
 ):
-    path = model_path or settings.YOLO_MODEL_PATH
-    success = await asyncio.to_thread(yolo_detector.load_model, path)
+    configured_paths = {
+        "detect": [settings.YOLO_DETECT_MODEL_PATH],
+        "classify": [
+            settings.YOLO_CLASSIFY_MODEL_PATH,
+            settings.YOLO_CLASSIFY_FALLBACK_PATH,
+        ],
+    }
+    paths = [model_path] if model_path else configured_paths[task_type]
+    success = await asyncio.to_thread(vision_model_registry.load, task_type, paths)
     if not success:
         raise HTTPException(status_code=500, detail="模型加载失败")
-    return DetectResponse(code=200, data={**yolo_detector.get_status(), "message": "模型加载成功"})
+    model = vision_model_registry.get(task_type)
+    return DetectResponse(
+        code=200,
+        data={**model.get_status(), "message": "模型加载成功"},
+    )
 
 
 @router.post("/detect/image", response_model=DetectResponse, summary="上传图片检测")
@@ -264,8 +301,7 @@ async def detect_uploaded_image(
     payload: DetectImageRequest,
     _user: User = Depends(require_auth),
 ):
-    if not yolo_detector.loaded:
-        raise HTTPException(status_code=503, detail="YOLO 模型未加载")
+    model = _get_model_or_503(payload.task_type)
 
     try:
         image_bytes = base64.b64decode(payload.image, validate=True)
@@ -280,7 +316,7 @@ async def detect_uploaded_image(
         raise HTTPException(status_code=400, detail=f"图片格式错误: {exc}") from exc
 
     result, drawn_image = await asyncio.to_thread(
-        yolo_detector.detect_and_draw,
+        model.analyze_and_render,
         image,
         payload.confidence,
         settings.YOLO_IOU,
@@ -288,13 +324,16 @@ async def detect_uploaded_image(
     if result.get("error"):
         raise HTTPException(status_code=500, detail=result["error"])
 
-    jpeg_bytes = yolo_detector.image_to_bytes(drawn_image, quality=90)
+    jpeg_bytes = _encode_jpeg(drawn_image)
     result_image_base64 = base64.b64encode(jpeg_bytes).decode("utf-8")
     minio_url = None
     try:
         from app.services.minio_service import minio_service
 
-        filename = f"detect_{time.strftime('%Y%m%d_%H%M%S')}.jpg"
+        filename = (
+            f"{payload.task_type}_{time.strftime('%Y%m%d_%H%M%S')}_"
+            f"{time.time_ns()}.jpg"
+        )
         minio_url = minio_service.upload_image(jpeg_bytes, "image/jpeg", filename)
     except Exception as exc:
         logger.warning(f"检测结果上传 MinIO 失败: {exc}")
@@ -320,12 +359,12 @@ async def detect_uploaded_image(
 )
 async def create_video_detection_job(
     file: UploadFile = File(...),
+    task_type: AnalysisTask = Query("detect", description="模型任务类型"),
     confidence: float = Query(0.5, ge=0.0, le=1.0),
     sample_fps: float = Query(settings.VIDEO_DETECTION_FPS, ge=0.2, le=10.0),
     _user: User = Depends(require_auth),
 ):
-    if not yolo_detector.loaded:
-        raise HTTPException(status_code=503, detail="YOLO 模型未加载")
+    model = _get_model_or_503(task_type)
     safe_name = Path(file.filename or "video").name
     suffix = Path(safe_name).suffix.lower()
     if suffix not in VIDEO_SUFFIXES:
@@ -351,7 +390,8 @@ async def create_video_detection_job(
             file_path=str(target),
             filename=safe_name,
             owner_id=_owner_id(_user),
-            detector=yolo_detector,
+            model=model,
+            task_type=task_type,
             confidence=confidence,
             iou=settings.YOLO_IOU,
             sample_fps=sample_fps,
@@ -395,7 +435,10 @@ async def get_video_detection_result(
     if not result:
         raise HTTPException(status_code=404, detail="视频检测任务不存在或已过期")
     if result["state"] != "completed":
-        raise HTTPException(status_code=409, detail=result.get("error") or "视频检测尚未完成")
+        raise HTTPException(
+            status_code=409,
+            detail=result.get("error") or "视频检测尚未完成",
+        )
     return DetectResponse(code=200, data=result)
 
 
@@ -674,12 +717,12 @@ async def toggle_detection(
 ):
     camera = _get_camera_or_404(camera_id)
     if payload.enabled:
-        if not yolo_detector.loaded:
-            raise HTTPException(status_code=503, detail="YOLO 模型未加载")
+        model = _get_model_or_503(payload.task_type)
         if not camera.running:
             camera.start()
         camera.enable_detection(
-            detector=yolo_detector,
+            model=model,
+            task_type=payload.task_type,
             confidence=(
                 payload.confidence
                 if payload.confidence is not None
@@ -692,10 +735,14 @@ async def toggle_detection(
                 else settings.CAMERA_DETECTION_FPS
             ),
         )
-        message = "实时检测已开启"
+        message = (
+            "实时目标检测已开启"
+            if payload.task_type == "detect"
+            else "实时图片分类已开启"
+        )
     else:
         camera.disable_detection()
-        message = "实时检测已关闭"
+        message = "实时 AI 分析已关闭"
 
     return DetectResponse(
         code=200,
@@ -710,32 +757,35 @@ async def toggle_detection(
 )
 async def snapshot_detect(
     camera_id: str,
+    task_type: AnalysisTask = Query("detect", description="模型任务类型"),
     confidence: float = Query(0.5, ge=0.0, le=1.0),
     _user: User = Depends(require_auth),
 ):
     camera = _get_camera_or_404(camera_id)
-    if not yolo_detector.loaded:
-        raise HTTPException(status_code=503, detail="YOLO 模型未加载")
+    model = _get_model_or_503(task_type)
     frame = camera.get_frame()
     if frame is None:
         raise HTTPException(status_code=503, detail="摄像头未连接或暂无画面")
 
     result, drawn = await asyncio.to_thread(
-        yolo_detector.detect_and_draw,
+        model.analyze_and_render,
         frame,
         confidence,
         settings.YOLO_IOU,
     )
     if result.get("error"):
         raise HTTPException(status_code=500, detail=result["error"])
-    jpeg_bytes = yolo_detector.image_to_bytes(drawn, quality=90)
+    jpeg_bytes = _encode_jpeg(drawn)
     image_base64 = base64.b64encode(jpeg_bytes).decode("utf-8")
 
     minio_url = None
     try:
         from app.services.minio_service import minio_service
 
-        filename = f"snapshot_{camera_id}_{time.strftime('%Y%m%d_%H%M%S')}.jpg"
+        filename = (
+            f"snapshot_{task_type}_{camera_id}_{time.strftime('%Y%m%d_%H%M%S')}_"
+            f"{time.time_ns()}.jpg"
+        )
         minio_url = minio_service.upload_image(jpeg_bytes, "image/jpeg", filename)
     except Exception as exc:
         logger.warning(f"截图上传 MinIO 失败: {exc}")

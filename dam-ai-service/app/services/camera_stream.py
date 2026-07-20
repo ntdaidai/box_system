@@ -71,7 +71,9 @@ class CameraStream:
         self.detection_confidence = 0.5
         self.detection_iou = 0.45
         self.detection_target_fps = 5.0
-        self._detector: Optional[Any] = None
+        self.analysis_task = "detect"
+        self._model: Optional[Any] = None
+        self._analysis_generation = 0
         self._detection_thread: Optional[threading.Thread] = None
         self._detection_stop_event = threading.Event()
         self._detection_condition = threading.Condition(self.lock)
@@ -82,6 +84,7 @@ class CameraStream:
     def _empty_detection(self, enabled: bool) -> Dict[str, Any]:
         return {
             "camera_id": self.camera_id,
+            "task_type": self.analysis_task,
             "enabled": enabled,
             "frame_sequence": self.frame_sequence,
             "timestamp": time.time(),
@@ -269,20 +272,28 @@ class CameraStream:
 
     def enable_detection(
         self,
-        detector: Any,
+        model: Any,
+        task_type: str = "detect",
         confidence: float = 0.5,
         iou: float = 0.45,
         target_fps: float = 5.0,
     ) -> None:
         """Start one shared inference worker, regardless of viewer count."""
         with self._detection_condition:
-            self._detector = detector
+            previous_task = self.analysis_task
+            self._model = model
+            self.analysis_task = str(task_type)
+            self._analysis_generation += 1
             self.detection_confidence = max(0.0, min(float(confidence), 1.0))
             self.detection_iou = max(0.0, min(float(iou), 1.0))
             self.detection_target_fps = max(0.2, min(float(target_fps), 30.0))
             self.detection_enabled = True
             self._detection_stop_event.clear()
             if self._detection_thread and self._detection_thread.is_alive():
+                if previous_task != self.analysis_task:
+                    self._latest_detection = self._empty_detection(True)
+                    self._detection_version += 1
+                    self._detection_condition.notify_all()
                 return
             self._latest_detection = self._empty_detection(True)
             self._detection_version += 1
@@ -294,8 +305,8 @@ class CameraStream:
             self._detection_thread.start()
             self._detection_condition.notify_all()
         logger.info(
-            f"摄像头 {self.camera_id} 实时检测已开启 "
-            f"(target_fps={self.detection_target_fps:.1f})"
+            f"摄像头 {self.camera_id} 实时分析已开启 "
+            f"(task={self.analysis_task}, target_fps={self.detection_target_fps:.1f})"
         )
 
     def disable_detection(self) -> None:
@@ -315,7 +326,7 @@ class CameraStream:
             if self._detection_thread is thread and (thread is None or not thread.is_alive()):
                 self._detection_thread = None
         if was_enabled:
-            logger.info(f"摄像头 {self.camera_id} 实时检测已关闭")
+            logger.info(f"摄像头 {self.camera_id} 实时分析已关闭")
 
     def _detection_loop(self) -> None:
         last_sequence = -1
@@ -326,19 +337,30 @@ class CameraStream:
                 continue
 
             started = time.monotonic()
-            detector = self._detector
-            if detector is None:
+            with self.lock:
+                model = self._model
+                analysis_task = self.analysis_task
+                analysis_generation = self._analysis_generation
+            if model is None:
                 break
             try:
-                result, drawn = detector.detect_and_draw(
+                result, drawn = model.analyze_and_render(
                     frame,
                     conf=self.detection_confidence,
                     iou=self.detection_iou,
                 )
-                jpeg = detector.image_to_bytes(drawn, quality=80)
+                success, buffer = cv2.imencode(
+                    ".jpg",
+                    drawn,
+                    [int(cv2.IMWRITE_JPEG_QUALITY), 80],
+                )
+                if not success:
+                    raise ValueError("结果视频帧编码失败")
+                jpeg = buffer.tobytes()
                 completed_at = time.time()
                 payload = {
                     **result,
+                    "task_type": analysis_task,
                     "camera_id": self.camera_id,
                     "enabled": True,
                     "frame_sequence": sequence,
@@ -349,7 +371,7 @@ class CameraStream:
                     "error": result.get("error"),
                 }
             except Exception as exc:
-                logger.exception(f"摄像头 {self.camera_id} 实时检测异常: {exc}")
+                logger.exception(f"摄像头 {self.camera_id} 实时分析异常: {exc}")
                 jpeg = None
                 payload = self._empty_detection(True)
                 payload.update(
@@ -364,6 +386,9 @@ class CameraStream:
             if self._detection_stop_event.is_set():
                 break
             with self._detection_condition:
+                if analysis_generation != self._analysis_generation:
+                    last_sequence = sequence
+                    continue
                 self._latest_detection = payload
                 if jpeg is not None:
                     self._detected_jpeg = jpeg
@@ -423,6 +448,7 @@ class CameraStream:
                 "detection_enabled": self.detection_enabled,
                 "detection_running": detection_thread_running,
                 "detection_target_fps": self.detection_target_fps,
+                "analysis_task": self.analysis_task,
                 "has_frame": self.current_frame is not None,
                 "last_frame_time": self.frame_timestamp,
                 "frame_age_ms": round(frame_age * 1000) if frame_age is not None else None,

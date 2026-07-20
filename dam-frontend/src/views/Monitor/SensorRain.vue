@@ -124,6 +124,12 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { getRainTrends, getSensorRealtime } from '@/api/sensor'
+import {
+  buildDailyRainChartValues,
+  buildDailyRainRows,
+  resolveRainCalendarSelection,
+  toRainNumber,
+} from '@/utils/rainHistory'
 import { calcNiceYAxisRange } from '@/utils/sensorHistory'
 import { cancelIdleTask, createSensorDetailStartup, runWhenIdle } from '@/utils/sensorDetailStartup'
 import { Pouring } from '@element-plus/icons-vue'
@@ -160,20 +166,12 @@ const monthOptions = computed(() => {
   return (period?.months || []).map(Number).filter(month => month >= 1 && month <= 12)
 })
 
-const toNumericValue = (value) => {
-  if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null
-  const numeric = Number(value)
-  return Number.isFinite(numeric) ? numeric : null
-}
-
-const dailyRainRows = computed(() => (chartData.value.history || [])
-  .map(row => ({ ...row, value: toNumericValue(row.data?.daily_rain) }))
-  .filter(row => row.value !== null))
+const dailyRainRows = computed(() => buildDailyRainRows(chartData.value.history || []))
 
 const historyEmpty = computed(() => dailyRainRows.value.length === 0)
 
 const formatRain = (value) => {
-  const numeric = toNumericValue(value)
+  const numeric = toRainNumber(value)
   return numeric === null ? '--' : `${numeric.toFixed(1)} mm`
 }
 
@@ -267,15 +265,9 @@ const currentQuery = () => ({
 const syncAvailablePeriods = (periods = []) => {
   if (!Array.isArray(periods) || !periods.length) return
   availablePeriods.value = periods
-  const selected = periods.find(item => Number(item.year) === Number(selectedYear.value))
-  if (!selected) {
-    selectedYear.value = Number(periods[0].year)
-    selectedMonth.value = 'all'
-    return
-  }
-  if (selectedMonth.value !== 'all' && !selected.months?.map(Number).includes(Number(selectedMonth.value))) {
-    selectedMonth.value = 'all'
-  }
+  const selection = resolveRainCalendarSelection(periods, selectedYear.value, selectedMonth.value)
+  selectedYear.value = selection.year
+  selectedMonth.value = selection.month
 }
 
 const applyTrendPayload = (payload, query, apply = true) => {
@@ -283,7 +275,7 @@ const applyTrendPayload = (payload, query, apply = true) => {
   syncAvailablePeriods(payload.available_periods)
   const normalized = { ...payload, history: payload.history || [] }
   historyCache.set(queryKey(query), normalized)
-  if (apply) {
+  if (apply && queryKey(query) === queryKey(currentQuery())) {
     chartData.value = normalized
     historyError.value = ''
   }
@@ -293,7 +285,11 @@ const applyTrendPayload = (payload, query, apply = true) => {
 const loadTrends = async (query = currentQuery(), apply = true, force = false) => {
   const key = queryKey(query)
   if (!force && historyCache.has(key)) {
-    return applyTrendPayload(historyCache.get(key), query, apply)
+    const normalized = applyTrendPayload(historyCache.get(key), query, apply)
+    if (apply && key !== queryKey(currentQuery())) {
+      return loadTrends(currentQuery(), true, force)
+    }
+    return normalized
   }
 
   if (apply) {
@@ -303,7 +299,11 @@ const loadTrends = async (query = currentQuery(), apply = true, force = false) =
   try {
     const res = await getRainTrends(query)
     if (res.code !== 200) throw new Error('逐日雨量响应无效')
-    return applyTrendPayload(res.data, query, apply)
+    const normalized = applyTrendPayload(res.data, query, apply)
+    if (apply && key !== queryKey(currentQuery())) {
+      return await loadTrends(currentQuery(), true, force)
+    }
+    return normalized
   } catch (error) {
     console.warn('加载逐日雨量失败:', error)
     if (apply) historyError.value = '历史数据服务暂时不可用，请稍后重试'
@@ -323,7 +323,11 @@ const handleHistoryCacheUpdate = (event) => {
   }
   const shouldApply = queryKey(query) === queryKey(currentQuery())
   applyTrendPayload(detail.data.data, query, shouldApply)
-  if (shouldApply) renderChart()
+  if (shouldApply && queryKey(query) === queryKey(currentQuery())) {
+    renderChart()
+  } else if (shouldApply) {
+    void loadTrends(currentQuery()).then(renderChart)
+  }
 }
 
 const preloadHistoryLater = () => {
@@ -367,7 +371,7 @@ const onMonthChange = async () => {
 
 const chartDates = () => (chartData.value.history || []).map(row => row.date)
 
-const chartValues = () => (chartData.value.history || []).map(row => toNumericValue(row.data?.daily_rain))
+const chartValues = () => buildDailyRainChartValues(chartData.value.history || [])
 
 const formatXAxisLabel = (dateValue) => {
   const value = new Date(`${dateValue}T00:00:00+08:00`)
@@ -385,9 +389,11 @@ const tooltipFormatter = (params) => {
   if (!item || item.data === null) return ''
   const dateValue = new Date(`${item.axisValue}T00:00:00+08:00`)
   const heading = dateValue.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })
+  const source = (chartData.value.history || []).find(row => row.date === item.axisValue)
+  const seriesLabel = source?.data?.in_progress ? '今日雨量（截至当前）' : '逐日雨量'
   return `<div style="min-width:160px"><strong>${heading}</strong>`
     + `<div style="display:flex;justify-content:space-between;gap:24px;margin-top:8px">`
-    + `<span>${item.marker}逐日雨量</span><strong>${Number(item.data).toFixed(1)} mm</strong></div></div>`
+    + `<span>${item.marker}${seriesLabel}</span><strong>${Number(item.data).toFixed(1)} mm</strong></div></div>`
 }
 
 const fullChartOption = () => {
@@ -403,6 +409,7 @@ const fullChartOption = () => {
     type: 'bar',
     data: values,
     barMaxWidth: selectedMonth.value === 'all' ? 6 : 22,
+    barMinHeight: 3,
     z: 3,
     itemStyle: {
       borderRadius: [3, 3, 0, 0],

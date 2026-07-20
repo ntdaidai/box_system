@@ -46,7 +46,8 @@ class VideoDetectionService:
         file_path: str,
         filename: str,
         owner_id: str,
-        detector: Any,
+        model: Any,
+        task_type: str,
         confidence: float,
         iou: float,
         sample_fps: float,
@@ -58,7 +59,7 @@ class VideoDetectionService:
                 job["state"] not in self.TERMINAL_STATES for job in self.jobs.values()
             )
             if active_count >= self.max_jobs:
-                raise ValueError("视频检测队列已满，请稍后重试")
+                raise ValueError("视频分析队列已满，请稍后重试")
             job_id = secrets.token_hex(16)
             self.jobs[job_id] = {
                 "job_id": job_id,
@@ -76,7 +77,8 @@ class VideoDetectionService:
                 "cancel_requested": False,
                 "result": None,
                 "_file_path": str(file_path),
-                "_detector": detector,
+                "task_type": str(task_type),
+                "_model": model,
                 "_confidence": float(confidence),
                 "_iou": float(iou),
                 "_sample_fps": max(0.2, min(float(sample_fps), 10.0)),
@@ -165,7 +167,8 @@ class VideoDetectionService:
             job["started_at"] = time.time()
             job["updated_at"] = job["started_at"]
             path = job["_file_path"]
-            detector = job["_detector"]
+            model = job["_model"]
+            task_type = job["task_type"]
             confidence = job["_confidence"]
             iou = job["_iou"]
             requested_sample_fps = job["_sample_fps"]
@@ -204,28 +207,31 @@ class VideoDetectionService:
                 if frame.shape[0] * frame.shape[1] > self.max_frame_pixels:
                     raise ValueError("视频帧像素尺寸超过限制")
                 if frame_index % sample_every == 0:
-                    result = detector.detect(frame, conf=confidence, iou=iou)
+                    result = model.analyze(frame, conf=confidence, iou=iou)
                     if result.get("error"):
                         raise RuntimeError(result["error"])
-                    detections = result.get("detections", [])
-                    for detection in detections:
+                    if task_type == "detect":
+                        result_items = result.get("detections", [])
+                    else:
+                        prediction = result.get("prediction")
+                        result_items = [prediction] if prediction else []
+                    for item in result_items:
                         class_counter[
                             (
-                                int(detection.get("class_id", -1)),
-                                str(detection.get("class_name", "object")),
-                                str(detection.get("class_name_cn", "object")),
+                                int(item.get("class_id", -1)),
+                                str(item.get("class_name", "object")),
+                                str(item.get("class_name_cn", "object")),
                             )
                         ] += 1
-                    timeline.append(
-                        {
-                            "time": round(frame_index / source_fps, 3),
-                            "image_width": int(result.get("image_width", frame.shape[1])),
-                            "image_height": int(result.get("image_height", frame.shape[0])),
-                            "detections": detections,
-                            "count": len(detections),
-                            "process_time": result.get("process_time", 0),
-                        }
-                    )
+                    sample = {
+                        **result,
+                        "time": round(frame_index / source_fps, 3),
+                        "task_type": task_type,
+                        "image_width": int(result.get("image_width", frame.shape[1])),
+                        "image_height": int(result.get("image_height", frame.shape[0])),
+                        "process_time": result.get("process_time", 0),
+                    }
+                    timeline.append(sample)
 
                 frame_index += 1
                 if frame_index % 5 == 0:
@@ -254,6 +260,7 @@ class VideoDetectionService:
                 for key, count in sorted(class_counter.items())
             ]
             result_payload = {
+                "task_type": task_type,
                 "duration_s": round(actual_duration, 3),
                 "source_fps": round(source_fps, 3),
                 "sample_fps": round(actual_sample_fps, 3),
@@ -329,6 +336,7 @@ class VideoDetectionService:
             for key in (
                 "job_id",
                 "filename",
+                "task_type",
                 "state",
                 "progress",
                 "created_at",

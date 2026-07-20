@@ -260,6 +260,189 @@ class SensorHistoryService:
             "coverage_ratio": round(populated_days / max_point_count, 4) if max_point_count else 0.0,
         }
 
+    def query_wind_trends(
+        self,
+        view: str = "recent24h",
+        year: int | None = None,
+        month: int | None = None,
+        now_ms: int = None,
+    ) -> dict:
+        """Return half-hour or daily-average wind data for the trend chart."""
+        available_periods = self.available_calendar_periods("wind")
+        if view == "recent24h":
+            payload = self.query_history("wind", "1d", now_ms=now_ms)
+            start_seconds = float(payload["window"]["start"])
+            end_seconds = float(payload["window"]["end"])
+            max_points = int(payload["max_point_count"])
+            recent_history = [
+                point
+                for point in payload.get("history", [])
+                if start_seconds < float(point.get("timestamp", 0)) <= end_seconds
+            ][-max_points:]
+            return {
+                **payload,
+                "history": recent_history,
+                "point_count": len(recent_history),
+                "coverage_ratio": (
+                    round(len(recent_history) / max_points, 4) if max_points else 0.0
+                ),
+                "view": "recent24h",
+                "aggregation": "30m_average",
+                "available_periods": available_periods,
+            }
+
+        if view == "rolling12":
+            payload = self.query_wind_rolling_12_months(now_ms=now_ms)
+            payload["available_periods"] = available_periods
+            return payload
+
+        if view != "calendar":
+            raise ValueError("view must be recent24h, rolling12 or calendar")
+
+        current = datetime.now(self.timezone)
+        selected_year = int(year if year is not None else current.year)
+        selected_month = int(month) if month not in (None, 0) else None
+        payload = self.query_wind_calendar(selected_year, selected_month)
+        payload["available_periods"] = available_periods
+        return payload
+
+    def query_wind_calendar(self, year: int, month: int | None = None) -> dict:
+        """Read daily mean speed, wind force and circular-mean direction."""
+        year = int(year)
+        if year < 2000 or year > 2100:
+            raise ValueError("year must be between 2000 and 2100")
+        if month is not None and (int(month) < 1 or int(month) > 12):
+            raise ValueError("month must be between 1 and 12")
+
+        month = int(month) if month is not None else None
+        start_date = date(year, month or 1, 1)
+        if month is None or month == 12:
+            end_date = date(year + 1, 1, 1)
+        else:
+            end_date = date(year, month + 1, 1)
+
+        return self._query_wind_calendar_window(
+            start_date,
+            end_date,
+            view="calendar",
+            year=year,
+            month=month,
+        )
+
+    def query_wind_rolling_12_months(self, now_ms: int = None) -> dict:
+        """Read the twelve complete/current calendar months ending this month."""
+        current = (
+            datetime.fromtimestamp(now_ms / 1000.0, tz=self.timezone)
+            if now_ms is not None
+            else datetime.now(self.timezone)
+        )
+        if current.month == 12:
+            end_date = date(current.year + 1, 1, 1)
+        else:
+            end_date = date(current.year, current.month + 1, 1)
+        start_date = date(end_date.year - 1, end_date.month, 1)
+        return self._query_wind_calendar_window(
+            start_date,
+            end_date,
+            view="rolling12",
+            year=None,
+            month=None,
+        )
+
+    def _query_wind_calendar_window(
+        self,
+        start_date: date,
+        end_date: date,
+        view: str,
+        year: int | None,
+        month: int | None,
+    ) -> dict:
+        """Materialize a daily wind window without bridging missing dates."""
+
+        start_dt = datetime.combine(start_date, datetime_time.min, tzinfo=self.timezone)
+        end_dt = datetime.combine(end_date, datetime_time.min, tzinfo=self.timezone)
+        start_ms = int(start_dt.timestamp() * 1000)
+        end_ms = int(end_dt.timestamp() * 1000)
+        points = self.iotdb.query_points(
+            self.rollup_path("1d", self.get_device_id("wind")),
+            start_ms,
+            end_ms,
+        )
+
+        wanted_fields = {
+            "wind_speed_ms",
+            "wind_speed_kmh",
+            "wind_level",
+            "wind_angle",
+            "wind_dir_code",
+            "wind_direction",
+        }
+        rows_by_date = {}
+        for point in points:
+            try:
+                point_dt = datetime.fromtimestamp(
+                    float(point.get("timestamp", 0)) - 0.001,
+                    tz=self.timezone,
+                )
+            except (TypeError, ValueError, OSError):
+                continue
+            point_date = point_dt.date()
+            if point_date < start_date or point_date >= end_date:
+                continue
+
+            data = {
+                key: value
+                for key, value in (point.get("data") or {}).items()
+                if key in wanted_fields and value is not None
+            }
+            rows_by_date[point_date.isoformat()] = {
+                "date": point_date.isoformat(),
+                "timestamp": float(point.get("timestamp", 0)),
+                "data": data,
+            }
+
+        history = []
+        cursor = start_date
+        while cursor < end_date:
+            date_key = cursor.isoformat()
+            row = rows_by_date.get(date_key)
+            if row is None:
+                bucket_end = datetime.combine(
+                    cursor + timedelta(days=1),
+                    datetime_time.min,
+                    tzinfo=self.timezone,
+                )
+                row = {
+                    "date": date_key,
+                    "timestamp": bucket_end.timestamp(),
+                    "data": {},
+                }
+            history.append(row)
+            cursor += timedelta(days=1)
+
+        point_count = sum(
+            1
+            for row in history
+            if row["data"].get("wind_speed_kmh") is not None
+            or row["data"].get("wind_speed_ms") is not None
+        )
+        max_point_count = (end_date - start_date).days
+        return {
+            "device_name": "wind",
+            "view": view,
+            "year": year,
+            "month": month,
+            "source": "rollup",
+            "rollup_level": "1d",
+            "aggregation": "daily_average",
+            "window": {"start": start_ms / 1000.0, "end": end_ms / 1000.0},
+            "sample_interval": 24 * 60 * 60,
+            "max_point_count": max_point_count,
+            "history": history,
+            "point_count": point_count,
+            "coverage_ratio": round(point_count / max_point_count, 4) if max_point_count else 0.0,
+        }
+
     def query_rain_calendar(self, year: int, month: int | None = None) -> dict:
         """Read exact daily rainfall for one calendar month or year."""
         year = int(year)

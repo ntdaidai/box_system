@@ -73,6 +73,7 @@ services:
       - /proc/device-tree:/proc/device-tree:ro
       # 挂载 YOLO 模型权重目录
       - /home/jetson/wh_test/roboflow/runs:/models/runs:ro
+      - /home/jetson/sep/disaster_idf/yolo26x/runs/exp004_yolo26x_cls_disaster_generalize_v4/weights:/models/disaster-classifier:ro
     environment:
       # vLLM 视觉模型
       VLLM_QWEN3VL_URL: http://localhost:8000
@@ -100,8 +101,10 @@ services:
       DEFAULT_ADMIN_USERNAME: admin
       DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD}
       DEFAULT_ADMIN_REALNAME: "管理员"
-      # YOLO 目标检测模型
-      YOLO_MODEL_PATH: /models/runs/yolo26x_continue/weights/best.pt
+      # 可扩展视觉模型。当前 engine 与容器 TensorRT 版本不兼容，默认使用 CUDA .pt。
+      YOLO_DETECT_MODEL_PATH: "${YOLO_DETECT_MODEL_PATH:-/models/runs/yolo26x_continue/weights/best.pt}"
+      YOLO_CLASSIFY_MODEL_PATH: "${YOLO_CLASSIFY_MODEL_PATH:-/models/disaster-classifier/best.pt}"
+      YOLO_CLASSIFY_FALLBACK_PATH: "${YOLO_CLASSIFY_FALLBACK_PATH:-}"
       YOLO_CONFIDENCE: "0.5"
       YOLO_IOU: "0.45"
       # dai: 未接入摄像头时保持为空；接入后在 .env 中填写真实海康地址。

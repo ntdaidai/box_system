@@ -30,6 +30,14 @@ class LoadedDetector:
     loaded = True
 
 
+class FakeRegistry:
+    def __init__(self, model):
+        self.model = model
+
+    def get(self, task_type):
+        return self.model if task_type == "detect" else None
+
+
 class CameraApiContractTests(unittest.TestCase):
     def test_static_model_route_precedes_dynamic_camera_status(self):
         paths = [route.path for route in camera_api.router.routes]
@@ -62,7 +70,9 @@ class CameraApiContractTests(unittest.TestCase):
         )
         try:
             with patch.object(camera_api, "camera_manager", manager), patch.object(
-                camera_api, "yolo_detector", LoadedDetector()
+                camera_api,
+                "vision_model_registry",
+                FakeRegistry(LoadedDetector()),
             ):
                 enabled = asyncio.run(
                     camera_api.toggle_detection(

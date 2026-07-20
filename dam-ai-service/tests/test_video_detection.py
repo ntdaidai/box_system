@@ -55,7 +55,7 @@ class TimelineDetector:
         self.calls = 0
         self.lock = threading.Lock()
 
-    def detect(self, image, conf=0.5, iou=0.45):
+    def analyze(self, image, conf=0.5, iou=0.45):
         with self.lock:
             self.calls += 1
         return {
@@ -71,6 +71,25 @@ class TimelineDetector:
                 }
             ],
             "count": 1,
+            "process_time": 0.001,
+        }
+
+
+class TimelineClassifier:
+    def analyze(self, image, conf=0.5, iou=0.45):
+        del image, conf, iou
+        prediction = {
+            "class_id": 2,
+            "class_name": "landslide",
+            "class_name_cn": "滑坡",
+            "confidence": 0.88,
+        }
+        return {
+            "task_type": "classify",
+            "image_width": 80,
+            "image_height": 48,
+            "prediction": prediction,
+            "classifications": [prediction],
             "process_time": 0.001,
         }
 
@@ -92,7 +111,8 @@ class VideoDetectionServiceTests(unittest.TestCase):
             "/tmp/dai-video-test-does-not-exist.mp4",
             "sample.mp4",
             owner_id="user-a",
-            detector=detector,
+            model=detector,
+            task_type="detect",
             confidence=0.5,
             iou=0.45,
             sample_fps=2,
@@ -125,7 +145,8 @@ class VideoDetectionServiceTests(unittest.TestCase):
                 "/tmp/dai-video-too-long.mp4",
                 "long.mp4",
                 owner_id="user-a",
-                detector=TimelineDetector(),
+                model=TimelineDetector(),
+                task_type="detect",
                 confidence=0.5,
                 iou=0.45,
                 sample_fps=2,
@@ -139,6 +160,29 @@ class VideoDetectionServiceTests(unittest.TestCase):
             self.assertIn("时长", service.get_status(job["job_id"], "user-a")["error"])
         finally:
             service.shutdown()
+
+    def test_classification_timeline_counts_one_prediction_per_sample(self):
+        job = self.service.submit(
+            "/tmp/dai-classification-video-does-not-exist.mp4",
+            "classification.mp4",
+            owner_id="user-a",
+            model=TimelineClassifier(),
+            task_type="classify",
+            confidence=0.5,
+            iou=0.45,
+            sample_fps=2,
+        )
+        self.assertTrue(
+            wait_until(
+                lambda: self.service.get_status(job["job_id"], "user-a")["state"]
+                == "completed"
+            )
+        )
+        result = self.service.get_result(job["job_id"], "user-a")
+        self.assertEqual(result["task_type"], "classify")
+        self.assertEqual(result["total_occurrences"], 4)
+        self.assertEqual(result["timeline"][0]["prediction"]["class_name_cn"], "滑坡")
+        self.assertNotIn("detections", result["timeline"][0])
 
 
 if __name__ == "__main__":

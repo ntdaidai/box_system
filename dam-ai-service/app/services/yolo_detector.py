@@ -46,9 +46,13 @@ class YOLODetector:
         3: (255, 255, 0),    # 普通人员 - 青色
     }
 
-    def __init__(self):
+    task_type = "detect"
+
+    def __init__(self, inference_lock: Optional[threading.Lock] = None):
         self.lock = threading.RLock()
-        self.inference_lock = threading.Lock()
+        # Different model adapters may share this lock so Jetson inference stays
+        # serial even when live, image, and video requests arrive concurrently.
+        self.inference_lock = inference_lock or threading.Lock()
         self.model = None
         self.model_path: Optional[str] = None
         self.loaded: bool = False
@@ -135,7 +139,12 @@ class YOLODetector:
             model_names = dict(self.model_names)
 
         if not loaded or model is None:
-            return {"error": "模型未加载", "detections": [], "count": 0}
+            return {
+                "task_type": self.task_type,
+                "error": "模型未加载",
+                "detections": [],
+                "count": 0,
+            }
 
         start_time = time.time()
 
@@ -185,6 +194,7 @@ class YOLODetector:
             process_time = round(time.time() - start_time, 3)
 
             return {
+                "task_type": self.task_type,
                 "image_width": image.shape[1],
                 "image_height": image.shape[0],
                 "detections": detections,
@@ -194,12 +204,18 @@ class YOLODetector:
 
         except Exception as e:
             logger.error(f"YOLO 检测失败: {e}")
-            return {"error": str(e), "detections": [], "count": 0}
+            return {
+                "task_type": self.task_type,
+                "error": str(e),
+                "detections": [],
+                "count": 0,
+            }
 
     def get_status(self) -> Dict[str, Any]:
         """Return model metadata without exposing mutable model internals."""
         with self.lock:
             return {
+                "task_type": self.task_type,
                 "loaded": self.loaded,
                 "model_path": self.model_path,
                 "classes": {
@@ -292,6 +308,24 @@ class YOLODetector:
             return result, drawn
         return result, image
 
+    def analyze(
+        self,
+        image: np.ndarray,
+        conf: float = 0.5,
+        iou: float = 0.45,
+    ) -> Dict[str, Any]:
+        """Task-neutral adapter entry point used by camera workflows."""
+        return self.detect(image, conf=conf, iou=iou)
+
+    def analyze_and_render(
+        self,
+        image: np.ndarray,
+        conf: float = 0.5,
+        iou: float = 0.45,
+    ) -> Tuple[Dict[str, Any], np.ndarray]:
+        """Return metadata plus a display image for the generic model registry."""
+        return self.detect_and_draw(image, conf=conf, iou=iou)
+
     def image_to_bytes(
         self, image: np.ndarray, format: str = ".jpg", quality: int = 85
     ) -> bytes:
@@ -313,5 +347,5 @@ class YOLODetector:
         raise ValueError(f"图片编码失败: {format}")
 
 
-# 全局单例
+# Global singleton kept for compatibility; the registry injects a shared lock.
 yolo_detector = YOLODetector()

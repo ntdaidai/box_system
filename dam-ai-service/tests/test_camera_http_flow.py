@@ -71,6 +71,7 @@ class SyntheticCameraManager(CameraManager):
 
 class SyntheticDetector:
     loaded = True
+    task_type = "detect"
 
     def __init__(self):
         self.calls = 0
@@ -83,7 +84,7 @@ class SyntheticDetector:
             "classes": {0: {"name": "boat", "name_cn": "船只"}},
         }
 
-    def detect_and_draw(self, image, conf=0.5, iou=0.45):
+    def analyze_and_render(self, image, conf=0.5, iou=0.45):
         with self.lock:
             self.calls += 1
         drawn = image.copy()
@@ -117,6 +118,52 @@ class SyntheticDetector:
         if not ok:
             raise RuntimeError("jpeg encode failed")
         return buffer.tobytes()
+
+
+class SyntheticClassifier:
+    loaded = True
+    task_type = "classify"
+
+    def get_status(self):
+        return {
+            "task_type": self.task_type,
+            "loaded": True,
+            "model_path": "/models/test/classify.engine",
+            "classes": {0: {"name": "flood", "name_cn": "洪水"}},
+        }
+
+    def analyze_and_render(self, image, conf=0.5, iou=0.45):
+        del conf, iou
+        prediction = {
+            "class_id": 0,
+            "class_name": "flood",
+            "class_name_cn": "洪水",
+            "confidence": 0.94,
+        }
+        return {
+            "task_type": self.task_type,
+            "image_width": image.shape[1],
+            "image_height": image.shape[0],
+            "prediction": prediction,
+            "classifications": [prediction],
+            "process_time": 0.004,
+        }, image
+
+
+class SyntheticRegistry:
+    def __init__(self, detector, classifier):
+        self.models = {"detect": detector, "classify": classifier}
+
+    def get(self, task_type):
+        return self.models.get(task_type)
+
+    def get_status(self):
+        statuses = {key: model.get_status() for key, model in self.models.items()}
+        return {
+            "loaded": True,
+            "available_tasks": list(statuses),
+            "models": statuses,
+        }
 
 
 class ImmediateVideoService:
@@ -212,6 +259,8 @@ class CameraHttpFlowTests(unittest.TestCase):
     def setUp(self):
         self.manager = SyntheticCameraManager()
         self.detector = SyntheticDetector()
+        self.classifier = SyntheticClassifier()
+        self.registry = SyntheticRegistry(self.detector, self.classifier)
         self.ticket_store = StreamTicketStore(ttl_seconds=60)
         self.video_service = ImmediateVideoService()
         app = FastAPI()
@@ -222,7 +271,7 @@ class CameraHttpFlowTests(unittest.TestCase):
         self.client = TestClient(app)
         self.patches = [
             patch.object(camera_api, "camera_manager", self.manager),
-            patch.object(camera_api, "yolo_detector", self.detector),
+            patch.object(camera_api, "vision_model_registry", self.registry),
             patch.object(camera_api, "stream_ticket_store", self.ticket_store),
             patch.object(camera_api, "video_detection_service", self.video_service),
         ]
@@ -335,6 +384,22 @@ class CameraHttpFlowTests(unittest.TestCase):
         self.assertEqual(body["count"], 1)
         self.assertTrue(body["result_image_base64"])
         self.assertEqual(body["minio_url"], "mock://result.jpg")
+
+        with patch.dict(sys.modules, {"app.services.minio_service": fake_minio_module}):
+            classified = self.client.post(
+                "/api/v1/camera/detect/image",
+                json={
+                    "image": payload,
+                    "confidence": 0.5,
+                    "task_type": "classify",
+                },
+            )
+        self.assertEqual(classified.status_code, 200)
+        classification = classified.json()["data"]
+        self.assertEqual(classification["task_type"], "classify")
+        self.assertEqual(classification["prediction"]["class_name_cn"], "洪水")
+        self.assertNotIn("bbox", classification["prediction"])
+        self.assertTrue(classification["result_image_base64"])
 
         malformed = self.client.post(
             "/api/v1/camera/detect/image",

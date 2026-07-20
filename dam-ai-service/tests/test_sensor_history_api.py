@@ -1,9 +1,11 @@
 import asyncio
 import concurrent.futures
+from datetime import date, datetime
 import os
 import sys
 import types
 import unittest
+from zoneinfo import ZoneInfo
 
 
 os.environ.setdefault("JWT_SECRET", "unit-test-secret")
@@ -89,6 +91,17 @@ class FakeHistoryService:
             "year": year,
             "month": month,
             "aggregation": "daily_rainfall",
+            "history": [],
+            "point_count": 0,
+        }
+
+    def query_wind_trends(self, view, year, month):
+        return {
+            "device_name": "wind",
+            "view": view,
+            "year": year,
+            "month": month,
+            "aggregation": "daily_average" if view in {"calendar", "rolling12"} else "30m_average",
             "history": [],
             "point_count": 0,
         }
@@ -203,6 +216,77 @@ class SensorHistoryApiTest(unittest.TestCase):
         self.assertEqual(response.data["year"], 2026)
         self.assertEqual(response.data["month"], 7)
         self.assertEqual(response.data["aggregation"], "daily_rainfall")
+
+    def test_wind_trends_route_supports_calendar_selection(self):
+        original = sensor_api.get_sensor_history_service
+        sensor_api.get_sensor_history_service = lambda: FakeHistoryService()
+        try:
+            response = asyncio.run(
+                sensor_api.get_wind_trends(view="calendar", year=2026, month=7)
+            )
+        finally:
+            sensor_api.get_sensor_history_service = original
+
+        self.assertEqual(response.code, 200)
+        self.assertEqual(response.data["device_name"], "wind")
+        self.assertEqual(response.data["view"], "calendar")
+        self.assertEqual(response.data["year"], 2026)
+        self.assertEqual(response.data["month"], 7)
+        self.assertEqual(response.data["aggregation"], "daily_average")
+
+    def test_current_zero_rain_is_kept_as_valid_calendar_value(self):
+        current_date = date(2026, 7, 18)
+        observed_at = datetime(2026, 7, 18, 9, 30, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp()
+        payload = {
+            "year": 2026,
+            "month": 7,
+            "history": [
+                {"date": "2026-07-17", "data": {"daily_rain": 0.0}},
+                {"date": "2026-07-18", "data": {}},
+            ],
+            "max_point_count": 31,
+            "point_count": 1,
+        }
+
+        result = sensor_api._with_current_rain_day(
+            payload,
+            {"timestamp": observed_at, "data": {"today_rain": 0.0}},
+            current_date=current_date,
+        )
+
+        today = next(row for row in result["history"] if row["date"] == "2026-07-18")
+        self.assertEqual(today["data"]["daily_rain"], 0.0)
+        self.assertTrue(today["data"]["in_progress"])
+        self.assertEqual(result["point_count"], 2)
+        self.assertEqual(result["coverage_ratio"], 0.0645)
+
+    def test_stale_rain_observation_does_not_fill_today(self):
+        current_date = date(2026, 7, 18)
+        stale_at = datetime(2026, 7, 17, 23, 59, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp()
+        payload = {
+            "year": 2026,
+            "month": 7,
+            "history": [{"date": "2026-07-18", "data": {}}],
+            "max_point_count": 31,
+            "point_count": 0,
+        }
+
+        result = sensor_api._with_current_rain_day(
+            payload,
+            {"timestamp": stale_at, "data": {"today_rain": 0.0}},
+            current_date=current_date,
+        )
+
+        self.assertEqual(result, payload)
+
+    def test_current_rain_calendar_uses_shorter_cache_ttl(self):
+        current = datetime.now(sensor_api._HISTORY_TIMEZONE)
+        other_month = 1 if current.month != 1 else 2
+
+        self.assertEqual(sensor_api._rain_trends_cache_ttl(current.year, None), 300)
+        self.assertEqual(sensor_api._rain_trends_cache_ttl(current.year, current.month), 300)
+        self.assertEqual(sensor_api._rain_trends_cache_ttl(current.year, other_month), 1800)
+        self.assertEqual(sensor_api._rain_trends_cache_ttl(current.year - 1, None), 1800)
 
     def test_history_route_returns_503_when_iotdb_is_unavailable(self):
         original = sensor_api.get_sensor_history_service

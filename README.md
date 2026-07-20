@@ -133,7 +133,24 @@ docker compose up -d
 - 所有 API（除登录和健康检查外）需要 JWT 认证
 
 <!-- dai -->
-## 摄像头实时检测配置
+## 摄像头实时检测与分类配置
+
+`/monitor/camera` 顶部可以选择“目标检测”或“图片分类”。两类模型通过独立适配器
+注册，实时摄像头、截图、图片上传和视频上传共用同一任务选择；所有 Jetson 推理请求
+使用一条串行执行通道，避免多个模型同时争抢 GPU。
+
+当前 Compose 默认模型为：
+
+```dotenv
+YOLO_DETECT_MODEL_PATH=/models/runs/yolo26x_continue/weights/best.pt
+YOLO_CLASSIFY_MODEL_PATH=/models/disaster-classifier/best.pt
+YOLO_CLASSIFY_FALLBACK_PATH=
+```
+
+灾害分类模型输出 `earthquake / flood / landslide / mudslide`，分类模式只返回整图类别
+与置信度，页面不会绘制检测框。已有 `best.engine` 只能在构建它的 TensorRT/CUDA 环境
+中使用；为目标容器重新导出兼容 engine 后，可通过 `YOLO_CLASSIFY_MODEL_PATH` 覆盖为
+`/models/disaster-classifier/best.engine`。
 
 未接入摄像头时 `CAMERA_RTSP_URL` 保持为空，系统会正常启动，`/monitor/camera`
 页面显示待配置状态。接入单路海康摄像头时，在项目 `.env` 中配置：
@@ -181,7 +198,8 @@ CAMERA_DEVICE=/dev/video0
 RTSP 和 USB 两种类型；页面临时添加的配置在后端重启后不会
 保留，正式部署请写入 `.env` 或 `CAMERA_CONFIGS_JSON`。
 
-图片与视频上传检测均位于 `/monitor/camera`。视频采用临时任务处理：浏览器播放本地
-视频，后端按时间抽帧并返回检测时间轴，播放时同步显示检测框。原视频和结果不会写入
+图片与视频上传分析均位于 `/monitor/camera`。视频采用临时任务处理：浏览器播放本地
+视频，后端按时间抽帧并返回分析时间轴；检测模式同步显示检测框，分类模式显示对应
+采样位置的整图类别和置信度。原视频和结果不会写入
 历史或触发告警，任务结果默认 30 分钟后清理。默认限制为 200MB、10 分钟，可通过
 `MAX_VIDEO_SIZE_MB`、`MAX_VIDEO_DURATION_SECONDS` 和 `VIDEO_DETECTION_FPS` 调整。

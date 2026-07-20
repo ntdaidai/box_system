@@ -53,7 +53,7 @@
           <!-- 左侧核心区 -->
           <div class="wind-core">
             <div class="wind-speed-main">
-              <span class="wind-speed-num">{{ data.wind_speed_ms != null ? data.wind_speed_ms.toFixed(1) : '--' }}</span>
+              <span class="wind-speed-num">{{ liveWindSpeedMs != null ? liveWindSpeedMs.toFixed(1) : '--' }}</span>
               <span class="wind-speed-unit">m/s</span>
             </div>
             <div class="wind-level-bar">
@@ -74,7 +74,7 @@
           <!-- 右侧辅助区 -->
           <div class="wind-aux">
             <div class="wind-aux-item">
-              <div class="wind-aux-val">{{ data.wind_speed_kmh != null ? data.wind_speed_kmh.toFixed(1) : '--' }}</div>
+              <div class="wind-aux-val">{{ liveWindSpeedKmh != null ? liveWindSpeedKmh.toFixed(1) : '--' }}</div>
               <div class="wind-aux-label">风速 km/h</div>
             </div>
             <div class="wind-aux-divider"></div>
@@ -92,35 +92,69 @@
       </div>
     </div>
 
-    <!-- 历史曲线: 全宽 -->
-    <div class="data-panel">
-      <div class="chart-top-row">
-        <span class="panel-title">历史记录</span>
-        <div class="chart-tabs">
-          <button v-for="c in chartList" :key="c.key"
-            class="chart-tab" :class="{ active: selectedChart === c.key }"
-            :style="{ '--tab-color': c.color }"
-            @click="selectChart(c.key)">{{ c.name }}</button>
+    <!-- 风速趋势：近24小时 + 年/月每日平均 -->
+    <div class="data-panel history-panel">
+      <div class="history-panel-header">
+        <div class="history-heading">
+          <span class="panel-title">风速趋势</span>
+          <div class="metric-switch" aria-label="风速指标">
+            <button type="button" class="active"><span>≋</span>风速</button>
+          </div>
         </div>
-        <el-radio-group v-model="selectedRange" size="small" @change="onRangeChange">
-          <el-radio-button value="1h">1小时</el-radio-button>
-          <el-radio-button value="6h">6小时</el-radio-button>
-          <el-radio-button value="1d">1天</el-radio-button>
-          <el-radio-button value="7d">7天</el-radio-button>
-          <el-radio-button value="6mo">6个月</el-radio-button>
-        </el-radio-group>
+        <div class="history-controls">
+          <button
+            type="button"
+            class="period-button"
+            :class="{ active: historyMode === 'recent24h' }"
+            @click="selectRecent24h"
+          >
+            <span class="control-icon">◷</span>近24小时
+          </button>
+          <div class="calendar-controls" :class="{ active: historyMode === 'calendar' }">
+            <el-select v-model="selectedYear" class="history-select year-select" @change="onYearChange">
+              <el-option
+                v-for="year in yearOptions"
+                :key="year"
+                :label="year === 'last12' ? '过去12个月' : `${year}年`"
+                :value="year"
+              />
+            </el-select>
+            <el-select
+              v-model="selectedMonth"
+              class="history-select month-select"
+              :disabled="selectedYear === 'last12'"
+              @change="onMonthChange"
+            >
+              <el-option label="所有月份" value="all" />
+              <el-option
+                v-for="month in monthOptions"
+                :key="month"
+                :label="`${month}月`"
+                :value="month"
+              />
+            </el-select>
+          </div>
+        </div>
       </div>
-      <div class="chart-wrap">
-        <div class="chart-container" ref="chartRef"></div>
-        <div v-if="historyLoading" class="chart-loading-overlay">
-          <div class="loading-spinner"></div>
-          <div class="loading-text">加载中 ...</div>
-        </div>
-        <div v-else-if="historyError" class="chart-loading-overlay">
-          <div class="loading-text">{{ historyError }}</div>
-        </div>
-        <div v-else-if="historyEmpty" class="chart-loading-overlay">
-          <div class="loading-text">当前时间范围暂无历史数据</div>
+
+      <div class="trend-shell">
+        <div class="chart-wrap history-chart-wrap">
+          <div class="chart-container" ref="chartRef"></div>
+          <div v-if="historyError && !historyEmpty" class="chart-error-banner">
+            <span>{{ historyError }}，当前显示上一次成功加载的数据</span>
+            <button type="button" @click="retryHistory">重试</button>
+          </div>
+          <div v-if="historyLoading" class="chart-loading-overlay">
+            <div class="loading-spinner"></div>
+            <div class="loading-text">正在读取聚合数据...</div>
+          </div>
+          <div v-else-if="historyError && historyEmpty" class="chart-loading-overlay">
+            <div class="loading-text">{{ historyError }}</div>
+            <button type="button" class="chart-retry-button" @click="retryHistory">重新加载</button>
+          </div>
+          <div v-else-if="historyEmpty" class="chart-loading-overlay chart-hint-overlay">
+            <div class="loading-text">该时间范围暂无风速数据</div>
+          </div>
         </div>
       </div>
     </div>
@@ -128,255 +162,564 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { getSensorRealtime, getSensorHistory } from '@/api/sensor'
-import { buildChartAxisWindow, calcYAxisRange, formatChartAxisLabel, getNextHistoryRefreshMs, normalizeHistorySeries } from '@/utils/sensorHistory'
-import { cancelIdleTask, createSensorDetailStartup, preloadHistoryRanges, runWhenIdle } from '@/utils/sensorDetailStartup'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { getSensorHistory, getSensorRealtime, getWindTrends } from '@/api/sensor'
+import { calcNiceYAxisRange } from '@/utils/sensorHistory'
+import { cancelIdleTask, createSensorDetailStartup, runWhenIdle } from '@/utils/sensorDetailStartup'
 import { getWindCompassState } from '@/utils/sensorWindView'
+import {
+  formatWindSource,
+  normalizeLegacyWindTrend,
+  resolveWindLevel,
+  shanghaiDateKey,
+  toWindNumber,
+  windDirectionByDate,
+} from '@/utils/windHistory'
 import * as echarts from 'echarts'
+
+const MINUTE = 60 * 1000
+const HOUR = 60 * MINUTE
+const DAY = 24 * HOUR
+const TREND_URL = '/v1/sensor/history/wind/trends'
+const initialShanghaiYear = Number(shanghaiDateKey(Date.now()).slice(0, 4))
 
 const data = ref({})
 const chartRef = ref(null)
 const statusClass = ref('online')
 const statusText = ref('在线')
-const selectedRange = ref('1h')
-const selectedChart = ref('ms')
 const lastTimestamp = ref(0)
+const historyMode = ref('recent24h')
+const selectedYear = ref(initialShanghaiYear)
+const selectedMonth = ref('all')
+const availablePeriods = ref([])
 const historyLoading = ref(false)
 const historyError = ref('')
-const historyEmpty = ref(false)
-let chart = null, timer = null, historyRefreshTimer = null, preloadIdleTask = null
-let resizeHandler = null
-const chartData = ref({ ms: [], kmh: [], level: [], angle: [], window: null, config: null })
+const chartData = ref({ view: 'recent24h', history: [], window: null })
 const historyCache = new Map()
-const deviceMeta = {
-  sn: 'DAM-WD-2031',
-  location: '坝顶迎风侧 K0+210',
-  power: '市电 / 备用电池',
+
+let chart = null
+let timer = null
+let historyRefreshTimer = null
+let preloadIdleTask = null
+let resizeHandler = null
+let resizeFrame = null
+let historyRequestSerial = 0
+let isMounted = false
+
+const yearOptions = computed(() => {
+  const years = availablePeriods.value.map(item => Number(item.year)).filter(Number.isFinite)
+  const selected = Number(selectedYear.value)
+  if (Number.isInteger(selected) && !years.includes(selected)) years.push(selected)
+  return ['last12', ...(years.length ? [...new Set(years)].sort((a, b) => b - a) : [initialShanghaiYear])]
+})
+
+const monthOptions = computed(() => {
+  const period = availablePeriods.value.find(item => Number(item.year) === Number(selectedYear.value))
+  if (!period) return Array.from({ length: 12 }, (_, index) => index + 1)
+  return (period.months || []).map(Number).filter(month => month >= 1 && month <= 12)
+})
+
+const getSpeedKmh = (source = {}) => {
+  source = source || {}
+  const kmh = toWindNumber(source.wind_speed_kmh)
+  if (kmh !== null) return kmh
+  const ms = toWindNumber(source.wind_speed_ms)
+  return ms === null ? null : Number((ms * 3.6).toFixed(4))
 }
-const historyFields = {
-  ms: 'wind_speed_ms',
-  kmh: 'wind_speed_kmh',
-  level: 'wind_level',
-  angle: 'wind_angle',
-}
+
+const historyValues = computed(() => (chartData.value.history || [])
+  .map(point => getSpeedKmh(point?.data))
+  .filter(value => value !== null))
+
+const historyEmpty = computed(() => historyValues.value.length === 0)
+
+const liveWindSpeedMs = computed(() => {
+  const ms = toWindNumber(data.value.wind_speed_ms)
+  if (ms !== null) return ms
+  const kmh = toWindNumber(data.value.wind_speed_kmh)
+  return kmh === null ? null : kmh / 3.6
+})
+
+const liveWindSpeedKmh = computed(() => {
+  const kmh = toWindNumber(data.value.wind_speed_kmh)
+  if (kmh !== null) return kmh
+  return liveWindSpeedMs.value === null ? null : liveWindSpeedMs.value * 3.6
+})
 
 // 风速进度条位置（0-30m/s 映射到 0-100%）
 const windSpeedPosition = computed(() => {
-  const v = Number(data.value.wind_speed_ms) || 0
+  const v = liveWindSpeedMs.value || 0
   return Math.max(0, Math.min(100, (v / 30) * 100))
 })
 const windStatusText = computed(() => {
-  const v = Number(data.value.wind_speed_ms) || 0
+  const v = liveWindSpeedMs.value || 0
   if (v < 6) return '微风（安全）'
   if (v < 10) return '和风（注意）'
   if (v < 15) return '大风（警惕）'
   return '狂风（危险）'
 })
 const windStatusClass = computed(() => {
-  const v = Number(data.value.wind_speed_ms) || 0
+  const v = liveWindSpeedMs.value || 0
   if (v < 10) return 'status-ok'
   if (v < 15) return 'status-warn'
   return 'status-danger'
 })
 const compassState = computed(() => getWindCompassState(data.value))
 
-const chartList = [
-  { key: 'ms',    name: '风速 (m/s)',  color: '#00e5ff', unit: 'm/s' },
-  { key: 'kmh',   name: '风速 (km/h)', color: '#409eff', unit: 'km/h' },
-  { key: 'level', name: '风级 (级)',    color: '#e6a23c', unit: '级' },
-  { key: 'angle', name: '风向角度 (°)', color: '#67c23a', unit: '°' },
-]
-
-const getSeriesData = (key) => {
-  const map = { ms: [chartData.value.ms], kmh: [chartData.value.kmh], level: [chartData.value.level], angle: [chartData.value.angle] }
-  return map[key] || map.ms
-}
-const getChartUnit = (key) => chartList.find(c => c.key === key)?.unit || ''
-const getYAxisFallback = (key) => {
-  const map = {
-    ms: { min: 0, max: 20 },
-    kmh: { min: 0, max: 72 },
-    level: { min: 0, max: 12 },
-    angle: { min: 0, max: 360 },
-  }
-  return map[key] || map.ms
-}
-
 const formatCommTime = (ts) => {
-  if (!ts) return '--'
-  return new Date(ts * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+  const numeric = Number(ts)
+  if (!Number.isFinite(numeric) || numeric <= 0) return '--'
+  const timeMs = numeric > 1e12 ? numeric : numeric * 1000
+  return new Date(timeMs).toLocaleString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  })
 }
 
 const fetchData = async () => {
   try {
     const res = await getSensorRealtime('wind')
     if (res.code === 200 && res.data?.data) {
-      const d = res.data.data
-      data.value = d
+      data.value = res.data.data
       lastTimestamp.value = res.data.timestamp || lastTimestamp.value
-      statusClass.value = res.data.mock ? 'offline' : 'online'; statusText.value = res.data.mock ? '离线' : '在线'
+      statusClass.value = res.data.mock ? 'offline' : 'online'
+      statusText.value = res.data.mock ? '离线' : '在线'
     }
-  } catch (e) { statusClass.value = 'offline'; statusText.value = '离线' }
+  } catch {
+    statusClass.value = 'offline'
+    statusText.value = '离线'
+  }
 }
 
-const loadHistory = async (range = '1h', apply = true) => {
-  try {
-    if (historyCache.has(range)) {
-      const cached = historyCache.get(range)
-      if (apply) {
-        chartData.value = cached
-        historyError.value = ''
-        historyEmpty.value = cached.pointCount === 0
-      }
-      return cached
+const queryKey = ({ view, year, month }) => [view, year || '', month || 'all'].join(':')
+
+const historyCacheMaxAge = query => query.view === 'recent24h' ? 5 * MINUTE : 30 * MINUTE
+
+const readHistoryCache = (query) => {
+  const key = queryKey(query)
+  const cached = historyCache.get(key)
+  if (!cached) return null
+  if (Date.now() - cached.updatedAt <= historyCacheMaxAge(query)) return cached.payload
+  historyCache.delete(key)
+  return null
+}
+
+const currentQuery = () => historyMode.value === 'recent24h'
+  ? { view: 'recent24h' }
+  : selectedYear.value === 'last12'
+    ? { view: 'rolling12' }
+    : {
+      view: 'calendar',
+      year: Number(selectedYear.value),
+      month: selectedMonth.value === 'all' ? null : Number(selectedMonth.value),
     }
+
+const syncAvailablePeriods = (periods = []) => {
+  if (!Array.isArray(periods) || !periods.length) return
+  availablePeriods.value = periods
+}
+
+const applyTrendPayload = (payload, query, apply = true, cacheResult = true) => {
+  if (!payload) return null
+  syncAvailablePeriods(payload.available_periods)
+  const normalized = { ...payload, history: Array.isArray(payload.history) ? payload.history : [] }
+  if (cacheResult) {
+    historyCache.set(queryKey(query), { payload: normalized, updatedAt: Date.now() })
+  }
+  if (apply && queryKey(query) === queryKey(currentQuery())) {
+    chartData.value = normalized
+    historyError.value = ''
+  }
+  return normalized
+}
+
+const loadLegacyTrends = async (query) => {
+  const range = query.view === 'recent24h' ? '1d' : '6mo'
+  const res = await getSensorHistory('wind', range)
+  if (res.code !== 200) throw new Error('兼容历史响应无效')
+  return normalizeLegacyWindTrend(res.data || {}, query)
+}
+
+const loadTrends = async (query = currentQuery(), apply = true, force = false) => {
+  const key = queryKey(query)
+  const requestId = apply ? ++historyRequestSerial : 0
+  const isCurrentRequest = () => !apply || (
+    isMounted
+    && requestId === historyRequestSerial
+    && key === queryKey(currentQuery())
+  )
+  const cached = force ? null : readHistoryCache(query)
+  if (cached) {
+    const shouldApply = apply && isCurrentRequest()
+    const normalized = applyTrendPayload(cached, query, shouldApply, false)
+    if (shouldApply) historyLoading.value = false
+    return { payload: normalized, applied: shouldApply, error: false }
+  }
+
+  if (apply && isMounted) {
     historyLoading.value = true
-    if (apply) historyError.value = ''
-    const res = await getSensorHistory('wind', range)
-    if (res.code === 200) {
-      const normalized = normalizeHistorySeries(res.data?.history || [], range, historyFields, new Date(), res.data || {})
-      const nextData = {
-        ms: normalized.series.ms,
-        kmh: normalized.series.kmh,
-        level: normalized.series.level,
-        angle: normalized.series.angle,
-        window: normalized.window,
-        config: normalized.config,
-        pointCount: Number(res.data?.point_count || 0),
-      }
-      historyCache.set(range, nextData)
-      if (apply) {
-        chartData.value = nextData
-        historyEmpty.value = nextData.pointCount === 0
-      }
-      return nextData
+    historyError.value = ''
+  }
+  try {
+    const res = await getWindTrends(query)
+    if (res.code !== 200 || !res.data || !Array.isArray(res.data.history)) {
+      throw new Error('风速趋势响应无效')
     }
-  } catch (e) {
-    console.warn('加载历史数据失败:', e)
-    if (apply) historyError.value = '历史数据服务暂时不可用，请稍后重试'
+    const shouldApply = apply && isCurrentRequest()
+    const normalized = applyTrendPayload(res.data, query, shouldApply)
+    return { payload: normalized, applied: shouldApply, error: false }
+  } catch (error) {
+    console.warn('风速趋势专用接口不可用，尝试兼容历史接口:', error)
+    if (apply && !isCurrentRequest()) {
+      return { payload: null, applied: false, error: false }
+    }
+    try {
+      const fallback = await loadLegacyTrends(query)
+      const shouldApply = apply && isCurrentRequest()
+      const normalized = applyTrendPayload(fallback, query, shouldApply)
+      return { payload: normalized, applied: shouldApply, error: false }
+    } catch (fallbackError) {
+      console.warn('加载风速趋势失败:', fallbackError)
+      const currentError = apply && isCurrentRequest()
+      if (currentError) historyError.value = '历史数据服务暂时不可用，请稍后重试'
+      return { payload: null, applied: false, error: currentError }
+    }
+  } finally {
+    if (apply && isCurrentRequest()) historyLoading.value = false
   }
-  finally {
-    historyLoading.value = false
-  }
-}
-
-const applyHistoryResponse = (range, res) => {
-  if (res?.code !== 200) return null
-  const normalized = normalizeHistorySeries(res.data?.history || [], range, historyFields, new Date(), res.data || {})
-  const nextData = {
-    ms: normalized.series.ms,
-    kmh: normalized.series.kmh,
-    level: normalized.series.level,
-    angle: normalized.series.angle,
-    window: normalized.window,
-    config: normalized.config,
-    pointCount: Number(res.data?.point_count || 0),
-  }
-  historyCache.set(range, nextData)
-  chartData.value = nextData
-  historyError.value = ''
-  historyEmpty.value = nextData.pointCount === 0
-  return nextData
 }
 
 const handleHistoryCacheUpdate = (event) => {
   const detail = event.detail || {}
-  if (detail.url !== '/v1/sensor/history/wind') return
-  const range = detail.params?.range || '1h'
-  if (range !== selectedRange.value) return
-  if (applyHistoryResponse(range, detail.data)) renderChart()
+  if (detail.url !== TREND_URL || detail.data?.code !== 200) return
+  const params = detail.params || {}
+  const query = {
+    view: params.view || 'recent24h',
+    year: params.year != null ? Number(params.year) : undefined,
+    month: params.month != null ? Number(params.month) : null,
+  }
+  const shouldApply = queryKey(query) === queryKey(currentQuery())
+  applyTrendPayload(detail.data.data, query, shouldApply)
+  if (shouldApply && queryKey(query) === queryKey(currentQuery())) renderChart()
 }
 
-const preloadHistory = () => {
-  preloadHistoryRanges(['6h'], loadHistory)
-}
-
-const preloadHistoryLater = () => {
+const preloadCalendarLater = () => {
   if (preloadIdleTask) cancelIdleTask(preloadIdleTask)
+  const preloadYear = Number.isInteger(Number(selectedYear.value))
+    ? Number(selectedYear.value)
+    : initialShanghaiYear
   preloadIdleTask = runWhenIdle(() => {
     preloadIdleTask = null
-    preloadHistory()
+    loadTrends({ view: 'calendar', year: preloadYear, month: null }, false)
   }, 1200)
+}
+
+const millisecondsToNextHalfHour = () => {
+  const now = Date.now()
+  const interval = 30 * 60 * 1000
+  return Math.floor(now / interval) * interval + interval - now
+}
+
+const restoreSelectionFromChart = () => {
+  const view = chartData.value.view
+  if (view === 'recent24h') {
+    historyMode.value = 'recent24h'
+    return
+  }
+
+  historyMode.value = 'calendar'
+  if (view === 'rolling12') {
+    selectedYear.value = 'last12'
+    selectedMonth.value = 'all'
+    return
+  }
+
+  const year = Number(chartData.value.year)
+  selectedYear.value = Number.isInteger(year) ? year : initialShanghaiYear
+  const month = Number(chartData.value.month)
+  selectedMonth.value = Number.isInteger(month) && month >= 1 && month <= 12 ? month : 'all'
+}
+
+const finishHistorySelection = (query, result) => {
+  if (!isMounted || queryKey(query) !== queryKey(currentQuery())) return
+  if (!result?.applied && !result?.error) return
+  if (result?.error) restoreSelectionFromChart()
+  if (result?.applied || result?.error) renderChart()
+  scheduleHistoryRefresh()
 }
 
 const scheduleHistoryRefresh = () => {
   if (historyRefreshTimer) clearTimeout(historyRefreshTimer)
+  if (!isMounted) return
+  const delay = historyMode.value === 'recent24h' ? millisecondsToNextHalfHour() + 1000 : 30 * 60 * 1000
   historyRefreshTimer = setTimeout(async () => {
-    historyCache.clear()
-    await loadHistory(selectedRange.value)
-    renderChart()
-    preloadHistoryLater()
-    scheduleHistoryRefresh()
-  }, getNextHistoryRefreshMs(selectedRange.value) + 1000)
+    if (!isMounted) return
+    const query = currentQuery()
+    historyCache.delete(queryKey(query))
+    const result = await loadTrends(query, true, true)
+    finishHistorySelection(query, result)
+  }, delay)
 }
 
-const selectChart = (key) => { selectedChart.value = key; renderChart() }
+const selectRecent24h = async () => {
+  if (historyMode.value === 'recent24h' && !historyError.value) return
+  historyMode.value = 'recent24h'
+  const query = currentQuery()
+  const result = await loadTrends(query, true, Boolean(historyError.value))
+  finishHistorySelection(query, result)
+}
 
-const onRangeChange = async (range) => {
-  await loadHistory(range); renderChart(); scheduleHistoryRefresh()
+const onYearChange = async () => {
+  historyMode.value = 'calendar'
+  if (selectedYear.value === 'last12') selectedMonth.value = 'all'
+  if (selectedMonth.value !== 'all' && !monthOptions.value.includes(Number(selectedMonth.value))) {
+    selectedMonth.value = 'all'
+  }
+  const query = currentQuery()
+  const result = await loadTrends(query)
+  finishHistorySelection(query, result)
+}
+
+const onMonthChange = async () => {
+  historyMode.value = 'calendar'
+  const query = currentQuery()
+  const result = await loadTrends(query)
+  finishHistorySelection(query, result)
+}
+
+const retryHistory = async () => {
+  const query = currentQuery()
+  historyCache.delete(queryKey(query))
+  const result = await loadTrends(query, true, true)
+  finishHistorySelection(query, result)
+}
+
+const toCalendarTimestamp = dateValue => new Date(`${dateValue}T00:00:00+08:00`).getTime()
+
+const chartSeriesData = () => (chartData.value.history || []).map(point => {
+  const pointData = point?.data || {}
+  const speed = getSpeedKmh(pointData)
+  return {
+    value: historyMode.value === 'recent24h'
+      ? [Number(point.timestamp) * 1000, speed]
+      : speed,
+    windLevel: resolveWindLevel(pointData),
+    windDirection: pointData.wind_direction || '',
+    date: point?.date || '',
+  }
+})
+
+const formatXAxisLabel = (value) => {
+  if (historyMode.value === 'recent24h') {
+    const dateValue = new Date(value)
+    return dateValue.toLocaleTimeString('zh-CN', {
+      timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false,
+    })
+  }
+  const [, month, day] = String(value).split('-').map(Number)
+  if (selectedMonth.value === 'all') return `${month}月`
+  const direction = windDirectionByDate(chartData.value.history).get(String(value)) || ' '
+  return `{direction|${direction}}\n{day|${day}}`
+}
+
+const escapeTooltipHtml = value => String(value).replace(/[&<>"']/g, character => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+})[character])
+
+const tooltipFormatter = (params) => {
+  const recent = historyMode.value === 'recent24h'
+  const item = (Array.isArray(params) ? params : [params]).find(entry => {
+    const value = recent ? entry.value?.[1] : entry.value
+    return value !== null && value !== undefined
+  })
+  if (!item) return ''
+  const dateValue = recent ? new Date(item.value[0]) : new Date(`${item.axisValue}T00:00:00+08:00`)
+  const heading = recent
+    ? dateValue.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
+    : dateValue.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: 'long', day: 'numeric' })
+  const speed = recent ? item.value[1] : item.value
+  const speedLabel = recent ? '30分钟平均风速' : '每日平均风速'
+  const level = item.data?.windLevel
+  const levelText = level == null ? '--' : `${level}级`
+  const directionText = escapeTooltipHtml(formatWindSource(item.data?.windDirection))
+  return `<div style="min-width:205px"><strong>${escapeTooltipHtml(heading)}</strong>`
+    + `<div style="display:flex;justify-content:space-between;gap:22px;margin-top:8px">`
+    + `<span>${item.marker}${speedLabel}</span><strong>${Number(speed).toFixed(1)} 公里/小时</strong></div>`
+    + `<div style="display:flex;justify-content:space-between;gap:22px;margin-top:7px">`
+    + `<span>风级</span><strong>${levelText}</strong></div>`
+    + `<div style="display:flex;justify-content:space-between;gap:22px;margin-top:7px">`
+    + `<span>风向</span><strong>${directionText}</strong></div></div>`
+}
+
+const currentDayMark = () => {
+  if (historyMode.value !== 'calendar') return undefined
+  const dateKey = shanghaiDateKey(Date.now())
+  const value = toCalendarTimestamp(dateKey)
+  const start = Number(chartData.value.window?.start) * 1000
+  const end = Number(chartData.value.window?.end) * 1000
+  if (!Number.isFinite(start) || !Number.isFinite(end) || value < start || value >= end) return undefined
+  return {
+    silent: true,
+    symbol: ['none', 'none'],
+    lineStyle: { color: 'rgba(255,255,255,0.5)', width: 1, type: 'solid' },
+    label: {
+      show: true, formatter: '今天', position: 'insideEndTop', rotate: 0, color: '#fff',
+      backgroundColor: '#343b4d', borderRadius: 10, padding: [3, 9], fontWeight: 600,
+    },
+    data: [{ xAxis: dateKey }],
+  }
 }
 
 const fullChartOption = () => {
-  const dataArr = getSeriesData(selectedChart.value)
-  const unit = getChartUnit(selectedChart.value)
-  const color = chartList.find(c => c.key === selectedChart.value)?.color || '#00e5ff'
-  const xAxisWindow = buildChartAxisWindow(chartData.value.window)
+  const recent = historyMode.value === 'recent24h'
+  const monthly = !recent && selectedMonth.value !== 'all'
+  const points = chartSeriesData()
+  const values = points
+    .map(point => recent ? point.value[1] : point.value)
+    .filter(value => value !== null)
+  const observedMax = values.length ? Math.max(...values) : 0
+  const fallbackMax = observedMax <= 1 ? 1 : (observedMax <= 5 ? 5 : 20)
+  const yRange = calcNiceYAxisRange(values, { min: 0, max: fallbackMax }, 5)
+  const windowStart = Number(chartData.value.window?.start) * 1000
+  const windowEnd = Number(chartData.value.window?.end) * 1000
+  const xMin = Number.isFinite(windowStart) ? windowStart : Date.now() - DAY
+  const xMax = Number.isFinite(windowEnd) ? windowEnd - (recent ? 0 : DAY) : Date.now()
+  const calendarDates = recent ? [] : (chartData.value.history || []).map(point => point?.date || '')
+  const chartWidth = chartRef.value?.clientWidth || 1000
+  const monthlyLabelStep = chartWidth < 400 ? 6 : (chartWidth < 700 ? 4 : 2)
+  const [firstYear, firstMonth] = String(calendarDates[0] || '').split('-').map(Number)
+  const firstMonthIndex = firstYear * 12 + firstMonth
+  const calendarLabelInterval = (index, value) => {
+    const day = Number(String(value).slice(-2))
+    if (monthly) return index % monthlyLabelStep === 0
+    if (day !== 1) return false
+    if (chartWidth >= 480 || !Number.isFinite(firstMonthIndex)) return true
+    const [year, month] = String(value).split('-').map(Number)
+    return (year * 12 + month - firstMonthIndex) % 2 === 0
+  }
+
   return {
+    animation: true,
+    animationDuration: 900,
+    animationDurationUpdate: 650,
     backgroundColor: 'transparent',
-    tooltip: { trigger: 'axis', backgroundColor: 'rgba(0,0,0,0.85)', borderColor: '#00e5ff', textStyle: { color: '#E2F0FE', fontSize: 13 } },
-    legend: { show: false },
-    grid: { left: '3%', right: '6%', bottom: '3%', top: '8%', containLabel: true },
-    xAxis: {
-      type: 'time',
-      min: xAxisWindow.min,
-      max: xAxisWindow.max,
-      interval: chartData.value.config?.majorTickMs,
-      minInterval: chartData.value.config?.majorTickMs,
-      maxInterval: chartData.value.config?.majorTickMs,
-      axisLine: { lineStyle: { color: '#2a4a6a' } },
-      axisLabel: { color: '#AECAF5', hideOverlap: true, showMaxLabel: true, formatter: value => formatChartAxisLabel(value, selectedRange.value, chartData.value.window) },
+    tooltip: {
+      trigger: 'axis', confine: true, formatter: tooltipFormatter,
+      backgroundColor: 'rgba(3, 8, 17, 0.96)', borderColor: 'rgba(88, 191, 255, 0.5)', borderWidth: 1,
+      padding: [11, 13], textStyle: { color: '#f1f6ff', fontSize: 13 },
+      axisPointer: { type: 'line', lineStyle: { color: 'rgba(185, 208, 239, 0.56)', type: 'dashed' } },
     },
-    yAxis: { type: 'value', scale: true, name: unit, ...calcYAxisRange(dataArr[0], 0.2, getYAxisFallback(selectedChart.value)), nameLocation: 'end', nameGap: 8, nameTextStyle: { color: '#AECAF5', fontSize: 12 }, axisLine: { lineStyle: { color: '#2a4a6a' } }, axisLabel: { color: '#AECAF5' }, splitLine: { lineStyle: { color: 'rgba(0,200,255,0.06)' } } },
-    series: [{ type: 'line', smooth: true, data: dataArr[0], itemStyle: { color }, symbol: 'circle', symbolSize: 8, lineStyle: { width: 2 } }],
+    grid: { left: 18, right: 22, bottom: monthly ? 34 : 18, top: 24, containLabel: true },
+    xAxis: recent ? {
+      type: 'time', min: xMin, max: xMax, interval: 3 * HOUR, minInterval: 3 * HOUR,
+      axisLine: { lineStyle: { color: 'rgba(151, 177, 215, 0.55)' } },
+      axisTick: { show: true, lineStyle: { color: 'rgba(151, 177, 215, 0.45)' } },
+      axisLabel: {
+        color: '#aebdd1', margin: 11, hideOverlap: true, formatter: formatXAxisLabel,
+        rich: {
+          direction: { color: '#b7c6db', fontSize: 12, lineHeight: 16 },
+          day: { color: '#a8b8ce', fontSize: 12, fontWeight: 700, lineHeight: 15 },
+        },
+      },
+      splitLine: { show: false },
+    } : {
+      type: 'category', data: calendarDates, boundaryGap: false,
+      axisLine: { lineStyle: { color: 'rgba(151, 177, 215, 0.55)' } },
+      axisTick: { show: true, alignWithLabel: true, interval: calendarLabelInterval, lineStyle: { color: 'rgba(151, 177, 215, 0.45)' } },
+      axisLabel: {
+        color: '#aebdd1', margin: 11, interval: calendarLabelInterval, formatter: formatXAxisLabel,
+        rich: {
+          direction: { width: 38, align: 'center', color: '#b7c6db', fontSize: 12, lineHeight: 16 },
+          day: { width: 38, align: 'center', color: '#a8b8ce', fontSize: 12, fontWeight: 700, lineHeight: 15 },
+        },
+      },
+      splitLine: { show: false },
+    },
+    yAxis: {
+      type: 'value', scale: true, min: yRange.min, max: yRange.max, interval: yRange.interval,
+      axisLine: { show: false }, axisTick: { show: false },
+      axisLabel: { color: '#d4deec', margin: 12, formatter: value => `${value}\n公里/小时`, lineHeight: 17 },
+      splitLine: { lineStyle: { color: 'rgba(187, 204, 229, 0.38)', width: 1 } },
+    },
+    series: [{
+      id: 'wind-speed',
+      name: recent ? '风速（30分钟平均）' : '每日平均风速',
+      type: 'line',
+      data: points,
+      showSymbol: !recent && observedMax <= 1,
+      showAllSymbol: false,
+      symbol: 'circle',
+      symbolSize: 7,
+      smooth: monthly ? 0.36 : (recent ? 0.28 : 0.08),
+      smoothMonotone: 'x',
+      connectNulls: false,
+      clip: true,
+      z: 3,
+      lineStyle: { color: '#72cdf9', width: observedMax <= 1 ? 2.2 : (monthly ? 1.8 : 1.35) },
+      itemStyle: { color: '#76d4ff', borderColor: '#dff5ff', borderWidth: 1 },
+      emphasis: { focus: 'series', scale: true },
+      areaStyle: {
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: 'rgba(113, 198, 246, 0.58)' },
+          { offset: 1, color: 'rgba(68, 119, 195, 0.14)' },
+        ]),
+      },
+      markLine: currentDayMark(),
+    }],
   }
 }
-const renderChart = () => { if (chart) chart.setOption(fullChartOption(), true) }
-const updateChart = () => {
-  if (!chart) return
-  renderChart()
+
+const renderChart = () => {
+  if (!isMounted || !chart || chart.isDisposed()) return
+  chart.setOption(fullChartOption(), {
+    notMerge: false,
+    replaceMerge: ['xAxis', 'yAxis', 'series'],
+    lazyUpdate: false,
+  })
 }
+
 const initChart = () => {
   if (!chartRef.value) return
   chart = echarts.init(chartRef.value)
   chart.setOption(fullChartOption(), true)
-  resizeHandler = () => chart?.resize()
+  resizeHandler = () => {
+    if (resizeFrame != null) cancelAnimationFrame(resizeFrame)
+    resizeFrame = requestAnimationFrame(() => {
+      resizeFrame = null
+      if (!chart || chart.isDisposed()) return
+      chart.resize()
+      renderChart()
+    })
+  }
   window.addEventListener('resize', resizeHandler)
 }
 
 onMounted(() => {
+  isMounted = true
   const startup = createSensorDetailStartup({
     initChart,
     fetchRealtime: fetchData,
-    loadInitialHistory: async () => {
-      await loadHistory('1h')
-    },
+    loadInitialHistory: async () => loadTrends({ view: 'recent24h' }),
     renderHistory: renderChart,
     scheduleHistoryRefresh,
-    preloadHistoryLater,
+    preloadHistoryLater: preloadCalendarLater,
   })
-
   startup.start()
   timer = setInterval(fetchData, 3000)
   window.addEventListener('dam-api-cache-updated', handleHistoryCacheUpdate)
 })
+
 onUnmounted(() => {
+  isMounted = false
+  historyRequestSerial += 1
   if (timer) clearInterval(timer)
   if (historyRefreshTimer) clearTimeout(historyRefreshTimer)
   if (preloadIdleTask) cancelIdleTask(preloadIdleTask)
   window.removeEventListener('dam-api-cache-updated', handleHistoryCacheUpdate)
   if (resizeHandler) window.removeEventListener('resize', resizeHandler)
-  if (chart) chart.dispose()
+  if (resizeFrame != null) cancelAnimationFrame(resizeFrame)
+  if (chart && !chart.isDisposed()) chart.dispose()
+  chart = null
 })
 </script>
 
@@ -558,22 +901,116 @@ onUnmounted(() => {
 .wind-aux-label { font-size: 11px; color: var(--text-secondary); }
 .wind-aux-divider { width: 1px; height: 36px; background: rgba(0, 200, 255, 0.1); }
 
-/* 图表区域 */
-.chart-top-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 6px; }
-.chart-top-row .panel-title { margin-bottom: 0; }
-.chart-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
-.chart-tab {
-  padding: 4px 12px; border: 1px solid rgba(0, 200, 255, 0.2); border-radius: 14px;
-  background: rgba(0, 0, 0, 0.2); color: #AECAF5; font-size: 12px;
-  cursor: pointer; transition: all 0.25s; white-space: nowrap;
+/* 气象站式风速趋势 */
+.history-panel {
+  margin-top: 12px;
+  padding: 0;
+  overflow: hidden;
+  border-color: rgba(84, 130, 202, 0.25);
+  background:
+    radial-gradient(circle at 100% 0%, rgba(50, 138, 210, 0.15), transparent 34%),
+    linear-gradient(145deg, rgba(15, 31, 57, 0.98), rgba(10, 23, 43, 0.98));
+  box-shadow: 0 14px 36px rgba(0, 8, 24, 0.18);
 }
-.chart-tab:hover { border-color: var(--tab-color, #00e5ff); color: var(--tab-color, #00e5ff); background: rgba(0, 0, 0, 0.35); }
-.chart-tab.active {
-  border-color: var(--tab-color, #00e5ff); background: color-mix(in srgb, var(--tab-color, #00e5ff) 15%, transparent);
-  color: var(--tab-color, #00e5ff); font-weight: 600;
-  box-shadow: 0 0 10px color-mix(in srgb, var(--tab-color, #00e5ff) 25%, transparent);
+.history-panel-header {
+  min-height: 66px;
+  padding: 16px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border-bottom: 1px solid rgba(124, 157, 207, 0.14);
 }
+.history-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
+.history-heading .panel-title {
+  display: block;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: #f4f8ff;
+  font-size: 22px;
+  font-weight: 750;
+  letter-spacing: 0.03em;
+  text-shadow: 0 2px 14px rgba(74, 139, 255, 0.18);
+}
+.metric-switch {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px;
+  border-radius: 10px;
+  background: rgba(4, 15, 33, 0.44);
+  border: 1px solid rgba(119, 153, 204, 0.13);
+}
+.metric-switch button {
+  min-width: 86px;
+  height: 32px;
+  padding: 0 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 7px;
+  color: #091426;
+  background: linear-gradient(135deg, #ffd84a, #ffbc27);
+  box-shadow: 0 4px 14px rgba(255, 190, 35, 0.24);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+}
+.history-controls { display: flex; align-items: center; gap: 9px; }
+.period-button {
+  height: 34px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid rgba(120, 155, 211, 0.24);
+  border-radius: 8px;
+  background: rgba(33, 57, 94, 0.55);
+  color: #a8bddb;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+.period-button:hover { color: #fff; border-color: rgba(65, 147, 255, 0.6); }
+.period-button.active {
+  color: #fff;
+  border-color: #378cff;
+  background: linear-gradient(135deg, #1d70e8, #245ac4);
+  box-shadow: 0 5px 16px rgba(20, 100, 230, 0.3);
+}
+.control-icon { font-size: 16px; line-height: 1; }
+.calendar-controls {
+  display: flex;
+  gap: 7px;
+  padding: 3px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  opacity: 0.72;
+  transition: 0.2s ease;
+}
+.calendar-controls:hover,
+.calendar-controls.active {
+  opacity: 1;
+  border-color: rgba(77, 141, 234, 0.28);
+  background: rgba(26, 49, 83, 0.38);
+}
+.history-select.year-select { width: 112px; }
+.history-select.month-select { width: 126px; }
+.history-select :deep(.el-select__wrapper) {
+  min-height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: rgba(31, 53, 88, 0.82);
+  box-shadow: 0 0 0 1px rgba(120, 155, 211, 0.18) inset;
+}
+.history-select :deep(.el-select__selected-item) { color: #dce9fa; font-size: 13px; }
+.history-select :deep(.el-select__caret) { color: #91a8c9; }
+.trend-shell { padding: 12px 18px 14px; }
 .chart-wrap { position: relative; height: 310px; }
+.history-chart-wrap { height: 392px; }
 .chart-container { height: 100%; }
 .chart-loading-overlay {
   position: absolute;
@@ -604,5 +1041,88 @@ onUnmounted(() => {
   margin-top: 12px;
   color: #AECAF5;
   font-size: 14px;
+}
+.history-chart-wrap .chart-loading-overlay {
+  background: rgba(8, 22, 43, 0.78);
+  backdrop-filter: blur(3px);
+}
+.history-chart-wrap .chart-hint-overlay { background: rgba(8, 22, 43, 0.5); }
+.chart-error-banner {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 9;
+  max-width: calc(100% - 20px);
+  padding: 7px 11px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(255, 190, 82, 0.35);
+  border-radius: 6px;
+  background: rgba(66, 43, 17, 0.9);
+  color: #ffd58a;
+  font-size: 12px;
+  line-height: 18px;
+}
+.chart-error-banner button,
+.chart-retry-button {
+  flex: 0 0 auto;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 213, 138, 0.55);
+  border-radius: 5px;
+  background: rgba(255, 213, 138, 0.12);
+  color: #ffe4b4;
+  font: inherit;
+  cursor: pointer;
+}
+.chart-error-banner button:hover,
+.chart-retry-button:hover {
+  border-color: rgba(255, 226, 174, 0.9);
+  background: rgba(255, 213, 138, 0.2);
+}
+.chart-retry-button {
+  margin-top: 12px;
+}
+.history-chart-wrap .loading-spinner {
+  width: 34px;
+  height: 34px;
+  border-color: rgba(55, 140, 255, 0.18);
+  border-top-color: #438fff;
+}
+
+@media (max-width: 900px) {
+  .history-panel-header { align-items: flex-start; flex-wrap: wrap; }
+  .history-controls { width: 100%; flex-wrap: wrap; }
+  .history-chart-wrap { height: 340px; }
+}
+
+@media (max-width: 1200px) {
+  .top-row { flex-direction: column; }
+  .compass-panel { flex-basis: auto; }
+}
+
+@media (max-width: 700px) {
+  .detail-header { align-items: stretch; flex-direction: column; gap: 8px; }
+  .header-info h2 { font-size: 18px; }
+  .header-status { font-size: 14px; }
+  .wind-data-card { flex-direction: column; }
+  .wind-core { padding-right: 0; }
+  .wind-aux {
+    justify-content: space-between;
+    margin-top: 18px;
+    padding: 16px 0 0;
+    border-top: 1px solid rgba(0, 200, 255, 0.12);
+    border-left: 0;
+  }
+  .wind-aux-item { min-width: 0; padding: 0 6px; }
+  .wind-aux-val { font-size: 18px; white-space: nowrap; }
+  .wind-aux-label { white-space: nowrap; }
+}
+
+@media (max-width: 560px) {
+  .history-heading { width: 100%; align-items: flex-start; flex-direction: column; gap: 12px; }
+  .calendar-controls { width: 100%; }
+  .history-select.year-select, .history-select.month-select { flex: 1; width: auto; }
 }
 </style>

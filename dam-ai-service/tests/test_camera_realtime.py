@@ -46,12 +46,13 @@ class FakeDetector:
         self.calls = 0
         self.lock = threading.Lock()
 
-    def detect_and_draw(self, image, conf=0.5, iou=0.45):
+    def analyze_and_render(self, image, conf=0.5, iou=0.45):
         with self.lock:
             self.calls += 1
         drawn = image.copy()
         cv2.rectangle(drawn, (10, 10), (60, 55), (0, 255, 0), 2)
         return {
+            "task_type": "detect",
             "image_width": image.shape[1],
             "image_height": image.shape[0],
             "detections": [
@@ -75,6 +76,25 @@ class FakeDetector:
         if not success:
             raise RuntimeError("jpeg encode failed")
         return buffer.tobytes()
+
+
+class FakeClassifier:
+    def analyze_and_render(self, image, conf=0.5, iou=0.45):
+        del conf, iou
+        prediction = {
+            "class_id": 2,
+            "class_name": "landslide",
+            "class_name_cn": "滑坡",
+            "confidence": 0.89,
+        }
+        return {
+            "task_type": "classify",
+            "image_width": image.shape[1],
+            "image_height": image.shape[0],
+            "prediction": prediction,
+            "classifications": [prediction],
+            "process_time": 0.004,
+        }, image
 
 
 class CameraRealtimeTests(unittest.TestCase):
@@ -147,6 +167,41 @@ class CameraRealtimeTests(unittest.TestCase):
             self.assertTrue(camera.get_status()["connected"])
         finally:
             camera.stop()
+
+    def test_running_worker_switches_tasks_without_publishing_stale_boxes(self):
+        self.camera.start()
+        self.assertTrue(wait_until(lambda: self.camera.frame_sequence >= 2))
+        self.camera.enable_detection(
+            FakeDetector(),
+            task_type="detect",
+            target_fps=20,
+        )
+        self.assertTrue(
+            wait_until(
+                lambda: self.camera.get_detection_snapshot()[1].get("task_type")
+                == "detect"
+                and self.camera.get_detection_snapshot()[1].get("count") == 1
+            )
+        )
+
+        worker = self.camera._detection_thread
+        self.camera.enable_detection(
+            FakeClassifier(),
+            task_type="classify",
+            target_fps=20,
+        )
+        self.assertTrue(
+            wait_until(
+                lambda: self.camera.get_detection_snapshot()[1]
+                .get("prediction", {})
+                .get("class_name_cn")
+                == "滑坡"
+            )
+        )
+        payload = self.camera.get_detection_snapshot()[1]
+        self.assertEqual(payload["task_type"], "classify")
+        self.assertNotIn("detections", payload)
+        self.assertIs(self.camera._detection_thread, worker)
 
     def test_manager_supports_multiple_selectable_cameras(self):
         manager = CameraManager()

@@ -106,6 +106,31 @@ class SensorHistoryServiceTest(unittest.TestCase):
         self.assertGreater(payload["history"][0]["timestamp"], payload["window"]["start"])
         self.assertEqual(payload["coverage_ratio"], 1.0)
 
+    def test_wind_recent_24h_excludes_inclusive_start_boundary(self):
+        fake = FakeIoTDB()
+        now_ms = 1782957600000
+        start_seconds = (now_ms - 24 * 60 * 60 * 1000) / 1000.0
+        fake.rollup_points = [
+            {
+                "timestamp": start_seconds + index * 30 * 60,
+                "data": {
+                    "wind_speed_kmh": 8 + index / 10,
+                    "wind_level": 2,
+                    "wind_direction": "东",
+                },
+            }
+            for index in range(49)
+        ]
+        service = SensorHistoryService(iotdb=fake)
+
+        payload = service.query_wind_trends("recent24h", now_ms=now_ms)
+
+        self.assertEqual(payload["aggregation"], "30m_average")
+        self.assertEqual(payload["point_count"], 48)
+        self.assertEqual(len(payload["history"]), 48)
+        self.assertGreater(payload["history"][0]["timestamp"], payload["window"]["start"])
+        self.assertEqual(payload["coverage_ratio"], 1.0)
+
     def test_query_history_rebuilds_rollup_from_raw_when_rollup_empty(self):
         fake = FakeIoTDB()
         fake.raw_points = [
@@ -220,6 +245,68 @@ class SensorHistoryServiceTest(unittest.TestCase):
         self.assertEqual([item["date"] for item in payload["history"][:2]], ["2026-07-01", "2026-07-02"])
         self.assertEqual(payload["history"][1]["data"]["temperature_max"], 29)
         self.assertEqual(payload["history"][2]["data"], {})
+
+    def test_wind_calendar_returns_daily_average_speed_level_and_direction(self):
+        fake = FakeIoTDB()
+        timezone = ZoneInfo("Asia/Shanghai")
+        first_bucket_end = datetime(2026, 7, 2, tzinfo=timezone).timestamp()
+        second_bucket_end = datetime(2026, 7, 3, tzinfo=timezone).timestamp()
+        fake.points_by_path["root.dam.rollup_1d.wind_001"] = [
+            {
+                "timestamp": first_bucket_end,
+                "data": {
+                    "wind_speed_ms": 3.0,
+                    "wind_speed_kmh": 10.8,
+                    "wind_level": 2.6,
+                    "wind_angle": 270.0,
+                    "wind_dir_code": 12,
+                    "wind_direction": "西",
+                },
+            },
+            {
+                "timestamp": second_bucket_end,
+                "data": {
+                    "wind_speed_ms": 4.0,
+                    "wind_speed_kmh": 14.4,
+                    "wind_level": 3.0,
+                    "wind_direction": "西北",
+                },
+            },
+        ]
+        service = SensorHistoryService(iotdb=fake)
+
+        payload = service.query_wind_calendar(2026, 7)
+
+        self.assertEqual(payload["aggregation"], "daily_average")
+        self.assertEqual(payload["max_point_count"], 31)
+        self.assertEqual(payload["point_count"], 2)
+        self.assertEqual(len(payload["history"]), 31)
+        self.assertEqual(payload["history"][0]["data"]["wind_speed_kmh"], 10.8)
+        self.assertEqual(payload["history"][0]["data"]["wind_level"], 2.6)
+        self.assertEqual(payload["history"][0]["data"]["wind_direction"], "西")
+        self.assertEqual(payload["history"][1]["data"]["wind_direction"], "西北")
+        self.assertEqual(payload["history"][2]["data"], {})
+
+    def test_wind_rolling_view_covers_twelve_calendar_months(self):
+        fake = FakeIoTDB()
+        timezone = ZoneInfo("Asia/Shanghai")
+        bucket_end = datetime(2026, 7, 2, tzinfo=timezone).timestamp()
+        fake.points_by_path["root.dam.rollup_1d.wind_001"] = [{
+            "timestamp": bucket_end,
+            "data": {"wind_speed_kmh": 10.8, "wind_level": 3, "wind_direction": "西"},
+        }]
+        service = SensorHistoryService(iotdb=fake)
+        now_ms = int(datetime(2026, 7, 18, 12, tzinfo=timezone).timestamp() * 1000)
+
+        payload = service.query_wind_trends("rolling12", now_ms=now_ms)
+
+        self.assertEqual(payload["view"], "rolling12")
+        self.assertEqual(payload["history"][0]["date"], "2025-08-01")
+        self.assertEqual(payload["history"][-1]["date"], "2026-07-31")
+        self.assertEqual(payload["max_point_count"], 365)
+        self.assertEqual(payload["point_count"], 1)
+        july_first = next(row for row in payload["history"] if row["date"] == "2026-07-01")
+        self.assertEqual(july_first["data"]["wind_direction"], "西")
 
     def test_rain_calendar_returns_only_daily_rainfall(self):
         fake = FakeIoTDB()

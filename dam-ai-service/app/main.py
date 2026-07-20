@@ -5,13 +5,25 @@ from loguru import logger
 from contextlib import asynccontextmanager
 import asyncio
 
-from app.api import vision, health, sensor, auth, device, alarm, rule, eca, vision_detect, image, camera
+from app.api import (
+    alarm,
+    auth,
+    camera,
+    device,
+    eca,
+    health,
+    image,
+    rule,
+    sensor,
+    vision,
+    vision_detect,
+)
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.redis import redis_manager
 from app.services.sensor_collector import sensor_collector
 from app.services.vision_detector import vision_detector
-from app.services.yolo_detector import yolo_detector
+from app.services.vision_model_registry import vision_model_registry
 from app.services.camera_stream import camera_manager
 from app.services.camera_config import load_camera_configs
 from app.services.video_detection import video_detection_service
@@ -77,11 +89,22 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"MinIO 连接失败，图片上传功能将不可用: {e}")
 
-    # 加载 YOLO 检测模型
+    # Detection and classification use independent adapters but one serialized
+    # Jetson inference lane. Each task may define an optional fallback artifact.
     try:
-        yolo_detector.load_model(settings.YOLO_MODEL_PATH)
+        vision_model_registry.load(
+            "detect",
+            [settings.YOLO_DETECT_MODEL_PATH],
+        )
+        vision_model_registry.load(
+            "classify",
+            [
+                settings.YOLO_CLASSIFY_MODEL_PATH,
+                settings.YOLO_CLASSIFY_FALLBACK_PATH,
+            ],
+        )
     except Exception as e:
-        logger.warning(f"YOLO 模型加载失败，检测功能将不可用: {e}")
+        logger.warning(f"视觉模型加载失败，部分分析功能将不可用: {e}")
 
     # dai: 同一份启动逻辑兼容单摄像头环境变量和多摄像头 JSON 配置。
     # 未配置真实地址时保持空列表，页面会明确展示待接入状态。

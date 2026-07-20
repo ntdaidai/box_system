@@ -33,17 +33,18 @@ export function setDetectionEnabled(cameraId, enabled, options = {}) {
 }
 
 // 截图并检测
-export function snapshotDetect(cameraId, confidence = 0.5) {
+export function snapshotDetect(cameraId, confidence = 0.5, taskType = 'detect') {
   return request.post(`/v1/camera/${cameraId}/snapshot`, null, {
-    params: { confidence },
+    params: { confidence, task_type: taskType },
   })
 }
 
 // 上传图片检测
-export function detectImage(imageBase64, confidence = 0.5) {
+export function detectImage(imageBase64, confidence = 0.5, taskType = 'detect') {
   return request.post('/v1/camera/detect/image', {
     image: imageBase64,
     confidence,
+    task_type: taskType,
   })
 }
 
@@ -55,6 +56,7 @@ export function createVideoDetection(file, options = {}) {
     params: {
       confidence: options.confidence ?? 0.5,
       sample_fps: options.sampleFps ?? 2,
+      task_type: options.taskType ?? 'detect',
     },
     timeout: 120000,
     onUploadProgress: options.onUploadProgress,
@@ -84,9 +86,12 @@ export function getModelStatus() {
 }
 
 // 重新加载模型
-export function reloadModel(modelPath) {
+export function reloadModel(modelPath, taskType = 'detect') {
   return request.post('/v1/camera/model/reload', null, {
-    params: modelPath ? { model_path: modelPath } : {},
+    params: {
+      task_type: taskType,
+      ...(modelPath ? { model_path: modelPath } : {}),
+    },
   })
 }
 

@@ -8,7 +8,9 @@ import {
   detectionName,
   findVideoSample,
   isValidDetection,
+  normalizeClassifications,
   normalizeDetections,
+  primaryClassification,
 } from './cameraDetectionView.js'
 
 
@@ -50,4 +52,21 @@ test('supports current Chinese labels and future model classes', () => {
   assert.equal(confidencePercent({ confidence: 0.916 }), 92)
   assert.equal(confidencePercent({ confidence: 3 }), 100)
   assert.match(classColor(11), /^hsl\(/)
+})
+
+
+test('normalizes whole-image classifications without requiring bounding boxes', () => {
+  const flood = {
+    class_id: 1,
+    class_name: 'flood',
+    class_name_cn: '洪水',
+    confidence: 0.94,
+  }
+  const invalid = { class_id: 2, confidence: 'unknown' }
+  const payload = { prediction: flood, classifications: [flood, invalid] }
+
+  assert.deepEqual(normalizeClassifications(payload), [flood])
+  assert.equal(primaryClassification(payload), flood)
+  assert.equal(primaryClassification({ classifications: [flood] }), flood)
+  assert.equal(primaryClassification(null), null)
 })
