@@ -14,6 +14,7 @@ from app.models.model_registry import ModelRegistry
 from app.models.model_deploy_binding import ModelDeployBinding
 from app.models.model_operation_log import ModelOperationLog
 from app.services.docker_service import docker_service
+from app.utils.container_utils import generate_container_name
 
 
 class LifecycleService:
@@ -41,7 +42,7 @@ class LifecycleService:
 
             elif binding.bind_type == "image":
                 # 仅有镜像：docker run 创建新容器
-                container_name = f"model-{model_id}"
+                container_name = generate_container_name(model_id, model.name)
                 container_id = docker_service.create_and_start_container(
                     image_name=binding.image_name,
                     container_name=container_name,

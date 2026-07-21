@@ -228,16 +228,31 @@
       </div>
       <!-- 列表头 -->
       <div class="alarm-list-header" v-if="recentAlarms.length > 0">
-        <div class="col-time">告警时间</div>
-        <div class="col-level">级别</div>
-        <div class="col-type">类型</div>
+        <div class="col-time sortable" @click="toggleSort('time')">
+          告警时间
+          <span class="sort-icon" :class="{ active: sortField === 'time' }">
+            {{ sortField === 'time' ? (sortOrder === 'asc' ? '↑' : '↓') : '↕' }}
+          </span>
+        </div>
+        <div class="col-level sortable" @click="toggleSort('level')">
+          级别
+          <span class="sort-icon" :class="{ active: sortField === 'level' }">
+            {{ sortField === 'level' ? (sortOrder === 'asc' ? '↑' : '↓') : '↕' }}
+          </span>
+        </div>
+        <div class="col-desc">描述</div>
         <div class="col-content">告警内容</div>
-        <div class="col-status">状态</div>
+        <div class="col-status sortable" @click="toggleSort('status')">
+          状态
+          <span class="sort-icon" :class="{ active: sortField === 'status' }">
+            {{ sortField === 'status' ? (sortOrder === 'asc' ? '↑' : '↓') : '↕' }}
+          </span>
+        </div>
       </div>
       <div class="alarm-preview-list">
         <div v-if="recentAlarms.length === 0" class="alarm-empty">暂无告警记录</div>
         <div
-          v-for="row in recentAlarms.slice(0, 3)"
+          v-for="row in sortedRecentAlarms"
           :key="row.id"
           class="alarm-item"
           :class="{ 'is-unhandled': row.handle_status === 0 }"
@@ -248,10 +263,8 @@
               {{ alarmLevelText(row.alarm_level) }}
             </span>
           </div>
-          <div class="col-type">
-            <span class="type-tag" :class="'type-' + row.alarm_type">
-              {{ alarmTypeText(row.alarm_type) }}
-            </span>
+          <div class="col-desc">
+            <span class="desc-text" @click="router.push({ path: '/alarm/list', query: { report: row.id } })">{{ row.alarm_content || '--' }}</span>
           </div>
           <div class="col-content">
             <span class="report-link" @click="router.push({ path: '/alarm/list', query: { report: row.id } })">查看分析报告</span>
@@ -320,6 +333,10 @@ const systemInfo = ref({
 
 // 最近告警
 const recentAlarms = ref([])
+
+// 排序条件
+const sortField = ref('')
+const sortOrder = ref('')
 
 // SSE 客户端
 let sseClient = null
@@ -411,6 +428,40 @@ const alarmStatusText = computed(() => {
   if ((alarmTotal.value - alarmHigh.value) > 0) return '存在一般告警，请关注'
   return '当前无告警，系统运行正常'
 })
+
+// 排序后的最近告警
+const sortedRecentAlarms = computed(() => {
+  let list = recentAlarms.value.slice(0, 3)
+  if (sortField.value) {
+    list = [...list].sort((a, b) => {
+      let comparison = 0
+      if (sortField.value === 'time') {
+        comparison = new Date(a.alarm_time) - new Date(b.alarm_time)
+      } else if (sortField.value === 'level') {
+        comparison = a.alarm_level - b.alarm_level
+      } else if (sortField.value === 'status') {
+        comparison = a.handle_status - b.handle_status
+      }
+      return sortOrder.value === 'asc' ? comparison : -comparison
+    })
+  }
+  return list
+})
+
+// 排序切换
+const toggleSort = (field) => {
+  if (sortField.value === field) {
+    if (sortOrder.value === 'asc') {
+      sortOrder.value = 'desc'
+    } else if (sortOrder.value === 'desc') {
+      sortField.value = ''
+      sortOrder.value = ''
+    }
+  } else {
+    sortField.value = field
+    sortOrder.value = 'asc'
+  }
+}
 
 const alarmStatusLevel = computed(() => {
   if (alarmHigh.value > 0) return 'level-high'
@@ -1248,9 +1299,65 @@ onUnmounted(() => {
   text-align: center;
 }
 
+.sortable {
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sortable:hover {
+  color: #00a8ff;
+}
+
+.sort-icon {
+  font-size: 10px;
+  color: rgba(150, 180, 210, 0.6);
+  transition: all 0.2s;
+}
+
+.sortable:hover .sort-icon {
+  color: #00a8ff;
+}
+
+.sort-icon.active {
+  color: #00a8ff;
+  text-shadow: 0 0 6px rgba(0, 168, 255, 0.5);
+}
+
 .col-type {
   flex: 1;
   text-align: center;
+}
+
+.col-desc {
+  flex: 2;
+  font-size: 12px;
+  color: rgba(224, 240, 255, 0.8);
+  text-align: center;
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desc-text {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.desc-text:hover {
+  background: rgba(0, 168, 255, 0.15);
+  color: #00a8ff;
 }
 
 .col-content {

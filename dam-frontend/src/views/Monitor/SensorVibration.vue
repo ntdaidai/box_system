@@ -11,7 +11,7 @@
       </div>
       <div class="header-status" :class="statusClass">
         <span class="dot"></span>{{ statusText }}
-        <div class="header-comm" v-if="lastTimestamp">最后通讯: {{ formatCommTime(lastTimestamp) }}</div>
+        <div class="header-comm" v-if="lastTimestamp">{{ formatCommTime(lastTimestamp) }}</div>
       </div>
     </div>
 
@@ -313,14 +313,14 @@ const formatDrift = (drift) => {
 
 const formatCommTime = (ts) => {
   if (!ts) return '--'
-  return new Date(ts * 1000).toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false
-  })
+  const date = new Date(ts * 1000)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  const seconds = String(date.getSeconds()).padStart(2, '0')
+  return `${year}/${month}/${day} ${hours}:${minutes}:${seconds}`
 }
 
 // API调用
@@ -674,9 +674,10 @@ const handleResize = () => {
   width: 100%;
   margin-top: 4px;
   text-align: right;
-  font-size: 11px;
-  font-weight: 400;
+  font-size: 14px;
+  font-weight: 500;
   color: #8aa8c7;
+  font-family: "Consolas", "Monaco", monospace;
 }
 
 /* 指标卡片区 */

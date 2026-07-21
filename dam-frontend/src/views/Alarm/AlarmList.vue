@@ -26,6 +26,14 @@
     <div class="alarm-panel">
       <div class="panel-header">
         <div class="filter-group">
+          <input
+            v-model="filterIndex"
+            type="number"
+            class="custom-input"
+            placeholder="序号查询"
+            min="1"
+            @keyup.enter="fetchAlarms"
+          />
           <select v-model="filterLevel" class="custom-select">
             <option value="">全部级别</option>
             <option value="3">紧急</option>
@@ -64,29 +72,44 @@
       <!-- 告警列表 -->
       <div v-else class="alarm-list">
         <div class="alarm-list-header">
-          <div class="col-time">告警时间</div>
-          <div class="col-level">级别</div>
-          <div class="col-type">类型</div>
+          <div class="col-index">序号</div>
+          <div class="col-time sortable" @click="toggleSort('time')">
+            告警时间
+            <span class="sort-icon" :class="{ active: sortField === 'time' }">
+              {{ sortField === 'time' ? (sortOrder === 'asc' ? '↑' : '↓') : '↕' }}
+            </span>
+          </div>
+          <div class="col-level sortable" @click="toggleSort('level')">
+            级别
+            <span class="sort-icon" :class="{ active: sortField === 'level' }">
+              {{ sortField === 'level' ? (sortOrder === 'asc' ? '↑' : '↓') : '↕' }}
+            </span>
+          </div>
+          <div class="col-desc">描述</div>
           <div class="col-content">告警内容</div>
-          <div class="col-status">状态</div>
+          <div class="col-status sortable" @click="toggleSort('status')">
+            状态
+            <span class="sort-icon" :class="{ active: sortField === 'status' }">
+              {{ sortField === 'status' ? (sortOrder === 'asc' ? '↑' : '↓') : '↕' }}
+            </span>
+          </div>
           <div class="col-action">操作</div>
         </div>
         <div
-          v-for="row in filteredList"
+          v-for="(row, index) in filteredList"
           :key="row.id"
           class="alarm-item"
           :class="{ 'is-unhandled': row.handle_status === 0 }"
         >
+          <div class="col-index">{{ (currentPage - 1) * pageSize + index + 1 }}</div>
           <div class="col-time">{{ formatTime(row.alarm_time) }}</div>
           <div class="col-level">
             <span class="level-tag" :class="'level-' + row.alarm_level">
               {{ levelText(row.alarm_level) }}
             </span>
           </div>
-          <div class="col-type">
-            <span class="type-tag" :class="'type-' + row.alarm_type">
-              {{ typeText(row.alarm_type) }}
-            </span>
+          <div class="col-desc">
+            <span class="desc-text" @click="showFullContent(row)">{{ row.alarm_content || '--' }}</span>
           </div>
           <div class="col-content">
             <span class="report-link" @click="openReport(row)">查看分析报告</span>
@@ -102,7 +125,7 @@
               class="handle-btn"
               @click="openHandleDialog(row)"
             >
-              处理
+              人工复核
             </button>
             <span v-else class="handled-user">{{ row.handle_user || '--' }}</span>
           </div>
@@ -177,6 +200,27 @@
         </div>
       </div>
     </div>
+
+    <!-- 内容详情弹窗 -->
+    <div v-if="contentDialogVisible" class="dialog-overlay" @click.self="contentDialogVisible = false">
+      <div class="dialog-box content-dialog">
+        <div class="dialog-header">
+          <div class="dialog-title">
+            <el-icon><Bell /></el-icon>
+            <span>告警内容详情</span>
+          </div>
+          <button class="dialog-close" @click="contentDialogVisible = false">
+            <el-icon><Close /></el-icon>
+          </button>
+        </div>
+        <div class="dialog-body">
+          <div class="full-content">{{ fullContent }}</div>
+        </div>
+        <div class="dialog-footer">
+          <button class="confirm-btn" @click="contentDialogVisible = false">关闭</button>
+        </div>
+      </div>
+    </div>
   </div>
   </div>
 </template>
@@ -206,15 +250,30 @@ const currentPage = ref(1)
 const pageSize = ref(20)
 
 // 筛选条件
+const filterIndex = ref('')
 const filterLevel = ref('')
 const filterType = ref('')
 const filterStatus = ref('')
+
+// 排序条件
+const sortField = ref('')
+const sortOrder = ref('')
 
 // 处理对话框
 const handleDialogVisible = ref(false)
 const currentAlarm = ref({})
 const handleRemark = ref('')
 const handleLoading = ref(false)
+
+// 内容详情弹窗
+const contentDialogVisible = ref(false)
+const fullContent = ref('')
+
+// 显示完整内容
+const showFullContent = (row) => {
+  fullContent.value = row.alarm_content || '--'
+  contentDialogVisible.value = true
+}
 
 // 统计卡片
 const statCards = computed(() => [
@@ -227,6 +286,21 @@ const statCards = computed(() => [
 // 前端筛选
 const filteredList = computed(() => {
   let list = allAlarms.value
+  if (filterIndex.value !== '') {
+    const targetIndex = Number(filterIndex.value)
+    if (targetIndex >= 1 && targetIndex <= total.value) {
+      const startIndex = (currentPage.value - 1) * pageSize.value
+      const endIndex = startIndex + pageSize.value
+      if (targetIndex >= startIndex + 1 && targetIndex <= endIndex) {
+        const localIndex = targetIndex - startIndex - 1
+        list = list.slice(localIndex, localIndex + 1)
+      } else {
+        list = []
+      }
+    } else {
+      list = []
+    }
+  }
   if (filterLevel.value !== '') {
     list = list.filter(item => item.alarm_level === Number(filterLevel.value))
   }
@@ -236,8 +310,39 @@ const filteredList = computed(() => {
   if (filterStatus.value !== '') {
     list = list.filter(item => item.handle_status === Number(filterStatus.value))
   }
+
+  // 排序
+  if (sortField.value) {
+    list = [...list].sort((a, b) => {
+      let comparison = 0
+      if (sortField.value === 'time') {
+        comparison = new Date(a.alarm_time) - new Date(b.alarm_time)
+      } else if (sortField.value === 'level') {
+        comparison = a.alarm_level - b.alarm_level
+      } else if (sortField.value === 'status') {
+        comparison = a.handle_status - b.handle_status
+      }
+      return sortOrder.value === 'asc' ? comparison : -comparison
+    })
+  }
+
   return list
 })
+
+// 排序切换
+const toggleSort = (field) => {
+  if (sortField.value === field) {
+    if (sortOrder.value === 'asc') {
+      sortOrder.value = 'desc'
+    } else if (sortOrder.value === 'desc') {
+      sortField.value = ''
+      sortOrder.value = ''
+    }
+  } else {
+    sortField.value = field
+    sortOrder.value = 'asc'
+  }
+}
 
 // 获取统计数据
 const fetchStats = async () => {
@@ -433,6 +538,39 @@ onMounted(async () => {
   color: #e0f0ff;
 }
 
+/* 自定义输入框 */
+.custom-input {
+  padding: 8px 12px;
+  background: rgba(0, 30, 50, 0.8);
+  border: 1px solid rgba(0, 200, 255, 0.3);
+  border-radius: 6px;
+  color: #e0f0ff;
+  font-size: 13px;
+  outline: none;
+  min-width: 80px;
+  max-width: 100px;
+}
+
+.custom-input:focus {
+  border-color: #00a8ff;
+  box-shadow: 0 0 0 2px rgba(0, 168, 255, 0.2);
+}
+
+.custom-input::placeholder {
+  color: rgba(224, 240, 255, 0.4);
+}
+
+/* 隐藏number input的增减按钮 */
+.custom-input::-webkit-outer-spin-button,
+.custom-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.custom-input[type=number] {
+  -moz-appearance: textfield;
+}
+
 .refresh-btn {
   display: flex;
   align-items: center;
@@ -530,14 +668,77 @@ onMounted(async () => {
   text-align: center;
 }
 
+.col-index {
+  width: 60px;
+  text-align: center;
+  font-size: 13px;
+  color: rgba(224, 240, 255, 0.7);
+}
+
 .col-level {
   flex: 1;
   text-align: center;
 }
 
+.sortable {
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sortable:hover {
+  color: #00a8ff;
+}
+
+.sort-icon {
+  font-size: 10px;
+  color: rgba(150, 180, 210, 0.6);
+  transition: all 0.2s;
+}
+
+.sortable:hover .sort-icon {
+  color: #00a8ff;
+}
+
+.sort-icon.active {
+  color: #00a8ff;
+  text-shadow: 0 0 6px rgba(0, 168, 255, 0.5);
+}
+
 .col-type {
   flex: 1;
   text-align: center;
+}
+
+.col-desc {
+  flex: 2;
+  font-size: 13px;
+  color: rgba(224, 240, 255, 0.8);
+  text-align: center;
+  padding: 0 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desc-text {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.desc-text:hover {
+  background: rgba(0, 168, 255, 0.15);
+  color: #00a8ff;
 }
 
 .col-content {
@@ -858,5 +1059,43 @@ onMounted(async () => {
 .confirm-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* 内容详情弹窗 */
+.content-dialog {
+  width: 600px;
+  max-height: 70vh;
+}
+
+.full-content {
+  color: rgba(224, 240, 255, 0.9);
+  font-size: 14px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  max-height: 400px;
+  overflow-y: auto;
+  padding: 16px;
+  background: rgba(0, 40, 60, 0.6);
+  border-radius: 8px;
+  border: 1px solid rgba(0, 200, 255, 0.1);
+}
+
+.full-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.full-content::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+}
+
+.full-content::-webkit-scrollbar-thumb {
+  background: rgba(0, 200, 255, 0.3);
+  border-radius: 3px;
+}
+
+.full-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 200, 255, 0.5);
 }
 </style>

@@ -182,3 +182,55 @@ services:
       HOST: "0.0.0.0"
       PORT: "5002"
     network_mode: host
+
+  # ========== OnlyOffice 文档编辑服务 ==========
+  onlyoffice-documentserver:
+    image: onlyoffice/documentserver:latest
+    container_name: dam-onlyoffice
+    restart: unless-stopped
+    # OnlyOffice 需要较大内存，建议至少 2GB
+    # ARM64 平台需要使用社区构建版本
+    # platform: linux/arm64  # Jetson 平台取消注释
+    ports:
+      - "8080:80"  # OnlyOffice Web 界面
+      - "443:443"  # HTTPS（可选）
+    volumes:
+      # 持久化配置和数据
+      - onlyoffice_data:/var/www/onlyoffice/Data
+      - onlyoffice_logs:/var/log/onlyoffice
+      - onlyoffice_lib:/var/lib/onlyoffice
+      - onlyoffice_rabbitmq:/var/lib/rabbitmq
+      - onlyoffice_redis:/var/lib/redis
+      - onlyoffice_postgresql:/var/lib/postgresql
+    environment:
+      # JWT 安全配置（生产环境必须设置）
+      JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-mysecretkey}
+      JWT_HEADER: Authorization
+      # 数据库配置（使用内置 PostgreSQL）
+      DB_TYPE: postgres
+      # 文档存储路径
+      DOCUMENT_SERVER_STORAGE_PATH: /var/www/onlyoffice/Data
+      # 启用回调 URL（文档保存时回调）
+      # CALLBACK_URL: http://your-backend:8090/api/onlyoffice/callback
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    # 资源限制（根据 Jetson 性能调整）
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+
+volumes:
+  onlyoffice_data:
+  onlyoffice_logs:
+  onlyoffice_lib:
+  onlyoffice_rabbitmq:
+  onlyoffice_redis:
+  onlyoffice_postgresql:

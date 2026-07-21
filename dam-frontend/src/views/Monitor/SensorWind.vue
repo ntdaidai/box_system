@@ -9,7 +9,7 @@
       </div>
       <div class="header-status" :class="statusClass">
         <span class="dot"></span>{{ statusText }}
-        <div class="header-comm" v-if="lastTimestamp">最后通讯: {{ formatCommTime(lastTimestamp) }}</div>
+        <div class="header-comm" v-if="lastTimestamp">{{ formatCommTime(lastTimestamp) }}</div>
       </div>
     </div>
 
@@ -271,10 +271,14 @@ const formatCommTime = (ts) => {
   const numeric = Number(ts)
   if (!Number.isFinite(numeric) || numeric <= 0) return '--'
   const timeMs = numeric > 1e12 ? numeric : numeric * 1000
-  return new Date(timeMs).toLocaleString('zh-CN', {
-    timeZone: 'Asia/Shanghai',
-    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-  })
+  const date = new Date(timeMs)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  const seconds = String(date.getSeconds()).padStart(2, '0')
+  return `${year}/${month}/${day} ${hours}:${minutes}:${seconds}`
 }
 
 const fetchData = async () => {
@@ -726,7 +730,7 @@ onUnmounted(() => {
 .header-status.online .dot { background: var(--success-color); box-shadow: 0 0 6px var(--success-color); }
 .header-status.offline { color: var(--danger-color); }
 .header-status.offline .dot { background: var(--danger-color); box-shadow: 0 0 6px var(--danger-color); }
-.header-comm { font-size: 11px; font-weight: 400; color: var(--text-secondary); margin-top: 4px; }
+.header-comm { font-size: 14px; font-weight: 500; color: var(--text-secondary); margin-top: 4px; font-family: "Consolas", "Monaco", monospace; }
 
 /* 上半部分: 指南针 + 数据卡片 并排 */
 .top-row { display: flex; gap: 12px; margin-bottom: 10px; }
