@@ -69,6 +69,18 @@ const routes = [
             meta: { title: '视频监控', requiresAuth: true }
           },
           {
+            path: 'camera/image',
+            name: 'CameraImageAnalysis',
+            component: () => import('@/views/Monitor/CameraView.vue'),
+            meta: { title: '图片分析', requiresAuth: true, mediaTab: 'image' }
+          },
+          {
+            path: 'camera/video',
+            name: 'CameraVideoAnalysis',
+            component: () => import('@/views/Monitor/CameraView.vue'),
+            meta: { title: '视频分析', requiresAuth: true, mediaTab: 'video' }
+          },
+          {
             path: 'device',
             name: 'DeviceStatus',
             component: () => import('@/views/Monitor/DeviceStatus.vue'),

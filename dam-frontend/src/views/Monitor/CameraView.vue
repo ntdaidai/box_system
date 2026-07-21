@@ -85,7 +85,7 @@
       </div>
     </section>
 
-    <section class="live-workspace">
+    <section v-if="!isMediaAnalysisRoute" class="live-workspace">
       <article class="live-card surface-card">
         <div class="card-heading">
           <div>
@@ -248,20 +248,12 @@
       </aside>
     </section>
 
-    <section class="media-lab surface-card">
+    <section v-if="isMediaAnalysisRoute" class="media-lab surface-card">
       <div class="lab-heading">
         <div>
-          <h2>图片与视频分析</h2>
-          <p>上传内容仅用于本次分析；视频结果为临时时间轴，不进入历史或告警流程。</p>
+          <h2>{{ mediaHeadingTitle }}</h2>
+          <p>{{ mediaHeadingDescription }}</p>
         </div>
-        <el-tabs v-model="mediaTab" class="media-tabs">
-          <el-tab-pane name="image">
-            <template #label><span><el-icon><Picture /></el-icon>图片分析</span></template>
-          </el-tab-pane>
-          <el-tab-pane name="video">
-            <template #label><span><el-icon><VideoPlay /></el-icon>视频分析</span></template>
-          </el-tab-pane>
-        </el-tabs>
       </div>
 
       <div v-show="mediaTab === 'image'" class="lab-content image-lab">
@@ -492,6 +484,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   Aim, Camera, Connection, DataAnalysis, Files, Loading, Monitor,
@@ -511,6 +504,8 @@ import { CameraWebRtcPlayer } from '@/utils/cameraWebRtc'
 import { subscribeDetectionEvents } from '@/utils/detectionEvents'
 
 const cameras = ref([])
+const route = useRoute()
+const router = useRouter()
 const currentCameraId = ref('')
 const currentCamera = ref(null)
 const modelStatus = ref({ loaded: false, models: {} })
@@ -528,7 +523,6 @@ const showAddDialog = ref(false)
 const addingCamera = ref(false)
 const addForm = ref({ camera_id: '', name: '', source_type: 'rtsp', source: '' })
 
-const mediaTab = ref('image')
 const imageUploading = ref(false)
 const uploadResult = ref(null)
 const videoPreviewUrl = ref('')
@@ -600,6 +594,14 @@ const sourceHelp = computed(() => ({
   rtsp: '海康网络摄像头接在 Jetson 网口或同一网络后，填写摄像头 RTSP 地址。',
   usb: 'USB/UVC 摄像头需同时在 .env 设置 CAMERA_DEVICE=/dev/video0。',
 }[addForm.value.source_type]))
+const isMediaAnalysisRoute = computed(() => ['image', 'video'].includes(route.meta.mediaTab))
+const mediaTab = computed(() => route.meta.mediaTab === 'video' ? 'video' : 'image')
+const mediaHeadingTitle = computed(() => mediaTab.value === 'video' ? '视频分析' : '图片分析')
+const mediaHeadingDescription = computed(() => (
+  mediaTab.value === 'video'
+    ? '上传视频仅用于本次分析；结果为临时时间轴，不进入历史或告警流程。'
+    : '上传图片仅用于本次分析；检测或分类结果不进入历史或告警流程。'
+))
 
 function sourceTypeLabel(type) {
   return ({ rtsp: 'RTSP', usb: 'USB / V4L2' })[type] || 'VIDEO'
@@ -825,7 +827,7 @@ function updateCameraInList(camera) {
 async function takeSnapshot() {
   const response = await snapshotDetect(currentCameraId.value, 0.5, analysisTask.value)
   uploadResult.value = { ...response.data, result_image_base64: response.data.image_base64 }
-  mediaTab.value = 'image'
+  if (route.path !== '/monitor/camera/image') router.push('/monitor/camera/image')
   if (response.data.task_type === 'detect') {
     ElMessage.success(`截图检测完成，发现 ${response.data.count} 个目标`)
   } else {
@@ -874,7 +876,7 @@ async function handleVideoUpload(file) {
     return
   }
   await clearVideoJob()
-  mediaTab.value = 'video'
+  if (route.path !== '/monitor/camera/video') router.push('/monitor/camera/video')
   videoPreviewUrl.value = URL.createObjectURL(rawFile)
   videoUploadProgress.value = 0
   videoJob.value = { filename: rawFile.name, state: 'uploading', progress: 0, processed_samples: 0 }

@@ -117,6 +117,16 @@ const menuMap = {
       path: '/monitor/camera',
       icon: VideoCamera,
     },
+    {
+      name: '图片分析',
+      path: '/monitor/camera/image',
+      icon: Picture,
+    },
+    {
+      name: '视频分析',
+      path: '/monitor/camera/video',
+      icon: VideoPlay,
+    },
   ],
   '/alarm': [
     {

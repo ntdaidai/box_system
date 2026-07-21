@@ -13,7 +13,20 @@
           <span class="card-title">{{ card.title }}</span>
           <span class="card-state">{{ card.state }}</span>
         </div>
-        <div class="metric-row">
+        <div v-if="card.key === 'wind'" class="wind-card-body">
+          <div class="wind-primary">
+            <strong>{{ card.metrics[0].value }}</strong>
+            <span>{{ card.metrics[0].label }}</span>
+          </div>
+          <div class="wind-direction">
+            <strong>{{ card.directionText }}</strong>
+            <span>{{ card.metrics[1].label }}</span>
+          </div>
+          <div class="mini-compass" aria-hidden="true">
+            <i :style="{ transform: `translate(-50%, -50%) rotate(${card.angle}deg)` }"></i>
+          </div>
+        </div>
+        <div v-else class="metric-row">
           <div v-for="metric in card.metrics" :key="metric.label" class="metric-cell">
             <strong>{{ metric.value }}</strong>
             <span>{{ metric.label }}</span>
@@ -40,6 +53,14 @@
             @click="selectRecent24h"
           >
             近24小时
+          </button>
+          <button
+            type="button"
+            class="period-button"
+            :class="{ active: historyMode === 'overview' }"
+            @click="selectOverview"
+          >
+            总览
           </button>
           <div class="calendar-controls" :class="{ active: historyMode === 'calendar' }">
             <el-select v-model="selectedYear" class="history-select year-select" @change="onYearChange">
@@ -117,7 +138,7 @@
         </div>
         <div class="summary-table">
           <div v-for="item in weatherInfoRows" :key="item.label" class="summary-row">
-            <span>{{ item.icon }} {{ item.label }}</span>
+            <span><i class="info-icon">{{ item.icon }}</i>{{ item.label }}</span>
             <strong>{{ item.recent }}</strong>
             <strong>{{ item.all }}</strong>
           </div>
@@ -152,6 +173,7 @@ import {
   getTempHumidityTrends,
   getVibrationHistoryTrends,
   getVibrationProcessed,
+  getVibrationTrends,
   getWindTrends,
 } from '@/api/sensor'
 import { calcNiceYAxisRange } from '@/utils/sensorHistory'
@@ -183,11 +205,14 @@ const summaryData = reactive({
   tempAll: [],
   rainAll: [],
   windAll: [],
+  vibrationRecent: [],
+  vibrationAll: [],
 })
 
 let chart = null
 let realtimeTimer = null
 let refreshTimer = null
+let summaryTimer = null
 let resizeHandler = null
 let requestSerial = 0
 let isMounted = false
@@ -256,6 +281,8 @@ const liveCards = computed(() => {
       statusClass: windStatusClass(wind),
       note: wind.wind_direction || '--',
       time: formatCommTime(realtimeData.value.wind?.timestamp),
+      angle: windDirectionAngle(wind),
+      directionText: wind.wind_direction || '--',
       metrics: [
         { label: '风速', value: formatMetric(windSpeedKmh(wind), 1, 'km/h') },
         { label: '风向', value: wind.wind_direction || '--' },
@@ -283,35 +310,43 @@ const weatherInfoRows = computed(() => {
   const recentStats = buildMonthlyStats({
     temp: summaryData.tempRecent,
     wind: summaryData.windRecent,
+    vibration: summaryData.vibrationRecent,
   })
   const allStats = buildMonthlyStats({
     temp: summaryData.tempAll,
     wind: summaryData.windAll,
+    vibration: summaryData.vibrationAll,
   })
   return [
     {
-      icon: '🌡',
+      icon: '高',
       label: '最热的月份',
       recent: monthName(bestMonth(recentStats.temperatureMax, 'max')),
       all: monthName(bestMonth(allStats.temperatureMax, 'max')),
     },
     {
-      icon: '❄',
+      icon: '低',
       label: '最冷的月份',
       recent: monthName(bestMonth(recentStats.temperatureMin, 'min')),
       all: monthName(bestMonth(allStats.temperatureMin, 'min')),
     },
     {
-      icon: '💧',
+      icon: '湿',
       label: '最潮湿的月份',
       recent: monthName(bestMonth(recentStats.humidity, 'max')),
       all: monthName(bestMonth(allStats.humidity, 'max')),
     },
     {
-      icon: '≋',
+      icon: '风',
       label: '风最多的月份',
       recent: monthName(bestMonth(recentStats.wind, 'max')),
       all: monthName(bestMonth(allStats.wind, 'max')),
+    },
+    {
+      icon: '振',
+      label: '振动最高的月份',
+      recent: monthName(bestMonth(recentStats.vibration, 'max')),
+      all: monthName(bestMonth(allStats.vibration, 'max')),
     },
   ]
 })
@@ -321,6 +356,7 @@ const dailySummaryRows = computed(() => [
   summaryRow('低温 (℃)', summaryData.tempRecent.map(row => toNumber(row.data?.temperature_min ?? row.data?.temperature)).filter(v => v !== null), 0),
   summaryRow('降水 (mm)', summaryData.rainRecent.map(row => toNumber(row.data?.daily_rain)).filter(v => v !== null), 2),
   summaryRow('风速 (km/h)', summaryData.windRecent.map(row => windSpeedKmh(row.data)).filter(v => v !== null), 1),
+  summaryRow('振动 RMS (g)', summaryData.vibrationRecent.map(row => toNumber(row.data?.rms)).filter(v => v !== null), 3),
 ])
 
 const toNumber = (value) => {
@@ -339,12 +375,16 @@ const formatCommTime = (timestamp) => {
   const numeric = Number(timestamp)
   if (!Number.isFinite(numeric) || numeric <= 0) return '--'
   const timeMs = numeric > 1e12 ? numeric : numeric * 1000
-  return new Date(timeMs).toLocaleTimeString('zh-CN', {
+  return new Date(timeMs).toLocaleString('zh-CN', {
     timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
+    second: '2-digit',
     hour12: false,
-  })
+  }).replace(/\//g, '/')
 }
 
 const tempHumidityState = (data) => {
@@ -378,6 +418,31 @@ const windSpeedKmh = (data = {}) => {
   return ms === null ? null : ms * 3.6
 }
 
+const windDirectionAngle = (data = {}) => {
+  const angle = toNumber(data.wind_angle ?? data.wind_direction_angle ?? data.direction_angle)
+  if (angle !== null) return angle
+  const direction = String(data.wind_direction || '')
+  const map = {
+    北: 0,
+    东北: 45,
+    东: 90,
+    东南: 135,
+    南: 180,
+    西南: 225,
+    西: 270,
+    西北: 315,
+    东东北: 67.5,
+    东东南: 112.5,
+    西西南: 247.5,
+    西西北: 292.5,
+    北东北: 22.5,
+    南东南: 157.5,
+    南西南: 202.5,
+    北西北: 337.5,
+  }
+  return map[direction] ?? 0
+}
+
 const windState = (data) => {
   const speed = windSpeedKmh(data)
   if (speed === null) return '--'
@@ -400,7 +465,9 @@ const historyCache = new Map()
 
 const currentQuery = () => historyMode.value === 'recent24h'
   ? { tab: activeHistoryTab.value, view: 'recent24h' }
-  : {
+  : historyMode.value === 'overview'
+    ? { tab: activeHistoryTab.value, view: 'overview' }
+    : {
       tab: activeHistoryTab.value,
       view: 'calendar',
       year: Number(selectedYear.value),
@@ -445,11 +512,67 @@ const fetchRealtime = async () => {
 }
 
 const fetchHistoryPayload = async (query) => {
+  if (query.view === 'overview') return fetchOverviewPayload(query)
   const params = { view: query.view, year: query.year, month: query.month }
   if (query.tab === 'temperature' || query.tab === 'humidity') return getTempHumidityTrends(params)
   if (query.tab === 'rain') return getRainTrends(params)
   if (query.tab === 'wind') return getWindTrends(params)
-  return getVibrationHistoryTrends(params)
+  return fetchVibrationHistory(params)
+}
+
+const historyLoaderForTab = (tab) => {
+  if (tab === 'temperature' || tab === 'humidity') return getTempHumidityTrends
+  if (tab === 'rain') return getRainTrends
+  if (tab === 'wind') return getWindTrends
+  return fetchVibrationHistory
+}
+
+const fetchOverviewPayload = async (query) => {
+  const loader = historyLoaderForTab(query.tab)
+  const seedRes = await loader({ view: 'calendar', year: Number(selectedYear.value), month: null })
+  if (seedRes.code !== 200 || !seedRes.data) return seedRes
+  const periods = periodUnion(seedRes.data.available_periods || [{ year: selectedYear.value }])
+  const history = await loadAllCalendarRows(periods, period => loader({ view: 'calendar', year: period.year, month: null }))
+  return {
+    code: 200,
+    data: {
+      ...seedRes.data,
+      view: 'overview',
+      history,
+      available_periods: periods,
+    },
+  }
+}
+
+const fetchVibrationHistory = async (params) => {
+  try {
+    const res = await getVibrationHistoryTrends(params)
+    if (res.code === 200 && res.data && Array.isArray(res.data.history)) return res
+    throw new Error('vibration trends response invalid')
+  } catch (error) {
+    console.warn('振动新历史接口不可用，回退旧趋势接口:', error)
+    return loadLegacyVibrationPayload(params)
+  }
+}
+
+const loadLegacyVibrationPayload = async ({ view = 'recent24h', year, month } = {}) => {
+  const res = await getVibrationTrends(view === 'recent24h' ? '1d' : '6mo')
+  if (res.code !== 200 || !res.data) return res
+  const sourceRows = Array.isArray(res.data.history) ? res.data.history : []
+  const rows = sourceRows
+    .map(row => normalizeLegacyVibrationRow(row))
+    .filter(row => row && legacyRowInRange(row, view, year, month))
+  const periods = buildPeriodsFromRows(rows)
+  return {
+    code: 200,
+    data: {
+      view,
+      history: rows,
+      window: res.data.window || legacyWindow(rows),
+      available_periods: periods,
+      fallback: true,
+    },
+  }
 }
 
 const applyHistoryPayload = (query, payload, cacheResult = true) => {
@@ -528,6 +651,13 @@ const selectRecent24h = () => {
   loadHistory(currentQuery(), Boolean(historyError.value))
 }
 
+const selectOverview = () => {
+  if (historyMode.value === 'overview' && !historyError.value) return
+  historyMode.value = 'overview'
+  selectedMonth.value = 'all'
+  loadHistory(currentQuery(), Boolean(historyError.value))
+}
+
 const onYearChange = () => {
   historyMode.value = 'calendar'
   if (selectedMonth.value !== 'all' && !monthOptions.value.includes(Number(selectedMonth.value))) {
@@ -543,6 +673,62 @@ const onMonthChange = () => {
 
 const retryHistory = () => {
   loadHistory(currentQuery(), true)
+}
+
+const normalizeLegacyVibrationRow = (row = {}) => {
+  const timestamp = toNumber(row.timestamp ?? row.time)
+  if (timestamp === null) return null
+  const timestampSeconds = timestamp > 1e12 ? timestamp / 1000 : timestamp
+  const date = shanghaiDateKey(timestampSeconds * 1000)
+  return {
+    timestamp: timestampSeconds,
+    date,
+    data: {
+      rms: toNumber(row.rms ?? row.total_rms ?? row.data?.rms ?? row.data?.total_rms),
+      freq: toNumber(row.freq ?? row.dominant_freq ?? row.data?.freq ?? row.data?.dominant_freq),
+      temperature: toNumber(row.temperature ?? row.data?.temperature),
+    },
+  }
+}
+
+const legacyRowInRange = (row, view, year, month) => {
+  if (view === 'recent24h') return true
+  const date = new Date(`${row.date}T00:00:00+08:00`)
+  if (year != null && Number.isInteger(Number(year)) && date.getFullYear() !== Number(year)) return false
+  if (month != null && Number.isInteger(Number(month)) && date.getMonth() + 1 !== Number(month)) return false
+  return true
+}
+
+const shanghaiDateKey = (timeMs) => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(timeMs))
+  const value = Object.fromEntries(parts.filter(part => part.type !== 'literal').map(part => [part.type, part.value]))
+  return `${value.year}-${value.month}-${value.day}`
+}
+
+const buildPeriodsFromRows = (rows = []) => {
+  const map = new Map()
+  rows.forEach(row => {
+    const date = row?.date ? new Date(`${row.date}T00:00:00+08:00`) : null
+    if (!date || Number.isNaN(date.getTime())) return
+    const year = date.getFullYear()
+    const month = date.getMonth() + 1
+    if (!map.has(year)) map.set(year, new Set())
+    map.get(year).add(month)
+  })
+  return [...map.entries()]
+    .map(([year, months]) => ({ year, months: [...months].sort((a, b) => a - b) }))
+    .sort((a, b) => b.year - a.year)
+}
+
+const legacyWindow = (rows = []) => {
+  const times = rows.map(row => toNumber(row.timestamp)).filter(value => value !== null)
+  if (!times.length) return null
+  return { start: Math.min(...times), end: Math.max(...times) }
 }
 
 const valueFromPoint = (point) => {
@@ -566,7 +752,10 @@ const pointTime = (point) => {
   return Number(point.timestamp) * 1000
 }
 
-const chartSeriesData = () => (chartData.value.history || []).map(point => [pointTime(point), valueFromPoint(point)])
+const chartSeriesData = () => (chartData.value.history || [])
+  .map(point => [pointTime(point), valueFromPoint(point)])
+  .filter(point => Number.isFinite(point[0]))
+  .sort((a, b) => a[0] - b[0])
 
 const chartValues = () => chartSeriesData().map(point => point[1]).filter(value => value !== null && Number.isFinite(value))
 
@@ -574,6 +763,9 @@ const formatXAxisLabel = (value) => {
   const date = new Date(value)
   if (historyMode.value === 'recent24h') {
     return date.toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false })
+  }
+  if (historyMode.value === 'overview') {
+    return date.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit' })
   }
   return selectedMonth.value === 'all'
     ? date.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric' })
@@ -612,6 +804,7 @@ const fullChartOption = () => {
   const windowStart = Number(chartData.value.window?.start) * 1000
   const windowEnd = Number(chartData.value.window?.end) * 1000
   const recent = historyMode.value === 'recent24h'
+  const overview = historyMode.value === 'overview'
   return {
     animation: true,
     animationDuration: 850,
@@ -627,13 +820,26 @@ const fullChartOption = () => {
       textStyle: { color: '#f1f6ff', fontSize: 13 },
       axisPointer: { type: activeHistoryTab.value === 'rain' ? 'shadow' : 'line' },
     },
-    grid: { left: 18, right: 22, bottom: 18, top: 28, containLabel: true },
+    grid: { left: 18, right: 28, bottom: 18, top: 34, containLabel: true },
+    dataZoom: overview
+      ? [{
+          type: 'inside',
+          zoomOnMouseWheel: true,
+          moveOnMouseWheel: true,
+          moveOnMouseMove: false,
+          filterMode: 'none',
+        }]
+      : [],
     xAxis: {
       type: 'time',
       min: Number.isFinite(windowStart) && recent ? windowStart : (points[0]?.[0] ?? Date.now() - DAY),
       max: Number.isFinite(windowEnd) && recent ? windowEnd : (points.at(-1)?.[0] ?? Date.now()),
-      interval: recent ? 3 * HOUR : (selectedMonth.value === 'all' ? 30 * DAY : 5 * DAY),
-      axisLine: { lineStyle: { color: 'rgba(121, 155, 202, 0.42)' } },
+      interval: recent ? 3 * HOUR : (overview ? undefined : (selectedMonth.value === 'all' ? 30 * DAY : 5 * DAY)),
+      name: recent ? '时间' : '日期',
+      nameLocation: 'end',
+      nameGap: 8,
+      nameTextStyle: { color: '#b6c7df', fontSize: 12, padding: [18, 0, 0, 0] },
+      axisLine: { show: true, symbol: ['none', 'arrow'], symbolSize: [8, 10], lineStyle: { color: 'rgba(121, 155, 202, 0.68)' } },
       axisTick: { show: true, lineStyle: { color: 'rgba(121, 155, 202, 0.42)' } },
       axisLabel: { color: '#91a9ca', margin: 12, hideOverlap: true, formatter: formatXAxisLabel },
       splitLine: { show: false },
@@ -643,9 +849,13 @@ const fullChartOption = () => {
       min: yRange.min,
       max: yRange.max,
       interval: yRange.interval,
-      axisLine: { show: false },
+      name: meta.unit,
+      nameLocation: 'end',
+      nameGap: 12,
+      nameTextStyle: { color: '#b6c7df', fontSize: 12, padding: [0, 28, 4, 0] },
+      axisLine: { show: true, symbol: ['none', 'arrow'], symbolSize: [8, 10], lineStyle: { color: 'rgba(121, 155, 202, 0.68)' } },
       axisTick: { show: false },
-      axisLabel: { color: '#b6c7df', margin: 12, formatter: value => `${value}${meta.unit}` },
+      axisLabel: { color: '#b6c7df', margin: 12 },
       splitLine: { lineStyle: { color: 'rgba(151, 177, 215, 0.18)', width: 1 } },
     },
     series: [{
@@ -684,7 +894,7 @@ const renderChart = () => {
   if (!chart || chart.isDisposed()) return
   chart.setOption(fullChartOption(), {
     notMerge: false,
-    replaceMerge: ['xAxis', 'yAxis', 'series'],
+    replaceMerge: ['xAxis', 'yAxis', 'dataZoom', 'series'],
     lazyUpdate: false,
   })
 }
@@ -704,45 +914,78 @@ const loadSummary = async () => {
   const year = new Date().getFullYear()
   const previousYear = year - 1
   try {
-    const [tempCurrent, tempPrevious, rainRecent, windRecent] = await Promise.all([
+    const [tempCurrent, tempPrevious, rainRecent, windRecent, vibrationCurrent, vibrationPrevious] = await Promise.allSettled([
       getTempHumidityTrends({ view: 'calendar', year, month: null }),
       getTempHumidityTrends({ view: 'calendar', year: previousYear, month: null }),
       getRainTrends({ view: 'rolling12' }),
       getWindTrends({ view: 'rolling12' }),
+      fetchVibrationHistory({ view: 'calendar', year, month: null }),
+      fetchVibrationHistory({ view: 'calendar', year: previousYear, month: null }),
     ])
+    const tempCurrentRes = fulfilledResponse(tempCurrent)
+    const tempPreviousRes = fulfilledResponse(tempPrevious)
+    const rainRecentRes = fulfilledResponse(rainRecent)
+    const windRecentRes = fulfilledResponse(windRecent)
+    const vibrationCurrentRes = fulfilledResponse(vibrationCurrent)
+    const vibrationPreviousRes = fulfilledResponse(vibrationPrevious)
     const tempRecentSource = [
-      ...(tempPrevious.data?.history || []),
-      ...(tempCurrent.data?.history || []),
+      ...(tempPreviousRes?.data?.history || []),
+      ...(tempCurrentRes?.data?.history || []),
     ]
-    if (tempCurrent.code === 200 || tempPrevious.code === 200) {
+    if (tempCurrentRes?.code === 200 || tempPreviousRes?.code === 200) {
       summaryData.tempRecent = filterLast12Months(tempRecentSource)
-      const tempPeriods = [
-        ...(tempCurrent.data?.available_periods || []),
-        ...(tempPrevious.data?.available_periods || []),
-      ]
-      summaryData.tempAll = await loadAllCalendarRows(
-        periodUnion(tempPeriods),
+    }
+    if (rainRecentRes?.code === 200) summaryData.rainRecent = rainRecentRes.data?.history || []
+    if (windRecentRes?.code === 200) summaryData.windRecent = windRecentRes.data?.history || []
+    const vibrationRecentSource = [
+      ...(vibrationPreviousRes?.data?.history || []),
+      ...(vibrationCurrentRes?.data?.history || []),
+    ]
+    if (vibrationCurrentRes?.code === 200 || vibrationPreviousRes?.code === 200) {
+      summaryData.vibrationRecent = filterLast12Months(vibrationRecentSource)
+    }
+
+    const [tempAll, rainAll, windAll, vibrationAll] = await Promise.allSettled([
+      loadAllCalendarRows(
+        periodUnion([
+          ...(tempCurrentRes?.data?.available_periods || []),
+          ...(tempPreviousRes?.data?.available_periods || []),
+        ]),
         period => getTempHumidityTrends({ view: 'calendar', year: period.year, month: null }),
-      )
-    }
-    if (rainRecent.code === 200) {
-      summaryData.rainRecent = rainRecent.data?.history || []
-      summaryData.rainAll = await loadAllCalendarRows(
-        rainRecent.data?.available_periods || [],
-        period => getRainTrends({ view: 'calendar', year: period.year, month: null }),
-      )
-    }
-    if (windRecent.code === 200) {
-      summaryData.windRecent = windRecent.data?.history || []
-      summaryData.windAll = await loadAllCalendarRows(
-        windRecent.data?.available_periods || [],
-        period => getWindTrends({ view: 'calendar', year: period.year, month: null }),
-      )
-    }
+      ),
+      rainRecentRes?.code === 200
+        ? loadAllCalendarRows(
+            rainRecentRes.data?.available_periods || [],
+            period => getRainTrends({ view: 'calendar', year: period.year, month: null }),
+          )
+        : Promise.resolve([]),
+      windRecentRes?.code === 200
+        ? loadAllCalendarRows(
+            windRecentRes.data?.available_periods || [],
+            period => getWindTrends({ view: 'calendar', year: period.year, month: null }),
+          )
+        : Promise.resolve([]),
+      (vibrationCurrentRes?.code === 200 || vibrationPreviousRes?.code === 200)
+        ? loadAllCalendarRows(
+            periodUnion([
+              ...(vibrationCurrentRes?.data?.available_periods || []),
+              ...(vibrationPreviousRes?.data?.available_periods || []),
+            ]),
+            period => fetchVibrationHistory({ view: 'calendar', year: period.year, month: null }),
+          )
+        : Promise.resolve([]),
+    ])
+    summaryData.tempAll = fulfilledValue(tempAll) || summaryData.tempRecent
+    summaryData.rainAll = fulfilledValue(rainAll) || summaryData.rainRecent
+    summaryData.windAll = fulfilledValue(windAll) || summaryData.windRecent
+    summaryData.vibrationAll = fulfilledValue(vibrationAll) || summaryData.vibrationRecent
   } catch (error) {
     console.warn('加载统计摘要失败:', error)
   }
 }
+
+const fulfilledResponse = result => result.status === 'fulfilled' ? result.value : null
+const fulfilledValue = result => result.status === 'fulfilled' ? result.value : null
 
 const filterLast12Months = (rows = []) => {
   const cutoff = new Date()
@@ -776,12 +1019,13 @@ const loadAllCalendarRows = async (periods = [], loader) => {
   ))
 }
 
-const buildMonthlyStats = ({ temp = [], wind = [] } = {}) => {
+const buildMonthlyStats = ({ temp = [], wind = [], vibration = [] } = {}) => {
   const result = {
     temperatureMax: new Map(),
     temperatureMin: new Map(),
     humidity: new Map(),
     wind: new Map(),
+    vibration: new Map(),
   }
   temp.forEach(row => {
     const month = monthFromRow(row)
@@ -791,6 +1035,9 @@ const buildMonthlyStats = ({ temp = [], wind = [] } = {}) => {
   })
   wind.forEach(row => {
     pushMonthValue(result.wind, monthFromRow(row), windSpeedKmh(row.data))
+  })
+  vibration.forEach(row => {
+    pushMonthValue(result.vibration, monthFromRow(row), toNumber(row.data?.rms))
   })
   return result
 }
@@ -839,7 +1086,10 @@ const summaryRow = (label, values, decimals) => {
 onMounted(async () => {
   isMounted = true
   initChart()
-  await Promise.all([fetchRealtime(), loadHistory(currentQuery()), loadSummary()])
+  await Promise.all([fetchRealtime(), loadHistory(currentQuery())])
+  summaryTimer = window.setTimeout(() => {
+    if (isMounted) loadSummary()
+  }, 0)
   realtimeTimer = setInterval(fetchRealtime, 5000)
 })
 
@@ -848,6 +1098,7 @@ onUnmounted(() => {
   requestSerial += 1
   if (realtimeTimer) clearInterval(realtimeTimer)
   if (refreshTimer) clearTimeout(refreshTimer)
+  if (summaryTimer) clearTimeout(summaryTimer)
   if (resizeHandler) window.removeEventListener('resize', resizeHandler)
   if (chart && !chart.isDisposed()) chart.dispose()
   chart = null
@@ -938,6 +1189,76 @@ onUnmounted(() => {
   margin-top: 6px;
   color: #8ea8c9;
   font-size: 12px;
+}
+
+.wind-card-body {
+  min-height: 68px;
+  margin: 16px 0 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.9fr) 42px;
+  align-items: center;
+  gap: 12px;
+}
+
+.wind-primary strong,
+.wind-direction strong {
+  display: block;
+  color: #fff;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.wind-primary strong {
+  font-family: "Consolas", "Monaco", monospace;
+  font-size: 25px;
+}
+
+.wind-direction strong {
+  font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+  font-size: 27px;
+  letter-spacing: 0;
+}
+
+.wind-primary span,
+.wind-direction span {
+  display: block;
+  margin-top: 8px;
+  color: #8ea8c9;
+  font-size: 12px;
+}
+
+.mini-compass {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  border: 1px solid rgba(116, 201, 249, 0.45);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(38, 82, 128, 0.35), rgba(13, 31, 57, 0.2));
+}
+
+.mini-compass::before {
+  content: "N";
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #8ea8c9;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.mini-compass i {
+  position: absolute;
+  top: 54%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 18px solid #72cdf9;
+  transform-origin: 50% 70%;
+  filter: drop-shadow(0 0 8px rgba(114, 205, 249, 0.45));
 }
 
 .card-foot {
@@ -1210,7 +1531,23 @@ onUnmounted(() => {
 }
 
 .summary-row span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   color: #f4f8ff;
+}
+
+.info-icon {
+  width: 22px;
+  height: 22px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 6px;
+  background: rgba(76, 151, 255, 0.16);
+  color: #80c8ff;
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .summary-row strong {
@@ -1247,6 +1584,15 @@ onUnmounted(() => {
 
   .metric-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .wind-card-body {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 0.9fr) 38px;
+  }
+
+  .wind-primary strong,
+  .wind-direction strong {
+    font-size: 22px;
   }
 
   .calendar-controls {

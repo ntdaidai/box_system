@@ -10,6 +10,8 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 from loguru import logger
 
+from app.services.low_light_enhancement import enhance_low_light_if_needed
+
 
 class YOLOClassifier:
     """Expose YOLO-cls through the same small contract as object detection."""
@@ -90,6 +92,9 @@ class YOLOClassifier:
         image: np.ndarray,
         conf: float = 0.5,
         iou: float = 0.45,
+        *,
+        preprocessed_image: Optional[np.ndarray] = None,
+        preprocessing: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         del conf, iou  # Classification always returns ranked softmax probabilities.
         with self.lock:
@@ -106,10 +111,13 @@ class YOLOClassifier:
             }
 
         started = time.time()
+        inference_image = preprocessed_image
+        if inference_image is None or preprocessing is None:
+            inference_image, preprocessing = enhance_low_light_if_needed(image)
         try:
             with self.inference_lock:
                 results = model.predict(
-                    source=image,
+                    source=inference_image,
                     imgsz=self.image_size,
                     verbose=False,
                 )
@@ -138,6 +146,7 @@ class YOLOClassifier:
                 "task_type": self.task_type,
                 "image_width": int(image.shape[1]),
                 "image_height": int(image.shape[0]),
+                "preprocessing": preprocessing,
                 "prediction": classifications[0] if classifications else None,
                 "classifications": classifications,
                 "process_time": round(time.time() - started, 3),
@@ -157,8 +166,16 @@ class YOLOClassifier:
         conf: float = 0.5,
         iou: float = 0.45,
     ) -> Tuple[Dict[str, Any], np.ndarray]:
-        # Classification describes the whole image, so its display image is raw.
-        return self.analyze(image, conf=conf, iou=iou), image
+        inference_image, preprocessing = enhance_low_light_if_needed(image)
+        result = self.analyze(
+            image,
+            conf=conf,
+            iou=iou,
+            preprocessed_image=inference_image,
+            preprocessing=preprocessing,
+        )
+        display_image = inference_image if preprocessing.get("applied") else image
+        return result, display_image
 
     def get_status(self) -> Dict[str, Any]:
         with self.lock:
