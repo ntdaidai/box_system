@@ -52,7 +52,7 @@ class VisionModelRegistryTests(unittest.TestCase):
         }
         classifier.loaded = True
 
-        image = np.zeros((60, 100, 3), dtype=np.uint8)
+        image = np.full((60, 100, 3), 180, dtype=np.uint8)
         result, rendered = classifier.analyze_and_render(image)
 
         self.assertEqual(result["task_type"], "classify")
@@ -60,6 +60,7 @@ class VisionModelRegistryTests(unittest.TestCase):
         self.assertEqual(result["classifications"][1]["class_name_cn"], "滑坡")
         self.assertNotIn("bbox", result["prediction"])
         self.assertIs(rendered, image)
+        self.assertFalse(result["preprocessing"]["applied"])
 
 
 if __name__ == "__main__":

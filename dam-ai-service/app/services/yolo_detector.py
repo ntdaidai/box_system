@@ -18,6 +18,8 @@ from loguru import logger
 import cv2
 import numpy as np
 
+from app.services.low_light_enhancement import enhance_low_light_if_needed
+
 
 class YOLODetector:
     """YOLO 目标检测服务"""
@@ -120,6 +122,9 @@ class YOLODetector:
         conf: float = 0.5,
         iou: float = 0.45,
         classes: Optional[List[int]] = None,
+        *,
+        preprocessed_image: Optional[np.ndarray] = None,
+        preprocessing: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         对图片进行目标检测
@@ -147,13 +152,16 @@ class YOLODetector:
             }
 
         start_time = time.time()
+        inference_image = preprocessed_image
+        if inference_image is None or preprocessing is None:
+            inference_image, preprocessing = enhance_low_light_if_needed(image)
 
         try:
             # Ultralytics model objects share mutable predictor state. A single
             # lock prevents snapshot, upload, and live-stream calls from racing.
             with self.inference_lock:
                 results = model.predict(
-                    source=image,
+                    source=inference_image,
                     conf=conf,
                     iou=iou,
                     classes=classes,
@@ -197,6 +205,7 @@ class YOLODetector:
                 "task_type": self.task_type,
                 "image_width": image.shape[1],
                 "image_height": image.shape[0],
+                "preprocessing": preprocessing,
                 "detections": detections,
                 "count": len(detections),
                 "process_time": process_time,
@@ -302,9 +311,18 @@ class YOLODetector:
         Returns:
             (检测结果, 绘制后的图片)
         """
-        result = self.detect(image, conf=conf, iou=iou, classes=classes)
+        inference_image, preprocessing = enhance_low_light_if_needed(image)
+        result = self.detect(
+            image,
+            conf=conf,
+            iou=iou,
+            classes=classes,
+            preprocessed_image=inference_image,
+            preprocessing=preprocessing,
+        )
         if "error" not in result:
-            drawn = self.draw_detections(image, result["detections"])
+            display_image = inference_image if preprocessing.get("applied") else image
+            drawn = self.draw_detections(display_image, result["detections"])
             return result, drawn
         return result, image
 

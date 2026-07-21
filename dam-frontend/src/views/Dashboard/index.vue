@@ -288,6 +288,7 @@ import {
   Cpu, Clock, Timer, Connection, FolderOpened, Menu, Odometer, Aim
 } from '@element-plus/icons-vue'
 import { getSystemInfo, getAllSensorRealtime, getDeviceStatus, getAlarmStatistics, getAlarmList } from '@/api/dashboard'
+import { getVibrationProcessed } from '@/api/sensor'
 import SensorSSE from '@/utils/sensorSSE'
 import { readCachedResponse } from '@/utils/localResponseCache'
 import { cancelIdleTask, runWhenIdle } from '@/utils/sensorDetailStartup'
@@ -315,6 +316,7 @@ const alarmUnhandled = ref(0)
 // 传感器数据
 const sensorData = ref({})
 const deviceStatus = ref({})
+const vibrationProcessedData = ref({})
 
 // 系统状态
 const systemInfo = ref({
@@ -341,6 +343,7 @@ const sortOrder = ref('')
 // SSE 客户端
 let sseClient = null
 let pollTimer = null
+let vibrationTimer = null
 let cacheUpdateHandler = null
 let sensorPagePreloadTask = null
 
@@ -371,10 +374,9 @@ const sensorCards = [
   {
     key: 'vibration', name: '振动传感器', path: '/monitor/vibration', icon: vibrationIcon,
     values: [
-      { label: '加速度 X', field: '加速度X' },
-      { label: '加速度 Y', field: '加速度Y' },
-      { label: '加速度 Z', field: '加速度Z' },
-      { label: '工作温度', field: '温度' },
+      { label: 'RMS', field: 'total_rms' },
+      { label: '主频', field: 'dominant_freq' },
+      { label: '峰值因子', field: 'crest_factor' },
     ],
   },
 ]
@@ -523,6 +525,11 @@ const applyRecentAlarms = (data) => {
   if (data?.records) recentAlarms.value = data.records
 }
 
+const applyVibrationProcessed = (payload) => {
+  if (!payload) return
+  vibrationProcessedData.value = payload.data || payload
+}
+
 const readDashboardCache = (url, params) => readCachedResponse(apiCacheConfig(url, params))?.data
 
 const hydrateDashboardFromCache = () => {
@@ -572,6 +579,16 @@ const fetchSensorData = async () => {
   } catch (e) { /* 使用默认值 */ }
 }
 
+/** 获取振动处理后指标：RMS / 主频 / 峰值因子 */
+const fetchVibrationProcessed = async () => {
+  try {
+    const res = await getVibrationProcessed()
+    if (res.code === 200 && res.data) {
+      applyVibrationProcessed(res.data)
+    }
+  } catch (e) { /* 保持上一次振动处理数据 */ }
+}
+
 /** 获取告警统计 */
 const fetchAlarmStats = async () => {
   try {
@@ -617,6 +634,7 @@ const initData = async () => {
   await Promise.all([
     fetchSensorData(),
     fetchSystemInfo(),
+    fetchVibrationProcessed(),
   ])
 
   // 阶段二：异步加载告警数据，不阻塞 UI
@@ -665,11 +683,14 @@ const getSensorOnline = (key) => {
 }
 
 const formatSensorValue = (key, field) => {
-  const d = sensorData.value[key]?.data
+  const d = key === 'vibration' ? vibrationProcessedData.value : sensorData.value[key]?.data
   if (!d || d[field] == null) return '--'
   const v = d[field]
   if (typeof v === 'number') {
     // 根据字段类型决定精度
+    if (field === 'total_rms') return v.toFixed(4) + 'g'
+    if (field === 'dominant_freq') return v.toFixed(1) + 'Hz'
+    if (field === 'crest_factor') return v.toFixed(1)
     if (field === '温度' || field === 'temperature') return v.toFixed(1) + '℃'
     if (field === 'humidity') return v.toFixed(1) + '%'
     if (field === 'wind_speed_ms') return v.toFixed(1) + ' m/s'
@@ -762,12 +783,15 @@ onMounted(async () => {
       fetchRecentAlarms(),
     ])
   }, 30000)
+
+  vibrationTimer = setInterval(fetchVibrationProcessed, 5000)
 })
 
 onUnmounted(() => {
   if (clockTimer) clearInterval(clockTimer)
   disconnectSSE()
   if (pollTimer) clearInterval(pollTimer)
+  if (vibrationTimer) clearInterval(vibrationTimer)
   if (cacheUpdateHandler) window.removeEventListener('dam-api-cache-updated', cacheUpdateHandler)
   if (sensorPagePreloadTask) cancelIdleTask(sensorPagePreloadTask)
 })
