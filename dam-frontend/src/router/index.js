@@ -103,6 +103,44 @@ const routes = [
         component: () => import('@/views/Rule/RuleConfig.vue'),
         meta: { title: '规则配置' }
       },
+      // ========== 文档管理 ==========
+      {
+        path: 'document',
+        redirect: '/document/hub',
+        meta: { title: '文档管理' },
+        children: [
+          {
+            path: 'hub',
+            name: 'DocumentHub',
+            component: () => import('@/views/DocumentHub.vue'),
+            meta: { title: '文档中心' }
+          },
+          {
+            path: 'upload',
+            name: 'DocumentUpload',
+            component: () => import('@/views/DocumentUpload.vue'),
+            meta: { title: '文档上传' }
+          },
+          {
+            path: 'list',
+            name: 'DocumentList',
+            component: () => import('@/views/DocumentManagement.vue'),
+            meta: { title: '文档列表' }
+          },
+          {
+            path: 'editor/:documentId',
+            name: 'DocumentEditor',
+            component: () => import('@/views/DocumentEditor.vue'),
+            meta: { title: '文档编辑' }
+          },
+          {
+            path: 'test',
+            name: 'DocumentTest',
+            component: () => import('@/views/DocumentTest.vue'),
+            meta: { title: '文档测试' }
+          },
+        ],
+      },
     ],
   },
 ]

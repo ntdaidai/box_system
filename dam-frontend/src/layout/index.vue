@@ -76,7 +76,7 @@
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores'
-import { HomeFilled, UserFilled, ArrowDown, Monitor, DataAnalysis, Warning, Setting, VideoCamera, Cpu, Sunny, WindPower, Cloudy, Odometer, Bell, Document } from '@element-plus/icons-vue'
+import { HomeFilled, UserFilled, ArrowDown, Monitor, DataAnalysis, Warning, Setting, VideoCamera, Cpu, Sunny, WindPower, Cloudy, Odometer, Bell, Document, Upload } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -87,6 +87,7 @@ const navList = [
   { name: '系统概览', path: '/dashboard', icon: HomeFilled },
   { name: '实时监控', path: '/monitor', icon: Monitor },
   { name: '告警管理', path: '/alarm', icon: Warning },
+  { name: '文档管理', path: '/document', icon: Document },
 ]
 
 // 各模块对应的菜单
@@ -127,6 +128,16 @@ const menuMap = {
       ],
     },
   ],
+  '/document': [
+    {
+      name: '文档管理',
+      icon: Document,
+      children: [
+        { name: '文档中心', path: '/document/hub', icon: Document },
+        { name: '文档上传', path: '/document/upload', icon: Upload },
+      ],
+    },
+  ],
 }
 
 // 当前导航
@@ -145,7 +156,7 @@ const isDashboard = computed(() => route.path === '/dashboard')
 // 需要显示侧边栏的模块
 const showSiderbar = computed(() => {
   const path = route.path
-  return path.startsWith('/monitor') || path.startsWith('/rule')
+  return path.startsWith('/monitor') || path.startsWith('/rule') || path.startsWith('/document')
 })
 
 // 当前菜单

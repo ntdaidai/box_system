@@ -10,6 +10,7 @@ from app.api import (
     auth,
     camera,
     device,
+    document,
     eca,
     health,
     image,
@@ -181,6 +182,7 @@ app.include_router(eca.router, prefix="/api/v1/eca", tags=["ECA规则引擎"])
 app.include_router(vision_detect.router, prefix="/api/v1/vision/detect", tags=["视觉检测结果"])
 app.include_router(image.router, prefix="/api/v1/image", tags=["图片管理"])
 app.include_router(camera.router, prefix="/api/v1/camera", tags=["摄像头与检测"])
+app.include_router(document.router, tags=["文档管理"])
 
 
 # ── 共享 HTTP 客户端依赖 ─────────────────────────────────────
