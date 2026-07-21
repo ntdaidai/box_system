@@ -1,6 +1,5 @@
 <template>
-  <div class="vibration-monitor" :class="{ 'alert-flash': isAlertFlashing }">
-    <!-- 页面头部 -->
+  <div class="vibration-monitor sensor-detail" :class="{ 'alert-flash': isAlertFlashing }">
     <div class="detail-header">
       <div class="header-left">
         <img src="@/assets/images/sensors/vibration.png" class="header-icon" />
@@ -15,10 +14,8 @@
       </div>
     </div>
 
-    <!-- 第一层：核心指标卡 -->
     <div class="indicator-section">
       <div class="indicator-cards">
-        <!-- 综合振动烈度 -->
         <div class="indicator-card" :class="rmsStatusClass">
           <div class="card-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -38,7 +35,6 @@
           </div>
         </div>
 
-        <!-- 当前主频 -->
         <div class="indicator-card" :class="freqStatusClass">
           <div class="card-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -58,7 +54,6 @@
           <div class="card-desc">FFT分析1-20Hz范围内主频</div>
         </div>
 
-        <!-- 运行状态 -->
         <div class="indicator-card status-card">
           <div class="card-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -87,7 +82,6 @@
           <div class="card-desc">基于RMS和主频偏移综合判断</div>
         </div>
 
-        <!-- 峰值因子 -->
         <div class="indicator-card" :class="crestStatusClass">
           <div class="card-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -104,102 +98,85 @@
       </div>
     </div>
 
-    <!-- 第二层：趋势图 -->
-    <div class="trend-section">
-      <div class="section-header">
-        <h3>趋势分析</h3>
-        <div class="time-range-selector">
-          <button v-for="range in timeRanges" :key="range.value"
-                  :class="{ active: selectedRange === range.value }"
-                  @click="changeRange(range.value)">
-            {{ range.label }}
+    <div class="data-panel history-panel">
+      <div class="history-panel-header">
+        <div class="history-heading">
+          <span class="panel-title">振动趋势</span>
+          <div class="metric-switch" aria-label="振动指标">
+            <button type="button" class="active"><span>≈</span>RMS</button>
+          </div>
+        </div>
+        <div class="history-controls">
+          <button
+            type="button"
+            class="period-button"
+            :class="{ active: historyMode === 'recent24h' }"
+            @click="selectRecent24h"
+          >
+            <span class="control-icon">◷</span>近24小时
           </button>
+          <div class="calendar-controls" :class="{ active: historyMode === 'calendar' }">
+            <el-select v-model="selectedYear" class="history-select year-select" @change="onYearChange">
+              <el-option
+                v-for="year in yearOptions"
+                :key="year"
+                :label="`${year}年`"
+                :value="year"
+              />
+            </el-select>
+            <el-select v-model="selectedMonth" class="history-select month-select" @change="onMonthChange">
+              <el-option label="所有月份" value="all" />
+              <el-option
+                v-for="month in monthOptions"
+                :key="month"
+                :label="`${month}月`"
+                :value="month"
+              />
+            </el-select>
+          </div>
         </div>
       </div>
 
-      <div class="trend-charts">
-        <!-- 振动趋势 -->
-        <div class="chart-panel">
-          <div class="panel-title">
-            <span>振动趋势</span>
-            <span class="panel-subtitle">RMS值变化曲线</span>
+      <div class="trend-shell">
+        <div class="chart-wrap history-chart-wrap">
+          <div ref="chartRef" class="chart-container"></div>
+          <div v-if="historyError && !historyEmpty" class="chart-error-banner">
+            <span>{{ historyError }}，当前显示上一次成功加载的数据</span>
+            <button type="button" @click="retryHistory">重试</button>
           </div>
-          <div class="chart-wrap">
-            <div ref="rmsChartRef" class="chart-container"></div>
-            <div v-if="historyLoading" class="chart-state-overlay">加载中 ...</div>
-            <div v-else-if="historyError" class="chart-state-overlay chart-state-error">{{ historyError }}</div>
-            <div v-else-if="historyEmpty" class="chart-state-overlay">当前时间范围暂无振动 RMS 数据</div>
+          <div v-if="historyLoading" class="chart-loading-overlay">
+            <div class="loading-spinner"></div>
+            <div class="loading-text">正在读取振动 RMS 数据...</div>
           </div>
-          <div class="chart-legend">
-            <span class="legend-item"><span class="legend-line" style="background:#00e5ff"></span>振动RMS</span>
-            <span class="legend-threshold"><span class="threshold-line" style="background:#67c23a"></span>关注线 0.05g</span>
-            <span class="legend-threshold"><span class="threshold-line" style="background:#e6a23c"></span>预警线 0.10g</span>
-            <span class="legend-threshold"><span class="threshold-line" style="background:#f56c6c"></span>报警线 0.15g</span>
+          <div v-else-if="historyError && historyEmpty" class="chart-loading-overlay">
+            <div class="loading-text">{{ historyError }}</div>
+            <button type="button" class="chart-retry-button" @click="retryHistory">重新加载</button>
           </div>
+          <div v-else-if="historyEmpty" class="chart-loading-overlay chart-hint-overlay">
+            <div class="loading-text">该时间范围暂无振动 RMS 数据</div>
+          </div>
+        </div>
+
+        <div class="series-toggles">
+          <span class="series-plain">
+            <i></i>综合振动烈度 RMS
+          </span>
+          <label class="series-toggle warning">
+            <input v-model="thresholdVisibility.warning" type="checkbox" @change="renderChart" />
+            <span class="checkbox-ui"></span>
+            <i></i>预警线 0.10g
+          </label>
+          <label class="series-toggle alarm">
+            <input v-model="thresholdVisibility.alarm" type="checkbox" @change="renderChart" />
+            <span class="checkbox-ui"></span>
+            <i></i>报警线 0.15g
+          </label>
         </div>
       </div>
     </div>
 
-    <!-- 详细数据表格 -->
-    <div class="detail-section">
-      <div class="section-header">
-        <h3>详细数据</h3>
-      </div>
-      <div class="data-table-container">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>参数</th>
-              <th>数值</th>
-              <th>单位</th>
-              <th>说明</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>综合振动RMS</td>
-              <td class="value">{{ formatValue(processedData.total_rms, 4) }}</td>
-              <td>g</td>
-              <td>三轴合成加速度的均方根值</td>
-            </tr>
-            <tr>
-              <td>峰值加速度</td>
-              <td class="value">{{ formatValue(processedData.peak_accel, 4) }}</td>
-              <td>g</td>
-              <td>窗口内最大加速度幅值</td>
-            </tr>
-            <tr>
-              <td>主频率</td>
-              <td class="value">{{ formatValue(processedData.dominant_freq, 2) }}</td>
-              <td>Hz</td>
-              <td>FFT分析得到的主频</td>
-            </tr>
-            <tr>
-              <td>主频偏移</td>
-              <td class="value" :class="driftClass">{{ formatDrift(processedData.freq_drift_percent) }}</td>
-              <td>%</td>
-              <td>相对于基线主频的偏移百分比</td>
-            </tr>
-            <tr>
-              <td>峰值因子</td>
-              <td class="value">{{ formatValue(processedData.crest_factor, 2) }}</td>
-              <td>-</td>
-              <td>峰值/RMS比值，判断冲击信号</td>
-            </tr>
-            <tr>
-              <td>传感器温度</td>
-              <td class="value">{{ formatValue(processedData.temperature, 1) }}</td>
-              <td>℃</td>
-              <td>传感器内部温度</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- 报警提示浮层 -->
     <div v-if="showAlertBanner" class="alert-banner" :class="'alert-' + processedData.alert_level">
-      <div class="alert-icon">⚠️</div>
+      <div class="alert-icon">!</div>
       <div class="alert-content">
         <div class="alert-level">{{ processedData.alert_level }}</div>
         <div class="alert-reason">{{ processedData.alert_reason }}</div>
@@ -210,13 +187,32 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
-import { getVibrationProcessed, getVibrationTrends } from '@/api/sensor'
-import { buildChartAxisWindow, formatChartAxisLabel, getNextHistoryRefreshMs, normalizeHistorySeries } from '@/utils/sensorHistory'
-import { cancelIdleTask, createSensorDetailStartup, preloadHistoryRanges, runWhenIdle } from '@/utils/sensorDetailStartup'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { getVibrationHistoryTrends, getVibrationProcessed } from '@/api/sensor'
+import { calcNiceYAxisRange } from '@/utils/sensorHistory'
+import { cancelIdleTask, createSensorDetailStartup, runWhenIdle } from '@/utils/sensorDetailStartup'
 import * as echarts from 'echarts'
 
-// 状态数据
+const MINUTE = 60 * 1000
+const HOUR = 60 * MINUTE
+const DAY = 24 * HOUR
+const TREND_URL = '/v1/sensor/history/vibration/trends'
+const WARNING_RMS = 0.10
+const ALARM_RMS = 0.15
+
+const shanghaiDateKey = (value) => {
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(value))
+  const get = type => parts.find(part => part.type === type)?.value || ''
+  return `${get('year')}-${get('month')}-${get('day')}`
+}
+
+const initialShanghaiYear = Number(shanghaiDateKey(Date.now()).slice(0, 4))
+
 const processedData = reactive({
   total_rms: null,
   dominant_freq: null,
@@ -228,59 +224,68 @@ const processedData = reactive({
   alert_reason: '',
 })
 
+const chartRef = ref(null)
 const lastTimestamp = ref(0)
 const statusClass = ref('online')
 const statusText = ref('在线')
-const selectedRange = ref('1h')
+const historyMode = ref('recent24h')
+const selectedYear = ref(initialShanghaiYear)
+const selectedMonth = ref('all')
+const availablePeriods = ref([])
 const showAlertBanner = ref(false)
 const isAlertFlashing = ref(false)
 const historyLoading = ref(false)
 const historyError = ref('')
-const historyEmpty = ref(false)
-const chartData = ref({ rms: [], window: null, config: null, pointCount: 0 })
+const chartData = ref({ view: 'recent24h', history: [], window: null })
+const thresholdVisibility = reactive({ warning: true, alarm: true })
 const historyCache = new Map()
 
-// 图表引用
-const rmsChartRef = ref(null)
-
-// 图表实例
-let rmsChart = null
-
-// 定时器
+let chart = null
 let realtimeTimer = null
 let historyRefreshTimer = null
 let preloadIdleTask = null
+let resizeHandler = null
+let resizeFrame = null
+let historyRequestSerial = 0
+let isMounted = false
 
-// 时间范围选项
-const timeRanges = [
-  { label: '1小时', value: '1h' },
-  { label: '6小时', value: '6h' },
-  { label: '1天', value: '1d' },
-  { label: '7天', value: '7d' },
-  { label: '6个月', value: '6mo' },
-]
+const yearOptions = computed(() => {
+  const years = availablePeriods.value.map(item => Number(item.year)).filter(Number.isFinite)
+  const selected = Number(selectedYear.value)
+  if (Number.isInteger(selected) && !years.includes(selected)) years.push(selected)
+  return years.length ? [...new Set(years)].sort((a, b) => b - a) : [initialShanghaiYear]
+})
 
-// 计算属性
+const monthOptions = computed(() => {
+  const period = availablePeriods.value.find(item => Number(item.year) === Number(selectedYear.value))
+  if (!period) return Array.from({ length: 12 }, (_, index) => index + 1)
+  return (period.months || []).map(Number).filter(month => month >= 1 && month <= 12)
+})
+
+const chartValues = computed(() => (chartData.value.history || [])
+  .map(point => toNumber(point?.data?.rms))
+  .filter(value => value !== null))
+
+const historyEmpty = computed(() => chartValues.value.length === 0)
+
 const rmsStatusClass = computed(() => {
   const rms = processedData.total_rms
   if (rms === null) return 'status-unknown'
-  if (rms >= 0.15) return 'status-alarm'
-  if (rms >= 0.10) return 'status-warning'
+  if (rms >= ALARM_RMS) return 'status-alarm'
+  if (rms >= WARNING_RMS) return 'status-warning'
   if (rms >= 0.05) return 'status-attention'
   return 'status-normal'
 })
 
 const freqStatusClass = computed(() => {
   const drift = Math.abs(processedData.freq_drift_percent || 0)
-  if (drift > 15) return 'status-alarm'
-  return 'status-normal'
+  return drift > 15 ? 'status-alarm' : 'status-normal'
 })
 
 const crestStatusClass = computed(() => {
   const cf = processedData.crest_factor
   if (cf === null) return 'status-unknown'
-  if (cf > 3.5) return 'status-warning'
-  return 'status-normal'
+  return cf > 3.5 ? 'status-warning' : 'status-normal'
 })
 
 const driftClass = computed(() => {
@@ -299,35 +304,42 @@ const freqDriftArrow = computed(() => {
   return '→'
 })
 
-// 格式化函数
+const toNumber = (value) => {
+  if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : null
+}
+
 const formatValue = (value, decimals) => {
-  if (value === null || value === undefined) return '--'
-  return Number(value).toFixed(decimals)
+  const numeric = toNumber(value)
+  return numeric === null ? '--' : numeric.toFixed(decimals)
 }
 
 const formatDrift = (drift) => {
-  if (drift === null || drift === undefined) return '--'
-  const sign = drift >= 0 ? '+' : ''
-  return `${sign}${drift.toFixed(1)}%`
+  const numeric = toNumber(drift)
+  if (numeric === null) return '--'
+  const sign = numeric >= 0 ? '+' : ''
+  return `${sign}${numeric.toFixed(1)}%`
 }
 
 const formatCommTime = (ts) => {
-  if (!ts) return '--'
-  return new Date(ts * 1000).toLocaleString('zh-CN', {
+  const numeric = Number(ts)
+  if (!Number.isFinite(numeric) || numeric <= 0) return '--'
+  const timeMs = numeric > 1e12 ? numeric : numeric * 1000
+  return new Date(timeMs).toLocaleString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-    hour12: false
+    hour12: false,
   })
 }
 
-// API调用
 const fetchProcessedData = async () => {
   try {
     const result = await getVibrationProcessed()
-
     if (result.code === 200 && result.data) {
       const data = result.data.data || result.data
       Object.assign(processedData, data)
@@ -335,7 +347,6 @@ const fetchProcessedData = async () => {
       statusClass.value = result.data.mock ? 'offline' : 'online'
       statusText.value = result.data.mock ? '离线（模拟数据）' : '在线'
 
-      // 检查是否需要报警闪烁
       if (data.alert_level === '报警' || data.alert_level === '预警') {
         isAlertFlashing.value = true
         showAlertBanner.value = true
@@ -350,236 +361,412 @@ const fetchProcessedData = async () => {
   }
 }
 
-const normalizeTrendResponse = (range, result) => {
-  if (result?.code !== 200) return null
-  const rawHistory = result.data?.history || []
-  const rmsHistory = rawHistory.filter(
-    point => point.rms != null && Number.isFinite(Number(point.rms)),
-  )
-  const nestedHistory = rmsHistory.map(point => ({
-    timestamp: point.timestamp,
-    data: { rms: Number(point.rms) },
-  }))
-  const normalized = normalizeHistorySeries(
-    nestedHistory,
-    range,
-    { rms: 'rms' },
-    new Date(),
-    result.data || {},
-  )
-  return {
-    rms: normalized.series.rms,
-    window: normalized.window,
-    config: normalized.config,
-    pointCount: rmsHistory.length,
+const queryKey = ({ view, year, month }) => [view, year || '', month || 'all'].join(':')
+
+const currentQuery = () => historyMode.value === 'recent24h'
+  ? { view: 'recent24h' }
+  : {
+      view: 'calendar',
+      year: Number(selectedYear.value),
+      month: selectedMonth.value === 'all' ? null : Number(selectedMonth.value),
+    }
+
+const historyCacheMaxAge = query => query.view === 'recent24h' ? 5 * MINUTE : 30 * MINUTE
+
+const readHistoryCache = (query) => {
+  const key = queryKey(query)
+  const cached = historyCache.get(key)
+  if (!cached) return null
+  if (Date.now() - cached.updatedAt <= historyCacheMaxAge(query)) return cached.payload
+  historyCache.delete(key)
+  return null
+}
+
+const syncAvailablePeriods = (periods = []) => {
+  if (!Array.isArray(periods) || !periods.length) return
+  availablePeriods.value = periods
+  if (!periods.some(item => Number(item.year) === Number(selectedYear.value))) {
+    selectedYear.value = Number(periods[0].year)
+    selectedMonth.value = 'all'
+    return
+  }
+  if (selectedMonth.value !== 'all' && !monthOptions.value.includes(Number(selectedMonth.value))) {
+    selectedMonth.value = 'all'
   }
 }
 
-const applyTrendResponse = (range, result) => {
-  const nextData = normalizeTrendResponse(range, result)
-  if (!nextData) return null
-  historyCache.set(range, nextData)
-  chartData.value = nextData
-  historyError.value = ''
-  historyEmpty.value = nextData.pointCount === 0
-  return nextData
+const applyTrendPayload = (payload, query, apply = true, cacheResult = true) => {
+  if (!payload) return null
+  syncAvailablePeriods(payload.available_periods)
+  const normalized = { ...payload, history: Array.isArray(payload.history) ? payload.history : [] }
+  if (cacheResult) historyCache.set(queryKey(query), { payload: normalized, updatedAt: Date.now() })
+  if (apply && queryKey(query) === queryKey(currentQuery())) {
+    chartData.value = normalized
+    historyError.value = ''
+  }
+  return normalized
 }
 
-const loadHistory = async (range = '1h', apply = true) => {
+const loadTrends = async (query = currentQuery(), apply = true, force = false) => {
+  const key = queryKey(query)
+  const requestId = apply ? ++historyRequestSerial : 0
+  const isCurrentRequest = () => !apply || (
+    isMounted &&
+    requestId === historyRequestSerial &&
+    key === queryKey(currentQuery())
+  )
+  const cached = force ? null : readHistoryCache(query)
+  if (cached) {
+    const shouldApply = apply && isCurrentRequest()
+    const normalized = applyTrendPayload(cached, query, shouldApply, false)
+    if (shouldApply) historyLoading.value = false
+    return { payload: normalized, applied: shouldApply, error: false }
+  }
+
+  if (apply && isMounted) {
+    historyLoading.value = true
+    historyError.value = ''
+  }
   try {
-    if (historyCache.has(range)) {
-      const cached = historyCache.get(range)
-      if (apply) {
-        chartData.value = cached
-        historyError.value = ''
-        historyEmpty.value = cached.pointCount === 0
-      }
-      return cached
+    const res = await getVibrationHistoryTrends(query)
+    if (res.code !== 200 || !res.data || !Array.isArray(res.data.history)) {
+      throw new Error('振动趋势响应无效')
     }
-    if (apply) {
-      historyLoading.value = true
-      historyError.value = ''
-    }
-    const result = await getVibrationTrends(range)
-    const nextData = normalizeTrendResponse(range, result)
-    if (!nextData) throw new Error('振动历史响应无效')
-    historyCache.set(range, nextData)
-    if (apply) {
-      chartData.value = nextData
-      historyEmpty.value = nextData.pointCount === 0
-    }
-    return nextData
+    const shouldApply = apply && isCurrentRequest()
+    const normalized = applyTrendPayload(res.data, query, shouldApply)
+    return { payload: normalized, applied: shouldApply, error: false }
   } catch (error) {
-    console.error('获取趋势数据失败:', error)
-    if (apply) historyError.value = '历史数据服务暂时不可用，请稍后重试'
+    console.warn('加载振动趋势失败:', error)
+    const currentError = apply && isCurrentRequest()
+    if (currentError) historyError.value = '历史数据服务暂时不可用，请稍后重试'
+    return { payload: null, applied: false, error: currentError }
   } finally {
-    if (apply) historyLoading.value = false
+    if (apply && isCurrentRequest()) historyLoading.value = false
   }
 }
 
 const handleHistoryCacheUpdate = (event) => {
   const detail = event.detail || {}
-  if (detail.url !== '/v1/sensor/vibration/trends') return
-  const range = detail.params?.range || '1h'
-  if (range !== selectedRange.value) return
-  if (applyTrendResponse(range, detail.data)) renderChart()
+  if (detail.url !== TREND_URL || detail.data?.code !== 200) return
+  const params = detail.params || {}
+  const query = {
+    view: params.view || 'recent24h',
+    year: params.year != null ? Number(params.year) : undefined,
+    month: params.month != null ? Number(params.month) : null,
+  }
+  const shouldApply = queryKey(query) === queryKey(currentQuery())
+  applyTrendPayload(detail.data.data, query, shouldApply)
+  if (shouldApply) renderChart()
 }
 
-const preloadHistoryLater = () => {
+const preloadCalendarLater = () => {
   if (preloadIdleTask) cancelIdleTask(preloadIdleTask)
   preloadIdleTask = runWhenIdle(() => {
     preloadIdleTask = null
-    preloadHistoryRanges(['6h'], loadHistory)
+    loadTrends({ view: 'calendar', year: Number(selectedYear.value), month: null }, false)
   }, 1200)
+}
+
+const millisecondsToNextHalfHour = () => {
+  const now = Date.now()
+  const interval = 30 * MINUTE
+  return Math.floor(now / interval) * interval + interval - now
+}
+
+const restoreSelectionFromChart = () => {
+  if (chartData.value.view === 'recent24h') {
+    historyMode.value = 'recent24h'
+    return
+  }
+  historyMode.value = 'calendar'
+  selectedYear.value = Number(chartData.value.year) || initialShanghaiYear
+  selectedMonth.value = Number.isInteger(Number(chartData.value.month)) ? Number(chartData.value.month) : 'all'
+}
+
+const finishHistorySelection = (query, result) => {
+  if (!isMounted || queryKey(query) !== queryKey(currentQuery())) return
+  if (!result?.applied && !result?.error) return
+  if (result?.error) restoreSelectionFromChart()
+  renderChart()
+  scheduleHistoryRefresh()
 }
 
 const scheduleHistoryRefresh = () => {
   if (historyRefreshTimer) clearTimeout(historyRefreshTimer)
+  if (!isMounted) return
+  const delay = historyMode.value === 'recent24h' ? millisecondsToNextHalfHour() + 1000 : 30 * MINUTE
   historyRefreshTimer = setTimeout(async () => {
-    historyCache.clear()
-    await loadHistory(selectedRange.value)
-    renderChart()
-    preloadHistoryLater()
-    scheduleHistoryRefresh()
-  }, getNextHistoryRefreshMs(selectedRange.value) + 1000)
+    if (!isMounted) return
+    const query = currentQuery()
+    historyCache.delete(queryKey(query))
+    const result = await loadTrends(query, true, true)
+    finishHistorySelection(query, result)
+  }, delay)
+}
+
+const selectRecent24h = async () => {
+  if (historyMode.value === 'recent24h' && !historyError.value) return
+  historyMode.value = 'recent24h'
+  const query = currentQuery()
+  const result = await loadTrends(query, true, Boolean(historyError.value))
+  finishHistorySelection(query, result)
+}
+
+const onYearChange = async () => {
+  historyMode.value = 'calendar'
+  if (selectedMonth.value !== 'all' && !monthOptions.value.includes(Number(selectedMonth.value))) {
+    selectedMonth.value = 'all'
+  }
+  const query = currentQuery()
+  const result = await loadTrends(query)
+  finishHistorySelection(query, result)
+}
+
+const onMonthChange = async () => {
+  historyMode.value = 'calendar'
+  const query = currentQuery()
+  const result = await loadTrends(query)
+  finishHistorySelection(query, result)
+}
+
+const retryHistory = async () => {
+  const query = currentQuery()
+  historyCache.delete(queryKey(query))
+  const result = await loadTrends(query, true, true)
+  finishHistorySelection(query, result)
+}
+
+const chartSeriesData = () => {
+  if (chartData.value.view === 'recent24h') {
+    return (chartData.value.history || []).map(point => [
+      Number(point.timestamp) * 1000,
+      toNumber(point.data?.rms),
+    ])
+  }
+  return (chartData.value.history || []).map(point => [
+    new Date(`${point.date}T00:00:00+08:00`).getTime(),
+    toNumber(point.data?.rms),
+  ])
+}
+
+const formatXAxisLabel = (value) => {
+  const dateValue = new Date(value)
+  if (historyMode.value === 'recent24h') {
+    return dateValue.toLocaleTimeString('zh-CN', {
+      timeZone: 'Asia/Shanghai',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    })
+  }
+  if (selectedMonth.value === 'all') {
+    return dateValue.toLocaleDateString('zh-CN', {
+      timeZone: 'Asia/Shanghai',
+      month: 'numeric',
+      day: 'numeric',
+    })
+  }
+  return `${dateValue.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', day: 'numeric' })}日`
+}
+
+const escapeTooltipHtml = value => String(value).replace(/[&<>"']/g, character => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+})[character])
+
+const tooltipFormatter = (params) => {
+  const item = (Array.isArray(params) ? params : [params]).find(entry => entry.value?.[1] != null)
+  if (!item) return ''
+  const dateValue = new Date(item.value[0])
+  const heading = historyMode.value === 'recent24h'
+    ? dateValue.toLocaleString('zh-CN', {
+        timeZone: 'Asia/Shanghai',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      })
+    : dateValue.toLocaleDateString('zh-CN', {
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      })
+  return `<div style="min-width:170px"><strong>${escapeTooltipHtml(heading)}</strong>`
+    + `<div style="display:flex;justify-content:space-between;gap:24px;margin-top:8px">`
+    + `<span>${item.marker}RMS</span><strong>${Number(item.value[1]).toFixed(4)} g</strong></div></div>`
+}
+
+const thresholdMarkLines = () => {
+  const data = []
+  if (thresholdVisibility.warning) {
+    data.push({
+      yAxis: WARNING_RMS,
+      name: '预警线',
+      lineStyle: { color: '#e6a23c', width: 1.4, type: 'dashed' },
+      label: { show: true, formatter: '预警 0.10g', color: '#e6a23c', position: 'insideEndTop' },
+    })
+  }
+  if (thresholdVisibility.alarm) {
+    data.push({
+      yAxis: ALARM_RMS,
+      name: '报警线',
+      lineStyle: { color: '#f56c6c', width: 1.4, type: 'dashed' },
+      label: { show: true, formatter: '报警 0.15g', color: '#f56c6c', position: 'insideEndTop' },
+    })
+  }
+  return data
 }
 
 const fullChartOption = () => {
-  const xAxisWindow = buildChartAxisWindow(chartData.value.window)
+  const recent = historyMode.value === 'recent24h'
+  const points = chartSeriesData()
+  const values = points.map(point => point[1]).filter(value => value !== null)
+  const thresholdValues = [
+    thresholdVisibility.warning ? WARNING_RMS : null,
+    thresholdVisibility.alarm ? ALARM_RMS : null,
+  ].filter(value => value !== null)
+  const yRange = calcNiceYAxisRange([...values, ...thresholdValues], { min: 0, max: 0.2 }, 5)
+  const windowStart = Number(chartData.value.window?.start) * 1000
+  const windowEnd = Number(chartData.value.window?.end) * 1000
+  const xMin = Number.isFinite(windowStart) && recent ? windowStart : (points[0]?.[0] ?? Date.now() - DAY)
+  const xMax = Number.isFinite(windowEnd) && recent ? windowEnd : (points.at(-1)?.[0] ?? Date.now())
+  const tickInterval = recent ? 3 * HOUR : (selectedMonth.value === 'all' ? 30 * DAY : 5 * DAY)
+
   return {
+    animation: true,
+    animationDuration: 900,
+    animationDurationUpdate: 650,
+    animationEasing: 'cubicOut',
+    animationEasingUpdate: 'cubicInOut',
     backgroundColor: 'transparent',
     tooltip: {
       trigger: 'axis',
-      backgroundColor: 'rgba(0,0,0,0.85)',
-      borderColor: '#00e5ff',
-      textStyle: { color: '#E2F0FE' },
-      formatter: function(params) {
-        if (!params || params.length === 0) return ''
-        const point = params[0].data
-        const time = new Date(point?.[0]).toLocaleString('zh-CN', { hour12: false })
-        const value = point?.[1]
-        return `${time}<br/>振动RMS: ${value == null ? '--' : Number(value).toFixed(4)} g`
-      }
+      confine: true,
+      formatter: tooltipFormatter,
+      backgroundColor: 'rgba(5, 11, 24, 0.95)',
+      borderColor: 'rgba(89, 155, 255, 0.55)',
+      borderWidth: 1,
+      padding: [11, 13],
+      textStyle: { color: '#f1f6ff', fontSize: 13 },
+      axisPointer: { type: 'line', lineStyle: { color: 'rgba(151, 190, 255, 0.55)', type: 'dashed' } },
     },
-    grid: { left: '3%', right: '4%', bottom: '3%', top: '10%', containLabel: true },
+    grid: { left: 18, right: 22, bottom: 18, top: 28, containLabel: true },
     xAxis: {
       type: 'time',
-      min: xAxisWindow.min,
-      max: xAxisWindow.max,
-      interval: chartData.value.config?.majorTickMs,
-      minInterval: chartData.value.config?.majorTickMs,
-      maxInterval: chartData.value.config?.majorTickMs,
-      axisLine: { lineStyle: { color: '#2a4a6a' } },
-      axisLabel: {
-        color: '#AECAF5',
-        hideOverlap: true,
-        showMaxLabel: true,
-        formatter: value => formatChartAxisLabel(value, selectedRange.value, chartData.value.window),
-      }
+      min: xMin,
+      max: xMax,
+      interval: tickInterval,
+      minInterval: recent ? 30 * MINUTE : DAY,
+      axisLine: { lineStyle: { color: 'rgba(121, 155, 202, 0.42)' } },
+      axisTick: { show: true, lineStyle: { color: 'rgba(121, 155, 202, 0.42)' } },
+      axisLabel: { color: '#91a9ca', margin: 12, hideOverlap: true, formatter: formatXAxisLabel },
+      splitLine: { show: false },
     },
     yAxis: {
       type: 'value',
-      name: 'RMS (g)',
-      nameTextStyle: { color: '#AECAF5' },
-      axisLine: { lineStyle: { color: '#2a4a6a' } },
-      axisLabel: { color: '#AECAF5' },
-      splitLine: { lineStyle: { color: 'rgba(0,200,255,0.1)' } },
-      min: 0
+      min: yRange.min,
+      max: yRange.max,
+      interval: yRange.interval,
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { color: '#b6c7df', margin: 12, formatter: value => `${Number(value).toFixed(2)}g` },
+      splitLine: { lineStyle: { color: 'rgba(151, 177, 215, 0.18)', width: 1 } },
     },
     series: [{
+      id: 'vibration-rms',
+      name: '综合振动烈度 RMS',
       type: 'line',
-      name: '振动RMS',
-      smooth: true,
-      symbol: 'none',
+      data: points,
+      showSymbol: false,
+      symbol: 'circle',
+      symbolSize: 6,
+      smooth: recent ? 0.32 : 0.16,
+      smoothMonotone: 'x',
       connectNulls: false,
-      lineStyle: { color: '#00e5ff', width: 2 },
+      clip: true,
+      z: 3,
+      lineStyle: { color: '#20d7ff', width: recent ? 2.4 : 1.8 },
+      itemStyle: { color: '#20d7ff', borderColor: '#ffffff', borderWidth: 1 },
+      emphasis: { focus: 'series', scale: true },
+      universalTransition: true,
       areaStyle: {
         color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-          { offset: 0, color: 'rgba(0,229,255,0.3)' },
-          { offset: 1, color: 'rgba(0,229,255,0)' }
-        ])
+          { offset: 0, color: 'rgba(32, 215, 255, 0.24)' },
+          { offset: 1, color: 'rgba(32, 215, 255, 0)' },
+        ]),
       },
       markLine: {
         silent: true,
-        lineStyle: { type: 'dashed' },
-        data: [
-          { yAxis: 0.05, lineStyle: { color: '#67c23a' }, label: { show: false } },
-          { yAxis: 0.10, lineStyle: { color: '#e6a23c' }, label: { show: false } },
-          { yAxis: 0.15, lineStyle: { color: '#f56c6c' }, label: { show: false } }
-        ]
+        symbol: ['none', 'none'],
+        data: thresholdMarkLines(),
       },
-      data: chartData.value.rms,
     }],
   }
 }
 
 const renderChart = () => {
-  if (rmsChart) rmsChart.setOption(fullChartOption(), true)
+  if (!isMounted || !chart || chart.isDisposed()) return
+  chart.setOption(fullChartOption(), {
+    notMerge: false,
+    replaceMerge: ['xAxis', 'yAxis', 'series'],
+    lazyUpdate: false,
+  })
 }
 
 const initChart = () => {
-  if (!rmsChartRef.value) return
-  rmsChart = echarts.init(rmsChartRef.value)
-  renderChart()
-}
-
-const changeRange = async (range) => {
-  selectedRange.value = range
-  await loadHistory(range)
-  renderChart()
-  scheduleHistoryRefresh()
+  if (!chartRef.value) return
+  chart = echarts.init(chartRef.value)
+  chart.setOption(fullChartOption(), true)
+  resizeHandler = () => {
+    if (resizeFrame != null) cancelAnimationFrame(resizeFrame)
+    resizeFrame = requestAnimationFrame(() => {
+      resizeFrame = null
+      if (!chart || chart.isDisposed()) return
+      chart.resize()
+      renderChart()
+    })
+  }
+  window.addEventListener('resize', resizeHandler)
 }
 
 const dismissAlert = () => {
   showAlertBanner.value = false
 }
 
-// 生命周期
 onMounted(() => {
+  isMounted = true
   const startup = createSensorDetailStartup({
     initChart,
     fetchRealtime: fetchProcessedData,
-    loadInitialHistory: () => loadHistory('1h'),
+    loadInitialHistory: async () => loadTrends({ view: 'recent24h' }),
     renderHistory: renderChart,
     scheduleHistoryRefresh,
-    preloadHistoryLater,
+    preloadHistoryLater: preloadCalendarLater,
   })
   startup.start()
 
-  // 设置定时刷新（每5秒刷新实时数据）
-  realtimeTimer = setInterval(() => {
-    fetchProcessedData()
-  }, 5000)
-
-  // 窗口大小变化时重绘图表
-  window.addEventListener('resize', handleResize)
+  realtimeTimer = setInterval(fetchProcessedData, 5000)
   window.addEventListener('dam-api-cache-updated', handleHistoryCacheUpdate)
 })
 
 onUnmounted(() => {
-  // 清理定时器
+  isMounted = false
+  historyRequestSerial += 1
   if (realtimeTimer) clearInterval(realtimeTimer)
   if (historyRefreshTimer) clearTimeout(historyRefreshTimer)
   if (preloadIdleTask) cancelIdleTask(preloadIdleTask)
-
-  // 销毁图表
-  if (rmsChart) rmsChart.dispose()
-
-  // 移除事件监听
-  window.removeEventListener('resize', handleResize)
   window.removeEventListener('dam-api-cache-updated', handleHistoryCacheUpdate)
+  if (resizeHandler) window.removeEventListener('resize', resizeHandler)
+  if (resizeFrame != null) cancelAnimationFrame(resizeFrame)
+  if (chart && !chart.isDisposed()) chart.dispose()
+  chart = null
 })
-
-const handleResize = () => {
-  rmsChart?.resize()
-}
 </script>
 
 <style scoped>
-/* 页面整体 */
 .vibration-monitor {
   padding: 16px;
-  background: linear-gradient(135deg, #0a1628 0%, #1a2a4a 100%);
   min-height: 100vh;
   color: #e0e8f0;
   position: relative;
@@ -590,48 +777,47 @@ const handleResize = () => {
 }
 
 @keyframes alertFlash {
-  0%, 100% { background: linear-gradient(135deg, #0a1628 0%, #1a2a4a 100%); }
-  50% { background: linear-gradient(135deg, #1a0a0a 0%, #3a1a1a 100%); }
+  0%, 100% { background: transparent; }
+  50% { background: rgba(120, 16, 16, 0.18); }
 }
 
-/* 头部 */
 .detail-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 20px;
-  background: rgba(10, 31, 55, 0.8);
-  border: 1px solid rgba(0, 200, 255, 0.2);
-  border-radius: 12px;
+  padding: 14px 18px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
   margin-bottom: 16px;
-  backdrop-filter: blur(10px);
 }
 
 .header-left {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
 }
 
 .header-icon {
-  width: 56px;
-  height: 56px;
+  width: 48px;
+  height: 48px;
   object-fit: cover;
-  border-radius: 8px;
-  background: rgba(0, 100, 200, 0.3);
-  border: 2px solid rgba(0, 200, 255, 0.3);
+  border-radius: 6px;
+  background: #1a3a5a;
+  border: 1px solid var(--border-color);
 }
 
 .header-info h2 {
-  font-size: 24px;
-  color: #ffffff;
-  margin: 0 0 4px 0;
+  font-size: 22px;
+  color: var(--text-primary);
+  margin: 0;
   font-weight: 600;
 }
 
 .header-subtitle {
-  font-size: 14px;
-  color: #8aa8c7;
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 
 .header-status {
@@ -653,21 +839,21 @@ const handleResize = () => {
 }
 
 .header-status.online {
-  color: #67c23a;
+  color: var(--success-color);
 }
 
 .header-status.online .dot {
-  background: #67c23a;
-  box-shadow: 0 0 6px #67c23a;
+  background: var(--success-color);
+  box-shadow: 0 0 6px var(--success-color);
 }
 
 .header-status.offline {
-  color: #f56c6c;
+  color: var(--danger-color);
 }
 
 .header-status.offline .dot {
-  background: #f56c6c;
-  box-shadow: 0 0 6px #f56c6c;
+  background: var(--danger-color);
+  box-shadow: 0 0 6px var(--danger-color);
 }
 
 .header-comm {
@@ -676,33 +862,34 @@ const handleResize = () => {
   text-align: right;
   font-size: 11px;
   font-weight: 400;
-  color: #8aa8c7;
+  color: var(--text-secondary);
 }
 
-/* 指标卡片区 */
 .indicator-section {
   margin-bottom: 16px;
 }
 
 .indicator-cards {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
 }
 
 .indicator-card {
-  background: rgba(10, 31, 55, 0.8);
-  border: 1px solid rgba(0, 200, 255, 0.2);
-  border-radius: 12px;
+  min-width: 0;
+  min-height: 164px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
   padding: 20px;
   position: relative;
   overflow: hidden;
-  transition: all 0.3s ease;
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
 }
 
 .indicator-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.22);
 }
 
 .indicator-card::before {
@@ -746,7 +933,7 @@ const handleResize = () => {
 .card-value {
   font-size: 36px;
   font-weight: 700;
-  font-family: 'Consolas', 'Monaco', monospace;
+  font-family: "Consolas", "Monaco", monospace;
   color: #ffffff;
   line-height: 1;
 }
@@ -794,7 +981,6 @@ const handleResize = () => {
 .threshold-warn { color: #e6a23c; }
 .threshold-alarm { color: #f56c6c; }
 
-/* 状态灯卡片 */
 .status-card .status-lights {
   display: flex;
   flex-direction: column;
@@ -810,7 +996,7 @@ const handleResize = () => {
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.3);
   opacity: 0.5;
-  transition: all 0.3s ease;
+  transition: 0.25s ease;
 }
 
 .light.active {
@@ -844,206 +1030,332 @@ const handleResize = () => {
   font-weight: 500;
 }
 
-/* 趋势图区域 */
-.trend-section {
-  margin-bottom: 16px;
+.data-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 12px;
 }
 
-.section-header {
+.history-panel {
+  margin-top: 12px;
+  padding: 0;
+  overflow: hidden;
+  border-color: rgba(84, 130, 202, 0.25);
+  background:
+    radial-gradient(circle at 100% 0%, rgba(50, 105, 200, 0.13), transparent 34%),
+    linear-gradient(145deg, rgba(15, 31, 57, 0.98), rgba(10, 23, 43, 0.98));
+  box-shadow: 0 14px 36px rgba(0, 8, 24, 0.18);
+}
+
+.history-panel-header {
+  min-height: 66px;
+  padding: 16px 18px;
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  justify-content: space-between;
+  gap: 18px;
+  border-bottom: 1px solid rgba(124, 157, 207, 0.14);
 }
 
-.section-header h3 {
-  font-size: 18px;
-  color: #ffffff;
-  margin: 0;
-}
-
-.time-range-selector {
+.history-heading {
   display: flex;
-  gap: 8px;
-}
-
-.time-range-selector button {
-  padding: 6px 16px;
-  border: 1px solid rgba(0, 200, 255, 0.3);
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.3);
-  color: #8aa8c7;
-  cursor: pointer;
-  transition: all 0.3s ease;
-}
-
-.time-range-selector button:hover {
-  border-color: #00e5ff;
-  color: #00e5ff;
-}
-
-.time-range-selector button.active {
-  background: rgba(0, 229, 255, 0.2);
-  border-color: #00e5ff;
-  color: #00e5ff;
-}
-
-.trend-charts {
-  display: grid;
-  grid-template-columns: 1fr;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 16px;
 }
 
-.chart-panel {
-  background: rgba(10, 31, 55, 0.8);
-  border: 1px solid rgba(0, 200, 255, 0.2);
-  border-radius: 12px;
-  padding: 16px;
+.history-heading .panel-title {
+  display: block;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: #f4f8ff;
+  font-size: 22px;
+  font-weight: 750;
+  letter-spacing: 0.03em;
+  text-shadow: 0 2px 14px rgba(74, 139, 255, 0.18);
 }
 
-.panel-title {
-  display: flex;
-  justify-content: space-between;
+.metric-switch {
+  display: inline-flex;
   align-items: center;
-  margin-bottom: 12px;
+  padding: 4px;
+  border: 1px solid rgba(119, 153, 204, 0.13);
+  border-radius: 10px;
+  background: rgba(4, 15, 33, 0.44);
 }
 
-.panel-title span:first-child {
-  font-size: 15px;
-  font-weight: 500;
-  color: #e0e8f0;
+.metric-switch button {
+  min-width: 86px;
+  height: 32px;
+  padding: 0 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 7px;
+  color: #091426;
+  background: linear-gradient(135deg, #ffd84a, #ffbc27);
+  box-shadow: 0 4px 14px rgba(255, 190, 35, 0.24);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
 }
 
-.panel-subtitle {
-  font-size: 12px;
-  color: #8aa8c7;
+.history-controls {
+  display: flex;
+  align-items: center;
+  gap: 9px;
 }
 
-.chart-container {
-  height: 300px;
+.period-button {
+  height: 34px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid rgba(120, 155, 211, 0.24);
+  border-radius: 8px;
+  background: rgba(33, 57, 94, 0.55);
+  color: #a8bddb;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+
+.period-button:hover {
+  color: #fff;
+  border-color: rgba(65, 147, 255, 0.6);
+}
+
+.period-button.active {
+  color: #fff;
+  border-color: #378cff;
+  background: linear-gradient(135deg, #1d70e8, #245ac4);
+  box-shadow: 0 5px 16px rgba(20, 100, 230, 0.3);
+}
+
+.control-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.calendar-controls {
+  display: flex;
+  gap: 7px;
+  padding: 3px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  opacity: 0.72;
+  transition: 0.2s ease;
+}
+
+.calendar-controls:hover,
+.calendar-controls.active {
+  opacity: 1;
+  border-color: rgba(77, 141, 234, 0.28);
+  background: rgba(26, 49, 83, 0.38);
+}
+
+.history-select.year-select { width: 112px; }
+.history-select.month-select { width: 126px; }
+.history-select :deep(.el-select__wrapper) {
+  min-height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: rgba(31, 53, 88, 0.82);
+  box-shadow: 0 0 0 1px rgba(120, 155, 211, 0.18) inset;
+}
+.history-select :deep(.el-select__selected-item) { color: #dce9fa; font-size: 13px; }
+.history-select :deep(.el-select__caret) { color: #91a8c9; }
+
+.trend-shell {
+  padding: 12px 18px 14px;
 }
 
 .chart-wrap {
   position: relative;
 }
 
-.chart-state-overlay {
+.history-chart-wrap {
+  height: 392px;
+}
+
+.chart-container {
+  height: 100%;
+}
+
+.chart-loading-overlay {
   position: absolute;
   inset: 0;
+  z-index: 10;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  color: #8aa8c7;
-  font-size: 14px;
-  background: rgba(10, 31, 55, 0.38);
-  pointer-events: none;
+  border-radius: 8px;
+  background: rgba(8, 22, 43, 0.78);
+  backdrop-filter: blur(3px);
 }
 
-.chart-state-error {
-  color: #f5a7a7;
+.chart-hint-overlay {
+  background: rgba(8, 22, 43, 0.5);
 }
 
-.chart-legend {
-  display: flex;
-  justify-content: center;
-  gap: 24px;
+.loading-spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid rgba(55, 140, 255, 0.18);
+  border-top-color: #438fff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-text {
   margin-top: 12px;
-  flex-wrap: wrap;
+  color: #AECAF5;
+  font-size: 14px;
 }
 
-.legend-item, .legend-threshold {
+.chart-error-banner {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 9;
+  max-width: calc(100% - 20px);
+  padding: 7px 11px;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
+  border: 1px solid rgba(255, 190, 82, 0.35);
+  border-radius: 6px;
+  background: rgba(66, 43, 17, 0.9);
+  color: #ffd58a;
   font-size: 12px;
-  color: #8aa8c7;
+  line-height: 18px;
 }
 
-.legend-line {
-  width: 20px;
-  height: 2px;
+.chart-error-banner button,
+.chart-retry-button {
+  flex: 0 0 auto;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 213, 138, 0.55);
+  border-radius: 5px;
+  background: rgba(255, 213, 138, 0.12);
+  color: #ffe4b4;
+  font: inherit;
+  cursor: pointer;
 }
 
-.legend-threshold {
-  opacity: 0.7;
+.chart-error-banner button:hover,
+.chart-retry-button:hover {
+  border-color: rgba(255, 226, 174, 0.9);
+  background: rgba(255, 213, 138, 0.2);
 }
 
-.threshold-line {
-  width: 20px;
-  height: 2px;
-  border-top: 2px dashed;
+.chart-retry-button {
+  margin-top: 12px;
 }
 
-/* 详细数据区域 */
-.detail-section {
-  margin-bottom: 16px;
+.series-toggles {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 4px 10px 0;
+  border-top: 1px solid rgba(123, 154, 201, 0.1);
 }
 
-.data-table-container {
-  background: rgba(10, 31, 55, 0.8);
-  border: 1px solid rgba(0, 200, 255, 0.2);
-  border-radius: 12px;
-  overflow: hidden;
+.series-plain,
+.series-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #b7cae4;
+  font-size: 12px;
+  user-select: none;
 }
 
-.data-table {
-  width: 100%;
-  border-collapse: collapse;
+.series-toggle {
+  cursor: pointer;
 }
 
-.data-table th {
-  background: rgba(0, 100, 200, 0.3);
-  color: #e0e8f0;
-  font-weight: 600;
-  font-size: 14px;
-  padding: 12px 16px;
-  text-align: left;
-  border-bottom: 1px solid rgba(0, 200, 255, 0.2);
+.series-toggle input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
 }
 
-.data-table td {
-  padding: 12px 16px;
-  border-bottom: 1px solid rgba(0, 200, 255, 0.1);
-  font-size: 14px;
+.checkbox-ui {
+  width: 15px;
+  height: 15px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 4px;
+  border: 1px solid rgba(147, 174, 215, 0.6);
+  background: rgba(5, 15, 32, 0.55);
+  transition: 0.18s ease;
 }
 
-.data-table tr:last-child td {
-  border-bottom: none;
+.series-toggle input:checked + .checkbox-ui {
+  border-color: #2d8cff;
+  background: #247ee8;
 }
 
-.data-table tr:hover {
-  background: rgba(0, 100, 200, 0.1);
+.series-toggle input:checked + .checkbox-ui::after {
+  content: '✓';
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
 }
 
-.data-table .value {
-  font-family: 'Consolas', 'Monaco', monospace;
-  font-weight: 600;
-  color: #00e5ff;
+.series-plain i,
+.series-toggle i {
+  width: 18px;
+  height: 3px;
+  border-radius: 999px;
+  background: #20d7ff;
+  box-shadow: 0 0 8px rgba(32, 215, 255, 0.4);
 }
 
-.data-table .value.drift-normal { color: #67c23a; }
-.data-table .value.drift-warning { color: #e6a23c; }
-.data-table .value.drift-alarm { color: #f56c6c; }
+.series-toggle.warning i {
+  background: #e6a23c;
+  box-shadow: 0 0 8px rgba(230, 162, 60, 0.35);
+}
 
-/* 状态未知 */
+.series-toggle.alarm i {
+  background: #f56c6c;
+  box-shadow: 0 0 8px rgba(245, 108, 108, 0.35);
+}
+
 .status-unknown {
   opacity: 0.6;
 }
 
-/* 报警提示浮层 */
 .alert-banner {
   position: fixed;
   top: 20px;
   right: 20px;
+  z-index: 1000;
+  max-width: 400px;
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 16px 20px;
   border-radius: 12px;
   backdrop-filter: blur(10px);
-  z-index: 1000;
   animation: slideIn 0.3s ease;
-  max-width: 400px;
 }
 
 @keyframes slideIn {
@@ -1074,7 +1386,14 @@ const handleResize = () => {
 }
 
 .alert-icon {
-  font-size: 24px;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  border-radius: 50%;
+  font-size: 16px;
+  font-weight: 800;
 }
 
 .alert-content {
@@ -1094,18 +1413,18 @@ const handleResize = () => {
 }
 
 .alert-close {
-  background: none;
-  border: none;
-  color: #ffffff;
-  font-size: 24px;
-  cursor: pointer;
-  padding: 0;
   width: 30px;
   height: 30px;
+  padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  border: none;
   border-radius: 50%;
+  background: none;
+  color: #ffffff;
+  font-size: 24px;
+  cursor: pointer;
   transition: background 0.3s ease;
 }
 
@@ -1113,10 +1432,25 @@ const handleResize = () => {
   background: rgba(255, 255, 255, 0.2);
 }
 
-/* 响应式设计 */
 @media (max-width: 1200px) {
   .indicator-cards {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .history-panel-header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .history-controls {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .history-chart-wrap {
+    height: 340px;
   }
 }
 
@@ -1139,6 +1473,30 @@ const handleResize = () => {
     left: 20px;
     right: 20px;
     max-width: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .history-heading {
+    width: 100%;
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .calendar-controls {
+    width: 100%;
+  }
+
+  .history-select.year-select,
+  .history-select.month-select {
+    flex: 1;
+    width: auto;
+  }
+
+  .series-toggles {
+    gap: 14px;
+    flex-wrap: wrap;
   }
 }
 </style>

@@ -104,6 +104,28 @@ export function getRainTrends({ view = 'recent24h', year, month } = {}) {
 }
 
 /**
+ * 振动趋势专用接口。
+ * recent24h 返回半小时 RMS；calendar 返回每日 RMS。
+ */
+export function getVibrationHistoryTrends({ view = 'recent24h', year, month } = {}) {
+  const params = { view }
+  if (view === 'calendar') {
+    if (year != null) params.year = year
+    if (month != null && month !== 'all') params.month = month
+  }
+
+  const recent = view === 'recent24h'
+  return request.get('/v1/sensor/history/vibration/trends', {
+    params,
+    timeout: 30000,
+    silentError: true,
+    localCacheMaxAge: recent ? 5 * 60 * 1000 : 30 * 60 * 1000,
+    localCacheAllowStale: true,
+    localCacheStaleMaxAge: recent ? 2 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000,
+  })
+}
+
+/**
  * 获取振动 RMS 历史趋势。后端沿用统一历史窗口和分层降采样，
  * 仅在输出阶段把振动原始字段转换为 rms/freq/temperature。
  */

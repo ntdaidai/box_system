@@ -104,6 +104,7 @@ const menuMap = {
       name: '传感器监测',
       icon: Cpu,
       children: [
+        { name: '综合传感器页', path: '/monitor/sensors', icon: Cpu },
         { name: '温湿度传感器', path: '/monitor/temp', icon: Sunny },
         { name: '风速风向传感器', path: '/monitor/wind', icon: WindPower },
         { name: '雨量传感器', path: '/monitor/rain', icon: Cloudy },

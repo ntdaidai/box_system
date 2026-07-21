@@ -443,6 +443,190 @@ class SensorHistoryService:
             "coverage_ratio": round(point_count / max_point_count, 4) if max_point_count else 0.0,
         }
 
+    @staticmethod
+    def _to_float(value):
+        if isinstance(value, bool) or value is None:
+            return None
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return None
+        return numeric if math.isfinite(numeric) else None
+
+    @classmethod
+    def _mean_available(cls, values) -> float | None:
+        numeric = [cls._to_float(value) for value in values]
+        numeric = [value for value in numeric if value is not None]
+        if not numeric:
+            return None
+        return round(sum(numeric) / len(numeric), 4)
+
+    @classmethod
+    def _vector_magnitude(cls, values) -> float | None:
+        numeric = [cls._to_float(value) for value in values]
+        numeric = [value for value in numeric if value is not None]
+        if not numeric:
+            return None
+        return round(math.sqrt(sum(value * value for value in numeric)), 4)
+
+    @classmethod
+    def _vibration_chart_data(cls, data: dict) -> dict:
+        data = data or {}
+        rms = cls._to_float(data.get("total_rms"))
+        if rms is None:
+            rms = cls._vector_magnitude([
+                data.get("加速度幅值X"),
+                data.get("加速度幅值Y"),
+                data.get("加速度幅值Z"),
+            ])
+        if rms is None:
+            rms = cls._vector_magnitude([
+                data.get("加速度X"),
+                data.get("加速度Y"),
+                data.get("加速度Z"),
+            ])
+
+        freq = cls._to_float(data.get("dominant_freq"))
+        if freq is None:
+            freq = cls._mean_available([
+                data.get("频率X"),
+                data.get("频率Y"),
+                data.get("频率Z"),
+            ])
+
+        temperature = cls._to_float(data.get("temperature"))
+        if temperature is None:
+            temperature = cls._to_float(data.get("温度"))
+
+        result = {"rms": rms, "freq": freq}
+        if temperature is not None:
+            result["temperature"] = temperature
+        return result
+
+    def query_vibration_trends(
+        self,
+        view: str = "recent24h",
+        year: int | None = None,
+        month: int | None = None,
+        now_ms: int = None,
+    ) -> dict:
+        """Return half-hour or daily-average vibration RMS data."""
+        available_periods = self.available_calendar_periods("vibration")
+        if view == "recent24h":
+            payload = self.query_history("vibration", "1d", now_ms=now_ms)
+            start_seconds = float(payload["window"]["start"])
+            end_seconds = float(payload["window"]["end"])
+            max_points = int(payload["max_point_count"])
+            history = []
+            for point in payload.get("history", []):
+                timestamp = self._to_float(point.get("timestamp"))
+                if timestamp is None or not (start_seconds < timestamp <= end_seconds):
+                    continue
+                data = self._vibration_chart_data(point.get("data") or {})
+                history.append({"timestamp": timestamp, "data": data})
+            history = history[-max_points:]
+            point_count = sum(row["data"].get("rms") is not None for row in history)
+            return {
+                **payload,
+                "history": history,
+                "point_count": point_count,
+                "coverage_ratio": round(point_count / max_points, 4) if max_points else 0.0,
+                "view": "recent24h",
+                "aggregation": "30m_rms_average",
+                "available_periods": available_periods,
+            }
+
+        if view != "calendar":
+            raise ValueError("view must be recent24h or calendar")
+
+        current = datetime.now(self.timezone)
+        selected_year = int(year if year is not None else current.year)
+        selected_month = int(month) if month not in (None, 0) else None
+        payload = self.query_vibration_calendar(selected_year, selected_month)
+        payload["available_periods"] = available_periods
+        return payload
+
+    def query_vibration_calendar(self, year: int, month: int | None = None) -> dict:
+        """Read daily vibration RMS for one calendar month or year."""
+        year = int(year)
+        if year < 2000 or year > 2100:
+            raise ValueError("year must be between 2000 and 2100")
+        if month is not None and (int(month) < 1 or int(month) > 12):
+            raise ValueError("month must be between 1 and 12")
+
+        month = int(month) if month is not None else None
+        start_date = date(year, month or 1, 1)
+        if month is None or month == 12:
+            end_date = date(year + 1, 1, 1)
+        else:
+            end_date = date(year, month + 1, 1)
+
+        start_dt = datetime.combine(start_date, datetime_time.min, tzinfo=self.timezone)
+        end_dt = datetime.combine(end_date, datetime_time.min, tzinfo=self.timezone)
+        start_ms = int(start_dt.timestamp() * 1000)
+        end_ms = int(end_dt.timestamp() * 1000)
+        points = self.iotdb.query_points(
+            self.rollup_path("1d", self.get_device_id("vibration")),
+            start_ms,
+            end_ms,
+        )
+
+        rows_by_date = {}
+        for point in points:
+            try:
+                point_dt = datetime.fromtimestamp(
+                    float(point.get("timestamp", 0)) - 0.001,
+                    tz=self.timezone,
+                )
+            except (TypeError, ValueError, OSError):
+                continue
+            point_date = point_dt.date()
+            if point_date < start_date or point_date >= end_date:
+                continue
+
+            rows_by_date[point_date.isoformat()] = {
+                "date": point_date.isoformat(),
+                "timestamp": float(point.get("timestamp", 0)),
+                "data": self._vibration_chart_data(point.get("data") or {}),
+            }
+
+        history = []
+        cursor = start_date
+        while cursor < end_date:
+            date_key = cursor.isoformat()
+            row = rows_by_date.get(date_key)
+            if row is None:
+                bucket_end = datetime.combine(
+                    cursor + timedelta(days=1),
+                    datetime_time.min,
+                    tzinfo=self.timezone,
+                )
+                row = {
+                    "date": date_key,
+                    "timestamp": bucket_end.timestamp(),
+                    "data": {},
+                }
+            history.append(row)
+            cursor += timedelta(days=1)
+
+        point_count = sum(1 for row in history if row["data"].get("rms") is not None)
+        max_point_count = (end_date - start_date).days
+        return {
+            "device_name": "vibration",
+            "view": "calendar",
+            "year": year,
+            "month": month,
+            "source": "rollup",
+            "rollup_level": "1d",
+            "aggregation": "daily_rms_average",
+            "window": {"start": start_ms / 1000.0, "end": end_ms / 1000.0},
+            "sample_interval": 24 * 60 * 60,
+            "max_point_count": max_point_count,
+            "history": history,
+            "point_count": point_count,
+            "coverage_ratio": round(point_count / max_point_count, 4) if max_point_count else 0.0,
+        }
+
     def query_rain_trends(
         self,
         view: str = "recent24h",

@@ -61,6 +61,14 @@ def _rain_trends_cache_ttl(
     return 300 if includes_today else 1800
 
 
+def _vibration_trends_cache_ttl(
+    view: str = "recent24h",
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+) -> int:
+    return 300 if view == "recent24h" else 1800
+
+
 def _with_current_rain_day(
     payload: dict,
     latest: dict,
@@ -374,6 +382,32 @@ async def get_wind_trends(
         raise HTTPException(status_code=400, detail=str(error))
     except IoTDBUnavailableError as error:
         logger.error(f"风速趋势服务不可用 [{view}/{year}/{month}]: {error}")
+        raise HTTPException(status_code=503, detail="历史数据服务暂时不可用，请稍后重试")
+    return SensorDataResponse(code=200, data=payload)
+
+
+@router.get("/history/vibration/trends", response_model=SensorDataResponse)
+@cached(ttl=_vibration_trends_cache_ttl, prefix="sensor:vibration-history:v1", jitter=False)
+async def get_vibration_history_trends(
+    view: str = "recent24h",
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+):
+    """Vibration trends with half-hour and calendar daily RMS views."""
+    loop = asyncio.get_event_loop()
+    service = get_sensor_history_service()
+    try:
+        payload = await loop.run_in_executor(
+            _io_executor,
+            service.query_vibration_trends,
+            view,
+            year,
+            month,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except IoTDBUnavailableError as error:
+        logger.error(f"振动趋势服务不可用 [{view}/{year}/{month}]: {error}")
         raise HTTPException(status_code=503, detail="历史数据服务暂时不可用，请稍后重试")
     return SensorDataResponse(code=200, data=payload)
 

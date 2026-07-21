@@ -106,6 +106,17 @@ class FakeHistoryService:
             "point_count": 0,
         }
 
+    def query_vibration_trends(self, view, year, month):
+        return {
+            "device_name": "vibration",
+            "view": view,
+            "year": year,
+            "month": month,
+            "aggregation": "daily_rms_average" if view == "calendar" else "30m_rms_average",
+            "history": [],
+            "point_count": 0,
+        }
+
     def query_history(self, device_name, range_key):
         if device_name == "vibration":
             return {
@@ -245,6 +256,23 @@ class SensorHistoryApiTest(unittest.TestCase):
         self.assertEqual(response.data["year"], 2026)
         self.assertEqual(response.data["month"], 7)
         self.assertEqual(response.data["aggregation"], "daily_average")
+
+    def test_vibration_history_trends_route_supports_calendar_selection(self):
+        original = sensor_api.get_sensor_history_service
+        sensor_api.get_sensor_history_service = lambda: FakeHistoryService()
+        try:
+            response = asyncio.run(
+                sensor_api.get_vibration_history_trends(view="calendar", year=2026, month=7)
+            )
+        finally:
+            sensor_api.get_sensor_history_service = original
+
+        self.assertEqual(response.code, 200)
+        self.assertEqual(response.data["device_name"], "vibration")
+        self.assertEqual(response.data["view"], "calendar")
+        self.assertEqual(response.data["year"], 2026)
+        self.assertEqual(response.data["month"], 7)
+        self.assertEqual(response.data["aggregation"], "daily_rms_average")
 
     def test_current_zero_rain_is_kept_as_valid_calendar_value(self):
         current_date = date(2026, 7, 18)

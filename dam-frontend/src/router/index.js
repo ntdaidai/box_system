@@ -33,6 +33,12 @@ const routes = [
             meta: { title: '监控总览' }
           },
           {
+            path: 'sensors',
+            name: 'SensorUnified',
+            component: () => import('@/views/Monitor/SensorUnified.vue'),
+            meta: { title: '综合传感器' }
+          },
+          {
             path: 'temp',
             name: 'SensorTemp',
             component: () => import('@/views/Monitor/SensorTemp.vue'),
