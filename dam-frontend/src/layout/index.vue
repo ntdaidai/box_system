@@ -76,7 +76,7 @@
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores'
-import { HomeFilled, UserFilled, ArrowDown, Monitor, DataAnalysis, Warning, Setting, VideoCamera, Cpu, Sunny, WindPower, Cloudy, Odometer, Bell, Document, Upload } from '@element-plus/icons-vue'
+import { HomeFilled, UserFilled, ArrowDown, Monitor, DataAnalysis, Warning, Setting, VideoCamera, Cpu, Sunny, WindPower, Cloudy, Odometer, Bell, Document, Upload, Picture, VideoPlay } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
