@@ -16,29 +16,37 @@
     </el-row>
 
     <!-- 第二行：传感器实时数据卡片 -->
-    <div class="sensor-row" aria-label="传感器实时数据">
-      <div class="sensor-card-slot" v-for="s in sensorCards" :key="s.key">
-        <div class="sensor-data-card" @click="router.push(s.path)">
-          <div class="sensor-card-top">
-            <img :src="s.icon" class="sensor-img" />
-            <div class="sensor-card-info">
-              <div class="sensor-card-name">{{ s.name }}</div>
+    <div class="sensor-carousel" @mouseenter="pauseSensorCarousel" @mouseleave="resumeSensorCarousel">
+      <button type="button" class="carousel-arrow left" @click.stop="scrollSensorCards(-1)">
+        <el-icon><ArrowLeft /></el-icon>
+      </button>
+      <div ref="sensorTrackRef" class="sensor-row" aria-label="传感器实时数据">
+        <div class="sensor-card-slot" v-for="s in sensorCards" :key="s.key">
+          <div class="sensor-data-card" @click="router.push(s.path)">
+            <div class="sensor-card-top">
+              <img :src="s.icon" class="sensor-img" />
+              <div class="sensor-card-info">
+                <div class="sensor-card-name">{{ s.name }}</div>
+              </div>
+              <div class="sensor-card-status">
+                <span class="status-dot" :class="getSensorOnline(s.key) ? 'online' : 'offline'"></span>
+                {{ getSensorOnline(s.key) ? '在线' : '离线' }}
+              </div>
             </div>
-            <div class="sensor-card-status">
-              <span class="status-dot" :class="getSensorOnline(s.key) ? 'online' : 'offline'"></span>
-              {{ getSensorOnline(s.key) ? '在线' : '离线' }}
-            </div>
-          </div>
-          <div class="sensor-card-values">
-            <div class="sensor-value-grid" :class="{ 'two-col': s.values.length > 2 }">
-              <div class="sensor-value-row" v-for="v in s.values" :key="v.label">
-                <span class="sensor-value-label">{{ v.label }}</span>
-                <span class="sensor-value-num">{{ formatSensorValue(s.key, v.field) }}</span>
+            <div class="sensor-card-values">
+              <div class="sensor-value-grid" :class="{ 'two-col': s.values.length > 2 }">
+                <div class="sensor-value-row" v-for="v in s.values" :key="v.label">
+                  <span class="sensor-value-label">{{ v.label }}</span>
+                  <span class="sensor-value-num">{{ formatSensorValue(s.key, v.field) }}</span>
+                </div>
               </div>
             </div>
           </div>
         </div>
       </div>
+      <button type="button" class="carousel-arrow right" @click.stop="scrollSensorCards(1)">
+        <el-icon><ArrowRight /></el-icon>
+      </button>
     </div>
 
     <!-- 第三行：系统状态 + 告警分布 -->
@@ -285,7 +293,8 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   Monitor, CircleCheck, Warning, WarningFilled,
-  Cpu, Clock, Timer, Connection, FolderOpened, Menu, Odometer, Aim
+  Cpu, Clock, Timer, Connection, FolderOpened, Menu, Odometer, Aim,
+  ArrowLeft, ArrowRight
 } from '@element-plus/icons-vue'
 import { getSystemInfo, getAllSensorRealtime, getDeviceStatus, getAlarmStatistics, getAlarmList } from '@/api/dashboard'
 import { getVibrationProcessed } from '@/api/sensor'
@@ -348,6 +357,9 @@ let pollTimer = null
 let vibrationTimer = null
 let cacheUpdateHandler = null
 let sensorPagePreloadTask = null
+let sensorCarouselFrame = null
+let sensorCarouselPaused = false
+const sensorTrackRef = ref(null)
 
 // ==================== 传感器卡片配置 ====================
 
@@ -685,6 +697,42 @@ const preloadSensorPagesLater = () => {
   }, 6000)
 }
 
+const sensorCardStride = () => {
+  const track = sensorTrackRef.value
+  const firstCard = track?.querySelector?.('.sensor-card-slot')
+  if (!track || !firstCard) return 430
+  const gap = Number.parseFloat(getComputedStyle(track).columnGap || getComputedStyle(track).gap || '14')
+  return firstCard.getBoundingClientRect().width + (Number.isFinite(gap) ? gap : 14)
+}
+
+const startSensorCarousel = () => {
+  if (sensorCarouselFrame) cancelAnimationFrame(sensorCarouselFrame)
+  const tick = () => {
+    const track = sensorTrackRef.value
+    if (track && !sensorCarouselPaused && track.scrollWidth > track.clientWidth + 4) {
+      track.scrollLeft += 0.35
+      if (track.scrollLeft >= track.scrollWidth - track.clientWidth - 2) {
+        track.scrollTo({ left: 0, behavior: 'smooth' })
+      }
+    }
+    sensorCarouselFrame = requestAnimationFrame(tick)
+  }
+  sensorCarouselFrame = requestAnimationFrame(tick)
+}
+
+const pauseSensorCarousel = () => {
+  sensorCarouselPaused = true
+}
+
+const resumeSensorCarousel = () => {
+  sensorCarouselPaused = false
+}
+
+const scrollSensorCards = (direction) => {
+  pauseSensorCarousel()
+  sensorTrackRef.value?.scrollBy({ left: sensorCardStride() * direction, behavior: 'smooth' })
+}
+
 // ==================== SSE 实时推送 ====================
 
 const connectSSE = () => {
@@ -814,6 +862,7 @@ onMounted(async () => {
   }, 30000)
 
   vibrationTimer = setInterval(fetchVibrationProcessed, 5000)
+  startSensorCarousel()
 })
 
 onUnmounted(() => {
@@ -823,6 +872,7 @@ onUnmounted(() => {
   if (vibrationTimer) clearInterval(vibrationTimer)
   if (cacheUpdateHandler) window.removeEventListener('dam-api-cache-updated', cacheUpdateHandler)
   if (sensorPagePreloadTask) cancelIdleTask(sensorPagePreloadTask)
+  if (sensorCarouselFrame) cancelAnimationFrame(sensorCarouselFrame)
 })
 </script>
 
@@ -845,38 +895,68 @@ onUnmounted(() => {
 }
 
 /* ========== 传感器卡片行 ========== */
-.sensor-row {
+.sensor-carousel {
+  position: relative;
   margin-bottom: 14px;
+}
+
+.sensor-row {
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: minmax(420px, 1fr);
   gap: 14px;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 0 2px 10px;
+  padding: 0 2px;
   scroll-snap-type: x proximity;
   scroll-behavior: smooth;
-  scrollbar-color: rgba(0, 200, 255, 0.55) rgba(9, 25, 48, 0.55);
-  scrollbar-width: thin;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
 .sensor-row::-webkit-scrollbar {
-  height: 8px;
-}
-
-.sensor-row::-webkit-scrollbar-track {
-  border-radius: 999px;
-  background: rgba(9, 25, 48, 0.55);
-}
-
-.sensor-row::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  background: linear-gradient(90deg, #00b8ff, #45f0bf);
+  display: none;
 }
 
 .sensor-card-slot {
   min-width: 0;
   scroll-snap-align: start;
+}
+
+.carousel-arrow {
+  position: absolute;
+  top: 50%;
+  z-index: 6;
+  width: 32px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(185, 176, 160, 0.58);
+  border-radius: 5px;
+  background: rgba(205, 195, 178, 0.88);
+  color: #4a3d31;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(-50%) scale(0.92);
+  transition: opacity 0.18s ease, transform 0.18s ease, background 0.18s ease;
+}
+
+.carousel-arrow.left {
+  left: 4px;
+}
+
+.carousel-arrow.right {
+  right: 4px;
+}
+
+.sensor-carousel:hover .carousel-arrow {
+  opacity: 1;
+  transform: translateY(-50%) scale(1);
+}
+
+.carousel-arrow:hover {
+  background: rgba(224, 216, 201, 0.96);
 }
 
 /* ========== 系统状态+告警分布行 ========== */

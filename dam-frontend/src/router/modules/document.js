@@ -5,8 +5,8 @@
 export default [
   {
     path: '/document',
-    name: 'DocumentManagement',
-    component: () => import('@/views/DocumentManagement.vue'),
+    name: 'DocumentHub',
+    component: () => import('@/views/DocumentHub.vue'),
     meta: {
       title: '文档管理',
       icon: 'Document',

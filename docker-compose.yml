@@ -131,6 +131,9 @@ services:
       ONLYOFFICE_JWT_SECRET: "${ONLYOFFICE_JWT_SECRET:-mysecretkey}"
       DOCUMENT_BUCKET: "${DOCUMENT_BUCKET:-documents}"
       MINIO_ENDPOINT: "${MINIO_ENDPOINT:-localhost:9000}"
+      MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY:-minioadmin}"
+      MINIO_SECRET_KEY: "${MINIO_SECRET_KEY:-minioadmin}"
+      MINIO_SECURE: "${MINIO_SECURE:-false}"
     devices:
       # dai: 海康网络摄像头不需要设备映射；USB/UVC 摄像头接入 Jetson
       # 时，在 .env 同时设置 CAMERA_DEVICE=/dev/video0 和 CAMERA_SOURCE=/dev/video0。

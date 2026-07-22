@@ -1,37 +1,45 @@
 <template>
   <div class="unified-sensors">
-    <section class="live-grid">
-      <button
-        v-for="card in liveCards"
-        :key="card.key"
-        type="button"
-        class="live-card"
-        :class="[card.statusClass, { active: activeCardKey === card.key }]"
-        @click="selectCard(card)"
-      >
-        <div class="card-head">
-          <span class="card-title">{{ card.title }}</span>
-          <span class="card-state">{{ card.state }}</span>
-        </div>
-        <div v-if="card.key === 'wind'" class="wind-card-body">
-          <div class="wind-primary">
-            <strong>{{ card.metrics[0].value }}</strong>
-            <span>{{ card.metrics[0].label }}</span>
+    <section class="live-carousel" @mouseenter="pauseLiveCarousel" @mouseleave="resumeLiveCarousel">
+      <button type="button" class="carousel-arrow left" @click.stop="scrollLiveCards(-1)">
+        <el-icon><ArrowLeft /></el-icon>
+      </button>
+      <div ref="liveTrackRef" class="live-grid">
+        <button
+          v-for="card in liveCards"
+          :key="card.key"
+          type="button"
+          class="live-card"
+          :class="[card.statusClass, { active: activeCardKey === card.key }]"
+          @click="selectCard(card)"
+        >
+          <div class="card-head">
+            <span class="card-title">{{ card.title }}</span>
+            <span class="card-state">{{ card.state }}</span>
           </div>
-          <div class="wind-direction">
-            <strong>{{ card.directionText }}</strong>
-            <span>{{ card.metrics[1].label }}</span>
+          <div v-if="card.key === 'wind'" class="wind-card-body">
+            <div class="wind-primary">
+              <strong>{{ card.metrics[0].value }}</strong>
+              <span>{{ card.metrics[0].label }}</span>
+            </div>
+            <div class="wind-direction">
+              <strong>{{ card.directionText }}</strong>
+              <span>{{ card.metrics[1].label }}</span>
+            </div>
+            <div class="mini-compass" aria-hidden="true">
+              <i :style="{ transform: `translate(-50%, -50%) rotate(${card.angle}deg)` }"></i>
+            </div>
           </div>
-          <div class="mini-compass" aria-hidden="true">
-            <i :style="{ transform: `translate(-50%, -50%) rotate(${card.angle}deg)` }"></i>
+          <div v-else class="metric-row" :class="{ 'metric-columns': card.metrics.length > 2 }">
+            <div v-for="metric in card.metrics" :key="metric.label" class="metric-cell">
+              <strong>{{ metric.value }}</strong>
+              <span>{{ metric.label }}</span>
+            </div>
           </div>
-        </div>
-        <div v-else class="metric-row" :class="{ 'metric-columns': card.metrics.length > 2 }">
-          <div v-for="metric in card.metrics" :key="metric.label" class="metric-cell">
-            <strong>{{ metric.value }}</strong>
-            <span>{{ metric.label }}</span>
-          </div>
-        </div>
+        </button>
+      </div>
+      <button type="button" class="carousel-arrow right" @click.stop="scrollLiveCards(1)">
+        <el-icon><ArrowRight /></el-icon>
       </button>
     </section>
 
@@ -163,6 +171,7 @@
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { ArrowLeft, ArrowRight } from '@element-plus/icons-vue'
 import {
   getAllSensorRealtime,
   getRainTrends,
@@ -182,6 +191,7 @@ const WARNING_RMS = 0.10
 const ALARM_RMS = 0.15
 
 const chartRef = ref(null)
+const liveTrackRef = ref(null)
 const realtimeData = ref({})
 const vibrationProcessed = ref({})
 const activeCardKey = ref('temp_humidity')
@@ -210,6 +220,8 @@ let realtimeTimer = null
 let refreshTimer = null
 let summaryTimer = null
 let resizeHandler = null
+let liveCarouselFrame = null
+let liveCarouselPaused = false
 let requestSerial = 0
 let isMounted = false
 let lastPointerPixel = null
@@ -670,6 +682,42 @@ const onMonthChange = () => {
 
 const retryHistory = () => {
   loadHistory(currentQuery(), true)
+}
+
+const liveCardStride = () => {
+  const track = liveTrackRef.value
+  const firstCard = track?.querySelector?.('.live-card')
+  if (!track || !firstCard) return 372
+  const gap = Number.parseFloat(getComputedStyle(track).columnGap || getComputedStyle(track).gap || '12')
+  return firstCard.getBoundingClientRect().width + (Number.isFinite(gap) ? gap : 12)
+}
+
+const startLiveCarousel = () => {
+  if (liveCarouselFrame) cancelAnimationFrame(liveCarouselFrame)
+  const tick = () => {
+    const track = liveTrackRef.value
+    if (track && !liveCarouselPaused && track.scrollWidth > track.clientWidth + 4) {
+      track.scrollLeft += 0.32
+      if (track.scrollLeft >= track.scrollWidth - track.clientWidth - 2) {
+        track.scrollTo({ left: 0, behavior: 'smooth' })
+      }
+    }
+    liveCarouselFrame = requestAnimationFrame(tick)
+  }
+  liveCarouselFrame = requestAnimationFrame(tick)
+}
+
+const pauseLiveCarousel = () => {
+  liveCarouselPaused = true
+}
+
+const resumeLiveCarousel = () => {
+  liveCarouselPaused = false
+}
+
+const scrollLiveCards = (direction) => {
+  pauseLiveCarousel()
+  liveTrackRef.value?.scrollBy({ left: liveCardStride() * direction, behavior: 'smooth' })
 }
 
 const normalizeLegacyVibrationRow = (row = {}) => {
@@ -1247,6 +1295,7 @@ onMounted(async () => {
     if (isMounted) loadSummary()
   }, 2200)
   realtimeTimer = setInterval(fetchRealtime, 5000)
+  startLiveCarousel()
 })
 
 onUnmounted(() => {
@@ -1255,6 +1304,7 @@ onUnmounted(() => {
   if (realtimeTimer) clearInterval(realtimeTimer)
   if (refreshTimer) clearTimeout(refreshTimer)
   if (summaryTimer) clearTimeout(summaryTimer)
+  if (liveCarouselFrame) cancelAnimationFrame(liveCarouselFrame)
   if (resizeHandler) window.removeEventListener('resize', resizeHandler)
   if (chart && !chart.isDisposed()) chart.dispose()
   chart = null
@@ -1268,37 +1318,29 @@ onUnmounted(() => {
   color: var(--text-primary);
 }
 
-.live-grid {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(360px, 1fr);
-  gap: 12px;
+.live-carousel {
+  position: relative;
   margin-bottom: 12px;
+}
+
+.live-grid {
+  display: flex;
+  gap: 12px;
   overflow-x: auto;
   overflow-y: hidden;
-  padding-bottom: 8px;
   scroll-snap-type: x proximity;
   scroll-behavior: smooth;
-  scrollbar-color: rgba(54, 151, 255, 0.55) rgba(9, 25, 48, 0.55);
-  scrollbar-width: thin;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
 .live-grid::-webkit-scrollbar {
-  height: 8px;
-}
-
-.live-grid::-webkit-scrollbar-track {
-  border-radius: 999px;
-  background: rgba(9, 25, 48, 0.55);
-}
-
-.live-grid::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  background: linear-gradient(90deg, #2f97ff, #52e5bd);
+  display: none;
 }
 
 .live-card {
   min-width: 0;
+  flex: 0 0 calc((100% - 36px) / 4);
   min-height: 166px;
   padding: 16px;
   display: flex;
@@ -1326,6 +1368,42 @@ onUnmounted(() => {
 .live-card.ok { border-top: 3px solid #67c23a; }
 .live-card.warn { border-top: 3px solid #e6a23c; }
 .live-card.danger { border-top: 3px solid #f56c6c; }
+
+.carousel-arrow {
+  position: absolute;
+  top: 50%;
+  z-index: 6;
+  width: 32px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(185, 176, 160, 0.58);
+  border-radius: 5px;
+  background: rgba(205, 195, 178, 0.88);
+  color: #4a3d31;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(-50%) scale(0.92);
+  transition: opacity 0.18s ease, transform 0.18s ease, background 0.18s ease;
+}
+
+.carousel-arrow.left {
+  left: 4px;
+}
+
+.carousel-arrow.right {
+  right: 4px;
+}
+
+.live-carousel:hover .carousel-arrow {
+  opacity: 1;
+  transform: translateY(-50%) scale(1);
+}
+
+.carousel-arrow:hover {
+  background: rgba(224, 216, 201, 0.96);
+}
 
 .card-head,
 .card-foot {
@@ -1746,8 +1824,8 @@ onUnmounted(() => {
 }
 
 @media (max-width: 1280px) {
-  .live-grid {
-    grid-auto-columns: minmax(330px, 1fr);
+  .live-card {
+    flex-basis: calc((100% - 12px) / 2);
   }
 }
 
@@ -1768,8 +1846,8 @@ onUnmounted(() => {
 }
 
 @media (max-width: 640px) {
-  .live-grid {
-    grid-auto-columns: minmax(280px, 88vw);
+  .live-card {
+    flex-basis: 88vw;
   }
 
   .metric-row {

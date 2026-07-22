@@ -11,7 +11,7 @@ import { useRouter } from 'vue-router'
 const router = useRouter()
 
 onMounted(() => {
-  router.replace('/document/list')
+  router.replace('/document/hub')
 })
 </script>
 

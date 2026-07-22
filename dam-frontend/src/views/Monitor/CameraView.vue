@@ -88,7 +88,7 @@
         <el-button
           class="ghost-button"
           :class="{ active: zoneDrawing }"
-          :disabled="analysisTask !== 'detect' || imageWidth <= 0 || imageHeight <= 0"
+          :disabled="analysisTask !== 'detect' || !currentCamera?.connected"
           @click="zoneDrawing = !zoneDrawing"
         >
           <el-icon><Crop /></el-icon>{{ zoneDrawing ? '结束标框' : '绘制区域' }}
@@ -130,6 +130,7 @@
           <img
             v-if="streamMode === 'mjpeg' && streamUrl"
             :key="streamUrl"
+            ref="liveImageRef"
             :src="streamUrl"
             class="video-stream"
             alt="摄像头实时画面"
@@ -172,10 +173,10 @@
           </svg>
 
           <svg
-            v-if="analysisTask === 'detect' && imageWidth > 0 && imageHeight > 0"
+            v-if="analysisTask === 'detect'"
             class="zone-overlay"
             :class="{ drawing: zoneDrawing }"
-            :viewBox="`0 0 ${imageWidth} ${imageHeight}`"
+            :viewBox="`0 0 ${overlayWidth} ${overlayHeight}`"
             preserveAspectRatio="xMidYMid meet"
             @mousedown.prevent="startZoneDraw"
             @mousemove.prevent="updateZoneDraw"
@@ -191,7 +192,7 @@
                 :height="zonePixelRect(zone).height"
                 :stroke="zoneStroke(zone)"
                 :fill="zoneFill(zone)"
-                :stroke-width="Math.max(2, imageWidth / 520)"
+                :stroke-width="Math.max(2, overlayWidth / 520)"
                 rx="4"
               />
               <text
@@ -630,6 +631,7 @@ const activeZoneType = ref('person_intrusion')
 const zoneDrawing = ref(false)
 const draftZone = ref(null)
 const liveVideoRef = ref(null)
+const liveImageRef = ref(null)
 const streamMode = ref('webrtc')
 const streamUrl = ref('')
 const streamLoading = ref(false)
@@ -657,6 +659,18 @@ let webRtcPlayer = null
 
 const imageWidth = computed(() => Number(latestDetection.value.image_width) || 0)
 const imageHeight = computed(() => Number(latestDetection.value.image_height) || 0)
+const overlayWidth = computed(() => (
+  imageWidth.value
+  || Number(liveVideoRef.value?.videoWidth)
+  || Number(liveImageRef.value?.naturalWidth)
+  || 1920
+))
+const overlayHeight = computed(() => (
+  imageHeight.value
+  || Number(liveVideoRef.value?.videoHeight)
+  || Number(liveImageRef.value?.naturalHeight)
+  || 1080
+))
 const labelFontSize = computed(() => Math.max(14, imageWidth.value / 55))
 const labelPadding = computed(() => labelFontSize.value * 0.35)
 const labelHeight = computed(() => labelFontSize.value * 1.35)
@@ -1153,16 +1167,16 @@ async function handleAddCamera() {
 function zonePixelRect(zone) {
   const rect = zone?.rect || {}
   return {
-    x: rect.x * imageWidth.value,
-    y: rect.y * imageHeight.value,
-    width: rect.width * imageWidth.value,
-    height: rect.height * imageHeight.value,
+    x: rect.x * overlayWidth.value,
+    y: rect.y * overlayHeight.value,
+    width: rect.width * overlayWidth.value,
+    height: rect.height * overlayHeight.value,
   }
 }
 
 function pointerToImagePoint(event) {
   const svg = event.currentTarget
-  if (!svg || imageWidth.value <= 0 || imageHeight.value <= 0) return null
+  if (!svg || overlayWidth.value <= 0 || overlayHeight.value <= 0) return null
   if (svg.createSVGPoint) {
     const point = svg.createSVGPoint()
     point.x = event.clientX
@@ -1171,20 +1185,20 @@ function pointerToImagePoint(event) {
     if (matrix) {
       const mapped = point.matrixTransform(matrix.inverse())
       return {
-        x: Math.max(0, Math.min(imageWidth.value, mapped.x)),
-        y: Math.max(0, Math.min(imageHeight.value, mapped.y)),
+        x: Math.max(0, Math.min(overlayWidth.value, mapped.x)),
+        y: Math.max(0, Math.min(overlayHeight.value, mapped.y)),
       }
     }
   }
   const rect = svg.getBoundingClientRect()
   return {
-    x: Math.max(0, Math.min(imageWidth.value, (event.clientX - rect.left) / rect.width * imageWidth.value)),
-    y: Math.max(0, Math.min(imageHeight.value, (event.clientY - rect.top) / rect.height * imageHeight.value)),
+    x: Math.max(0, Math.min(overlayWidth.value, (event.clientX - rect.left) / rect.width * overlayWidth.value)),
+    y: Math.max(0, Math.min(overlayHeight.value, (event.clientY - rect.top) / rect.height * overlayHeight.value)),
   }
 }
 
 function startZoneDraw(event) {
-  if (!zoneDrawing.value || imageWidth.value <= 0 || imageHeight.value <= 0) return
+  if (!zoneDrawing.value || overlayWidth.value <= 0 || overlayHeight.value <= 0) return
   const point = pointerToImagePoint(event)
   if (!point) return
   draftZone.value = {
@@ -1193,8 +1207,8 @@ function startZoneDraw(event) {
     type: activeZoneType.value,
     enabled: true,
     rect: {
-      x: point.x / imageWidth.value,
-      y: point.y / imageHeight.value,
+      x: point.x / overlayWidth.value,
+      y: point.y / overlayHeight.value,
       width: 0,
       height: 0,
     },
@@ -1214,10 +1228,10 @@ function updateZoneDraw(event) {
   draftZone.value = {
     ...draftZone.value,
     rect: {
-      x: x1 / imageWidth.value,
-      y: y1 / imageHeight.value,
-      width: (x2 - x1) / imageWidth.value,
-      height: (y2 - y1) / imageHeight.value,
+      x: x1 / overlayWidth.value,
+      y: y1 / overlayHeight.value,
+      width: (x2 - x1) / overlayWidth.value,
+      height: (y2 - y1) / overlayHeight.value,
     },
   }
 }

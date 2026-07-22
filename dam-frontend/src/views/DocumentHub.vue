@@ -1,6 +1,5 @@
 <template>
   <div class="document-hub">
-    <!-- 页面头部 -->
     <div class="page-header">
       <div class="header-content">
         <h2 class="page-title">文档中心</h2>
@@ -14,7 +13,6 @@
       </div>
     </div>
 
-    <!-- 统计卡片 -->
     <div class="stats-cards">
       <el-card class="stat-card">
         <div class="stat-content">
@@ -39,13 +37,12 @@
           <el-icon class="stat-icon" style="color: #e6a23c"><Clock /></el-icon>
           <div class="stat-info">
             <span class="stat-value">{{ recentCount }}</span>
-            <span class="stat-label">最近访问</span>
+            <span class="stat-label">最近修改</span>
           </div>
         </div>
       </el-card>
     </div>
 
-    <!-- 搜索和筛选 -->
     <div class="filter-section">
       <el-input
         v-model="searchQuery"
@@ -69,11 +66,10 @@
       </el-select>
     </div>
 
-    <!-- 文档列表 -->
-    <div class="document-grid">
+    <div v-loading="loading" class="document-grid">
       <el-card
         v-for="doc in filteredDocuments"
-        :key="doc.id"
+        :key="doc.document_id"
         class="document-card"
         shadow="hover"
       >
@@ -107,24 +103,22 @@
             </template>
           </el-dropdown>
         </div>
-        <div class="card-body" @click="previewDoc(doc)">
-          <h4 class="doc-name">{{ doc.name }}</h4>
+        <div class="card-body" @click="editDoc(doc)">
+          <h4 class="doc-name" :title="doc.name">{{ doc.name }}</h4>
           <p class="doc-meta">
             <span>{{ formatSize(doc.size) }}</span>
-            <span>{{ doc.updatedAt }}</span>
+            <span>{{ formatDate(doc.updatedAt) }}</span>
           </p>
         </div>
       </el-card>
     </div>
 
-    <!-- 空状态 -->
-    <div v-if="filteredDocuments.length === 0" class="empty-state">
+    <div v-if="!loading && filteredDocuments.length === 0" class="empty-state">
       <el-icon class="empty-icon"><FolderOpened /></el-icon>
       <h3>暂无文档</h3>
-      <p>点击上方"上传文档"按钮开始上传</p>
+      <p>点击上方“上传文档”按钮开始上传</p>
     </div>
 
-    <!-- 上传对话框 -->
     <el-dialog v-model="uploadDialogVisible" title="上传文档" width="500px">
       <el-upload
         class="upload-area"
@@ -132,6 +126,8 @@
         :auto-upload="false"
         :file-list="uploadFileList"
         :on-change="handleFileChange"
+        :before-upload="beforeUpload"
+        accept=".docx,.doc,.xlsx,.xls,.pptx,.ppt,.pdf,.odt,.ods,.odp,.csv,.txt"
         multiple
       >
         <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
@@ -140,108 +136,89 @@
         </div>
         <template #tip>
           <div class="el-upload__tip">
-            支持 Word、Excel、PPT、PDF、图片等格式
+            支持 Word、Excel、PPT、PDF 等格式，单个文件不超过 50MB
           </div>
         </template>
       </el-upload>
       <template #footer>
         <el-button @click="uploadDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleUpload">上传</el-button>
+        <el-button type="primary" :loading="uploading" @click="handleUpload">上传</el-button>
       </template>
     </el-dialog>
 
-    <!-- 预览对话框 -->
-    <OnlineDocEditor
+    <el-dialog
       v-model="previewDialogVisible"
-      :file-url="previewFile.url"
-      :file-name="previewFile.name"
-      :file-type="previewFile.type"
-      editor-type="local"
-      @close="previewDialogVisible = false"
-    />
+      :title="previewTitle"
+      width="80%"
+      fullscreen
+      @closed="previewConfig = null"
+    >
+      <OnlyOfficeEditor
+        v-if="previewConfig"
+        :config="previewConfig"
+        mode="view"
+        editor-height="calc(100vh - 150px)"
+        :user="currentUser"
+      />
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Upload, UploadFilled, Search, Document, FolderOpened,
   Clock, MoreFilled, View, Edit, Download, Delete
 } from '@element-plus/icons-vue'
-import OnlineDocEditor from '@/components/OnlineDocEditor.vue'
+import axios from 'axios'
+import OnlyOfficeEditor from '@/components/OnlyOfficeEditor.vue'
 
-// 文档列表
-const documents = ref([
-  {
-    id: 1,
-    name: '巡检报告模板.docx',
-    type: 'word',
-    size: 25600,
-    category: '模板',
-    updatedAt: '2024-07-20',
-    url: '/documents/template.docx'
-  },
-  {
-    id: 2,
-    name: '设备维护记录.xlsx',
-    type: 'excel',
-    size: 51200,
-    category: '记录',
-    updatedAt: '2024-07-19',
-    url: '/documents/maintenance.xlsx'
-  },
-  {
-    id: 3,
-    name: '系统操作手册.pdf',
-    type: 'pdf',
-    size: 1024000,
-    category: '文档',
-    updatedAt: '2024-07-18',
-    url: '/documents/manual.pdf'
-  }
-])
+const router = useRouter()
 
-// 搜索和筛选
+const loading = ref(false)
+const uploading = ref(false)
+const documents = ref([])
 const searchQuery = ref('')
 const selectedCategory = ref('')
 const sortBy = ref('updated')
 
-// 上传相关
 const uploadDialogVisible = ref(false)
 const uploadFileList = ref([])
 
-// 预览相关
 const previewDialogVisible = ref(false)
-const previewFile = ref({ url: '', name: '', type: '' })
+const previewTitle = ref('')
+const previewConfig = ref(null)
 
-// 计算属性
+const currentUser = ref({
+  id: 'user_001',
+  name: '管理员'
+})
+
 const categories = computed(() => {
-  const cats = new Set(documents.value.map(d => d.category))
+  const cats = new Set(documents.value.map((doc) => doc.category))
   return Array.from(cats)
 })
 
 const recentCount = computed(() => {
   const now = new Date()
   const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
-  return documents.value.filter(d => new Date(d.updatedAt) >= weekAgo).length
+  return documents.value.filter((doc) => new Date(doc.updatedAt) >= weekAgo).length
 })
 
 const filteredDocuments = computed(() => {
   let result = [...documents.value]
 
-  // 搜索过滤
   if (searchQuery.value) {
     const query = searchQuery.value.toLowerCase()
-    result = result.filter(d => d.name.toLowerCase().includes(query))
+    result = result.filter((doc) => doc.name.toLowerCase().includes(query))
   }
 
-  // 分类过滤
   if (selectedCategory.value) {
-    result = result.filter(d => d.category === selectedCategory.value)
+    result = result.filter((doc) => doc.category === selectedCategory.value)
   }
 
-  // 排序
   result.sort((a, b) => {
     if (sortBy.value === 'name') return a.name.localeCompare(b.name)
     if (sortBy.value === 'size') return b.size - a.size
@@ -251,14 +228,40 @@ const filteredDocuments = computed(() => {
   return result
 })
 
-// 工具函数
+const getDocumentType = (extension) => {
+  const ext = String(extension || '').toLowerCase()
+  const typeMap = {
+    docx: 'word', doc: 'word', odt: 'word', rtf: 'word', txt: 'word',
+    xlsx: 'cell', xls: 'cell', ods: 'cell', csv: 'cell',
+    pptx: 'slide', ppt: 'slide', odp: 'slide',
+    pdf: 'pdf'
+  }
+  return typeMap[ext] || 'word'
+}
+
+const getDisplayType = (extension) => {
+  const documentType = getDocumentType(extension)
+  if (documentType === 'cell') return 'excel'
+  if (documentType === 'slide') return 'powerpoint'
+  return documentType
+}
+
+const getCategory = (extension) => {
+  const categoryMap = {
+    word: 'Word 文档',
+    excel: 'Excel 表格',
+    powerpoint: 'PPT 演示',
+    pdf: 'PDF 文档'
+  }
+  return categoryMap[getDisplayType(extension)] || '其他文档'
+}
+
 const getIconClass = (type) => {
   const classMap = {
-    'word': 'word-icon',
-    'excel': 'excel-icon',
-    'powerpoint': 'ppt-icon',
-    'pdf': 'pdf-icon',
-    'image': 'image-icon'
+    word: 'word-icon',
+    excel: 'excel-icon',
+    powerpoint: 'ppt-icon',
+    pdf: 'pdf-icon'
   }
   return classMap[type] || 'default-icon'
 }
@@ -275,7 +278,45 @@ const formatSize = (bytes) => {
   return `${size.toFixed(1)} ${units[unitIndex]}`
 }
 
-// 操作函数
+const formatDate = (value) => {
+  if (!value) return '-'
+  return String(value).slice(0, 10)
+}
+
+const normalizeDocument = (doc) => ({
+  ...doc,
+  id: doc.document_id,
+  name: doc.title,
+  type: getDisplayType(doc.file_type),
+  category: getCategory(doc.file_type),
+  size: doc.file_size,
+  updatedAt: doc.updated_at
+})
+
+const loadDocuments = async () => {
+  try {
+    loading.value = true
+    const response = await axios.get('/api/onlyoffice/documents', {
+      params: {
+        user_id: currentUser.value.id,
+        page: 1,
+        page_size: 200
+      }
+    })
+
+    if (response.data.success) {
+      documents.value = response.data.data.documents.map(normalizeDocument)
+    } else {
+      ElMessage.error('加载文档列表失败')
+    }
+  } catch (error) {
+    console.error('加载文档列表失败:', error)
+    ElMessage.error('加载文档列表失败')
+  } finally {
+    loading.value = false
+  }
+}
+
 const showUploadDialog = () => {
   uploadFileList.value = []
   uploadDialogVisible.value = true
@@ -285,82 +326,133 @@ const handleFileChange = (file, fileList) => {
   uploadFileList.value = fileList
 }
 
-const handleUpload = () => {
+const beforeUpload = (file) => {
+  const maxSize = 50 * 1024 * 1024
+  if (file.size > maxSize) {
+    ElMessage.error('文件大小不能超过 50MB')
+    return false
+  }
+  return true
+}
+
+const handleUpload = async () => {
   if (uploadFileList.value.length === 0) {
-    ElMessage.warning('请选择要上传的文件')
+    ElMessage.warning('请选择要上传的文档')
     return
   }
 
-  // 模拟上传
-  uploadFileList.value.forEach(file => {
-    const ext = file.name.split('.').pop().toLowerCase()
-    let type = 'unknown'
-    if (['doc', 'docx'].includes(ext)) type = 'word'
-    else if (['xls', 'xlsx'].includes(ext)) type = 'excel'
-    else if (['ppt', 'pptx'].includes(ext)) type = 'powerpoint'
-    else if (ext === 'pdf') type = 'pdf'
-    else if (['jpg', 'jpeg', 'png', 'gif'].includes(ext)) type = 'image'
+  try {
+    uploading.value = true
 
-    documents.value.unshift({
-      id: Date.now() + Math.random(),
-      name: file.name,
-      type,
-      size: file.size,
-      category: '未分类',
-      updatedAt: new Date().toISOString().split('T')[0],
-      url: URL.createObjectURL(file.raw)
-    })
-  })
+    for (const file of uploadFileList.value) {
+      const formData = new FormData()
+      formData.append('file', file.raw)
+      formData.append('user_id', currentUser.value.id)
+      formData.append('user_name', currentUser.value.name)
 
-  ElMessage.success('上传成功')
-  uploadDialogVisible.value = false
+      const response = await axios.post('/api/onlyoffice/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+
+      if (!response.data.success) {
+        throw new Error(response.data.detail || response.data.message || `${file.name} 上传失败`)
+      }
+    }
+
+    ElMessage.success('上传成功')
+    uploadDialogVisible.value = false
+    await loadDocuments()
+  } catch (error) {
+    console.error('上传失败:', error)
+    const message = error.response?.data?.detail || error.response?.data?.message || error.message || '上传失败'
+    ElMessage.error(message)
+  } finally {
+    uploading.value = false
+  }
 }
 
-const previewDoc = (doc) => {
-  previewFile.value = {
-    url: doc.url,
-    name: doc.name,
-    type: doc.type
+const previewDoc = async (doc) => {
+  try {
+    const response = await axios.get(`/api/onlyoffice/editor-config/${doc.document_id}`, {
+      params: {
+        user_id: currentUser.value.id,
+        user_name: currentUser.value.name,
+        mode: 'view'
+      }
+    })
+
+    if (response.data.success) {
+      previewTitle.value = doc.name
+      previewConfig.value = response.data.data
+      previewDialogVisible.value = true
+    } else {
+      ElMessage.error('打开预览失败')
+    }
+  } catch (error) {
+    console.error('打开预览失败:', error)
+    ElMessage.error('打开预览失败')
   }
-  previewDialogVisible.value = true
 }
 
 const editDoc = (doc) => {
-  // 根据文件类型选择编辑方式
-  if (['word', 'excel', 'powerpoint'].includes(doc.type)) {
-    // 使用在线编辑服务
-    const officeUrl = `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(doc.url)}`
-    window.open(officeUrl, '_blank')
-  } else {
-    previewDoc(doc)
-  }
+  router.push({
+    name: 'DocumentEditor',
+    params: { documentId: doc.document_id },
+    query: {
+      title: doc.name,
+      type: doc.file_type
+    }
+  })
 }
 
-const downloadDoc = (doc) => {
-  const link = document.createElement('a')
-  link.href = doc.url
-  link.download = doc.name
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
+const downloadDoc = async (doc) => {
+  try {
+    const response = await axios.get(`/api/onlyoffice/document/${doc.document_id}`, {
+      responseType: 'blob'
+    })
+    const url = window.URL.createObjectURL(new Blob([response.data]))
+    const link = document.createElement('a')
+    link.href = url
+    link.setAttribute('download', doc.name)
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+  } catch (error) {
+    console.error('下载失败:', error)
+    ElMessage.error('下载失败')
+  }
 }
 
 const deleteDoc = async (doc) => {
   try {
     await ElMessageBox.confirm(
-      `确定要删除 "${doc.name}" 吗？`,
+      `确定要删除“${doc.name}”吗？此操作不可恢复。`,
       '确认删除',
-      { type: 'warning' }
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
     )
-    documents.value = documents.value.filter(d => d.id !== doc.id)
-    ElMessage.success('删除成功')
-  } catch {
-    // 取消
+
+    const response = await axios.delete(`/api/onlyoffice/document/${doc.document_id}`)
+    if (response.data.success) {
+      ElMessage.success('删除成功')
+      await loadDocuments()
+    } else {
+      ElMessage.error('删除失败')
+    }
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('删除失败:', error)
+      ElMessage.error('删除失败')
+    }
   }
 }
 
 onMounted(() => {
-  // 可以在这里加载文档列表
+  loadDocuments()
 })
 </script>
 
@@ -447,6 +539,7 @@ onMounted(() => {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 16px;
+  min-height: 120px;
 }
 
 .document-card {
@@ -475,7 +568,6 @@ onMounted(() => {
 .excel-icon { color: #217346; }
 .ppt-icon { color: #d24726; }
 .pdf-icon { color: #f40f02; }
-.image-icon { color: #67c23a; }
 .default-icon { color: #909399; }
 
 .card-body {
