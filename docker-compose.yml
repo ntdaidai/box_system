@@ -193,7 +193,7 @@ services:
 
   # ========== OnlyOffice 文档编辑服务 ==========
   onlyoffice-documentserver:
-    image: onlyoffice/documentserver:latest
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/onlyoffice/documentserver:9.4.0.1-linuxarm64
     container_name: dam-onlyoffice
     restart: unless-stopped
     network_mode: host
