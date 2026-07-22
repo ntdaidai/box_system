@@ -124,7 +124,7 @@
           </el-table-column>
           <el-table-column label="操作" width="150">
             <template #default="{ row }">
-              <el-button link type="primary" @click="previewFile(row)">预览</el-button>
+              <el-button link type="primary" @click="openFilePreview(row)">预览</el-button>
               <el-button link type="danger" @click="deleteFile(row)">删除</el-button>
             </template>
           </el-table-column>
@@ -295,7 +295,7 @@ const loadRecentDocs = async () => {
 }
 
 // 预览文件
-const previewFile = (doc) => {
+const openFilePreview = (doc) => {
   previewFile.value = {
     name: doc.name,
     url: doc.url

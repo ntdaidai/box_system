@@ -24,8 +24,10 @@ class HistoryRangeConfig:
 
 HISTORY_RANGES = {
     "1h": HistoryRangeConfig("1h", HOUR_MS, MINUTE_MS, MINUTE_MS, "1m", 60),
-    "6h": HistoryRangeConfig("6h", 6 * HOUR_MS, 10 * MINUTE_MS, 10 * MINUTE_MS, "10m", 36),
     "1d": HistoryRangeConfig("1d", DAY_MS, 30 * MINUTE_MS, 30 * MINUTE_MS, "30m", 48),
+    # Compatibility ranges for older API callers. They are not exposed in the
+    # current UI; long-range browsing should use day-level calendar/overview data.
+    "6h": HistoryRangeConfig("6h", 6 * HOUR_MS, 30 * MINUTE_MS, 30 * MINUTE_MS, "30m", 12),
     "7d": HistoryRangeConfig("7d", 7 * DAY_MS, HOUR_MS, HOUR_MS, "1h", 168),
     "6mo": HistoryRangeConfig(
         "6mo", 180 * DAY_MS, DAY_MS, DAY_MS, "1d", 180, 8 * HOUR_MS
@@ -35,7 +37,6 @@ HISTORY_RANGES = {
 
 ROLLUP_LEVELS = {
     "1m": {"bucket_ms": MINUTE_MS, "retention_ms": 14 * DAY_MS},
-    "10m": {"bucket_ms": 10 * MINUTE_MS, "retention_ms": 30 * DAY_MS},
     "30m": {"bucket_ms": 30 * MINUTE_MS, "retention_ms": 90 * DAY_MS},
     "1h": {"bucket_ms": HOUR_MS, "retention_ms": 365 * DAY_MS},
     "1d": {
@@ -50,8 +51,7 @@ ROLLUP_LEVELS = {
 # from materializing millions of raw rows in Python.
 ROLLUP_SOURCE_LEVELS = {
     "1m": None,
-    "10m": "1m",
-    "30m": "10m",
+    "30m": "1m",
     "1h": "30m",
     "1d": "1h",
 }

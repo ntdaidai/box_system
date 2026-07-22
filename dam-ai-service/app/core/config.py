@@ -66,7 +66,7 @@ class Settings:
     # ── JWT (必须设置，无默认值) ──────────────────────────────
     JWT_SECRET: str = _require_env("JWT_SECRET", is_secret=True)
     JWT_ALGORITHM: str = _get_env("JWT_ALGORITHM", "HS256")
-    JWT_EXPIRE_SECONDS: int = int(_get_env("JWT_EXPIRE_SECONDS", "86400"))  # 24h
+    JWT_EXPIRE_SECONDS: int = int(_get_env("JWT_EXPIRE_SECONDS", "1296000"))  # 15d
 
     # ── 默认管理员 (首次启动时创建，密码必须设置) ─────────────
     DEFAULT_ADMIN_USERNAME: str = _get_env("DEFAULT_ADMIN_USERNAME", "admin")
@@ -91,6 +91,21 @@ class Settings:
     MINIO_ACCESS_KEY: str = _get_env("MINIO_ACCESS_KEY", "minioadmin")
     MINIO_SECRET_KEY: str = _get_env("MINIO_SECRET_KEY", "minioadmin")
     MINIO_SECURE: bool = _get_env("MINIO_SECURE", "false").lower() == "true"
+    DOCUMENT_BUCKET: str = _get_env("DOCUMENT_BUCKET", "documents")
+
+    # OnlyOffice integration. BACKEND_PUBLIC_URL must be reachable from the
+    # OnlyOffice Document Server container, so do not use localhost here.
+    APP_PORT: int = int(_get_env("APP_PORT", "8090"))
+    PUBLIC_HOST: str = _get_env("PUBLIC_HOST", "192.168.31.52")
+    BACKEND_PUBLIC_URL: str = _get_env(
+        "BACKEND_PUBLIC_URL",
+        f"http://{PUBLIC_HOST}:{APP_PORT}",
+    )
+    ONLYOFFICE_PUBLIC_URL: str = _get_env(
+        "ONLYOFFICE_PUBLIC_URL",
+        f"http://{PUBLIC_HOST}",
+    )
+    ONLYOFFICE_JWT_SECRET: str = _get_env("ONLYOFFICE_JWT_SECRET", "mysecretkey")
 
     # ── 可扩展视觉模型 ──────────────────────────────────────
     # YOLO_MODEL_PATH remains a compatibility fallback for older deployments.

@@ -230,22 +230,22 @@
       <div class="alarm-list-header" v-if="recentAlarms.length > 0">
         <div class="col-time sortable" @click="toggleSort('time')">
           告警时间
-          <span class="sort-icon" :class="{ active: sortField === 'time' }">
-            {{ sortField === 'time' ? (sortOrder === 'asc' ? '↑' : '↓') : '↕' }}
+          <span class="sort-pill" :class="{ active: sortField === 'time' }">
+            <span class="sort-icon">{{ sortIcon('time') }}</span>{{ sortText('time') }}
           </span>
         </div>
         <div class="col-level sortable" @click="toggleSort('level')">
           级别
-          <span class="sort-icon" :class="{ active: sortField === 'level' }">
-            {{ sortField === 'level' ? (sortOrder === 'asc' ? '↑' : '↓') : '↕' }}
+          <span class="sort-pill" :class="{ active: sortField === 'level' }">
+            <span class="sort-icon">{{ sortIcon('level') }}</span>{{ sortText('level') }}
           </span>
         </div>
         <div class="col-desc">描述</div>
         <div class="col-content">告警内容</div>
         <div class="col-status sortable" @click="toggleSort('status')">
           状态
-          <span class="sort-icon" :class="{ active: sortField === 'status' }">
-            {{ sortField === 'status' ? (sortOrder === 'asc' ? '↑' : '↓') : '↕' }}
+          <span class="sort-pill" :class="{ active: sortField === 'status' }">
+            <span class="sort-icon">{{ sortIcon('status') }}</span>{{ sortText('status') }}
           </span>
         </div>
       </div>
@@ -465,6 +465,16 @@ const toggleSort = (field) => {
   }
 }
 
+const sortIcon = (field) => {
+  if (sortField.value !== field) return '↕'
+  return sortOrder.value === 'asc' ? '↑' : '↓'
+}
+
+const sortText = (field) => {
+  if (sortField.value !== field) return '排序'
+  return sortOrder.value === 'asc' ? '升序' : '降序'
+}
+
 const alarmStatusLevel = computed(() => {
   if (alarmHigh.value > 0) return 'level-high'
   if ((alarmTotal.value - alarmHigh.value) > 0) return 'level-warn'
@@ -656,7 +666,7 @@ const preloadSensorPagesLater = () => {
       import('@/views/Monitor/SensorRain.vue'),
       import('@/views/Monitor/SensorVibration.vue'),
     ])
-  }, 1800)
+  }, 6000)
 }
 
 // ==================== SSE 实时推送 ====================
@@ -959,8 +969,8 @@ onUnmounted(() => {
 }
 .sensor-value-grid.two-col {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 4px 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px 8px;
 }
 .sensor-value-row {
   display: flex;
@@ -969,6 +979,9 @@ onUnmounted(() => {
   padding: 6px 0;
 }
 .sensor-value-grid.two-col .sensor-value-row {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 6px;
   padding: 2px 0;
 }
 .sensor-value-label {
@@ -977,7 +990,7 @@ onUnmounted(() => {
 }
 .sensor-value-num {
   color: var(--accent-color);
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   font-family: "Consolas", "Monaco", monospace;
 }
@@ -1286,6 +1299,11 @@ onUnmounted(() => {
   border-bottom: 1px solid rgba(0, 200, 255, 0.08);
 }
 
+.alarm-list-header > div {
+  justify-content: center;
+  text-align: center;
+}
+
 .alarm-preview-list {
   display: flex;
   flex-direction: column;
@@ -1326,29 +1344,52 @@ onUnmounted(() => {
 .sortable {
   cursor: pointer;
   user-select: none;
-  transition: color 0.2s;
+  transition: color 0.2s, background 0.2s;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
+  gap: 7px;
+  min-height: 28px;
+  border-radius: 6px;
 }
 
 .sortable:hover {
   color: #00a8ff;
+  background: rgba(0, 168, 255, 0.08);
 }
 
-.sort-icon {
-  font-size: 10px;
-  color: rgba(150, 180, 210, 0.6);
+.sort-pill {
+  min-width: 52px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border: 1px solid rgba(114, 163, 205, 0.24);
+  border-radius: 999px;
+  color: rgba(174, 202, 245, 0.72);
+  background: rgba(4, 26, 44, 0.52);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
   transition: all 0.2s;
 }
 
-.sortable:hover .sort-icon {
+.sortable:hover .sort-pill {
   color: #00a8ff;
+  border-color: rgba(0, 168, 255, 0.42);
 }
 
-.sort-icon.active {
-  color: #00a8ff;
-  text-shadow: 0 0 6px rgba(0, 168, 255, 0.5);
+.sort-pill.active {
+  color: #071b24;
+  border-color: transparent;
+  background: linear-gradient(110deg, #36d4ff, #52e5bd);
+  box-shadow: 0 0 12px rgba(0, 168, 255, 0.22);
+}
+
+.sort-icon {
+  font-size: 11px;
+  line-height: 1;
 }
 
 .col-type {

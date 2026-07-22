@@ -1,7 +1,7 @@
 <!-- dai -->
 <template>
   <div class="vision-page">
-    <header class="command-header surface-card">
+    <header v-if="!isMediaAnalysisRoute" class="command-header surface-card">
       <div class="title-block">
         <div class="title-icon"><el-icon><Monitor /></el-icon></div>
         <div>
@@ -23,13 +23,14 @@
       </div>
     </header>
 
-    <section class="source-toolbar surface-card">
+    <section class="source-toolbar surface-card" :class="{ 'analysis-toolbar': isMediaAnalysisRoute }">
       <div class="source-control">
         <span class="control-label">当前视频源</span>
         <el-select
           v-model="currentCameraId"
           class="camera-select"
           placeholder="选择已配置的视频源"
+          popper-class="vision-select-popper"
           @change="activateCamera"
         >
           <el-option
@@ -46,23 +47,23 @@
             </div>
           </el-option>
         </el-select>
-        <span v-if="currentCamera" class="source-id">ID / {{ currentCamera.camera_id }}</span>
       </div>
 
       <div class="task-control">
         <span class="control-label">分析方式</span>
-        <el-radio-group
+        <el-select
           v-model="analysisTask"
-          class="task-switch"
+          class="task-select"
           :disabled="detectionToggling"
+          popper-class="vision-select-popper"
           @change="handleAnalysisTaskChange"
         >
-          <el-radio-button value="detect">目标检测</el-radio-button>
-          <el-radio-button value="classify">图片分类</el-radio-button>
-        </el-radio-group>
+          <el-option label="目标检测" value="detect" />
+          <el-option label="图片分类" value="classify" />
+        </el-select>
       </div>
 
-      <div class="toolbar-actions">
+      <div v-if="!isMediaAnalysisRoute" class="toolbar-actions">
         <el-button class="ghost-button" @click="showAddDialog = true">
           <el-icon><Plus /></el-icon>接入视频源
         </el-button>
@@ -253,6 +254,26 @@
         <div>
           <h2>{{ mediaHeadingTitle }}</h2>
           <p>{{ mediaHeadingDescription }}</p>
+        </div>
+        <div class="media-mode-switch" role="tablist" aria-label="图片视频分析切换">
+          <button
+            type="button"
+            role="tab"
+            :aria-selected="mediaTab === 'image'"
+            :class="{ active: mediaTab === 'image' }"
+            @click="switchMediaTab('image')"
+          >
+            <el-icon><Picture /></el-icon>图片分析
+          </button>
+          <button
+            type="button"
+            role="tab"
+            :aria-selected="mediaTab === 'video'"
+            :class="{ active: mediaTab === 'video' }"
+            @click="switchMediaTab('video')"
+          >
+            <el-icon><VideoPlay /></el-icon>视频分析
+          </button>
         </div>
       </div>
 
@@ -483,7 +504,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
@@ -685,6 +706,7 @@ async function activateCamera(cameraId) {
   if (detectionEnabled.value && currentCamera.value?.analysis_task) {
     analysisTask.value = currentCamera.value.analysis_task
   }
+  if (isMediaAnalysisRoute.value) return
   if (currentCamera.value?.connected) await startLiveStream()
   if (detectionEnabled.value) startDetectionSubscription()
 }
@@ -802,11 +824,11 @@ async function refreshCameraStatus() {
     const backendDetectionEnabled = Boolean(response.data.detection_enabled)
     currentCamera.value = response.data
     updateCameraInList(response.data)
-    if (!previousConnected && response.data.connected) await startLiveStream()
+    if (!isMediaAnalysisRoute.value && !previousConnected && response.data.connected) await startLiveStream()
     if (previousConnected && !response.data.connected) stopLiveStream()
     if (backendDetectionEnabled !== detectionEnabled.value) {
       detectionEnabled.value = backendDetectionEnabled
-      if (backendDetectionEnabled) startDetectionSubscription()
+      if (!isMediaAnalysisRoute.value && backendDetectionEnabled) startDetectionSubscription()
       else { stopDetectionSubscription(); detections.value = [] }
     }
     if (backendDetectionEnabled && response.data.analysis_task !== analysisTask.value) {
@@ -824,15 +846,25 @@ function updateCameraInList(camera) {
   if (index >= 0) cameras.value[index] = camera
 }
 
+function resetStatusTimer() {
+  clearInterval(statusTimer)
+  statusTimer = setInterval(refreshCameraStatus, isMediaAnalysisRoute.value ? 10000 : 3000)
+}
+
 async function takeSnapshot() {
+  if (route.path !== '/monitor/camera/image') await router.push('/monitor/camera/image')
   const response = await snapshotDetect(currentCameraId.value, 0.5, analysisTask.value)
   uploadResult.value = { ...response.data, result_image_base64: response.data.image_base64 }
-  if (route.path !== '/monitor/camera/image') router.push('/monitor/camera/image')
   if (response.data.task_type === 'detect') {
     ElMessage.success(`截图检测完成，发现 ${response.data.count} 个目标`)
   } else {
     ElMessage.success(`截图分类完成：${detectionName(response.data.prediction)}`)
   }
+}
+
+function switchMediaTab(tab) {
+  const target = tab === 'video' ? '/monitor/camera/video' : '/monitor/camera/image'
+  if (route.path !== target) router.push(target)
 }
 
 async function handleFileUpload(file) {
@@ -994,7 +1026,17 @@ onMounted(async () => {
   } catch {
     // Authentication interceptor handles an expired login and redirects once.
   }
-  statusTimer = setInterval(refreshCameraStatus, 3000)
+  resetStatusTimer()
+})
+
+watch(isMediaAnalysisRoute, async (mediaMode) => {
+  resetStatusTimer()
+  if (mediaMode) {
+    stopLiveStream()
+    stopDetectionSubscription()
+    return
+  }
+  if (currentCameraId.value) await activateCamera(currentCameraId.value)
 })
 
 onBeforeUnmount(() => {
@@ -1064,16 +1106,46 @@ h1, h2, h3, p { margin-top: 0; }
   font-variant-numeric: tabular-nums;
 }
 
-.source-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-top: 12px; padding: 12px 16px; }
-.source-control, .task-control, .toolbar-actions { display: flex; align-items: center; gap: 10px; }
+.source-toolbar { display: grid; grid-template-columns: minmax(280px, 1fr) 220px auto; align-items: center; gap: 18px; margin-top: 12px; padding: 12px 16px; }
+.source-toolbar.analysis-toolbar { grid-template-columns: minmax(280px, 1fr) 220px; }
+.source-control, .task-control, .toolbar-actions { min-width: 0; display: flex; align-items: center; gap: 10px; }
 .control-label { color: #7d9bb0; font-size: 12px; }
-.camera-select { width: 260px; }
-.task-control { padding: 0 10px; border-left: 1px solid rgba(93, 184, 225, 0.13); border-right: 1px solid rgba(93, 184, 225, 0.13); }
-.task-switch :deep(.el-radio-button__inner) { padding: 8px 12px; color: #86a9bb; border-color: rgba(83, 170, 205, 0.18); background: rgba(5, 27, 42, 0.58); box-shadow: none; }
-.task-switch :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) { color: #071a23; border-color: var(--cyan); background: linear-gradient(110deg, var(--cyan), var(--mint)); box-shadow: none; }
+.camera-select { width: min(100%, 320px); }
+.task-control { padding: 0 14px; border-left: 1px solid rgba(93, 184, 225, 0.13); border-right: 1px solid rgba(93, 184, 225, 0.13); }
+.task-select { width: 132px; }
+.camera-select :deep(.el-select__wrapper),
+.task-select :deep(.el-select__wrapper) {
+  min-height: 38px;
+  border-radius: 8px;
+  background: rgba(6, 28, 44, 0.88);
+  box-shadow: 0 0 0 1px rgba(72, 216, 255, 0.26) inset;
+}
+.camera-select :deep(.el-select__wrapper.is-focused),
+.task-select :deep(.el-select__wrapper.is-focused) {
+  box-shadow: 0 0 0 1px var(--cyan) inset, 0 0 14px rgba(72, 216, 255, 0.12);
+}
+.camera-select :deep(.el-select__selected-item),
+.task-select :deep(.el-select__selected-item) { color: #e6f7ff; font-weight: 600; }
+.camera-select :deep(.el-select__caret),
+.task-select :deep(.el-select__caret) { color: #8ddcf0; }
+:global(.vision-select-popper.el-select__popper) {
+  border: 1px solid rgba(72, 216, 255, 0.24);
+  background: #082033;
+  box-shadow: 0 16px 36px rgba(0, 7, 18, 0.38);
+}
+:global(.vision-select-popper .el-select-dropdown__item) {
+  color: #aecdde;
+}
+:global(.vision-select-popper .el-select-dropdown__item.is-hovering) {
+  color: #e9fbff;
+  background: rgba(72, 216, 255, 0.12);
+}
+:global(.vision-select-popper .el-select-dropdown__item.is-selected) {
+  color: #50e1d0;
+  font-weight: 800;
+}
 .camera-option { display: flex; justify-content: space-between; gap: 18px; width: 100%; }
 .option-meta { color: #7993a7; font-size: 11px; }
-.source-id { color: #4f7087; font-family: monospace; font-size: 10px; }
 .ghost-button, .detect-button { border-radius: 9px; }
 .ghost-button { color: #b4d0df; border-color: rgba(100, 180, 216, 0.21); background: rgba(18, 63, 88, 0.32); }
 .detect-button { color: #061b23; border: none; font-weight: 700; background: linear-gradient(105deg, #35c8ea, #52e5bd); box-shadow: 0 8px 22px rgba(50, 201, 209, 0.15); }
@@ -1138,6 +1210,23 @@ h1, h2, h3, p { margin-top: 0; }
 .media-lab { margin-top: 12px; padding: 18px; }
 .lab-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; border-bottom: 1px solid rgba(83, 159, 191, 0.13); }
 .lab-heading > div > p:last-child { margin: 6px 0 14px; color: #6e8ba0; font-size: 11px; }
+.media-mode-switch { display: flex; gap: 6px; margin-bottom: 12px; padding: 4px; border: 1px solid rgba(72, 187, 225, 0.18); border-radius: 10px; background: rgba(3, 20, 33, 0.58); }
+.media-mode-switch button {
+  height: 34px;
+  padding: 0 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #9ab8c9;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.media-mode-switch button:hover { color: #e7f8ff; background: rgba(31, 101, 132, 0.26); }
+.media-mode-switch button.active { color: #061b23; border-color: rgba(72, 216, 255, 0.62); background: linear-gradient(110deg, var(--cyan), var(--mint)); font-weight: 800; }
 .media-tabs { width: 350px; padding: 5px; border: 1px solid rgba(72, 187, 225, 0.2); border-radius: 12px; background: rgba(3, 20, 33, 0.58); }
 .media-tabs :deep(.el-tabs__header) { margin: 0; }
 .media-tabs :deep(.el-tabs__content) { display: none; }
@@ -1221,7 +1310,8 @@ h1, h2, h3, p { margin-top: 0; }
 @media (max-width: 1200px) {
   .live-workspace { grid-template-columns: minmax(0, 1fr) 300px; }
   .image-result.has-result { grid-template-columns: minmax(0, 1fr) 250px; }
-  .source-toolbar { align-items: flex-start; flex-wrap: wrap; }
+  .source-toolbar,
+  .source-toolbar.analysis-toolbar { grid-template-columns: 1fr; align-items: flex-start; }
   .toolbar-actions { flex-wrap: wrap; justify-content: flex-end; }
 }
 @media (max-width: 900px) {
@@ -1230,6 +1320,8 @@ h1, h2, h3, p { margin-top: 0; }
   .header-status { align-self: flex-end; }
   .header-status, .source-control, .task-control, .toolbar-actions { flex-wrap: wrap; }
   .task-control { padding: 0; border: none; }
+  .media-mode-switch { width: 100%; }
+  .media-mode-switch button { flex: 1; justify-content: center; }
   .live-workspace, .image-lab, .video-lab { grid-template-columns: 1fr; }
   .image-result.has-result { grid-template-columns: 1fr; }
   .image-target-panel { min-height: 250px; border-top: 1px solid rgba(75, 175, 211, 0.16); border-left: none; }

@@ -95,7 +95,7 @@ services:
       # 生成方法: python3 -c "import secrets; print(secrets.token_urlsafe(48))"
       JWT_SECRET: ${JWT_SECRET}
       JWT_ALGORITHM: HS256
-      JWT_EXPIRE_SECONDS: "86400"
+      JWT_EXPIRE_SECONDS: "${JWT_EXPIRE_SECONDS:-1296000}"
       # 默认管理员（仅在首次启动且用户不存在时创建）
       # 密码必须设置，否则服务无法启动
       DEFAULT_ADMIN_USERNAME: admin
@@ -123,6 +123,14 @@ services:
       MAX_VIDEO_SIZE_MB: "${MAX_VIDEO_SIZE_MB:-200}"
       MAX_VIDEO_DURATION_SECONDS: "${MAX_VIDEO_DURATION_SECONDS:-600}"
       VIDEO_DETECTION_FPS: "${VIDEO_DETECTION_FPS:-2}"
+      # OnlyOffice / 文档服务
+      APP_PORT: "${APP_PORT:-8090}"
+      PUBLIC_HOST: "${PUBLIC_HOST:-192.168.31.52}"
+      BACKEND_PUBLIC_URL: "${BACKEND_PUBLIC_URL:-http://localhost:8090}"
+      ONLYOFFICE_PUBLIC_URL: "${ONLYOFFICE_PUBLIC_URL:-http://192.168.31.52}"
+      ONLYOFFICE_JWT_SECRET: "${ONLYOFFICE_JWT_SECRET:-mysecretkey}"
+      DOCUMENT_BUCKET: "${DOCUMENT_BUCKET:-documents}"
+      MINIO_ENDPOINT: "${MINIO_ENDPOINT:-localhost:9000}"
     devices:
       # dai: 海康网络摄像头不需要设备映射；USB/UVC 摄像头接入 Jetson
       # 时，在 .env 同时设置 CAMERA_DEVICE=/dev/video0 和 CAMERA_SOURCE=/dev/video0。
@@ -188,10 +196,7 @@ services:
     image: onlyoffice/documentserver:latest
     container_name: dam-onlyoffice
     restart: unless-stopped
-    platform: linux/amd64  # Jetson ARM64 平台使用 amd64 镜像（通过 QEMU 模拟）
-    ports:
-      - "8088:80"  # OnlyOffice Web 界面（使用 8088 端口避免冲突）
-      - "443:443"  # HTTPS（可选）
+    network_mode: host
     volumes:
       # 持久化配置和数据
       - onlyoffice_data:/var/www/onlyoffice/Data
@@ -209,7 +214,7 @@ services:
       # 文档存储路径
       DOCUMENT_SERVER_STORAGE_PATH: /var/www/onlyoffice/Data
       # 启用回调 URL（文档保存时回调）
-      # CALLBACK_URL: http://your-backend:8090/api/onlyoffice/callback
+      # CALLBACK_URL is supplied per document by /api/onlyoffice/editor-config/{id}
     # 健康检查
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost/healthcheck"]

@@ -1,47 +1,42 @@
 """
-OnlyOffice 文档编辑器 API 集成
-提供文档上传、下载、回调处理等功能
+OnlyOffice document editing API backed by MinIO.
+
+The browser loads DocsAPI from OnlyOffice, while OnlyOffice Document Server
+downloads and saves documents through these FastAPI endpoints.
 """
 
-import os
-import json
 import hashlib
+import io
+import os
 import time
 from datetime import datetime
-from typing import Optional
 from pathlib import Path
+from typing import Optional
+from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
-from fastapi.responses import FileResponse, JSONResponse
+import httpx
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
+from jose import jwt
+from minio import Minio
+from minio.error import S3Error
 from pydantic import BaseModel
+
+from app.core.config import settings
 
 router = APIRouter(prefix="/api/onlyoffice", tags=["OnlyOffice 文档编辑"])
 
-# 配置
-ONLYOFFICE_SERVER_URL = os.getenv("ONLYOFFICE_SERVER_URL", "http://localhost:8080")
-DOCUMENT_STORAGE_PATH = os.getenv("DOCUMENT_STORAGE_PATH", "/var/www/onlyoffice/Data")
-JWT_SECRET = os.getenv("ONLYOFFICE_JWT_SECRET", "mysecretkey")
 
-# 确保存储目录存在
-os.makedirs(DOCUMENT_STORAGE_PATH, exist_ok=True)
+ONLYOFFICE_SERVER_URL = settings.ONLYOFFICE_PUBLIC_URL.rstrip("/")
+BACKEND_PUBLIC_URL = settings.BACKEND_PUBLIC_URL.rstrip("/")
+JWT_SECRET = settings.ONLYOFFICE_JWT_SECRET
+BUCKET_NAME = settings.DOCUMENT_BUCKET
+OBJECT_PREFIX = "editable"
 
-
-# ========== 数据模型 ==========
-
-class DocumentInfo(BaseModel):
-    """文档信息"""
-    document_id: str
-    title: str
-    url: str
-    file_type: str
-    file_size: int
-    created_at: str
-    updated_at: str
-    owner_id: str
+minio_client: Optional[Minio] = None
 
 
 class CallbackData(BaseModel):
-    """OnlyOffice 回调数据"""
     key: str
     status: int
     url: Optional[str] = None
@@ -52,48 +47,35 @@ class CallbackData(BaseModel):
     token: Optional[str] = None
 
 
-class EditorConfig(BaseModel):
-    """编辑器配置请求"""
-    document_url: str
-    document_title: str = "未命名文档"
-    document_type: str = "word"
-    mode: str = "edit"
-    user_id: str = "user_001"
-    user_name: str = "用户"
-    callback_url: Optional[str] = None
-
-
-# ========== 工具函数 ==========
-
-def generate_document_key(file_path: str) -> str:
-    """
-    生成文档的唯一 key
-    用于 OnlyOffice 协同编辑识别同一文档
-    """
-    # 使用文件路径 + 修改时间生成唯一 key
-    stat = os.stat(file_path)
-    unique_str = f"{file_path}_{stat.st_mtime}_{stat.st_size}"
-    return hashlib.md5(unique_str.encode()).hexdigest()
+def get_minio_client() -> Minio:
+    global minio_client
+    if minio_client is None:
+        minio_client = Minio(
+            settings.MINIO_ENDPOINT,
+            access_key=settings.MINIO_ACCESS_KEY,
+            secret_key=settings.MINIO_SECRET_KEY,
+            secure=settings.MINIO_SECURE,
+        )
+        if not minio_client.bucket_exists(BUCKET_NAME):
+            minio_client.make_bucket(BUCKET_NAME)
+    return minio_client
 
 
 def get_file_extension(filename: str) -> str:
-    """获取文件扩展名"""
     return Path(filename).suffix.lstrip(".").lower()
 
 
 def get_document_type(file_extension: str) -> str:
-    """根据文件扩展名获取文档类型"""
     type_map = {
         "docx": "word", "doc": "word", "odt": "word", "rtf": "word", "txt": "word",
         "xlsx": "cell", "xls": "cell", "ods": "cell", "csv": "cell",
         "pptx": "slide", "ppt": "slide", "odp": "slide",
-        "pdf": "word"
+        "pdf": "pdf",
     }
     return type_map.get(file_extension, "word")
 
 
 def get_content_type(file_extension: str) -> str:
-    """获取文件的 MIME 类型"""
     content_types = {
         "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "doc": "application/msword",
@@ -106,199 +88,206 @@ def get_content_type(file_extension: str) -> str:
         "ods": "application/vnd.oasis.opendocument.spreadsheet",
         "odp": "application/vnd.oasis.opendocument.presentation",
         "csv": "text/csv",
-        "txt": "text/plain"
+        "txt": "text/plain",
     }
     return content_types.get(file_extension, "application/octet-stream")
 
 
-# ========== API 路由 ==========
+def build_object_name(user_id: str, document_id: str, ext: str) -> str:
+    safe_user = user_id.replace("/", "_")
+    return f"{OBJECT_PREFIX}/{safe_user}/{document_id}.{ext}"
+
+
+def parse_object_name(object_name: str) -> tuple[str, str, str]:
+    filename = object_name.rsplit("/", 1)[-1]
+    document_id, ext = filename.rsplit(".", 1)
+    return document_id, filename, ext.lower()
+
+
+def document_key(document_id: str) -> str:
+    return hashlib.sha256(document_id.encode("utf-8")).hexdigest()[:32]
+
+
+def find_document_object(document_id: str, user_id: Optional[str] = None) -> Optional[str]:
+    client = get_minio_client()
+    prefix = f"{OBJECT_PREFIX}/{user_id}/" if user_id else f"{OBJECT_PREFIX}/"
+    for obj in client.list_objects(BUCKET_NAME, prefix=prefix, recursive=True):
+        try:
+            found_id, _, _ = parse_object_name(obj.object_name)
+        except ValueError:
+            continue
+        if found_id == document_id and not obj.object_name.endswith(".bak"):
+            return obj.object_name
+    return None
+
+
+def make_editor_token(config: dict) -> str:
+    return jwt.encode(config, JWT_SECRET, algorithm="HS256")
+
+
+def get_original_title(stat, fallback: str) -> str:
+    metadata = getattr(stat, "metadata", None) or {}
+    return (
+        metadata.get("X-Amz-Meta-Original-Name")
+        or metadata.get("x-amz-meta-original-name")
+        or metadata.get("original-name")
+        or fallback
+    )
+
+
+def content_disposition_inline(filename: str) -> str:
+    quoted = quote(filename)
+    return f"inline; filename*=UTF-8''{quoted}"
+
 
 @router.post("/upload")
 async def upload_document(
     file: UploadFile = File(...),
     user_id: str = Form("user_001"),
-    user_name: str = Form("用户")
+    user_name: str = Form("用户"),
 ):
-    """
-    上传文档到 OnlyOffice 存储
+    ext = get_file_extension(file.filename or "")
+    allowed_extensions = {
+        "docx", "doc", "odt", "rtf", "txt",
+        "xlsx", "xls", "ods", "csv",
+        "pptx", "ppt", "odp",
+        "pdf",
+    }
+    if ext not in allowed_extensions:
+        raise HTTPException(status_code=400, detail=f"不支持的文件类型: {ext}")
 
-    返回文档 ID 和访问 URL
-    """
+    content = await file.read()
+    document_id = f"doc_{user_id}_{int(time.time() * 1000)}"
+    object_name = build_object_name(user_id, document_id, ext)
+
     try:
-        # 验证文件类型
-        ext = get_file_extension(file.filename)
-        allowed_extensions = [
-            "docx", "doc", "odt", "rtf", "txt", "html",
-            "xlsx", "xls", "ods", "csv",
-            "pptx", "ppt", "odp",
-            "pdf"
-        ]
+        get_minio_client().put_object(
+            BUCKET_NAME,
+            object_name,
+            io.BytesIO(content),
+            len(content),
+            content_type=get_content_type(ext),
+            metadata={
+                "original-name": file.filename or f"{document_id}.{ext}",
+                "owner-id": user_id,
+                "owner-name": user_name,
+            },
+        )
+    except S3Error as exc:
+        raise HTTPException(status_code=500, detail=f"上传到 MinIO 失败: {exc}") from exc
 
-        if ext not in allowed_extensions:
-            raise HTTPException(
-                status_code=400,
-                detail=f"不支持的文件类型: {ext}。支持的类型: {', '.join(allowed_extensions)}"
-            )
-
-        # 生成文档 ID
-        timestamp = int(time.time() * 1000)
-        document_id = f"doc_{user_id}_{timestamp}"
-
-        # 创建用户目录
-        user_dir = os.path.join(DOCUMENT_STORAGE_PATH, user_id)
-        os.makedirs(user_dir, exist_ok=True)
-
-        # 保存文件
-        file_path = os.path.join(user_dir, f"{document_id}.{ext}")
-        with open(file_path, "wb") as f:
-            content = await file.read()
-            f.write(content)
-
-        # 生成文档 key
-        document_key = generate_document_key(file_path)
-
-        # 构建文档访问 URL
-        # 注意：这里需要根据实际部署情况调整
-        # 生产环境应该使用 Nginx 反向代理
-        document_url = f"http://localhost:8090/api/onlyoffice/document/{document_id}"
-
-        # 返回文档信息
-        return {
-            "success": True,
-            "data": {
-                "document_id": document_id,
-                "document_key": document_key,
-                "title": file.filename,
-                "url": document_url,
-                "file_type": ext,
-                "file_size": len(content),
-                "document_type": get_document_type(ext),
-                "created_at": datetime.now().isoformat(),
-                "owner_id": user_id,
-                "owner_name": user_name
-            }
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"上传失败: {str(e)}")
+    return {
+        "success": True,
+        "data": {
+            "document_id": document_id,
+            "document_key": document_key(document_id),
+            "title": file.filename,
+            "url": f"{BACKEND_PUBLIC_URL}/api/onlyoffice/document/{document_id}",
+            "file_type": ext,
+            "file_size": len(content),
+            "document_type": get_document_type(ext),
+            "created_at": datetime.now().isoformat(),
+            "owner_id": user_id,
+            "owner_name": user_name,
+        },
+    }
 
 
 @router.get("/document/{document_id}")
 async def get_document(document_id: str):
-    """
-    获取文档文件（供 OnlyOffice Server 读取）
-
-    OnlyOffice Server 会通过此接口下载文档进行编辑
-    """
-    try:
-        # 在存储目录中查找文档
-        for user_dir in os.listdir(DOCUMENT_STORAGE_PATH):
-            user_path = os.path.join(DOCUMENT_STORAGE_PATH, user_dir)
-            if not os.path.isdir(user_path):
-                continue
-
-            # 查找匹配的文档文件
-            for filename in os.listdir(user_path):
-                if filename.startswith(document_id):
-                    file_path = os.path.join(user_path, filename)
-                    ext = get_file_extension(filename)
-                    content_type = get_content_type(ext)
-
-                    return FileResponse(
-                        path=file_path,
-                        media_type=content_type,
-                        filename=filename
-                    )
-
+    object_name = find_document_object(document_id)
+    if not object_name:
         raise HTTPException(status_code=404, detail="文档不存在")
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取文档失败: {str(e)}")
+    try:
+        client = get_minio_client()
+        response = client.get_object(BUCKET_NAME, object_name)
+        _, filename, ext = parse_object_name(object_name)
+        stat = client.stat_object(BUCKET_NAME, object_name)
+        title = get_original_title(stat, filename)
+        headers = {"Content-Disposition": content_disposition_inline(title)}
+        return StreamingResponse(
+            response.stream(32 * 1024),
+            media_type=get_content_type(ext),
+            headers=headers,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"获取文档失败: {exc}") from exc
+
+
+@router.post("/callback/{document_id}")
+async def document_callback_for_document(document_id: str, callback_data: CallbackData):
+    return await handle_callback(document_id, callback_data)
 
 
 @router.post("/callback")
 async def document_callback(callback_data: CallbackData):
-    """
-    处理 OnlyOffice 文档编辑回调
+    object_name = find_document_object_by_key(callback_data.key)
+    if not object_name:
+        return {"error": 1, "message": "document key not found"}
+    document_id, _, _ = parse_object_name(object_name)
+    return await handle_callback(document_id, callback_data)
 
-    OnlyOffice Server 在文档状态变化时会调用此接口
-    状态码说明：
-    - 0: 正在编辑
-    - 1: 文档已保存
-    - 2: 文档保存错误
-    - 3: 文档关闭
-    - 4: 正在协同编辑
-    - 6: 正在编辑（强制保存后）
-    - 7: 文档已保存（强制保存后）
-    """
+
+def find_document_object_by_key(key: str) -> Optional[str]:
+    client = get_minio_client()
+    for obj in client.list_objects(BUCKET_NAME, prefix=f"{OBJECT_PREFIX}/", recursive=True):
+        try:
+            document_id, _, _ = parse_object_name(obj.object_name)
+        except ValueError:
+            continue
+        if document_key(document_id) == key and not obj.object_name.endswith(".bak"):
+            return obj.object_name
+    return None
+
+
+async def handle_callback(document_id: str, callback_data: CallbackData):
     try:
-        status = callback_data.status
-        document_key = callback_data.key
-
-        print(f"[OnlyOffice 回调] 文档: {document_key}, 状态: {status}")
-
-        if status == 1 or status == 7:
-            # 文档已保存，下载最新版本
-            if callback_data.url:
-                # 从 OnlyOffice Server 下载更新后的文档
-                await download_updated_document(document_key, callback_data.url)
-                print(f"[OnlyOffice 回调] 文档 {document_key} 已更新")
-
-        elif status == 2:
-            # 文档保存错误
-            print(f"[OnlyOffice 回调] 文档 {document_key} 保存错误")
-
-        elif status == 3:
-            # 文档关闭
-            print(f"[OnlyOffice 回调] 文档 {document_key} 已关闭")
-
-        # 返回成功响应（必须返回 {"error": 0} 表示处理成功）
+        if callback_data.status in (2, 6) and callback_data.url:
+            saved = await save_updated_document(document_id, callback_data.url)
+            if not saved:
+                return {"error": 1, "message": "save failed"}
         return {"error": 0}
-
-    except Exception as e:
-        print(f"[OnlyOffice 回调] 处理失败: {str(e)}")
-        return {"error": 1, "message": str(e)}
+    except Exception as exc:
+        return {"error": 1, "message": str(exc)}
 
 
-async def download_updated_document(document_key: str, url: str):
-    """
-    从 OnlyOffice Server 下载更新后的文档
-    """
-    import httpx
-
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url)
-            if response.status_code == 200:
-                # 查找并更新文档文件
-                for user_dir in os.listdir(DOCUMENT_STORAGE_PATH):
-                    user_path = os.path.join(DOCUMENT_STORAGE_PATH, user_dir)
-                    if not os.path.isdir(user_path):
-                        continue
-
-                    for filename in os.listdir(user_path):
-                        file_path = os.path.join(user_path, filename)
-                        # 通过 key 匹配文档
-                        if generate_document_key(file_path) == document_key:
-                            # 备份原文件
-                            backup_path = f"{file_path}.bak"
-                            if os.path.exists(file_path):
-                                os.rename(file_path, backup_path)
-
-                            # 保存新版本
-                            with open(file_path, "wb") as f:
-                                f.write(response.content)
-
-                            print(f"[OnlyOffice] 文档已更新: {file_path}")
-                            return True
-
+async def save_updated_document(document_id: str, url: str) -> bool:
+    object_name = find_document_object(document_id)
+    if not object_name:
         return False
 
-    except Exception as e:
-        print(f"[OnlyOffice] 下载更新文档失败: {str(e)}")
-        return False
+    client = get_minio_client()
+    async with httpx.AsyncClient(timeout=60.0) as http_client:
+        updated = await http_client.get(url)
+        updated.raise_for_status()
+        original_metadata = {}
+        try:
+            stat = client.stat_object(BUCKET_NAME, object_name)
+            original_title = get_original_title(stat, object_name.rsplit("/", 1)[-1])
+            original_metadata = {"original-name": original_title}
+            current = client.get_object(BUCKET_NAME, object_name).read()
+            client.put_object(
+                BUCKET_NAME,
+                f"{object_name}.bak",
+                io.BytesIO(current),
+                len(current),
+                content_type=stat.content_type,
+                metadata=original_metadata,
+            )
+        except Exception:
+            pass
+
+        _, _, ext = parse_object_name(object_name)
+        client.put_object(
+            BUCKET_NAME,
+            object_name,
+            io.BytesIO(updated.content),
+            len(updated.content),
+            content_type=get_content_type(ext),
+            metadata=original_metadata,
+        )
+        return True
 
 
 @router.get("/editor-config/{document_id}")
@@ -306,219 +295,150 @@ async def get_editor_config(
     document_id: str,
     user_id: str = "user_001",
     user_name: str = "用户",
-    mode: str = "edit"
+    mode: str = "edit",
 ):
-    """
-    获取 OnlyOffice 编辑器配置
+    object_name = find_document_object(document_id)
+    if not object_name:
+        raise HTTPException(status_code=404, detail="文档不存在")
 
-    前端调用此接口获取初始化编辑器所需的配置
-    """
     try:
-        # 查找文档
-        document_path = None
-        for user_dir in os.listdir(DOCUMENT_STORAGE_PATH):
-            user_path = os.path.join(DOCUMENT_STORAGE_PATH, user_dir)
-            if not os.path.isdir(user_path):
-                continue
-
-            for filename in os.listdir(user_path):
-                if filename.startswith(document_id):
-                    document_path = os.path.join(user_path, filename)
-                    break
-
-        if not document_path:
-            raise HTTPException(status_code=404, detail="文档不存在")
-
-        # 获取文档信息
-        filename = os.path.basename(document_path)
-        ext = get_file_extension(filename)
-        document_key = generate_document_key(document_path)
+        stat = get_minio_client().stat_object(BUCKET_NAME, object_name)
+        _, filename, ext = parse_object_name(object_name)
+        title = get_original_title(stat, filename)
+        doc_url = f"{BACKEND_PUBLIC_URL}/api/onlyoffice/document/{document_id}"
+        callback_url = f"{BACKEND_PUBLIC_URL}/api/onlyoffice/callback/{document_id}"
         document_type = get_document_type(ext)
 
-        # 构建文档 URL（供 OnlyOffice Server 访问）
-        document_url = f"http://localhost:8090/api/onlyoffice/document/{document_id}"
+        config = {
+            "document": {
+                "fileType": ext,
+                "key": document_key(document_id),
+                "title": title,
+                "url": doc_url,
+                "permissions": {
+                    "comment": mode == "edit",
+                    "download": True,
+                    "edit": mode == "edit",
+                    "fillForms": mode == "edit",
+                    "print": True,
+                    "review": mode == "edit",
+                },
+            },
+            "documentType": document_type,
+            "editorConfig": {
+                "callbackUrl": callback_url,
+                "lang": "zh-CN",
+                "mode": mode,
+                "user": {"id": user_id, "name": user_name},
+                "customization": {
+                    "forcesave": True,
+                    "compactHeader": False,
+                    "toolbarNoTabs": False,
+                    "hideRightMenu": False,
+                    "hideRulers": False,
+                    "macros": False,
+                    "plugins": True,
+                },
+            },
+            "height": "100%",
+            "width": "100%",
+            "type": "desktop",
+        }
+        config["token"] = make_editor_token(config)
 
-        # 构建回调 URL
-        callback_url = f"http://localhost:8090/api/onlyoffice/callback"
-
-        # 返回编辑器配置
         return {
             "success": True,
             "data": {
-                "document": {
-                    "fileType": ext,
-                    "key": document_key,
-                    "title": filename,
-                    "url": document_url,
-                    "permissions": {
-                        "comment": mode == "edit",
-                        "download": True,
-                        "edit": mode == "edit",
-                        "fillForms": mode == "edit",
-                        "print": True,
-                        "review": mode == "edit"
-                    }
-                },
-                "documentType": document_type,
-                "editorConfig": {
-                    "callbackUrl": callback_url,
-                    "lang": "zh-CN",
-                    "mode": mode,
-                    "user": {
-                        "id": user_id,
-                        "name": user_name
-                    },
-                    "customization": {
-                        "forcesave": True,
-                        "compactHeader": False,
-                        "toolbarNoTabs": False,
-                        "hideRightMenu": False,
-                        "hideRulers": False,
-                        "macros": False,
-                        "plugins": True
-                    }
-                },
-                "onlyoffice_server_url": ONLYOFFICE_SERVER_URL
-            }
+                **config,
+                "onlyoffice_server_url": ONLYOFFICE_SERVER_URL,
+                "file_size": stat.size,
+                "updated_at": stat.last_modified.isoformat() if stat.last_modified else "",
+            },
         }
-
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取编辑器配置失败: {str(e)}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"获取编辑器配置失败: {exc}") from exc
 
 
 @router.delete("/document/{document_id}")
-async def delete_document(
-    document_id: str,
-    user_id: str = "user_001"
-):
-    """
-    删除文档
-    """
-    try:
-        # 查找并删除文档
-        for user_dir in os.listdir(DOCUMENT_STORAGE_PATH):
-            user_path = os.path.join(DOCUMENT_STORAGE_PATH, user_dir)
-            if not os.path.isdir(user_path):
-                continue
-
-            for filename in os.listdir(user_path):
-                if filename.startswith(document_id):
-                    file_path = os.path.join(user_path, filename)
-                    os.remove(file_path)
-
-                    # 同时删除备份文件
-                    backup_path = f"{file_path}.bak"
-                    if os.path.exists(backup_path):
-                        os.remove(backup_path)
-
-                    return {"success": True, "message": "文档已删除"}
-
+async def delete_document(document_id: str):
+    object_name = find_document_object(document_id)
+    if not object_name:
         raise HTTPException(status_code=404, detail="文档不存在")
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"删除文档失败: {str(e)}")
+    client = get_minio_client()
+    client.remove_object(BUCKET_NAME, object_name)
+    try:
+        client.remove_object(BUCKET_NAME, f"{object_name}.bak")
+    except Exception:
+        pass
+    return {"success": True, "message": "文档已删除"}
 
 
 @router.get("/documents")
 async def list_documents(
     user_id: str = "user_001",
     page: int = 1,
-    page_size: int = 20
+    page_size: int = 20,
 ):
-    """
-    获取用户的文档列表
-    """
-    try:
-        documents = []
-        user_dir = os.path.join(DOCUMENT_STORAGE_PATH, user_id)
+    client = get_minio_client()
+    docs = []
+    prefix = f"{OBJECT_PREFIX}/{user_id}/"
+    for obj in client.list_objects(BUCKET_NAME, prefix=prefix, recursive=True):
+        if obj.object_name.endswith(".bak"):
+            continue
+        try:
+            document_id, filename, ext = parse_object_name(obj.object_name)
+        except ValueError:
+            continue
+        try:
+            stat = client.stat_object(BUCKET_NAME, obj.object_name)
+            title = get_original_title(stat, filename)
+        except Exception:
+            title = filename
+        docs.append({
+            "document_id": document_id,
+            "title": title,
+            "file_type": ext,
+            "file_size": obj.size or 0,
+            "document_type": get_document_type(ext),
+            "created_at": obj.last_modified.isoformat() if obj.last_modified else "",
+            "updated_at": obj.last_modified.isoformat() if obj.last_modified else "",
+        })
 
-        if os.path.exists(user_dir):
-            for filename in os.listdir(user_dir):
-                if filename.endswith(".bak"):
-                    continue
-
-                file_path = os.path.join(user_dir, filename)
-                stat = os.stat(file_path)
-                ext = get_file_extension(filename)
-
-                documents.append({
-                    "document_id": filename.split(".")[0],
-                    "title": filename,
-                    "file_type": ext,
-                    "file_size": stat.st_size,
-                    "document_type": get_document_type(ext),
-                    "created_at": datetime.fromtimestamp(stat.st_ctime).isoformat(),
-                    "updated_at": datetime.fromtimestamp(stat.st_mtime).isoformat()
-                })
-
-        # 按更新时间倒序排列
-        documents.sort(key=lambda x: x["updated_at"], reverse=True)
-
-        # 分页
-        total = len(documents)
-        start = (page - 1) * page_size
-        end = start + page_size
-        paginated_docs = documents[start:end]
-
-        return {
-            "success": True,
-            "data": {
-                "total": total,
-                "page": page,
-                "page_size": page_size,
-                "documents": paginated_docs
-            }
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取文档列表失败: {str(e)}")
+    docs.sort(key=lambda item: item["updated_at"], reverse=True)
+    total = len(docs)
+    start = (page - 1) * page_size
+    end = start + page_size
+    return {
+        "success": True,
+        "data": {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "documents": docs[start:end],
+        },
+    }
 
 
 @router.get("/health")
 async def health_check():
-    """
-    OnlyOffice 服务健康检查
-    """
-    import httpx
-
     try:
-        # 检查 OnlyOffice Document Server 是否可达
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{ONLYOFFICE_SERVER_URL}/healthcheck",
-                timeout=5.0
-            )
-
-            if response.status_code == 200:
-                return {
-                    "status": "healthy",
-                    "onlyoffice_server": ONLYOFFICE_SERVER_URL,
-                    "document_server_status": "running",
-                    "storage_path": DOCUMENT_STORAGE_PATH
-                }
-            else:
-                return {
-                    "status": "unhealthy",
-                    "onlyoffice_server": ONLYOFFICE_SERVER_URL,
-                    "document_server_status": "error",
-                    "error": f"HTTP {response.status_code}"
-                }
-
-    except httpx.ConnectError:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(f"{ONLYOFFICE_SERVER_URL}/healthcheck")
+        minio_ok = get_minio_client().bucket_exists(BUCKET_NAME)
         return {
-            "status": "unhealthy",
+            "status": "healthy" if response.status_code == 200 and minio_ok else "unhealthy",
             "onlyoffice_server": ONLYOFFICE_SERVER_URL,
-            "document_server_status": "unreachable",
-            "error": "无法连接到 OnlyOffice Document Server"
+            "backend_public_url": BACKEND_PUBLIC_URL,
+            "document_bucket": BUCKET_NAME,
         }
-    except Exception as e:
+    except Exception as exc:
         return {
             "status": "unhealthy",
             "onlyoffice_server": ONLYOFFICE_SERVER_URL,
-            "document_server_status": "error",
-            "error": str(e)
+            "backend_public_url": BACKEND_PUBLIC_URL,
+            "document_bucket": BUCKET_NAME,
+            "error": str(exc),
         }

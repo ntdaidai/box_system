@@ -26,7 +26,7 @@
       <!-- 左侧菜单 -->
       <aside v-if="showSiderbar" class="siderBox">
         <el-menu
-          :default-active="route.path"
+          :default-active="sidebarActivePath"
           router
           :style="{ '--el-menu-level-padding': '0px' }"
         >
@@ -118,14 +118,9 @@ const menuMap = {
       icon: VideoCamera,
     },
     {
-      name: '图片分析',
+      name: '图片/视频分析',
       path: '/monitor/camera/image',
-      icon: Picture,
-    },
-    {
-      name: '视频分析',
-      path: '/monitor/camera/video',
-      icon: VideoPlay,
+      icon: DataAnalysis,
     },
   ],
   '/alarm': [
@@ -172,6 +167,11 @@ const showSiderbar = computed(() => {
 // 当前菜单
 const currentMenu = computed(() => {
   return menuMap[currentNav.value] || []
+})
+
+const sidebarActivePath = computed(() => {
+  if (route.path === '/monitor/camera/video') return '/monitor/camera/image'
+  return route.path
 })
 
 // 面包屑

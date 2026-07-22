@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 import sys
 from urllib.request import ProxyHandler, build_opener
 
@@ -36,7 +37,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--url",
-        default="http://127.0.0.1:8090/api/v1/sensor/history/status",
+        default=f"http://127.0.0.1:{os.getenv('APP_PORT', '8090')}/api/v1/sensor/history/status",
     )
     parser.add_argument("--timeout", type=float, default=10)
     parser.add_argument("--max-queue-age", type=float, default=120)

@@ -45,6 +45,7 @@
         :document-url="documentUrl"
         :document-title="documentInfo.title"
         :document-type="documentType"
+        :config="editorConfig"
         :mode="editorMode"
         editor-height="calc(100vh - 280px)"
         :user="currentUser"
@@ -88,6 +89,7 @@ const editorRef = ref(null)
 const saving = ref(false)
 const documentUrl = ref('')
 const documentType = ref('word')
+const editorConfig = ref(null)
 const editorMode = ref('edit')
 const collaborators = ref([])
 const isDocumentModified = ref(false)
@@ -107,10 +109,8 @@ const currentUser = ref({
   name: '管理员'
 })
 
-// 回调 URL
-const callbackUrl = computed(() => {
-  return `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8090'}/api/onlyoffice/callback`
-})
+// 回调 URL 由后端完整 OnlyOffice config 提供，这里仅保留兼容兜底。
+const callbackUrl = computed(() => editorConfig.value?.editorConfig?.callbackUrl || '')
 
 // 获取文档类型标签
 const getFileTypeTag = (type) => {
@@ -181,9 +181,11 @@ const loadDocumentInfo = async () => {
         document_id: documentId,
         title: data.document.title,
         file_type: data.document.fileType,
-        file_size: 0, // 需要额外接口获取
-        updated_at: ''
+        file_size: data.file_size || 0,
+        updated_at: data.updated_at || ''
       }
+
+      editorConfig.value = data
 
       // 设置文档 URL
       documentUrl.value = data.document.url

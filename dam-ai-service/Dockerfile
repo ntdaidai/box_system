@@ -22,4 +22,4 @@ COPY . .
 EXPOSE 8090
 
 # 启动服务（root 用户以支持串口访问）
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8090"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${APP_PORT:-8090}"]

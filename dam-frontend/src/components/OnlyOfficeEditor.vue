@@ -30,7 +30,12 @@ const props = defineProps({
   // 文档 URL（必填）
   documentUrl: {
     type: String,
-    required: true
+    default: ''
+  },
+  // 后端生成的完整 OnlyOffice 配置（推荐）
+  config: {
+    type: Object,
+    default: null
   },
   // 文档标题
   documentTitle: {
@@ -41,7 +46,7 @@ const props = defineProps({
   documentType: {
     type: String,
     default: 'word',
-    validator: (value) => ['word', 'cell', 'slide'].includes(value)
+    validator: (value) => ['word', 'cell', 'slide', 'pdf'].includes(value)
   },
   // 编辑器模式：edit | view | fillForms
   mode: {
@@ -121,10 +126,11 @@ const hashString = (str) => {
 
 // 获取文档扩展名
 const getDocumentExtension = () => {
-  const url = props.documentUrl
-  const lastDot = url.lastIndexOf('.')
+  if (props.config?.document?.fileType) return props.config.document.fileType
+  const source = props.documentTitle || props.documentUrl
+  const lastDot = source.lastIndexOf('.')
   if (lastDot === -1) return 'docx'
-  return url.substring(lastDot + 1).toLowerCase()
+  return source.substring(lastDot + 1).toLowerCase()
 }
 
 // 获取文档图标 URL（可选，显示在标题栏）
@@ -163,8 +169,15 @@ const initEditor = async () => {
       docEditor = null
     }
 
-    // 配置编辑器选项
-    const config = {
+    // 配置编辑器选项。优先使用后端返回的完整配置，确保 key、token、
+    // callbackUrl 与后端保存逻辑一致。
+    const { onlyoffice_server_url: _onlyofficeServerUrl, file_size: _fileSize, updated_at: _updatedAt, ...serverConfig } = props.config || {}
+    const config = props.config ? {
+      ...serverConfig,
+      height: props.editorHeight,
+      width: '100%',
+      events: undefined
+    } : {
       document: {
         fileType: getDocumentExtension(),
         key: getDocumentKey(),
@@ -217,9 +230,22 @@ const initEditor = async () => {
       }
     }
 
+    config.events = {
+      onAppReady: () => {
+        loading.value = false
+        emit('ready')
+      },
+      onDocumentStateChange: (event) => {
+        emit('documentStateChange', event)
+      },
+      onError: (event) => {
+        const errorMsg = `编辑器错误: ${event.data || '未知错误'}`
+        error.value = errorMsg
+        emit('error', errorMsg)
+      }
+    }
+
     // 创建编辑器实例
-    // 注意：需要替换为你的 OnlyOffice Document Server 地址
-    const onlyofficeServerUrl = import.meta.env.VITE_ONLYOFFICE_URL || 'http://localhost:8080'
     docEditor = new window.DocsAPI.DocEditor('onlyoffice-editor', config)
 
   } catch (err) {
@@ -241,7 +267,10 @@ const loadOnlyOfficeScript = () => {
 
     // 动态创建 script 标签
     const script = document.createElement('script')
-    const onlyofficeServerUrl = import.meta.env.VITE_ONLYOFFICE_URL || 'http://localhost:8080'
+    const onlyofficeServerUrl =
+      props.config?.onlyoffice_server_url ||
+      import.meta.env.VITE_ONLYOFFICE_URL ||
+      'http://192.168.31.52'
     script.src = `${onlyofficeServerUrl}/web-apps/apps/api/documents/api.js`
     script.async = true
     script.onload = () => {
@@ -271,7 +300,7 @@ const getDocumentType = () => {
     'pptx': 'slide',
     'ppt': 'slide',
     'odp': 'slide',
-    'pdf': 'word' // PDF 使用 word 类型查看
+    'pdf': 'pdf'
   }
   return typeMap[ext] || props.documentType
 }
@@ -286,9 +315,9 @@ const destroyEditor = () => {
 
 // 监听 props 变化，重新初始化编辑器
 watch(
-  () => [props.documentUrl, props.documentKey],
+  () => [props.documentUrl, props.documentKey, props.config],
   () => {
-    if (props.documentUrl) {
+    if (props.config || props.documentUrl) {
       destroyEditor()
       initEditor()
     }
@@ -297,7 +326,7 @@ watch(
 
 // 组件挂载时初始化
 onMounted(() => {
-  if (props.documentUrl) {
+  if (props.config || props.documentUrl) {
     initEditor()
   }
 })

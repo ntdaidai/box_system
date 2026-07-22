@@ -14,6 +14,7 @@ from app.api import (
     eca,
     health,
     image,
+    onlyoffice,
     rule,
     sensor,
     vision,
@@ -183,6 +184,7 @@ app.include_router(vision_detect.router, prefix="/api/v1/vision/detect", tags=["
 app.include_router(image.router, prefix="/api/v1/image", tags=["图片管理"])
 app.include_router(camera.router, prefix="/api/v1/camera", tags=["摄像头与检测"])
 app.include_router(document.router, tags=["文档管理"])
+app.include_router(onlyoffice.router)
 
 
 # ── 共享 HTTP 客户端依赖 ─────────────────────────────────────

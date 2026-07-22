@@ -72,7 +72,7 @@ const routes = [
             path: 'camera/image',
             name: 'CameraImageAnalysis',
             component: () => import('@/views/Monitor/CameraView.vue'),
-            meta: { title: '图片分析', requiresAuth: true, mediaTab: 'image' }
+            meta: { title: '图片/视频分析', requiresAuth: true, mediaTab: 'image' }
           },
           {
             path: 'camera/video',

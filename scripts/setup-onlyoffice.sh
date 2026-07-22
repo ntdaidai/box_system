@@ -72,10 +72,16 @@ create_env_file() {
     if [ ! -f .env.onlyoffice ]; then
         cat > .env.onlyoffice << EOF
 # OnlyOffice 配置
-ONLYOFFICE_SERVER_URL=http://localhost:8080
+APP_PORT=8090
+PUBLIC_HOST=192.168.31.52
+BACKEND_PUBLIC_URL=http://192.168.31.52:8090
+ONLYOFFICE_PUBLIC_URL=http://192.168.31.52
 ONLYOFFICE_JWT_SECRET=$(openssl rand -hex 32)
 DOCUMENT_STORAGE_PATH=/var/www/onlyoffice/Data
-VITE_ONLYOFFICE_URL=http://localhost:8080
+DOCUMENT_BUCKET=documents
+MINIO_ENDPOINT=localhost:9000
+VITE_API_BASE_URL=http://192.168.31.52:8090
+VITE_ONLYOFFICE_URL=http://192.168.31.52
 EOF
         print_success "环境配置文件已创建: .env.onlyoffice"
     else
@@ -99,7 +105,7 @@ start_onlyoffice() {
     retry_count=0
 
     while [ $retry_count -lt $max_retries ]; do
-        if curl -s -f http://localhost:8080/healthcheck > /dev/null 2>&1; then
+        if curl -s -f http://localhost/healthcheck > /dev/null 2>&1; then
             print_success "OnlyOffice 服务启动成功"
             return 0
         fi
@@ -119,7 +125,7 @@ verify_service() {
     print_info "验证 OnlyOffice 服务..."
 
     # 检查健康状态
-    health_status=$(curl -s http://localhost:8080/healthcheck)
+    health_status=$(curl -s http://localhost/healthcheck)
     if [ "$health_status" = '{"status":"ok"}' ]; then
         print_success "OnlyOffice 健康检查通过"
     else
@@ -127,7 +133,7 @@ verify_service() {
     fi
 
     # 检查 API 是否可访问
-    if curl -s -f http://localhost:8080/web-apps/apps/api/documents/api.js > /dev/null 2>&1; then
+    if curl -s -f http://localhost/web-apps/apps/api/documents/api.js > /dev/null 2>&1; then
         print_success "OnlyOffice API 可访问"
     else
         print_warning "OnlyOffice API 无法访问"
@@ -170,7 +176,7 @@ print_access_info() {
     echo "访问地址："
     echo "  - 前端页面: http://localhost:9457"
     echo "  - 文档管理: http://localhost:9457/document"
-    echo "  - OnlyOffice 管理: http://localhost:8080"
+    echo "  - OnlyOffice 管理: http://localhost"
     echo "  - 后端 API: http://localhost:8090/docs"
     echo ""
     echo "快速测试："

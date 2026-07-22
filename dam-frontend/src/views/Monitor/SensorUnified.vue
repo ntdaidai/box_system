@@ -26,7 +26,7 @@
             <i :style="{ transform: `translate(-50%, -50%) rotate(${card.angle}deg)` }"></i>
           </div>
         </div>
-        <div v-else class="metric-row">
+        <div v-else class="metric-row" :class="{ 'metric-columns': card.metrics.length > 2 }">
           <div v-for="metric in card.metrics" :key="metric.label" class="metric-cell">
             <strong>{{ metric.value }}</strong>
             <span>{{ metric.label }}</span>
@@ -216,6 +216,7 @@ let summaryTimer = null
 let resizeHandler = null
 let requestSerial = 0
 let isMounted = false
+let lastPointerPixel = null
 
 const historyTabs = [
   { key: 'temperature', label: '气温', icon: '♨', subtitle: '温度变化趋势', unit: '℃', color: '#ff5b6e' },
@@ -759,19 +760,37 @@ const chartSeriesData = () => (chartData.value.history || [])
 
 const chartValues = () => chartSeriesData().map(point => point[1]).filter(value => value !== null && Number.isFinite(value))
 
+const visibleDaySpan = () => {
+  const option = chart?.getOption?.()
+  const zoom = option?.dataZoom?.[0]
+  const startValue = Number(zoom?.startValue)
+  const endValue = Number(zoom?.endValue)
+  if (Number.isFinite(startValue) && Number.isFinite(endValue) && endValue > startValue) {
+    return Math.ceil((endValue - startValue) / DAY)
+  }
+  const points = chartSeriesData()
+  const first = points[0]?.[0]
+  const last = points.at(-1)?.[0]
+  return Number.isFinite(first) && Number.isFinite(last) ? Math.ceil((last - first) / DAY) : 365
+}
+
 const formatXAxisLabel = (value) => {
   const date = new Date(value)
   if (historyMode.value === 'recent24h') {
     return date.toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false })
   }
   if (historyMode.value === 'overview') {
+    const span = visibleDaySpan()
+    if (span <= 45) return `${date.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', day: 'numeric' })}\u65e5`
+    if (span <= 400) {
+      return date.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric' })
+    }
     return date.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit' })
   }
   return selectedMonth.value === 'all'
     ? date.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric' })
-    : `${date.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', day: 'numeric' })}日`
+    : `${date.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', day: 'numeric' })}\u65e5`
 }
-
 const tooltipFormatter = (params) => {
   const item = (Array.isArray(params) ? params : [params]).find(entry => entry.value?.[1] != null)
   if (!item) return ''
@@ -780,6 +799,40 @@ const tooltipFormatter = (params) => {
     ? date.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
     : date.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: 'long', day: 'numeric' })
   return `<div style="min-width:160px"><strong>${heading}</strong><div style="display:flex;justify-content:space-between;gap:24px;margin-top:8px"><span>${item.marker}${activeTabMeta.value.label}</span><strong>${Number(item.value[1]).toFixed(activeHistoryTab.value === 'vibration' ? 4 : 1)} ${activeTabMeta.value.unit}</strong></div></div>`
+}
+
+const yAxisFallback = (values) => {
+  if (activeHistoryTab.value === 'vibration') return { min: 0, max: 0.2, ticks: 5 }
+  if (activeHistoryTab.value === 'humidity') return { min: 0, max: 100, ticks: 5 }
+  if (activeHistoryTab.value === 'temperature') return { min: 0, max: 35, ticks: 7 }
+  const max = values.length ? Math.max(...values) : 0
+  if (activeHistoryTab.value === 'rain') return { min: 0, max: max <= 5 ? 5 : Math.ceil(max / 5) * 5, ticks: 5 }
+  return { min: 0, max: max <= 35 ? 35 : Math.ceil(max / 5) * 5, ticks: 7 }
+}
+
+const zeroRainPoints = points => activeHistoryTab.value === 'rain'
+  ? points.filter(point => point[1] === 0).map(point => [point[0], 0])
+  : []
+
+const restorePointerTooltip = () => {
+  if (!chart || chart.isDisposed() || !lastPointerPixel || !chart.containPixel('grid', lastPointerPixel)) return
+  const dataPoint = chart.convertFromPixel({ seriesIndex: 0 }, lastPointerPixel)
+  const targetTime = Number(dataPoint?.[0])
+  if (!Number.isFinite(targetTime)) return
+  const points = chartSeriesData()
+  if (!points.length) return
+  let nearestIndex = -1
+  let nearestDistance = Number.POSITIVE_INFINITY
+  points.forEach((point, index) => {
+    if (point[1] === null) return
+    const distance = Math.abs(point[0] - targetTime)
+    if (distance < nearestDistance) {
+      nearestIndex = index
+      nearestDistance = distance
+    }
+  })
+  if (nearestIndex < 0) return
+  chart.dispatchAction({ type: 'showTip', seriesIndex: 0, dataIndex: nearestIndex })
 }
 
 const thresholdMarkLines = () => {
@@ -794,17 +847,19 @@ const fullChartOption = () => {
   const meta = activeTabMeta.value
   const points = chartSeriesData()
   const values = chartValues()
-  const fallback = activeHistoryTab.value === 'vibration'
-    ? { min: 0, max: 0.2 }
-    : activeHistoryTab.value === 'humidity'
-      ? { min: 0, max: 100 }
-      : { min: 0, max: Math.max(10, ...values, 10) }
+  const fallback = yAxisFallback(values)
   const thresholdValues = activeHistoryTab.value === 'vibration' ? [WARNING_RMS, ALARM_RMS] : []
-  const yRange = calcNiceYAxisRange([...values, ...thresholdValues], fallback, 5)
+  const yRange = calcNiceYAxisRange([...values, ...thresholdValues], fallback, fallback.ticks)
   const windowStart = Number(chartData.value.window?.start) * 1000
   const windowEnd = Number(chartData.value.window?.end) * 1000
   const recent = historyMode.value === 'recent24h'
   const overview = historyMode.value === 'overview'
+  const dataStart = points[0]?.[0] ?? Date.now() - DAY
+  const dataEnd = points.at(-1)?.[0] ?? Date.now()
+  const zeroPoints = zeroRainPoints(points)
+  const rainLegend = activeHistoryTab.value === 'rain'
+    ? (recent ? '逐半小时新增雨量' : '逐日雨量')
+    : meta.label
   return {
     animation: true,
     animationDuration: 850,
@@ -820,25 +875,53 @@ const fullChartOption = () => {
       textStyle: { color: '#f1f6ff', fontSize: 13 },
       axisPointer: { type: activeHistoryTab.value === 'rain' ? 'shadow' : 'line' },
     },
-    grid: { left: 18, right: 28, bottom: 18, top: 34, containLabel: true },
+    legend: activeHistoryTab.value === 'rain' ? {
+      show: true,
+      bottom: overview ? 34 : 4,
+      left: 12,
+      itemWidth: 18,
+      itemHeight: 8,
+      textStyle: { color: '#b7cae4', fontSize: 12 },
+      data: [rainLegend, '0 mm'],
+    } : undefined,
+    grid: { left: 46, right: 54, bottom: overview ? 78 : 48, top: 44, containLabel: true },
     dataZoom: overview
       ? [{
           type: 'inside',
           zoomOnMouseWheel: true,
           moveOnMouseWheel: true,
-          moveOnMouseMove: false,
+          moveOnMouseMove: true,
           filterMode: 'none',
+          minValueSpan: DAY,
+          startValue: dataStart,
+          endValue: dataEnd,
+        }, {
+          type: 'slider',
+          height: 24,
+          bottom: 10,
+          borderColor: 'rgba(89, 155, 255, 0.32)',
+          backgroundColor: 'rgba(7, 19, 38, 0.82)',
+          fillerColor: 'rgba(47, 151, 255, 0.18)',
+          handleStyle: { color: '#8fbfff', borderColor: '#d8e8ff' },
+          moveHandleStyle: { color: '#5aa7ff' },
+          textStyle: { color: '#9fb6d3' },
+          brushSelect: false,
+          filterMode: 'none',
+          minValueSpan: DAY,
+          startValue: dataStart,
+          endValue: dataEnd,
         }]
       : [],
     xAxis: {
       type: 'time',
-      min: Number.isFinite(windowStart) && recent ? windowStart : (points[0]?.[0] ?? Date.now() - DAY),
-      max: Number.isFinite(windowEnd) && recent ? windowEnd : (points.at(-1)?.[0] ?? Date.now()),
-      interval: recent ? 3 * HOUR : (overview ? undefined : (selectedMonth.value === 'all' ? 30 * DAY : 5 * DAY)),
+      min: Number.isFinite(windowStart) && recent ? windowStart : dataStart,
+      max: Number.isFinite(windowEnd) && recent ? windowEnd : dataEnd,
+      interval: recent ? 3 * HOUR : (overview ? DAY : (selectedMonth.value === 'all' ? 30 * DAY : 5 * DAY)),
+      minInterval: overview ? DAY : (recent ? 30 * MINUTE : DAY),
       name: recent ? '时间' : '日期',
       nameLocation: 'end',
-      nameGap: 8,
-      nameTextStyle: { color: '#b6c7df', fontSize: 12, padding: [18, 0, 0, 0] },
+      nameGap: 18,
+      nameTextStyle: { color: '#b6c7df', fontSize: 12, padding: [22, 0, 0, 0] },
       axisLine: { show: true, symbol: ['none', 'arrow'], symbolSize: [8, 10], lineStyle: { color: 'rgba(121, 155, 202, 0.68)' } },
       axisTick: { show: true, lineStyle: { color: 'rgba(121, 155, 202, 0.42)' } },
       axisLabel: { color: '#91a9ca', margin: 12, hideOverlap: true, formatter: formatXAxisLabel },
@@ -851,16 +934,22 @@ const fullChartOption = () => {
       interval: yRange.interval,
       name: meta.unit,
       nameLocation: 'end',
-      nameGap: 12,
-      nameTextStyle: { color: '#b6c7df', fontSize: 12, padding: [0, 28, 4, 0] },
+      nameGap: 18,
+      nameTextStyle: { color: '#b6c7df', fontSize: 12, padding: [0, 36, 4, 0] },
       axisLine: { show: true, symbol: ['none', 'arrow'], symbolSize: [8, 10], lineStyle: { color: 'rgba(121, 155, 202, 0.68)' } },
       axisTick: { show: false },
-      axisLabel: { color: '#b6c7df', margin: 12 },
+      axisLabel: {
+        color: '#b6c7df',
+        margin: 12,
+        formatter: value => activeHistoryTab.value === 'vibration'
+          ? Number(value).toFixed(2)
+          : String(Number(value).toFixed(Number.isInteger(value) ? 0 : 1)),
+      },
       splitLine: { lineStyle: { color: 'rgba(151, 177, 215, 0.18)', width: 1 } },
     },
     series: [{
       id: `history-${activeHistoryTab.value}`,
-      name: meta.label,
+      name: rainLegend,
       type: activeHistoryTab.value === 'rain' ? 'bar' : 'line',
       data: points,
       showSymbol: false,
@@ -886,7 +975,18 @@ const fullChartOption = () => {
         symbol: ['none', 'none'],
         data: thresholdMarkLines(),
       },
-    }],
+    }, ...(zeroPoints.length ? [{
+      id: 'rain-zero-markers',
+      name: '0 mm',
+      type: 'scatter',
+      data: zeroPoints,
+      symbol: 'roundRect',
+      symbolSize: [12, 3],
+      z: 5,
+      tooltip: { show: false },
+      itemStyle: { color: 'rgba(151, 190, 255, 0.72)' },
+      emphasis: { disabled: true },
+    }] : [])],
   }
 }
 
@@ -894,8 +994,8 @@ const renderChart = () => {
   if (!chart || chart.isDisposed()) return
   chart.setOption(fullChartOption(), {
     notMerge: false,
-    replaceMerge: ['xAxis', 'yAxis', 'dataZoom', 'series'],
-    lazyUpdate: false,
+    replaceMerge: ['legend', 'xAxis', 'yAxis', 'dataZoom', 'series'],
+    lazyUpdate: true,
   })
 }
 
@@ -903,6 +1003,12 @@ const initChart = () => {
   if (!chartRef.value) return
   chart = echarts.init(chartRef.value)
   chart.setOption(fullChartOption(), true)
+  chart.getZr().on('mousemove', event => {
+    lastPointerPixel = [event.offsetX, event.offsetY]
+  })
+  chart.on('datazoom', () => {
+    window.requestAnimationFrame(restorePointerTooltip)
+  })
   resizeHandler = () => {
     chart?.resize()
     renderChart()
@@ -1086,10 +1192,11 @@ const summaryRow = (label, values, decimals) => {
 onMounted(async () => {
   isMounted = true
   initChart()
-  await Promise.all([fetchRealtime(), loadHistory(currentQuery())])
+  fetchRealtime()
+  loadHistory(currentQuery())
   summaryTimer = window.setTimeout(() => {
     if (isMounted) loadSummary()
-  }, 0)
+  }, 2200)
   realtimeTimer = setInterval(fetchRealtime, 5000)
 })
 
@@ -1177,11 +1284,19 @@ onUnmounted(() => {
   margin: 18px 0 12px;
 }
 
+.metric-row.metric-columns {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .metric-cell strong {
   display: block;
   color: #fff;
-  font: 800 26px/1 "Consolas", "Monaco", monospace;
+  font: 800 24px/1 "Consolas", "Monaco", monospace;
   white-space: nowrap;
+}
+
+.metric-columns .metric-cell strong {
+  font-size: 20px;
 }
 
 .metric-cell span {

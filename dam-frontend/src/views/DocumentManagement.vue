@@ -83,7 +83,7 @@
             <el-button
               type="success"
               link
-              @click="previewDocument(row)"
+              @click="openDocumentPreview(row)"
             >
               <el-icon><View /></el-icon>
               预览
@@ -224,6 +224,8 @@ const currentUser = ref({
   id: 'user_001',
   name: '管理员'
 })
+
+const apiPublicBase = import.meta.env.VITE_API_BASE_URL || 'http://192.168.31.52:8090'
 
 // 过滤后的文档列表
 const filteredDocuments = computed(() => {
@@ -431,11 +433,11 @@ const openEditor = (doc) => {
 }
 
 // 预览文档
-const previewDocument = (doc) => {
+const openDocumentPreview = (doc) => {
   previewDocument.value = {
     document_id: doc.document_id,
     title: doc.title,
-    url: `http://localhost:8090/api/onlyoffice/document/${doc.document_id}`,
+    url: `${apiPublicBase}/api/onlyoffice/document/${doc.document_id}`,
     document_type: getDocumentType(doc.file_type)
   }
   previewDialogVisible.value = true

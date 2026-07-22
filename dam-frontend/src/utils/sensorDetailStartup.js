@@ -2,7 +2,7 @@ export const runWhenIdle = (callback, timeout = 600) => {
   if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
     return window.requestIdleCallback(callback, { timeout })
   }
-  return setTimeout(callback, Math.min(timeout, 300))
+  return setTimeout(callback, timeout)
 }
 
 export const cancelIdleTask = (taskId) => {

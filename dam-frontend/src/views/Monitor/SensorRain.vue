@@ -133,6 +133,8 @@
         <div class="rain-series-legend">
           <i></i>
           <span>{{ historyLegendLabel }}</span>
+          <i class="zero-marker"></i>
+          <span>0 mm</span>
         </div>
       </div>
     </div>
@@ -464,6 +466,16 @@ const chartSeriesData = () => {
   })
 }
 
+const zeroRainPoints = points => points
+  .filter(point => {
+    const value = chartData.value.view === 'recent24h' ? point.value?.[1] : point.value
+    return value === 0
+  })
+  .map(point => {
+    if (chartData.value.view === 'recent24h') return [point.value[0], 0]
+    return [point.date, 0]
+  })
+
 const formatXAxisLabel = (value) => {
   if (chartData.value.view === 'recent24h') {
     return new Date(value).toLocaleTimeString('zh-CN', {
@@ -517,6 +529,7 @@ const fullChartOption = () => {
   const recent = chartData.value.view === 'recent24h'
   const monthly = !recent && selectedMonth.value !== 'all'
   const points = chartSeriesData()
+  const zeroPoints = zeroRainPoints(points)
   const values = points
     .map(point => recent ? point.value[1] : point.value)
     .filter(value => value !== null)
@@ -596,7 +609,18 @@ const fullChartOption = () => {
         itemStyle: { color: '#43d7ff', shadowBlur: 12, shadowColor: 'rgba(31, 180, 255, 0.52)' },
       },
       markLine: currentDayMark(),
-    }],
+    }, ...(zeroPoints.length ? [{
+      id: 'rain-zero-markers',
+      name: '0 mm',
+      type: 'scatter',
+      data: zeroPoints,
+      symbol: 'roundRect',
+      symbolSize: [12, 3],
+      z: 5,
+      tooltip: { show: false },
+      itemStyle: { color: 'rgba(151, 190, 255, 0.72)' },
+      emphasis: { disabled: true },
+    }] : [])],
   }
 }
 
@@ -983,6 +1007,13 @@ onUnmounted(() => {
   border-radius: 999px;
   background: linear-gradient(90deg, #1762d5, #16c5ff);
   box-shadow: 0 0 8px rgba(22, 149, 255, 0.45);
+}
+.rain-series-legend .zero-marker {
+  width: 12px;
+  height: 3px;
+  margin-left: 14px;
+  background: rgba(151, 190, 255, 0.72);
+  box-shadow: none;
 }
 
 @media (max-width: 900px) {

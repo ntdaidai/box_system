@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from loguru import logger
 
 from app.core.database import get_db
+from app.core.config import settings
 from app.core.rate_limiter import login_limiter
 from app.core.security import (
     hash_password, verify_password, create_token,
@@ -55,7 +56,7 @@ async def login(req: LoginRequest, request: Request, db: Session = Depends(get_d
 
     return Result.success({
         "token": token,
-        "expires_in": 86400,
+        "expires_in": settings.JWT_EXPIRE_SECONDS,
         "user": _user_to_dict(user),
     })
 
