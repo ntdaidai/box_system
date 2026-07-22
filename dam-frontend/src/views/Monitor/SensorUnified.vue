@@ -32,10 +32,6 @@
             <span>{{ metric.label }}</span>
           </div>
         </div>
-        <div class="card-foot">
-          <span>{{ card.note }}</span>
-          <span>{{ card.time }}</span>
-        </div>
       </button>
     </section>
 
@@ -43,7 +39,7 @@
       <div class="history-header">
         <div class="history-title">
           <h3>历史记录</h3>
-          <span>{{ activeTabMeta.subtitle }}</span>
+          <span>{{ activeTabMeta.subtitle }}；实时卡片每 5 秒刷新，历史图表按半小时或 30 分钟窗口刷新</span>
         </div>
         <div class="history-controls">
           <button
@@ -320,31 +316,31 @@ const weatherInfoRows = computed(() => {
   })
   return [
     {
-      icon: '高',
+      icon: '℃+',
       label: '最热的月份',
       recent: monthName(bestMonth(recentStats.temperatureMax, 'max')),
       all: monthName(bestMonth(allStats.temperatureMax, 'max')),
     },
     {
-      icon: '低',
+      icon: '℃-',
       label: '最冷的月份',
       recent: monthName(bestMonth(recentStats.temperatureMin, 'min')),
       all: monthName(bestMonth(allStats.temperatureMin, 'min')),
     },
     {
-      icon: '湿',
+      icon: '%',
       label: '最潮湿的月份',
       recent: monthName(bestMonth(recentStats.humidity, 'max')),
       all: monthName(bestMonth(allStats.humidity, 'max')),
     },
     {
-      icon: '风',
+      icon: 'm/s',
       label: '风最多的月份',
       recent: monthName(bestMonth(recentStats.wind, 'max')),
       all: monthName(bestMonth(allStats.wind, 'max')),
     },
     {
-      icon: '振',
+      icon: 'g',
       label: '振动最高的月份',
       recent: monthName(bestMonth(recentStats.vibration, 'max')),
       all: monthName(bestMonth(allStats.vibration, 'max')),
@@ -781,15 +777,15 @@ const formatXAxisLabel = (value) => {
   }
   if (historyMode.value === 'overview') {
     const span = visibleDaySpan()
-    if (span <= 45) return `${date.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', day: 'numeric' })}\u65e5`
+    if (span <= 45) return date.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', year: '2-digit', month: 'numeric', day: 'numeric' })
     if (span <= 400) {
-      return date.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric' })
+      return date.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', year: '2-digit', month: 'numeric', day: 'numeric' })
     }
     return date.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit' })
   }
   return selectedMonth.value === 'all'
-    ? date.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric' })
-    : `${date.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', day: 'numeric' })}\u65e5`
+    ? date.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', year: '2-digit', month: 'numeric', day: 'numeric' })
+    : date.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric' })
 }
 const tooltipFormatter = (params) => {
   const item = (Array.isArray(params) ? params : [params]).find(entry => entry.value?.[1] != null)
@@ -833,6 +829,58 @@ const restorePointerTooltip = () => {
   })
   if (nearestIndex < 0) return
   chart.dispatchAction({ type: 'showTip', seriesIndex: 0, dataIndex: nearestIndex })
+}
+
+const handleChartWheel = (event) => {
+  if (historyMode.value !== 'overview' || !chart || chart.isDisposed()) return
+  const pixel = [event.offsetX, event.offsetY]
+  if (!chart.containPixel('grid', pixel)) return
+  event.event?.preventDefault?.()
+  event.event?.stopPropagation?.()
+  lastPointerPixel = pixel
+
+  const points = chartSeriesData()
+  const dataStart = points[0]?.[0]
+  const dataEnd = points.at(-1)?.[0]
+  if (!Number.isFinite(dataStart) || !Number.isFinite(dataEnd) || dataEnd <= dataStart) return
+
+  const option = chart.getOption()
+  const zoom = option?.dataZoom?.[0] || {}
+  const currentStart = Number.isFinite(Number(zoom.startValue)) ? Number(zoom.startValue) : dataStart
+  const currentEnd = Number.isFinite(Number(zoom.endValue)) ? Number(zoom.endValue) : dataEnd
+  const center = Number(chart.convertFromPixel({ seriesIndex: 0 }, pixel)?.[0])
+  if (!Number.isFinite(center) || currentEnd <= currentStart) return
+
+  const zoomIn = Number(event.wheelDelta) > 0
+  const factor = zoomIn ? 0.78 : 1.24
+  const minSpan = DAY
+  const maxSpan = dataEnd - dataStart
+  let nextSpan = Math.min(maxSpan, Math.max(minSpan, (currentEnd - currentStart) * factor))
+  const leftRatio = (center - currentStart) / (currentEnd - currentStart)
+  let nextStart = center - nextSpan * leftRatio
+  let nextEnd = nextStart + nextSpan
+
+  if (nextStart < dataStart) {
+    nextStart = dataStart
+    nextEnd = dataStart + nextSpan
+  }
+  if (nextEnd > dataEnd) {
+    nextEnd = dataEnd
+    nextStart = dataEnd - nextSpan
+  }
+
+  chart.dispatchAction({
+    type: 'dataZoom',
+    dataZoomIndex: 0,
+    startValue: nextStart,
+    endValue: nextEnd,
+  })
+  chart.dispatchAction({
+    type: 'dataZoom',
+    dataZoomIndex: 1,
+    startValue: nextStart,
+    endValue: nextEnd,
+  })
 }
 
 const thresholdMarkLines = () => {
@@ -888,7 +936,7 @@ const fullChartOption = () => {
     dataZoom: overview
       ? [{
           type: 'inside',
-          zoomOnMouseWheel: true,
+          zoomOnMouseWheel: false,
           moveOnMouseWheel: true,
           moveOnMouseMove: true,
           filterMode: 'none',
@@ -1006,6 +1054,7 @@ const initChart = () => {
   chart.getZr().on('mousemove', event => {
     lastPointerPixel = [event.offsetX, event.offsetY]
   })
+  chart.getZr().on('mousewheel', handleChartWheel)
   chart.on('datazoom', () => {
     window.requestAnimationFrame(restorePointerTooltip)
   })
@@ -1221,18 +1270,41 @@ onUnmounted(() => {
 
 .live-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(360px, 1fr);
   gap: 12px;
   margin-bottom: 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 8px;
+  scroll-snap-type: x proximity;
+  scroll-behavior: smooth;
+  scrollbar-color: rgba(54, 151, 255, 0.55) rgba(9, 25, 48, 0.55);
+  scrollbar-width: thin;
+}
+
+.live-grid::-webkit-scrollbar {
+  height: 8px;
+}
+
+.live-grid::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(9, 25, 48, 0.55);
+}
+
+.live-grid::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: linear-gradient(90deg, #2f97ff, #52e5bd);
 }
 
 .live-card {
   min-width: 0;
-  min-height: 148px;
+  min-height: 166px;
   padding: 16px;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  justify-content: flex-start;
+  gap: 16px;
   border: 1px solid rgba(88, 137, 205, 0.24);
   border-radius: 10px;
   background:
@@ -1241,6 +1313,7 @@ onUnmounted(() => {
   text-align: left;
   cursor: pointer;
   transition: 0.2s ease;
+  scroll-snap-align: start;
 }
 
 .live-card:hover,
@@ -1281,7 +1354,7 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
-  margin: 18px 0 12px;
+  margin: 4px 0 0;
 }
 
 .metric-row.metric-columns {
@@ -1291,24 +1364,24 @@ onUnmounted(() => {
 .metric-cell strong {
   display: block;
   color: #fff;
-  font: 800 24px/1 "Consolas", "Monaco", monospace;
+  font: 800 30px/1 "Consolas", "Monaco", monospace;
   white-space: nowrap;
 }
 
 .metric-columns .metric-cell strong {
-  font-size: 20px;
+  font-size: 26px;
 }
 
 .metric-cell span {
   display: block;
-  margin-top: 6px;
+  margin-top: 9px;
   color: #8ea8c9;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .wind-card-body {
-  min-height: 68px;
-  margin: 16px 0 10px;
+  min-height: 78px;
+  margin: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 0.9fr) 42px;
   align-items: center;
@@ -1326,12 +1399,12 @@ onUnmounted(() => {
 
 .wind-primary strong {
   font-family: "Consolas", "Monaco", monospace;
-  font-size: 25px;
+  font-size: 30px;
 }
 
 .wind-direction strong {
   font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
-  font-size: 27px;
+  font-size: 32px;
   letter-spacing: 0;
 }
 
@@ -1340,7 +1413,7 @@ onUnmounted(() => {
   display: block;
   margin-top: 8px;
   color: #8ea8c9;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .mini-compass {
@@ -1653,16 +1726,18 @@ onUnmounted(() => {
 }
 
 .info-icon {
-  width: 22px;
-  height: 22px;
+  min-width: 34px;
+  height: 26px;
+  padding: 0 8px;
   display: inline-grid;
   place-items: center;
   border-radius: 6px;
-  background: rgba(76, 151, 255, 0.16);
-  color: #80c8ff;
+  background:
+    linear-gradient(135deg, rgba(45, 170, 255, 0.24), rgba(82, 229, 189, 0.16));
+  color: #bdf6ff;
   font-style: normal;
-  font-size: 12px;
-  font-weight: 800;
+  font: 800 12px/1 "Consolas", "Monaco", monospace;
+  box-shadow: inset 0 0 0 1px rgba(129, 214, 255, 0.24);
 }
 
 .summary-row strong {
@@ -1672,7 +1747,7 @@ onUnmounted(() => {
 
 @media (max-width: 1280px) {
   .live-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-columns: minmax(330px, 1fr);
   }
 }
 
@@ -1694,7 +1769,7 @@ onUnmounted(() => {
 
 @media (max-width: 640px) {
   .live-grid {
-    grid-template-columns: 1fr;
+    grid-auto-columns: minmax(280px, 88vw);
   }
 
   .metric-row {

@@ -138,6 +138,16 @@ export function closeWebRtcSession(cameraId, peerId) {
   )
 }
 
+export function getCameraZones(cameraId) {
+  return request.get(`/v1/camera/${encodeURIComponent(cameraId)}/zones`, {
+    localCache: false,
+  })
+}
+
+export function saveCameraZones(cameraId, zones) {
+  return request.put(`/v1/camera/${encodeURIComponent(cameraId)}/zones`, { zones })
+}
+
 export function getLatestDetection(cameraId) {
   return request.get(`/v1/camera/${cameraId}/detections/latest`, {
     localCache: false,

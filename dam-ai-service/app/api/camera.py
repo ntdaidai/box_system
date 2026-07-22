@@ -10,7 +10,7 @@ import re
 import tempfile
 import time
 from pathlib import Path
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 import cv2
 import httpx
@@ -64,6 +64,25 @@ class DetectImageRequest(BaseModel):
 
 class StreamTicketRequest(BaseModel):
     detected: bool = False
+
+
+class DetectionZoneRect(BaseModel):
+    x: float = Field(..., ge=0.0, le=1.0)
+    y: float = Field(..., ge=0.0, le=1.0)
+    width: float = Field(..., gt=0.0, le=1.0)
+    height: float = Field(..., gt=0.0, le=1.0)
+
+
+class DetectionZoneRequest(BaseModel):
+    id: Optional[str] = Field(None, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    name: str = Field("", max_length=80)
+    type: Literal["person_intrusion", "illegal_fishing"] = "person_intrusion"
+    enabled: bool = True
+    rect: DetectionZoneRect
+
+
+class DetectionZonesRequest(BaseModel):
+    zones: List[DetectionZoneRequest] = Field(default_factory=list, max_length=20)
 
 
 class WebRtcSessionDescription(BaseModel):
@@ -522,6 +541,45 @@ async def get_detected_stream(
     if not camera.detection_enabled:
         raise HTTPException(status_code=409, detail="实时检测尚未开启")
     return await _mjpeg_response(request, camera, True)
+
+
+@router.get(
+    "/{camera_id}/zones",
+    response_model=DetectResponse,
+    summary="获取摄像头虚拟检测区域",
+)
+async def get_detection_zones(
+    camera_id: str,
+    _user: User = Depends(require_auth),
+):
+    camera = _get_camera_or_404(camera_id)
+    return DetectResponse(
+        code=200,
+        data={"camera_id": camera_id, "zones": camera.get_detection_zones()},
+    )
+
+
+@router.put(
+    "/{camera_id}/zones",
+    response_model=DetectResponse,
+    summary="保存摄像头虚拟检测区域",
+)
+async def save_detection_zones(
+    camera_id: str,
+    payload: DetectionZonesRequest,
+    _user: User = Depends(require_auth),
+):
+    camera = _get_camera_or_404(camera_id)
+    try:
+        zones = camera.set_detection_zones(
+            [zone.model_dump(exclude_none=True) for zone in payload.zones]
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return DetectResponse(
+        code=200,
+        data={"camera_id": camera_id, "zones": zones, "message": "检测区域已保存"},
+    )
 
 
 @router.get(

@@ -76,6 +76,23 @@
         >
           <el-icon><Aim /></el-icon>{{ detectionEnabled ? '停止 AI 分析' : '启动 AI 分析' }}
         </el-button>
+        <el-select
+          v-model="activeZoneType"
+          class="zone-type-select"
+          :disabled="zoneDrawing"
+          popper-class="vision-select-popper"
+        >
+          <el-option label="人员入侵区" value="person_intrusion" />
+          <el-option label="禁捕监管区" value="illegal_fishing" />
+        </el-select>
+        <el-button
+          class="ghost-button"
+          :class="{ active: zoneDrawing }"
+          :disabled="analysisTask !== 'detect' || imageWidth <= 0 || imageHeight <= 0"
+          @click="zoneDrawing = !zoneDrawing"
+        >
+          <el-icon><Crop /></el-icon>{{ zoneDrawing ? '结束标框' : '绘制区域' }}
+        </el-button>
         <el-button
           class="ghost-button"
           :disabled="!currentCamera?.connected || !selectedModelReady"
@@ -154,6 +171,40 @@
             </g>
           </svg>
 
+          <svg
+            v-if="analysisTask === 'detect' && imageWidth > 0 && imageHeight > 0"
+            class="zone-overlay"
+            :class="{ drawing: zoneDrawing }"
+            :viewBox="`0 0 ${imageWidth} ${imageHeight}`"
+            preserveAspectRatio="xMidYMid meet"
+            @mousedown.prevent="startZoneDraw"
+            @mousemove.prevent="updateZoneDraw"
+            @mouseup.prevent="finishZoneDraw"
+            @mouseleave="finishZoneDraw"
+          >
+            <g v-for="zone in zonesForOverlay" :key="zone.id">
+              <rect
+                class="zone-rect"
+                :x="zonePixelRect(zone).x"
+                :y="zonePixelRect(zone).y"
+                :width="zonePixelRect(zone).width"
+                :height="zonePixelRect(zone).height"
+                :stroke="zoneStroke(zone)"
+                :fill="zoneFill(zone)"
+                :stroke-width="Math.max(2, imageWidth / 520)"
+                rx="4"
+              />
+              <text
+                class="zone-label"
+                :x="zonePixelRect(zone).x + 8"
+                :y="Math.max(18, zonePixelRect(zone).y + 18)"
+                :fill="zoneStroke(zone)"
+              >
+                {{ zone.name || zoneTypeLabel(zone.type) }}
+              </text>
+            </g>
+          </svg>
+
           <div class="scan-grid"></div>
           <span class="corner corner-tl"></span><span class="corner corner-tr"></span>
           <span class="corner corner-bl"></span><span class="corner corner-br"></span>
@@ -167,6 +218,10 @@
           </div>
           <div class="stage-badge right-badge">
             {{ sourceTypeLabel(currentCamera.source_type) }} / {{ currentCamera.camera_id }}
+          </div>
+          <div v-if="liveAlerts.length" class="alert-ribbon">
+            <strong>{{ liveAlerts[0].message }}</strong>
+            <span>{{ liveAlerts[0].zone_name }} · {{ detectionName(liveAlerts[0]) }} {{ confidencePercent(liveAlerts[0]) }}%</span>
           </div>
         </div>
 
@@ -204,6 +259,38 @@
           <div><small>端到端延迟</small><strong>{{ latestDetection.latency_ms || 0 }} ms</strong></div>
           <div><small>推理耗时</small><strong>{{ formatSeconds(latestDetection.process_time) }}</strong></div>
           <div><small>分析帧</small><strong>#{{ latestDetection.frame_sequence || 0 }}</strong></div>
+        </div>
+
+        <div v-if="analysisTask === 'detect'" class="zone-panel">
+          <div class="zone-panel-heading">
+            <span>虚拟检测区域</span>
+            <b>{{ detectionZones.length }}</b>
+          </div>
+          <div v-if="detectionZones.length" class="zone-list">
+            <article
+              v-for="zone in detectionZones"
+              :key="zone.id"
+              class="zone-item"
+              :class="{ alerting: liveAlertZoneIds.has(zone.id) }"
+            >
+              <span class="zone-chip" :style="{ '--zone-color': zoneStroke(zone) }"></span>
+              <div>
+                <strong>{{ zone.name || zoneTypeLabel(zone.type) }}</strong>
+                <small>{{ zoneTypeLabel(zone.type) }}</small>
+              </div>
+              <el-button text class="zone-delete" @click="removeZone(zone.id)">
+                <el-icon><Delete /></el-icon>
+              </el-button>
+            </article>
+          </div>
+          <p v-else>启动目标检测后，在画面上绘制人员入侵区或禁捕监管区。</p>
+        </div>
+
+        <div v-if="liveAlerts.length" class="alert-list">
+          <article v-for="(alert, index) in liveAlerts" :key="`${alert.zone_id}-${index}`">
+            <strong>{{ alert.message }}</strong>
+            <span>{{ alert.zone_name }} · {{ detectionName(alert) }} {{ confidencePercent(alert) }}%</span>
+          </article>
         </div>
 
         <div v-if="analysisTask === 'detect' && detectionEnabled && detections.length" class="target-list">
@@ -508,18 +595,20 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  Aim, Camera, Connection, DataAnalysis, Files, Loading, Monitor,
+  Aim, Camera, Connection, Crop, DataAnalysis, Delete, Files, Loading, Monitor,
   Picture, Plus, UploadFilled, VideoCamera, VideoPlay,
 } from '@element-plus/icons-vue'
 import {
   addCamera, createStreamTicket, createVideoDetection, deleteVideoDetectionJob,
-  detectImage, getCameraList, getCameraStatus, getModelStatus,
-  getVideoDetectionResult, getVideoDetectionStatus, setDetectionEnabled, snapshotDetect,
+  detectImage, getCameraList, getCameraStatus, getCameraZones, getModelStatus,
+  getVideoDetectionResult, getVideoDetectionStatus, saveCameraZones,
+  setDetectionEnabled, snapshotDetect,
 } from '@/api/camera'
 import {
   classColor as getClassColor, confidencePercent, detectionName,
-  findVideoSample, formatDeviceCommTime, isValidDetection, normalizeClassifications,
-  normalizeDetections, primaryClassification,
+  detectionInZone, findVideoSample, formatDeviceCommTime, isValidDetection,
+  normalizeClassifications, normalizeDetections, normalizeZones, primaryClassification,
+  zoneTypeLabel,
 } from '@/utils/cameraDetectionView'
 import { CameraWebRtcPlayer } from '@/utils/cameraWebRtc'
 import { subscribeDetectionEvents } from '@/utils/detectionEvents'
@@ -536,6 +625,10 @@ const detectionToggling = ref(false)
 const detectionConnectionState = ref('closed')
 const latestDetection = ref({ detections: [], count: 0 })
 const detections = ref([])
+const detectionZones = ref([])
+const activeZoneType = ref('person_intrusion')
+const zoneDrawing = ref(false)
+const draftZone = ref(null)
 const liveVideoRef = ref(null)
 const streamMode = ref('webrtc')
 const streamUrl = ref('')
@@ -569,6 +662,9 @@ const labelPadding = computed(() => labelFontSize.value * 0.35)
 const labelHeight = computed(() => labelFontSize.value * 1.35)
 const boxStrokeWidth = computed(() => Math.max(2, imageWidth.value / 500))
 const visibleDetections = computed(() => detections.value.filter(isValidDetection))
+const liveAlerts = computed(() => Array.isArray(latestDetection.value.alerts) ? latestDetection.value.alerts : [])
+const liveAlertZoneIds = computed(() => new Set(liveAlerts.value.map((alert) => alert.zone_id)))
+const zonesForOverlay = computed(() => [...detectionZones.value, ...(draftZone.value ? [draftZone.value] : [])])
 const analysisTaskLabel = computed(() => taskTypeLabel(analysisTask.value))
 const selectedModelReady = computed(() => Boolean(modelStatus.value.models?.[analysisTask.value]?.loaded))
 const canToggleDetection = computed(() => Boolean(currentCamera.value?.connected && selectedModelReady.value))
@@ -644,6 +740,46 @@ async function fetchCameras() {
   currentCamera.value = cameras.value.find((item) => item.camera_id === currentCameraId.value) || null
 }
 
+async function fetchCameraZones(cameraId = currentCameraId.value) {
+  if (!cameraId) {
+    detectionZones.value = []
+    return
+  }
+  const response = await getCameraZones(cameraId)
+  if (cameraId === currentCameraId.value) detectionZones.value = normalizeZones(response.data)
+}
+
+function buildZoneAlert(zone, detection, index) {
+  return {
+    zone_id: zone.id,
+    zone_name: zone.name || zoneTypeLabel(zone.type),
+    type: zone.type,
+    message: zoneTypeLabel(zone.type),
+    detection_index: index,
+    class_id: detection.class_id,
+    class_name: detection.class_name,
+    class_name_cn: detection.class_name_cn,
+    confidence: detection.confidence,
+    bbox: detection.bbox,
+  }
+}
+
+function enrichDetectionPayload(payload) {
+  const normalized = normalizeDetections(payload)
+  const backendAlerts = Array.isArray(payload?.alerts) ? payload.alerts : []
+  const alertKeys = new Set(backendAlerts.map((item) => `${item.zone_id}-${item.detection_index}`))
+  const localAlerts = []
+  normalized.forEach((detection, index) => {
+    detectionZones.value.forEach((zone) => {
+      if (!zone.enabled || !detectionInZone(detection, zone, Number(payload.image_width), Number(payload.image_height))) return
+      const key = `${zone.id}-${index}`
+      if (!alertKeys.has(key)) localAlerts.push(buildZoneAlert(zone, detection, index))
+    })
+  })
+  const alerts = [...backendAlerts, ...localAlerts]
+  return { ...payload, alerts, alert_count: alerts.length }
+}
+
 function stopLiveStream() {
   clearTimeout(streamRetryTimer)
   streamRequestGeneration += 1
@@ -701,11 +837,17 @@ async function activateCamera(cameraId) {
   stopLiveStream()
   detections.value = []
   latestDetection.value = { detections: [], count: 0 }
+  detectionZones.value = []
+  draftZone.value = null
+  zoneDrawing.value = false
   currentCamera.value = cameras.value.find((camera) => camera.camera_id === cameraId) || null
   detectionEnabled.value = Boolean(currentCamera.value?.detection_enabled)
   if (detectionEnabled.value && currentCamera.value?.analysis_task) {
     analysisTask.value = currentCamera.value.analysis_task
   }
+  await fetchCameraZones(cameraId).catch(() => {
+    detectionZones.value = normalizeZones({ zones: currentCamera.value?.detection_zones || [] })
+  })
   if (isMediaAnalysisRoute.value) return
   if (currentCamera.value?.connected) await startLiveStream()
   if (detectionEnabled.value) startDetectionSubscription()
@@ -745,8 +887,9 @@ function startDetectionSubscription() {
     onDetection(payload) {
       if (payload.camera_id !== currentCameraId.value) return
       if (payload.task_type && payload.task_type !== analysisTask.value) return
-      latestDetection.value = payload
-      detections.value = normalizeDetections(payload)
+      const enriched = enrichDetectionPayload(payload)
+      latestDetection.value = enriched
+      detections.value = normalizeDetections(enriched)
       if (payload.enabled === false) detectionEnabled.value = false
     },
     onState(state) { detectionConnectionState.value = state },
@@ -823,6 +966,9 @@ async function refreshCameraStatus() {
     const previousConnected = Boolean(currentCamera.value?.connected)
     const backendDetectionEnabled = Boolean(response.data.detection_enabled)
     currentCamera.value = response.data
+    if (!detectionZones.value.length && response.data.detection_zones?.length) {
+      detectionZones.value = normalizeZones({ zones: response.data.detection_zones })
+    }
     updateCameraInList(response.data)
     if (!isMediaAnalysisRoute.value && !previousConnected && response.data.connected) await startLiveStream()
     if (previousConnected && !response.data.connected) stopLiveStream()
@@ -1004,6 +1150,118 @@ async function handleAddCamera() {
   }
 }
 
+function zonePixelRect(zone) {
+  const rect = zone?.rect || {}
+  return {
+    x: rect.x * imageWidth.value,
+    y: rect.y * imageHeight.value,
+    width: rect.width * imageWidth.value,
+    height: rect.height * imageHeight.value,
+  }
+}
+
+function pointerToImagePoint(event) {
+  const svg = event.currentTarget
+  if (!svg || imageWidth.value <= 0 || imageHeight.value <= 0) return null
+  if (svg.createSVGPoint) {
+    const point = svg.createSVGPoint()
+    point.x = event.clientX
+    point.y = event.clientY
+    const matrix = svg.getScreenCTM()
+    if (matrix) {
+      const mapped = point.matrixTransform(matrix.inverse())
+      return {
+        x: Math.max(0, Math.min(imageWidth.value, mapped.x)),
+        y: Math.max(0, Math.min(imageHeight.value, mapped.y)),
+      }
+    }
+  }
+  const rect = svg.getBoundingClientRect()
+  return {
+    x: Math.max(0, Math.min(imageWidth.value, (event.clientX - rect.left) / rect.width * imageWidth.value)),
+    y: Math.max(0, Math.min(imageHeight.value, (event.clientY - rect.top) / rect.height * imageHeight.value)),
+  }
+}
+
+function startZoneDraw(event) {
+  if (!zoneDrawing.value || imageWidth.value <= 0 || imageHeight.value <= 0) return
+  const point = pointerToImagePoint(event)
+  if (!point) return
+  draftZone.value = {
+    id: `draft_${Date.now()}`,
+    name: zoneTypeLabel(activeZoneType.value),
+    type: activeZoneType.value,
+    enabled: true,
+    rect: {
+      x: point.x / imageWidth.value,
+      y: point.y / imageHeight.value,
+      width: 0,
+      height: 0,
+    },
+    start: point,
+  }
+}
+
+function updateZoneDraw(event) {
+  if (!zoneDrawing.value || !draftZone.value) return
+  const point = pointerToImagePoint(event)
+  if (!point) return
+  const start = draftZone.value.start
+  const x1 = Math.min(start.x, point.x)
+  const y1 = Math.min(start.y, point.y)
+  const x2 = Math.max(start.x, point.x)
+  const y2 = Math.max(start.y, point.y)
+  draftZone.value = {
+    ...draftZone.value,
+    rect: {
+      x: x1 / imageWidth.value,
+      y: y1 / imageHeight.value,
+      width: (x2 - x1) / imageWidth.value,
+      height: (y2 - y1) / imageHeight.value,
+    },
+  }
+}
+
+async function finishZoneDraw() {
+  if (!draftZone.value) return
+  const { start, ...zone } = draftZone.value
+  draftZone.value = null
+  if (zone.rect.width < 0.01 || zone.rect.height < 0.01) return
+  const nextZones = [
+    ...detectionZones.value,
+    {
+      ...zone,
+      id: `${zone.type}_${Date.now()}`,
+      name: zoneTypeLabel(zone.type),
+    },
+  ]
+  await persistZones(nextZones)
+}
+
+async function persistZones(zones) {
+  const response = await saveCameraZones(currentCameraId.value, zones)
+  detectionZones.value = normalizeZones(response.data)
+  currentCamera.value = { ...currentCamera.value, detection_zones: detectionZones.value }
+  updateCameraInList(currentCamera.value)
+  latestDetection.value = enrichDetectionPayload(latestDetection.value)
+  ElMessage.success(response.data.message || '检测区域已保存')
+}
+
+async function removeZone(zoneId) {
+  await persistZones(detectionZones.value.filter((zone) => zone.id !== zoneId))
+}
+
+function zoneStroke(zone) {
+  if (zone.id?.startsWith('draft_')) return '#ffffff'
+  if (liveAlertZoneIds.value.has(zone.id)) return '#ff5d6c'
+  return zone.type === 'illegal_fishing' ? '#ffbd65' : '#48d8ff'
+}
+
+function zoneFill(zone) {
+  if (liveAlertZoneIds.value.has(zone.id)) return 'rgba(255, 93, 108, 0.20)'
+  return zone.type === 'illegal_fishing' ? 'rgba(255, 189, 101, 0.12)' : 'rgba(72, 216, 255, 0.12)'
+}
+
 function detectionLabel(detection) {
   return `${detectionName(detection)} ${confidencePercent(detection)}%`
 }
@@ -1148,8 +1406,16 @@ h1, h2, h3, p { margin-top: 0; }
 .option-meta { color: #7993a7; font-size: 11px; }
 .ghost-button, .detect-button { border-radius: 9px; }
 .ghost-button { color: #b4d0df; border-color: rgba(100, 180, 216, 0.21); background: rgba(18, 63, 88, 0.32); }
+.ghost-button.active { color: #061b23; border-color: rgba(72, 216, 255, 0.62); background: linear-gradient(110deg, var(--cyan), var(--mint)); font-weight: 800; }
 .detect-button { color: #061b23; border: none; font-weight: 700; background: linear-gradient(105deg, #35c8ea, #52e5bd); box-shadow: 0 8px 22px rgba(50, 201, 209, 0.15); }
 .detect-button.active { color: #ffe4c3; background: rgba(177, 103, 37, 0.28); box-shadow: inset 0 0 0 1px rgba(255, 181, 89, 0.32); }
+.zone-type-select { width: 136px; }
+.zone-type-select :deep(.el-select__wrapper) {
+  min-height: 32px;
+  border-radius: 8px;
+  background: rgba(6, 28, 44, 0.88);
+  box-shadow: 0 0 0 1px rgba(72, 216, 255, 0.18) inset;
+}
 
 .live-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 12px; margin-top: 12px; }
 .live-card, .telemetry-card { min-height: 520px; padding: 16px; }
@@ -1162,11 +1428,25 @@ h1, h2, h3, p { margin-top: 0; }
 .feed-metrics b { margin-top: 5px; color: #d5f2fc; font-family: monospace; font-size: 16px; line-height: 1.2; }
 
 .video-stage, .video-empty { position: relative; height: calc(100% - 64px); min-height: 430px; overflow: hidden; border: 1px solid rgba(73, 194, 232, 0.16); border-radius: 12px; background: #030b12; }
-.video-stream, .box-overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
+.video-stream, .box-overlay, .zone-overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
 .video-stream { object-fit: contain; }
 .box-overlay { z-index: 3; pointer-events: none; }
+.zone-overlay { z-index: 4; pointer-events: none; }
+.zone-overlay.drawing { cursor: crosshair; pointer-events: auto; }
 .detection-box { fill: none; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 3px currentColor); }
 .detection-label { fill: #04131b; font-weight: 800; }
+.zone-rect {
+  vector-effect: non-scaling-stroke;
+  stroke-dasharray: 10 6;
+  filter: drop-shadow(0 0 5px currentColor);
+}
+.zone-label {
+  font-size: 16px;
+  font-weight: 800;
+  paint-order: stroke;
+  stroke: rgba(3, 12, 18, 0.9);
+  stroke-width: 4px;
+}
 .scan-grid { position: absolute; inset: 0; z-index: 2; pointer-events: none; opacity: 0.12; background: repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(66, 210, 245, 0.12) 4px); }
 .corner { position: absolute; z-index: 4; width: 25px; height: 25px; border-color: rgba(72, 216, 255, 0.55); }
 .corner-tl { left: 12px; top: 12px; border-left: 2px solid; border-top: 2px solid; }
@@ -1178,6 +1458,25 @@ h1, h2, h3, p { margin-top: 0; }
 .left-badge { left: 16px; }.right-badge { right: 16px; }
 .stage-badge i { display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: #71808a; }
 .stage-badge i.active { background: #ff5f68; box-shadow: 0 0 8px #ff5f68; }
+.alert-ribbon {
+  position: absolute;
+  z-index: 7;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 13px;
+  color: #ffe8e9;
+  border: 1px solid rgba(255, 93, 108, 0.42);
+  border-radius: 8px;
+  background: rgba(82, 15, 24, 0.78);
+  box-shadow: 0 0 22px rgba(255, 93, 108, 0.18);
+}
+.alert-ribbon strong { color: #ffadb5; font-size: 15px; }
+.alert-ribbon span { min-width: 0; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .video-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 30px; text-align: center; color: #718da1; background: radial-gradient(circle, rgba(25, 100, 139, 0.13), transparent 50%), #06121c; }
 .empty-orbit { width: 110px; height: 110px; position: relative; display: grid; place-items: center; margin-bottom: 18px; color: var(--cyan); border: 1px solid rgba(72, 216, 255, 0.17); border-radius: 50%; }
 .empty-orbit span { position: absolute; inset: 10px; border: 1px dashed rgba(81, 230, 190, 0.22); border-radius: 50%; }
@@ -1192,6 +1491,50 @@ h1, h2, h3, p { margin-top: 0; }
 .telemetry-grid div { display: flex; flex-direction: column; padding: 10px; border: 1px solid rgba(87, 165, 199, 0.1); border-radius: 8px; background: rgba(3, 18, 29, 0.36); }
 .telemetry-grid strong { margin-top: 5px; color: #a9c9da; font: 600 12px monospace; }
 .telemetry-grid .metric-active { color: var(--mint); }
+.zone-panel {
+  margin-bottom: 10px;
+  padding: 10px;
+  border: 1px solid rgba(87, 165, 199, 0.12);
+  border-radius: 9px;
+  background: rgba(3, 18, 29, 0.36);
+}
+.zone-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #8fb0c2;
+  font-size: 11px;
+}
+.zone-panel-heading b { color: var(--cyan); font: 800 16px monospace; }
+.zone-list { display: flex; flex-direction: column; gap: 7px; margin-top: 8px; }
+.zone-item {
+  display: grid;
+  grid-template-columns: 4px minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 9px;
+  padding: 8px;
+  border: 1px solid rgba(85, 166, 201, 0.12);
+  border-radius: 7px;
+  background: rgba(8, 31, 47, 0.58);
+}
+.zone-item.alerting {
+  border-color: rgba(255, 93, 108, 0.38);
+  background: rgba(93, 21, 32, 0.36);
+}
+.zone-chip { width: 4px; height: 30px; border-radius: 2px; background: var(--zone-color); box-shadow: 0 0 9px var(--zone-color); }
+.zone-item strong { display: block; overflow: hidden; color: #d9edf6; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.zone-item small { color: #6f8da0; font-size: 10px; }
+.zone-delete { color: #8bb0c3; }
+.zone-panel p { margin: 8px 0 0; color: #607f94; font-size: 11px; line-height: 1.5; }
+.alert-list { display: flex; flex-direction: column; gap: 7px; margin-bottom: 10px; }
+.alert-list article {
+  padding: 9px 10px;
+  border: 1px solid rgba(255, 93, 108, 0.35);
+  border-radius: 8px;
+  background: rgba(93, 21, 32, 0.32);
+}
+.alert-list strong { display: block; color: #ffadb5; font-size: 12px; }
+.alert-list span { display: block; margin-top: 4px; color: #d8b7bd; font-size: 11px; }
 .target-list { max-height: 342px; overflow-y: auto; padding-right: 3px; }
 .target-item { display: grid; grid-template-columns: 28px 4px minmax(0, 1fr) 40px; align-items: center; gap: 10px; margin-bottom: 7px; padding: 10px; border: 1px solid rgba(93, 174, 208, 0.1); border-radius: 9px; background: rgba(7, 28, 43, 0.62); }
 .target-item.primary, .image-target-item.primary { border-color: rgba(81, 230, 190, 0.34); background: rgba(27, 89, 81, 0.24); }

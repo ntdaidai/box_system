@@ -47,11 +47,15 @@ export class CameraWebRtcPlayer {
       const iceResponse = await getWebRtcIceConfig(this.cameraId)
       if (!this._isCurrent(generation)) return
 
-      const pc = new RTCPeerConnection(iceResponse.data || { iceServers: [] })
+      const pc = new RTCPeerConnection({
+        ...(iceResponse.data || { iceServers: [] }),
+        bundlePolicy: 'max-bundle',
+        rtcpMuxPolicy: 'require',
+        iceCandidatePoolSize: 1,
+      })
       this.peerConnection = pc
       this._configurePeerConnection(pc, generation)
       pc.addTransceiver('video', { direction: 'recvonly' })
-      pc.addTransceiver('audio', { direction: 'recvonly' })
 
       const offer = await pc.createOffer()
       await pc.setLocalDescription(offer)

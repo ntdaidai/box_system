@@ -226,15 +226,15 @@ const handleSave = async () => {
   try {
     saving.value = true
 
-    if (editorRef.value) {
-      editorRef.value.save()
-      ElMessage.success('保存成功')
-      isDocumentModified.value = false
-    }
+    await axios.post(`/api/onlyoffice/force-save/${documentInfo.value.document_id}`, {
+      user_id: currentUser.value.id
+    })
+    ElMessage.success('已提交保存，请稍后刷新查看最新文件')
+    isDocumentModified.value = false
 
   } catch (error) {
     console.error('保存失败:', error)
-    ElMessage.error('保存失败')
+    ElMessage.error(error.response?.data?.detail || '保存失败')
   } finally {
     saving.value = false
   }

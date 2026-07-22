@@ -22,6 +22,24 @@ from app.models.event_log import EventLog
 router = APIRouter(tags=["ECA规则引擎"])
 
 
+class DataSourcePayload(BaseModel):
+    source_name: str
+    source_type: str
+    device_id: Optional[int] = None
+    data_path: Optional[str] = None
+    description: Optional[str] = None
+    is_activate: bool = True
+
+
+class DataSourceUpdatePayload(BaseModel):
+    source_name: Optional[str] = None
+    source_type: Optional[str] = None
+    device_id: Optional[int] = None
+    data_path: Optional[str] = None
+    description: Optional[str] = None
+    is_activate: Optional[bool] = None
+
+
 # ==================== 数据源管理 ====================
 
 @router.get("/sources", summary="获取数据源列表")
@@ -48,6 +66,45 @@ def get_source(source_id: int, db: Session = Depends(get_db), _user: User = Depe
     if not source:
         raise HTTPException(status_code=404, detail="数据源不存在")
     return {"code": 200, "data": source.to_dict()}
+
+
+@router.post("/sources", summary="新增数据源")
+def create_source(payload: DataSourcePayload, db: Session = Depends(get_db), _user: User = Depends(require_auth)):
+    """新增传感器、摄像头、北斗或其他数据源。"""
+    source = DataSource(**payload.model_dump())
+    db.add(source)
+    db.commit()
+    db.refresh(source)
+    return {"code": 200, "data": source.to_dict(), "message": "数据源已添加"}
+
+
+@router.put("/sources/{source_id}", summary="更新数据源")
+def update_source(
+    source_id: int,
+    payload: DataSourceUpdatePayload,
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_auth),
+):
+    """更新数据源配置。"""
+    source = db.query(DataSource).filter(DataSource.id == source_id).first()
+    if not source:
+        raise HTTPException(status_code=404, detail="数据源不存在")
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        setattr(source, key, value)
+    db.commit()
+    db.refresh(source)
+    return {"code": 200, "data": source.to_dict(), "message": "数据源已更新"}
+
+
+@router.delete("/sources/{source_id}", summary="删除数据源")
+def delete_source(source_id: int, db: Session = Depends(get_db), _user: User = Depends(require_auth)):
+    """删除数据源。已有规则引用的数据源会由数据库外键约束保护。"""
+    source = db.query(DataSource).filter(DataSource.id == source_id).first()
+    if not source:
+        raise HTTPException(status_code=404, detail="数据源不存在")
+    db.delete(source)
+    db.commit()
+    return {"code": 200, "data": {"id": source_id}, "message": "数据源已删除"}
 
 
 # ==================== 条件库管理 ====================

@@ -47,6 +47,10 @@ class CallbackData(BaseModel):
     token: Optional[str] = None
 
 
+class ForceSaveRequest(BaseModel):
+    user_id: str = "user_001"
+
+
 def get_minio_client() -> Minio:
     global minio_client
     if minio_client is None:
@@ -243,12 +247,19 @@ def find_document_object_by_key(key: str) -> Optional[str]:
 
 async def handle_callback(document_id: str, callback_data: CallbackData):
     try:
+        print(
+            f"[OnlyOffice callback] document_id={document_id} "
+            f"status={callback_data.status} has_url={bool(callback_data.url)}"
+        )
         if callback_data.status in (2, 6) and callback_data.url:
             saved = await save_updated_document(document_id, callback_data.url)
             if not saved:
+                print(f"[OnlyOffice callback] save failed document_id={document_id}")
                 return {"error": 1, "message": "save failed"}
+            print(f"[OnlyOffice callback] saved document_id={document_id}")
         return {"error": 0}
     except Exception as exc:
+        print(f"[OnlyOffice callback] error document_id={document_id}: {exc}")
         return {"error": 1, "message": str(exc)}
 
 
@@ -288,6 +299,41 @@ async def save_updated_document(document_id: str, url: str) -> bool:
             metadata=original_metadata,
         )
         return True
+
+
+@router.post("/force-save/{document_id}")
+async def force_save_document(document_id: str, payload: ForceSaveRequest):
+    object_name = find_document_object(document_id)
+    if not object_name:
+        raise HTTPException(status_code=404, detail="文档不存在")
+
+    key = document_key(document_id)
+    command = {
+        "c": "forcesave",
+        "key": key,
+        "userdata": payload.user_id,
+    }
+    token = jwt.encode(command, JWT_SECRET, algorithm="HS256")
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
+                f"{ONLYOFFICE_SERVER_URL}/command?shardkey={key}",
+                json={"token": token},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+            )
+        response.raise_for_status()
+        data = response.json()
+        if data.get("error") not in (0, None):
+            raise HTTPException(status_code=502, detail=f"OnlyOffice 强制保存失败: {data}")
+        return {"success": True, "data": data}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"调用 OnlyOffice 强制保存失败: {exc}") from exc
 
 
 @router.get("/editor-config/{document_id}")

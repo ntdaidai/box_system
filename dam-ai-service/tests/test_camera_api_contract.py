@@ -125,6 +125,51 @@ class CameraApiContractTests(unittest.TestCase):
         self.assertNotIn("Bearer", url)
         manager.stop_all()
 
+    def test_zone_api_saves_camera_area_rules(self):
+        manager = CameraManager()
+        manager.add_camera(
+            "camera_zone",
+            "rtsp://example.test/live",
+            auto_start=False,
+            capture_factory=ClosedCapture,
+        )
+        try:
+            with patch.object(camera_api, "camera_manager", manager):
+                saved = asyncio.run(
+                    camera_api.save_detection_zones(
+                        "camera_zone",
+                        camera_api.DetectionZonesRequest(
+                            zones=[
+                                camera_api.DetectionZoneRequest(
+                                    id="entry_area",
+                                    name="入口禁入区",
+                                    type="person_intrusion",
+                                    rect=camera_api.DetectionZoneRect(
+                                        x=0.1,
+                                        y=0.2,
+                                        width=0.3,
+                                        height=0.4,
+                                    ),
+                                )
+                            ]
+                        ),
+                        object(),
+                    )
+                )
+                listed = asyncio.run(
+                    camera_api.get_detection_zones("camera_zone", object())
+                )
+            self.assertEqual(saved.data["zones"][0]["type"], "person_intrusion")
+            self.assertEqual(listed.data["zones"][0]["name"], "入口禁入区")
+            self.assertEqual(
+                manager.get_camera("camera_zone").get_status()["detection_zones"][0][
+                    "id"
+                ],
+                "entry_area",
+            )
+        finally:
+            manager.stop_all()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -130,7 +130,7 @@ const routes = [
           {
             path: 'upload',
             name: 'DocumentUpload',
-            component: () => import('@/views/DocumentUpload.vue'),
+            redirect: '/document/list',
             meta: { title: '文档上传' }
           },
           {

@@ -16,8 +16,8 @@
     </el-row>
 
     <!-- 第二行：传感器实时数据卡片 -->
-    <el-row :gutter="14" class="sensor-row">
-      <el-col :span="6" v-for="s in sensorCards" :key="s.key">
+    <div class="sensor-row" aria-label="传感器实时数据">
+      <div class="sensor-card-slot" v-for="s in sensorCards" :key="s.key">
         <div class="sensor-data-card" @click="router.push(s.path)">
           <div class="sensor-card-top">
             <img :src="s.icon" class="sensor-img" />
@@ -38,8 +38,8 @@
             </div>
           </div>
         </div>
-      </el-col>
-    </el-row>
+      </div>
+    </div>
 
     <!-- 第三行：系统状态 + 告警分布 -->
     <el-row :gutter="14" class="health-alarm-row">
@@ -298,6 +298,8 @@ import tempIcon from '@/assets/images/sensors/temp_humidity.png'
 import windIcon from '@/assets/images/sensors/wind.png'
 import rainIcon from '@/assets/images/sensors/rain.png'
 import vibrationIcon from '@/assets/images/sensors/vibration.png'
+import cameraIcon from '@/assets/images/sensors/camera.png'
+import beidouIcon from '@/assets/images/sensors/beidou.png'
 
 const router = useRouter()
 
@@ -377,6 +379,20 @@ const sensorCards = [
       { label: 'RMS', field: 'total_rms' },
       { label: '主频', field: 'dominant_freq' },
       { label: '峰值因子', field: 'crest_factor' },
+    ],
+  },
+  {
+    key: 'camera', name: '摄像头设备', path: '/monitor/camera', icon: cameraIcon,
+    values: [
+      { label: '接入状态', field: 'device_status' },
+      { label: '视频通道', field: 'channel_status' },
+    ],
+  },
+  {
+    key: 'beidou', name: '北斗通信', path: '/monitor/device', icon: beidouIcon,
+    values: [
+      { label: '链路状态', field: 'device_status' },
+      { label: '定位状态', field: 'position_status' },
     ],
   },
 ]
@@ -693,6 +709,9 @@ const getSensorOnline = (key) => {
 }
 
 const formatSensorValue = (key, field) => {
+  if (field === 'device_status') return getSensorOnline(key) ? '在线' : '离线'
+  if (field === 'channel_status') return getSensorOnline(key) ? '待检测' : '--'
+  if (field === 'position_status') return getSensorOnline(key) ? '已接入' : '--'
   const d = key === 'vibration' ? vibrationProcessedData.value : sensorData.value[key]?.data
   if (!d || d[field] == null) return '--'
   const v = d[field]
@@ -828,6 +847,36 @@ onUnmounted(() => {
 /* ========== 传感器卡片行 ========== */
 .sensor-row {
   margin-bottom: 14px;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(420px, 1fr);
+  gap: 14px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0 2px 10px;
+  scroll-snap-type: x proximity;
+  scroll-behavior: smooth;
+  scrollbar-color: rgba(0, 200, 255, 0.55) rgba(9, 25, 48, 0.55);
+  scrollbar-width: thin;
+}
+
+.sensor-row::-webkit-scrollbar {
+  height: 8px;
+}
+
+.sensor-row::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(9, 25, 48, 0.55);
+}
+
+.sensor-row::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: linear-gradient(90deg, #00b8ff, #45f0bf);
+}
+
+.sensor-card-slot {
+  min-width: 0;
+  scroll-snap-align: start;
 }
 
 /* ========== 系统状态+告警分布行 ========== */
@@ -968,9 +1017,9 @@ onUnmounted(() => {
   gap: 2px;
 }
 .sensor-value-grid.two-col {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 4px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 .sensor-value-row {
   display: flex;
@@ -979,10 +1028,10 @@ onUnmounted(() => {
   padding: 6px 0;
 }
 .sensor-value-grid.two-col .sensor-value-row {
-  align-items: flex-start;
-  flex-direction: column;
-  gap: 6px;
-  padding: 2px 0;
+  align-items: center;
+  flex-direction: row;
+  gap: 8px;
+  padding: 6px 0;
 }
 .sensor-value-label {
   color: #AECAF5;

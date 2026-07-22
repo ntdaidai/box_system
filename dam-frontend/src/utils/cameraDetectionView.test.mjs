@@ -6,12 +6,15 @@ import * as cameraDetectionView from './cameraDetectionView.js'
 import {
   classColor,
   confidencePercent,
+  detectionInZone,
   detectionName,
   findVideoSample,
   isValidDetection,
   normalizeClassifications,
   normalizeDetections,
+  normalizeZones,
   primaryClassification,
+  zoneTypeLabel,
 } from './cameraDetectionView.js'
 
 
@@ -79,4 +82,42 @@ test('formats camera communication timestamps as fixed Shanghai month-day time',
   assert.equal(cameraDetectionView.formatDeviceCommTime(timestampMs / 1000), '07/20 11:11:12')
   assert.equal(cameraDetectionView.formatDeviceCommTime(timestampMs), '07/20 11:11:12')
   assert.equal(cameraDetectionView.formatDeviceCommTime(0), '--')
+})
+
+
+test('normalizes virtual zones and matches detector anchors inside areas', () => {
+  const zones = normalizeZones({
+    zones: [
+      {
+        id: 'fish_area',
+        type: 'illegal_fishing',
+        rect: { x: 0.1, y: 0.1, width: 0.5, height: 0.5 },
+      },
+      { id: 'bad', type: 'unknown', rect: { x: 0, y: 0, width: 1, height: 1 } },
+    ],
+  })
+  const boat = {
+    class_id: 0,
+    class_name: 'boat',
+    bbox: { x1: 100, y1: 100, x2: 200, y2: 200 },
+  }
+  const person = {
+    class_id: 3,
+    class_name: 'normal_person',
+    bbox: { x1: 100, y1: 100, x2: 200, y2: 500 },
+  }
+
+  assert.equal(zones.length, 1)
+  assert.equal(zoneTypeLabel(zones[0].type), '违规捕鱼')
+  assert.equal(detectionInZone(boat, zones[0], 1000, 1000), true)
+  assert.equal(detectionInZone(person, zones[0], 1000, 1000), false)
+  assert.equal(
+    detectionInZone(
+      person,
+      { ...zones[0], type: 'person_intrusion', rect: { x: 0.1, y: 0.4, width: 0.2, height: 0.2 } },
+      1000,
+      1000,
+    ),
+    true,
+  )
 })

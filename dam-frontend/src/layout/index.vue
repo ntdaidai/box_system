@@ -138,8 +138,7 @@ const menuMap = {
       name: '文档管理',
       icon: Document,
       children: [
-        { name: '文档中心', path: '/document/hub', icon: Document },
-        { name: '文档上传', path: '/document/upload', icon: Upload },
+        { name: '文档列表', path: '/document/list', icon: Document },
       ],
     },
   ],

@@ -6,6 +6,7 @@ from __future__ import annotations
 import threading
 import time
 import re
+import os
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import cv2
@@ -15,6 +16,36 @@ from loguru import logger
 
 CaptureFactory = Callable[[str], Any]
 LOCAL_VIDEO_PATTERN = re.compile(r"^/dev/video\d+$")
+ZONE_TYPES = {"person_intrusion", "illegal_fishing"}
+ZONE_LABELS = {
+    "person_intrusion": "人员入侵",
+    "illegal_fishing": "违规捕鱼",
+}
+ZONE_TARGET_CLASS_NAMES = {
+    "person_intrusion": {
+        "person",
+        "normal_person",
+        "fishing_person",
+        "person_in_water",
+    },
+    "illegal_fishing": {
+        "boat",
+        "ship",
+        "fishing_boat",
+        "vessel",
+    },
+}
+ZONE_TARGET_CLASS_IDS = {
+    "person_intrusion": {1, 2, 3},
+    "illegal_fishing": {0},
+}
+DEFAULT_FFMPEG_CAPTURE_OPTIONS = (
+    "rtsp_transport;tcp|"
+    "fflags;nobuffer|"
+    "flags;low_delay|"
+    "max_delay;500000|"
+    "stimeout;5000000"
+)
 
 
 def _default_capture_factory(source: str):
@@ -22,9 +53,138 @@ def _default_capture_factory(source: str):
     if LOCAL_VIDEO_PATTERN.fullmatch(source):
         capture = cv2.VideoCapture(source, cv2.CAP_V4L2)
     else:
+        os.environ.setdefault(
+            "OPENCV_FFMPEG_CAPTURE_OPTIONS",
+            DEFAULT_FFMPEG_CAPTURE_OPTIONS,
+        )
         capture = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
     capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    open_timeout = getattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC", None)
+    read_timeout = getattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC", None)
+    if open_timeout is not None:
+        capture.set(open_timeout, 5000)
+    if read_timeout is not None:
+        capture.set(read_timeout, 5000)
     return capture
+
+
+def _clip_unit(value: Any) -> float:
+    return max(0.0, min(float(value), 1.0))
+
+
+def normalize_detection_zone(zone: Dict[str, Any], fallback_id: str = "") -> Dict[str, Any]:
+    zone_type = str(zone.get("type") or "person_intrusion")
+    if zone_type not in ZONE_TYPES:
+        raise ValueError("区域类型仅支持 person_intrusion 或 illegal_fishing")
+
+    rect = zone.get("rect") or {}
+    x = _clip_unit(rect.get("x", 0))
+    y = _clip_unit(rect.get("y", 0))
+    width = _clip_unit(rect.get("width", 0))
+    height = _clip_unit(rect.get("height", 0))
+    width = min(width, 1.0 - x)
+    height = min(height, 1.0 - y)
+    if width <= 0.001 or height <= 0.001:
+        raise ValueError("区域宽高必须大于 0")
+
+    zone_id = str(zone.get("id") or fallback_id or f"{zone_type}_{time.time_ns()}")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", zone_id):
+        raise ValueError("区域 ID 只能包含字母、数字、下划线和短横线")
+
+    name = str(zone.get("name") or ZONE_LABELS[zone_type])[:80]
+    return {
+        "id": zone_id,
+        "name": name,
+        "type": zone_type,
+        "enabled": bool(zone.get("enabled", True)),
+        "rect": {
+            "x": round(x, 6),
+            "y": round(y, 6),
+            "width": round(width, 6),
+            "height": round(height, 6),
+        },
+    }
+
+
+def _zone_matches_detection(zone_type: str, detection: Dict[str, Any]) -> bool:
+    class_id = detection.get("class_id")
+    try:
+        if int(class_id) in ZONE_TARGET_CLASS_IDS.get(zone_type, set()):
+            return True
+    except (TypeError, ValueError):
+        pass
+    names = {
+        str(detection.get("class_name") or "").lower(),
+        str(detection.get("class_name_cn") or "").lower(),
+    }
+    return bool(names & ZONE_TARGET_CLASS_NAMES.get(zone_type, set()))
+
+
+def _detection_anchor_in_zone(
+    zone: Dict[str, Any],
+    detection: Dict[str, Any],
+    image_width: float,
+    image_height: float,
+) -> bool:
+    bbox = detection.get("bbox") or {}
+    if image_width <= 0 or image_height <= 0:
+        return False
+    try:
+        x1 = float(bbox["x1"]) / image_width
+        y1 = float(bbox["y1"]) / image_height
+        x2 = float(bbox["x2"]) / image_width
+        y2 = float(bbox["y2"]) / image_height
+    except (KeyError, TypeError, ValueError):
+        return False
+    if x2 <= x1 or y2 <= y1:
+        return False
+
+    rect = zone["rect"]
+    zx1 = rect["x"]
+    zy1 = rect["y"]
+    zx2 = zx1 + rect["width"]
+    zy2 = zy1 + rect["height"]
+    if zone["type"] == "person_intrusion":
+        anchor_x = (x1 + x2) / 2
+        anchor_y = y2
+    else:
+        anchor_x = (x1 + x2) / 2
+        anchor_y = (y1 + y2) / 2
+    return zx1 <= anchor_x <= zx2 and zy1 <= anchor_y <= zy2
+
+
+def evaluate_detection_zones(
+    zones: List[Dict[str, Any]],
+    payload: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    image_width = float(payload.get("image_width") or 0)
+    image_height = float(payload.get("image_height") or 0)
+    detections = payload.get("detections") or []
+    alerts: List[Dict[str, Any]] = []
+    for zone in zones:
+        if not zone.get("enabled", True):
+            continue
+        zone_type = zone.get("type")
+        for index, detection in enumerate(detections):
+            if not _zone_matches_detection(zone_type, detection):
+                continue
+            if not _detection_anchor_in_zone(zone, detection, image_width, image_height):
+                continue
+            alerts.append(
+                {
+                    "zone_id": zone["id"],
+                    "zone_name": zone["name"],
+                    "type": zone_type,
+                    "message": ZONE_LABELS.get(zone_type, "区域告警"),
+                    "detection_index": index,
+                    "class_id": detection.get("class_id"),
+                    "class_name": detection.get("class_name"),
+                    "class_name_cn": detection.get("class_name_cn"),
+                    "confidence": detection.get("confidence", 0),
+                    "bbox": detection.get("bbox"),
+                }
+            )
+    return alerts
 
 
 class CameraStream:
@@ -71,6 +231,7 @@ class CameraStream:
         self.detection_confidence = 0.5
         self.detection_iou = 0.45
         self.detection_target_fps = 5.0
+        self.detection_zones: List[Dict[str, Any]] = []
         self.analysis_task = "detect"
         self._model: Optional[Any] = None
         self._analysis_generation = 0
@@ -91,6 +252,9 @@ class CameraStream:
             "frame_timestamp": self.frame_timestamp,
             "detections": [],
             "count": 0,
+            "zones": self.get_detection_zones(),
+            "alerts": [],
+            "alert_count": 0,
             "process_time": 0.0,
             "latency_ms": 0,
             "target_fps": self.detection_target_fps,
@@ -309,6 +473,27 @@ class CameraStream:
             f"(task={self.analysis_task}, target_fps={self.detection_target_fps:.1f})"
         )
 
+    def set_detection_zones(self, zones: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        normalized = [
+            normalize_detection_zone(zone, f"zone_{index + 1}")
+            for index, zone in enumerate(zones[:20])
+        ]
+        with self._detection_condition:
+            self.detection_zones = normalized
+            latest = dict(self._latest_detection)
+            if latest.get("task_type") == "detect":
+                latest["zones"] = self.get_detection_zones()
+                latest["alerts"] = evaluate_detection_zones(self.detection_zones, latest)
+                latest["alert_count"] = len(latest["alerts"])
+                self._latest_detection = latest
+                self._detection_version += 1
+                self._detection_condition.notify_all()
+        return self.get_detection_zones()
+
+    def get_detection_zones(self) -> List[Dict[str, Any]]:
+        with self.lock:
+            return [dict(zone, rect=dict(zone["rect"])) for zone in self.detection_zones]
+
     def disable_detection(self) -> None:
         with self._detection_condition:
             was_enabled = self.detection_enabled
@@ -341,6 +526,7 @@ class CameraStream:
                 model = self._model
                 analysis_task = self.analysis_task
                 analysis_generation = self._analysis_generation
+                detection_zones = self.get_detection_zones()
             if model is None:
                 break
             try:
@@ -370,6 +556,10 @@ class CameraStream:
                     "target_fps": self.detection_target_fps,
                     "error": result.get("error"),
                 }
+                if analysis_task == "detect":
+                    payload["zones"] = detection_zones
+                    payload["alerts"] = evaluate_detection_zones(detection_zones, payload)
+                    payload["alert_count"] = len(payload["alerts"])
             except Exception as exc:
                 logger.exception(f"摄像头 {self.camera_id} 实时分析异常: {exc}")
                 jpeg = None
@@ -454,6 +644,7 @@ class CameraStream:
                 "frame_age_ms": round(frame_age * 1000) if frame_age is not None else None,
                 "last_detection_time": latest.get("timestamp", 0),
                 "last_detection_latency_ms": latest.get("latency_ms", 0),
+                "detection_zones": self.get_detection_zones(),
                 "last_error": self.last_error,
             }
 
