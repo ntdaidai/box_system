@@ -12,7 +12,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import httpx
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -131,12 +131,19 @@ def make_editor_token(config: dict) -> str:
 
 def get_original_title(stat, fallback: str) -> str:
     metadata = getattr(stat, "metadata", None) or {}
-    return (
+    value = (
         metadata.get("X-Amz-Meta-Original-Name")
         or metadata.get("x-amz-meta-original-name")
         or metadata.get("original-name")
         or fallback
     )
+    return unquote(value)
+
+
+def encode_metadata_value(value: str) -> str:
+    # S3-compatible metadata is carried in HTTP headers, so non-ASCII values
+    # such as Chinese filenames must be encoded before upload.
+    return quote(value or "", safe="")
 
 
 def content_disposition_inline(filename: str) -> str:
@@ -172,12 +179,14 @@ async def upload_document(
             len(content),
             content_type=get_content_type(ext),
             metadata={
-                "original-name": file.filename or f"{document_id}.{ext}",
-                "owner-id": user_id,
-                "owner-name": user_name,
+                "original-name": encode_metadata_value(file.filename or f"{document_id}.{ext}"),
+                "owner-id": encode_metadata_value(user_id),
+                "owner-name": encode_metadata_value(user_name),
             },
         )
     except S3Error as exc:
+        raise HTTPException(status_code=500, detail=f"上传到 MinIO 失败: {exc}") from exc
+    except Exception as exc:
         raise HTTPException(status_code=500, detail=f"上传到 MinIO 失败: {exc}") from exc
 
     return {
@@ -276,7 +285,7 @@ async def save_updated_document(document_id: str, url: str) -> bool:
         try:
             stat = client.stat_object(BUCKET_NAME, object_name)
             original_title = get_original_title(stat, object_name.rsplit("/", 1)[-1])
-            original_metadata = {"original-name": original_title}
+            original_metadata = {"original-name": encode_metadata_value(original_title)}
             current = client.get_object(BUCKET_NAME, object_name).read()
             client.put_object(
                 BUCKET_NAME,
