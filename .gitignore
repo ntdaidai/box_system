@@ -25,6 +25,9 @@ build/
 logs/
 dam-ai-service/data/
 
+# Runtime data
+dam-backend/data/
+
 # OS
 .DS_Store
 Thumbs.db
