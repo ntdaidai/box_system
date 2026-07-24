@@ -1,0 +1,132 @@
+server:
+  port: 6789
+spring:
+  main:
+    allow-bean-definition-overriding: true
+  application:
+    name: cloud-api-sample
+  datasource:
+    druid:
+      type: com.alibaba.druid.pool.DruidDataSource
+      driver-class-name: com.mysql.cj.jdbc.Driver
+      url: jdbc:mysql://host.docker.internal:3306/cloud_sample?useSSL=false&allowPublicKeyRetrieval=true
+      username: root
+      password: root
+      initial-size: 10
+      min-idle: 10
+      max-active: 20
+      max-wait: 60000
+
+  redis:
+    host: host.docker.internal
+    port: 6379
+    database: 0
+    username: # if you enable
+    password: redis
+    lettuce:
+      pool:
+        max-active: 8
+        max-idle: 8
+        min-idle: 0
+
+  servlet:
+    multipart:
+      max-file-size: 2GB
+      max-request-size: 2GB
+
+jwt:
+  issuer: DJI
+  subject: CloudApiSample
+  secret: CloudApiSample
+  age: 86400
+
+mqtt:
+  # @see com.dji.sample.component.mqtt.model.MqttUseEnum
+  # BASIC parameters are required.
+  BASIC:
+    protocol: MQTT # @see com.dji.sample.component.mqtt.model.MqttProtocolEnum
+    host: 192.168.31.52
+    port: 1883
+    username: admin
+    password: admin
+    client-id: dij_cloud_api_server
+    # If the protocol is ws/wss, this value is required.
+    path:
+  DRC:
+    protocol: WS # @see com.dji.sample.component.mqtt.model.MqttProtocolEnum
+    host: 192.168.31.52
+    port: 8083
+    path: /mqtt
+    username: admin
+    password: admin
+
+cloud-sdk:
+  mqtt:
+    # Topics that need to be subscribed when initially connecting to mqtt, multiple topics are divided by ",".
+    inbound-topic: sys/product/+/status,thing/product/+/requests
+
+url:
+  manage:
+    prefix: manage
+    version: /api/v1
+  map:
+    prefix: map
+    version: /api/v1
+  media:
+    prefix: media
+    version: /api/v1
+  wayline:
+    prefix: wayline
+    version: /api/v1
+  storage:
+    prefix: storage
+    version: /api/v1
+  control:
+    prefix: control
+    version: /api/v1
+
+# MinIO 对象存储配置
+oss:
+  enable: true
+  provider: minio
+  endpoint: http://192.168.31.52:9000
+  access-key: minioadmin
+  secret-key: minioadmin
+  bucket: dam
+  expire: 3600
+  region: us-east-1
+  object-dir-prefix: drone
+
+logging:
+  level:
+    com.dji: debug
+  file:
+    name: logs/cloud-api-sample.log
+
+ntp:
+  server:
+    host: Google.mzr.me
+
+# To create a license for an application: https://developer.dji.com/user/apps/#all
+cloud-api:
+  app:
+    id: 190692
+    key: 37268bf4705405690a68390d5252369
+    license: q1jbHkoD+xy3X2nLtcmANbkEqDl67j1VsAfPPsiRRT2TD8F9z5jrQ9bLE/ziKqfTTx2mY5AhjGgTSv5SajyUiiE2tR8WfN8lkqI8THre2DaNZgLOYyH7nFh9cawhJ5bwFGb+YvXufcus0OqwqfOY06mmsJHx6ZtDBwiRqKDPVaw=
+
+livestream:
+  url:
+    # It is recommended to use a program to create Token. https://github.com/AgoraIO/Tools/blob/master/DynamicKey/AgoraDynamicKey/java/src/main/java/io/agora/media/RtcTokenBuilder2.java
+    agora:
+      channel: Please enter the agora channel.
+      token: Please enter the agora temporary token.
+      uid:  654321
+
+    # RTMP
+    rtmp:
+      url: rtmp://192.168.31.52:1936/live/
+    # RTSP
+    rtsp:
+      username: ""
+      password: ""
+      port: 8554

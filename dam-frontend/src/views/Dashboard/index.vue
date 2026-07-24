@@ -705,14 +705,30 @@ const sensorCardStride = () => {
   return firstCard.getBoundingClientRect().width + (Number.isFinite(gap) ? gap : 14)
 }
 
+// 自动滚动速度（像素/帧，越小越慢，建议 0.15~0.25）
+const SCROLL_SPEED = 0.2
+// 滚动到末尾后回到起点前的停顿时间（毫秒）
+const LOOP_PAUSE_MS = 2000
+let sensorCarouselLooping = false
+
 const startSensorCarousel = () => {
   if (sensorCarouselFrame) cancelAnimationFrame(sensorCarouselFrame)
+
   const tick = () => {
     const track = sensorTrackRef.value
-    if (track && !sensorCarouselPaused && track.scrollWidth > track.clientWidth + 4) {
-      track.scrollLeft += 0.35
-      if (track.scrollLeft >= track.scrollWidth - track.clientWidth - 2) {
-        track.scrollTo({ left: 0, behavior: 'smooth' })
+    // 检查是否需要滚动（内容宽度大于容器宽度）
+    if (track && !sensorCarouselPaused && !sensorCarouselLooping) {
+      const needScroll = track.scrollWidth > track.clientWidth + 10
+      if (needScroll) {
+        track.scrollLeft += SCROLL_SPEED
+        // 到达末尾时，暂停后平滑回到起点
+        if (track.scrollLeft >= track.scrollWidth - track.clientWidth - 1) {
+          sensorCarouselLooping = true
+          setTimeout(() => {
+            track.scrollTo({ left: 0, behavior: 'smooth' })
+            setTimeout(() => { sensorCarouselLooping = false }, 800)
+          }, LOOP_PAUSE_MS)
+        }
       }
     }
     sensorCarouselFrame = requestAnimationFrame(tick)
@@ -898,6 +914,8 @@ onUnmounted(() => {
 .sensor-carousel {
   position: relative;
   margin-bottom: 14px;
+  overflow: hidden;
+  z-index: 10;
 }
 
 .sensor-row {
@@ -909,7 +927,6 @@ onUnmounted(() => {
   overflow-y: hidden;
   padding: 0 2px;
   scroll-snap-type: x proximity;
-  scroll-behavior: smooth;
   scrollbar-width: none;
   -ms-overflow-style: none;
 }

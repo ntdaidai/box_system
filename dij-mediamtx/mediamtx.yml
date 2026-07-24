@@ -1,0 +1,26 @@
+# MediaMTX 低延迟配置
+
+api: yes
+apiAddress: :9997
+
+rtsp: yes
+rtspAddress: :8554
+rtspTransports: [tcp]
+
+rtmp: yes
+rtmpAddress: :1935
+
+hls: no
+
+webrtc: yes
+webrtcAddress: :8889
+webrtcICEUDPMuxAddress: :8189
+webrtcICEHostNAT1To1IPs:
+  - 192.168.31.52
+  - 121.248.203.47
+
+paths:
+  all_others:
+    source: publisher
+    # 低延迟配置
+    rtspTransport: tcp

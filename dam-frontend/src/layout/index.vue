@@ -76,7 +76,7 @@
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores'
-import { HomeFilled, UserFilled, ArrowDown, Monitor, DataAnalysis, Warning, Setting, VideoCamera, Cpu, Sunny, WindPower, Cloudy, Odometer, Bell, Document, Upload, Picture, VideoPlay } from '@element-plus/icons-vue'
+import { HomeFilled, UserFilled, ArrowDown, Monitor, DataAnalysis, Warning, Setting, VideoCamera, Cpu, Sunny, WindPower, Cloudy, Odometer, Bell, Document, Upload, Picture, VideoPlay, Position } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -121,6 +121,11 @@ const menuMap = {
       name: '图片/视频分析',
       path: '/monitor/camera/image',
       icon: DataAnalysis,
+    },
+    {
+      name: '无人机监测',
+      path: '/monitor/drone',
+      icon: Position,
     },
   ],
   '/alarm': [

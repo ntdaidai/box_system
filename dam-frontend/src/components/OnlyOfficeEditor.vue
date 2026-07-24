@@ -267,11 +267,9 @@ const loadOnlyOfficeScript = () => {
 
     // 动态创建 script 标签
     const script = document.createElement('script')
-    const onlyofficeServerUrl =
-      props.config?.onlyoffice_server_url ||
-      import.meta.env.VITE_ONLYOFFICE_URL ||
-      'http://192.168.31.52'
-    script.src = `${onlyofficeServerUrl}/web-apps/apps/api/documents/api.js`
+    // 始终使用代理路径加载 OnlyOffice API（解决公网访问和跨域问题）
+    // 后端返回的 onlyoffice_server_url 用于服务器间通信，前端不需要直接访问
+    script.src = '/onlyoffice/web-apps/apps/api/documents/api.js'
     script.async = true
     script.onload = () => {
       resolve()

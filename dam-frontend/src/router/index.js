@@ -81,6 +81,12 @@ const routes = [
             meta: { title: '视频分析', requiresAuth: true, mediaTab: 'video' }
           },
           {
+            path: 'drone',
+            name: 'DroneView',
+            component: () => import('@/views/Monitor/DroneView.vue'),
+            meta: { title: '无人机监测', requiresAuth: true }
+          },
+          {
             path: 'device',
             name: 'DeviceStatus',
             component: () => import('@/views/Monitor/DeviceStatus.vue'),

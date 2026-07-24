@@ -1,0 +1,29 @@
+services:
+  mediamtx:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/bluenviron/mediamtx:latest-linuxarm64
+    container_name: mediamtx
+    restart: unless-stopped
+    ports:
+      # RTMP 端口
+      - "1935:1935"
+      # RTSP 端口
+      - "8554:8554"
+      # HLS 端口
+      - "8888:8888"
+      # WebRTC 端口
+      - "8889:8889"
+      # API 端口
+      - "9997:9997"
+    environment:
+      # 配置 RTMP
+      MTX_PROTOCOLS: tcp
+      # 禁用所有认证
+      MTX_AUTHMETHODS: "password"
+      MTX_READUSER: ""
+      MTX_READPASS: ""
+      MTX_PUBLISHUSER: ""
+      MTX_PUBLISHPASS: ""
+    volumes:
+      # 持久化配置
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    network_mode: bridge

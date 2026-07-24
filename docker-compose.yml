@@ -43,12 +43,16 @@ services:
       - ./dam-frontend/vite.config.js:/app/vite.config.js
     environment:
       TZ: Asia/Shanghai
+      # Vite 环境变量（VITE_ 前缀会被注入到前端代码中）
+      # 留空表示使用相对路径，通过 Vite 代理访问 OnlyOffice（解决公网访问问题）
+      VITE_ONLYOFFICE_URL: "${VITE_ONLYOFFICE_URL:-}"
+      VITE_API_BASE_URL: "${VITE_API_BASE_URL:-http://localhost:8090}"
     network_mode: host
 
   # ========== Python后端（一体化服务） ==========
   dam-server-python:
     build:
-      context: ./dam-ai-service
+      context: ./dam-backend
       dockerfile: Dockerfile
     container_name: dam-server-python
     restart: unless-stopped
@@ -65,7 +69,7 @@ services:
       start_period: 90s
     # 挂载源码目录，修改后只需 docker compose restart 即可生效
     volumes:
-      - ./dam-ai-service:/app
+      - ./dam-backend:/app
       # 挂载 Jetson 平台工具和设备树，用于读取 GPU/温度/功耗
       - /usr/bin/tegrastats:/usr/bin/tegrastats:ro
       - /usr/sbin/nvidia-smi:/usr/sbin/nvidia-smi:ro
@@ -126,8 +130,8 @@ services:
       # OnlyOffice / 文档服务
       APP_PORT: "${APP_PORT:-8090}"
       PUBLIC_HOST: "${PUBLIC_HOST:-192.168.31.52}"
-      BACKEND_PUBLIC_URL: "${BACKEND_PUBLIC_URL:-http://localhost:8090}"
-      ONLYOFFICE_PUBLIC_URL: "${ONLYOFFICE_PUBLIC_URL:-http://192.168.31.52}"
+      BACKEND_PUBLIC_URL: "${BACKEND_PUBLIC_URL:-http://localhost:${APP_PORT:-8090}}"
+      ONLYOFFICE_PUBLIC_URL: "${ONLYOFFICE_PUBLIC_URL:-http://121.248.203.47}"
       ONLYOFFICE_JWT_SECRET: "${ONLYOFFICE_JWT_SECRET:-mysecretkey}"
       DOCUMENT_BUCKET: "${DOCUMENT_BUCKET:-documents}"
       MINIO_ENDPOINT: "${MINIO_ENDPOINT:-localhost:9000}"
@@ -233,6 +237,67 @@ services:
         reservations:
           memory: 2G
 
+  # ========== MediaMTX 流媒体服务器（RTMP → RTSP 转封装，供无人机直播） ==========
+  dij-mediamtx:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/bluenviron/mediamtx:latest-linuxarm64
+    container_name: dij-mediamtx
+    restart: unless-stopped
+    ports:
+      - "1936:1935"       # RTMP 推流入口
+      - "8555:8554"       # RTSP 流输出（WebRTC-Streamer 拉流）
+      - "8890:8889"       # WebRTC HTTP API
+      - "8189:8189/udp"   # WebRTC ICE/STUN
+      - "9998:9997"       # MediaMTX 管理 API
+    volumes:
+      - ./dij-mediamtx/mediamtx.yml:/mediamtx.yml:ro
+
+  # ========== DJI Cloud API 后端（无人机管理、直播控制） ==========
+  dij-backend:
+    image: maven:3.8-eclipse-temurin-11
+    container_name: dij-backend
+    restart: unless-stopped
+    working_dir: /app
+    command: ["bash", "/app/start-dev.sh"]
+    ports:
+      - "6790:6789"
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./dij-backend/DJI-Cloud-API-Demo-main:/app
+      - dij-maven-repo:/root/.m2
+      - ./dij-backend/DJI-Cloud-API-Demo-main/start-dev.sh:/app/start-dev.sh:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - dij-mediamtx
+
+  # ========== DJI Cloud API 前端（手柄上云必需） ==========
+  dij-frontend:
+    image: node:18-alpine
+    container_name: dij-frontend
+    restart: unless-stopped
+    working_dir: /app
+    command: sh -c "yarn config set registry https://registry.npmmirror.com/ && yarn config set ignore-engines true && yarn install --network-timeout 600000 && yarn serve --host"
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./dij-frontend/src:/app/src
+      - ./dij-frontend/public:/app/public
+      - ./dij-frontend/index.html:/app/index.html
+      - ./dij-frontend/vite.config.ts:/app/vite.config.ts
+      - ./dij-frontend/tsconfig.json:/app/tsconfig.json
+      - ./dij-frontend/package.json:/app/package.json
+      - ./dij-frontend/env:/app/env
+      - dij-frontend-node-modules:/app/node_modules
+    environment:
+      - VITE_APP_ENVIRONMENT=development
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - dij-backend
+
 volumes:
   onlyoffice_data:
   onlyoffice_logs:
@@ -240,3 +305,5 @@ volumes:
   onlyoffice_rabbitmq:
   onlyoffice_redis:
   onlyoffice_postgresql:
+  dij-maven-repo:
+  dij-frontend-node-modules:
