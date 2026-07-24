@@ -1,14 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 const routes = [
-  // dai: Camera and upload APIs are authenticated. A dedicated login route
-  // prevents direct links from rendering a page full of raw HTTP 401 errors.
-  {
-    path: '/login',
-    name: 'Login',
-    component: () => import('@/views/Login/index.vue'),
-    meta: { title: '用户登录' },
-  },
   {
     path: '/',
     component: () => import('@/layout/index.vue'),
@@ -66,25 +58,25 @@ const routes = [
             path: 'camera',
             name: 'CameraView',
             component: () => import('@/views/Monitor/CameraView.vue'),
-            meta: { title: '视频监控', requiresAuth: true }
+            meta: { title: '视频监控' }
           },
           {
             path: 'camera/image',
             name: 'CameraImageAnalysis',
             component: () => import('@/views/Monitor/CameraView.vue'),
-            meta: { title: '图片/视频分析', requiresAuth: true, mediaTab: 'image' }
+            meta: { title: '图片/视频分析', mediaTab: 'image' }
           },
           {
             path: 'camera/video',
             name: 'CameraVideoAnalysis',
             component: () => import('@/views/Monitor/CameraView.vue'),
-            meta: { title: '视频分析', requiresAuth: true, mediaTab: 'video' }
+            meta: { title: '视频分析', mediaTab: 'video' }
           },
           {
             path: 'drone',
             name: 'DroneView',
             component: () => import('@/views/Monitor/DroneView.vue'),
-            meta: { title: '无人机监测', requiresAuth: true }
+            meta: { title: '无人机监测' }
           },
           {
             path: 'device',
@@ -166,18 +158,6 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes,
-})
-
-router.beforeEach((to) => {
-  const token = localStorage.getItem('token')
-  if (to.meta.requiresAuth && !token) {
-    return { path: '/login', query: { redirect: to.fullPath } }
-  }
-  if (to.path === '/login' && token) {
-    const redirect = typeof to.query.redirect === 'string' ? to.query.redirect : '/dashboard'
-    return redirect.startsWith('/') && !redirect.startsWith('//') ? redirect : '/dashboard'
-  }
-  return true
 })
 
 export default router

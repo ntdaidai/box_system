@@ -163,8 +163,9 @@
     <el-dialog
       v-model="previewDialogVisible"
       :title="previewDocument.title"
-      width="80%"
+      class="document-preview-dialog"
       fullscreen
+      destroy-on-close
     >
       <div class="preview-container">
         <OnlyOfficeEditor
@@ -173,7 +174,7 @@
           :document-title="previewDocument.title"
           :document-type="previewDocument.document_type"
           mode="view"
-          editor-height="calc(100vh - 150px)"
+          editor-height="100%"
           :user="currentUser"
         />
       </div>
@@ -611,7 +612,46 @@ onMounted(() => {
 }
 
 .preview-container {
-  height: calc(100vh - 150px);
+  width: 100%;
+  height: calc(100vh - 76px);
+  min-height: 520px;
+  overflow: hidden;
+  background: #f5f7fb;
+}
+
+.preview-container :deep(.onlyoffice-editor),
+.preview-container :deep(#onlyoffice-editor),
+.preview-container :deep(iframe) {
+  height: 100% !important;
+}
+
+.preview-container :deep(.onlyoffice-editor) {
+  border: 0;
+  border-radius: 0;
+}
+
+:global(.document-preview-dialog.el-dialog.is-fullscreen) {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  border-radius: 0 !important;
+}
+
+:global(.document-preview-dialog .el-dialog__header) {
+  flex: 0 0 56px;
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 0 20px;
+}
+
+:global(.document-preview-dialog .el-dialog__body) {
+  flex: 1;
+  min-height: 0;
+  padding: 0 20px 20px;
+  overflow: hidden;
 }
 
 /* 响应式布局 */
@@ -628,6 +668,15 @@ onMounted(() => {
 
   .search-input {
     width: 100%;
+  }
+
+  .preview-container {
+    height: calc(100vh - 56px);
+    min-height: 0;
+  }
+
+  :global(.document-preview-dialog .el-dialog__body) {
+    padding: 0;
   }
 }
 </style>

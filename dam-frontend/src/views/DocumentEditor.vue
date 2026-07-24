@@ -47,7 +47,7 @@
         :document-type="documentType"
         :config="editorConfig"
         :mode="editorMode"
-        editor-height="calc(100vh - 280px)"
+        editor-height="100%"
         :user="currentUser"
         :callback-url="callbackUrl"
         @ready="onEditorReady"
@@ -300,17 +300,22 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .document-editor-page {
-  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 92px);
+  min-height: 640px;
+  padding: 12px 20px 16px;
   background: #f5f7fa;
-  min-height: 100vh;
+  overflow: hidden;
 }
 
 .page-header {
+  flex: 0 0 auto;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 20px;
-  padding: 16px 20px;
+  margin-bottom: 12px;
+  padding: 10px 14px;
   background: #fff;
   border-radius: 8px;
   box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.05);
@@ -335,18 +340,36 @@ onBeforeUnmount(() => {
 }
 
 .document-info {
-  margin-bottom: 20px;
-  padding: 16px 20px;
+  flex: 0 0 auto;
+  margin-bottom: 12px;
+  padding: 10px 12px;
   background: #fff;
   border-radius: 8px;
   box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.05);
 }
 
 .editor-container {
+  flex: 1 1 auto;
+  min-height: 0;
   background: #fff;
   border-radius: 8px;
   box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.05);
   overflow: hidden;
+}
+
+.editor-container :deep(.onlyoffice-editor),
+.editor-container :deep(#onlyoffice-editor),
+.editor-container :deep(iframe) {
+  height: 100% !important;
+}
+
+.editor-container :deep(.onlyoffice-editor) {
+  border: 0;
+  border-radius: 0;
+}
+
+.document-info :deep(.el-descriptions__cell) {
+  padding: 8px 12px !important;
 }
 
 .collaborators-bar {
@@ -375,6 +398,8 @@ onBeforeUnmount(() => {
 /* 响应式布局 */
 @media (max-width: 768px) {
   .document-editor-page {
+    height: calc(100vh - 72px);
+    min-height: 0;
     padding: 12px;
   }
 

@@ -1,0 +1,74 @@
+// Element Plus 深色主题覆盖样式
+// 必须在 element-plus/dist/index.css 之后加载
+
+// 下拉选择框 - 强制覆盖深色主题
+.el-select-dropdown,
+.el-popper.is-light,
+.el-select__popper {
+  background: rgba(10, 30, 48, 0.95) !important;
+  border: 1px solid rgba(93, 184, 225, 0.3) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5) !important;
+}
+
+.el-select-dropdown__item {
+  color: #c8dce8 !important;
+  background: transparent !important;
+
+  &.hover,
+  &:hover {
+    background: rgba(72, 216, 255, 0.1) !important;
+    color: #e9f7ff !important;
+  }
+
+  &.selected {
+    color: #48d8ff !important;
+    font-weight: 700;
+  }
+}
+
+.el-select-dropdown__empty {
+  color: #4a7a9b !important;
+  background: rgba(10, 30, 48, 0.95) !important;
+}
+
+.el-popper.is-light .el-popper__arrow::before {
+  background: rgba(10, 30, 48, 0.95) !important;
+  border-color: rgba(93, 184, 225, 0.3) !important;
+}
+
+// 输入框
+.el-input__wrapper {
+  background-color: rgba(10, 30, 48, 0.85) !important;
+  border-color: rgba(0, 200, 255, 0.2) !important;
+  box-shadow: none !important;
+
+  .el-input__inner {
+    color: #E2F0FE !important;
+    &::placeholder {
+      color: rgba(200, 218, 240, 0.4) !important;
+    }
+  }
+}
+
+// 选择器输入框
+.el-select .el-input__wrapper {
+  background: rgba(10, 30, 48, 0.85) !important;
+  border: 1px solid rgba(93, 184, 225, 0.3) !important;
+  box-shadow: none !important;
+}
+
+.el-select .el-input__inner {
+  color: #e9f7ff !important;
+}
+
+.el-select .el-input__inner::placeholder {
+  color: #4a7a9b !important;
+}
+
+.el-select .el-input.is-focus .el-input__wrapper {
+  border-color: #48d8ff !important;
+}
+
+.el-select .el-select__caret {
+  color: #4a7a9b !important;
+}

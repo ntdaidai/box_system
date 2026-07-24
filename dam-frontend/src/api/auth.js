@@ -1,7 +1,13 @@
-// dai
-/** Authentication API used by the direct-link login flow. */
+/**
+ * Python 后端认证接口
+ */
 import request from '@/utils/request'
 
-export function login(username, password) {
-  return request.post('/auth/login', { username, password }, { timeout: 15000 })
+/**
+ * 静默登录（自动获取 token）
+ * @param {string} username
+ * @param {string} password
+ */
+export function silentLogin(username = 'admin', password = 'hhu@4208') {
+  return request.post('/auth/login', { username, password })
 }

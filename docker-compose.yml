@@ -216,6 +216,8 @@ services:
       # JWT 安全配置（生产环境必须设置）
       JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-mysecretkey}
       JWT_HEADER: Authorization
+      # 内网部署：允许 Document Server 下载本机/局域网后端提供的文档文件。
+      ALLOW_PRIVATE_IP_ADDRESS: "true"
       # 数据库配置（使用内置 PostgreSQL）
       DB_TYPE: postgres
       # 文档存储路径

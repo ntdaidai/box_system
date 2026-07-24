@@ -192,6 +192,28 @@ export function getCurrentUser() {
   return dij.get('/manage/api/v1/users/current')
 }
 
+// ========== 航线文件 ==========
+
+/**
+ * 获取航线文件列表
+ * @param {string} workspaceId
+ * @param {object} params - { page, page_size, order_by }
+ */
+export function getWaylineFiles(workspaceId, params = {}) {
+  return dij.get(`/wayline/api/v1/workspaces/${workspaceId}/waylines`, {
+    params: { order_by: 'update_time desc', page: 1, page_size: 50, ...params },
+  })
+}
+
+/**
+ * 删除航线文件
+ * @param {string} workspaceId
+ * @param {string} waylineId
+ */
+export function deleteWaylineFile(workspaceId, waylineId) {
+  return dij.delete(`/wayline/api/v1/workspaces/${workspaceId}/waylines/${waylineId}`)
+}
+
 // ========== 航线任务 ==========
 
 /**
@@ -201,4 +223,77 @@ export function getCurrentUser() {
  */
 export function getFlightJobs(workspaceId, params = {}) {
   return dij.get(`/wayline/api/v1/workspaces/${workspaceId}/jobs`, { params })
+}
+
+/**
+ * 创建飞行任务（立即执行）
+ * @param {string} workspaceId
+ * @param {object} data - CreateJobParam
+ * @param {string} data.name - 任务名称
+ * @param {string} data.fileId - 航线文件ID
+ * @param {string} data.dockSn - 机场序列号
+ * @param {number} data.waylineType - 航线类型（0=航点）
+ * @param {number} data.taskType - 任务类型（0=立即执行）
+ * @param {number} data.rthAltitude - 返航高度（20-500）
+ * @param {number} data.outOfControlAction - 失控动作（0=返航, 1=悬停, 2=降落）
+ */
+export function createFlightTask(workspaceId, data) {
+  return dij.post(`/wayline/api/v1/workspaces/${workspaceId}/flight-tasks`, data)
+}
+
+/**
+ * 暂停飞行任务
+ * @param {string} workspaceId
+ * @param {string} jobId
+ */
+export function pauseFlightTask(workspaceId, jobId) {
+  return dij.put(`/wayline/api/v1/workspaces/${workspaceId}/jobs/${jobId}`, { status: 0 })
+}
+
+/**
+ * 恢复飞行任务
+ * @param {string} workspaceId
+ * @param {string} jobId
+ */
+export function resumeFlightTask(workspaceId, jobId) {
+  return dij.put(`/wayline/api/v1/workspaces/${workspaceId}/jobs/${jobId}`, { status: 1 })
+}
+
+/**
+ * 取消/删除飞行任务
+ * @param {string} workspaceId
+ * @param {string} jobId
+ */
+export function cancelFlightTask(workspaceId, jobId) {
+  return dij.delete(`/wayline/api/v1/workspaces/${workspaceId}/jobs`, { params: { job_id: jobId } })
+}
+
+// ========== 模拟飞行 ==========
+
+/**
+ * 开始模拟飞行
+ * @param {object} data
+ * @param {string} data.job_id - 任务ID
+ * @param {string} data.route_name - 航线名称
+ * @param {Array} data.waypoints - 航点列表 [{x, y, label}]
+ * @param {number} data.duration - 飞行时长（毫秒）
+ */
+export function startSimulation(data) {
+  return dij.post('/manage/api/v1/simulation/start', data)
+}
+
+/**
+ * 停止模拟飞行
+ * @param {string} jobId
+ */
+export function stopSimulation(jobId) {
+  return dij.post(`/manage/api/v1/simulation/stop/${jobId}`)
+}
+
+/**
+ * 获取模拟飞行状态
+ * @param {string} jobId
+ */
+export function getSimulationStatus(jobId) {
+  return dij.get(`/manage/api/v1/simulation/status/${jobId}`)
 }

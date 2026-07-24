@@ -104,6 +104,41 @@ const loading = ref(true)
 const error = ref('')
 let docEditor = null
 
+const trimTrailingSlash = (value) => value.replace(/\/+$/, '')
+
+const getOnlyOfficeScriptUrls = () => {
+  const configuredUrl = import.meta.env.VITE_ONLYOFFICE_URL?.trim()
+  if (configuredUrl) {
+    return [`${trimTrailingSlash(configuredUrl)}/web-apps/apps/api/documents/api.js`]
+  }
+
+  const { protocol, hostname } = window.location
+  const directUrl = `${protocol}//${hostname}/web-apps/apps/api/documents/api.js`
+  const proxyUrl = '/onlyoffice/web-apps/apps/api/documents/api.js'
+  const isPrivateHost = hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname.startsWith('192.168.') ||
+    hostname.startsWith('10.') ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname)
+
+  return isPrivateHost ? [directUrl, proxyUrl] : [proxyUrl, directUrl]
+}
+
+const formatOnlyOfficeError = (event) => {
+  const data = event?.data ?? event
+  if (!data) return '未知错误'
+  if (typeof data === 'string' || typeof data === 'number') return String(data)
+  if (data.errorDescription) return data.errorDescription
+  if (data.message) return data.message
+  if (data.errorCode || data.error) return JSON.stringify(data)
+
+  try {
+    return JSON.stringify(data)
+  } catch {
+    return String(data)
+  }
+}
+
 // 计算文档 key（如果没有提供，使用时间戳生成唯一 key）
 const getDocumentKey = () => {
   if (props.documentKey) {
@@ -223,7 +258,7 @@ const initEditor = async () => {
           emit('documentStateChange', event)
         },
         onError: (event) => {
-          const errorMsg = `编辑器错误: ${event.data || '未知错误'}`
+          const errorMsg = `编辑器错误: ${formatOnlyOfficeError(event)}`
           error.value = errorMsg
           emit('error', errorMsg)
         }
@@ -239,7 +274,7 @@ const initEditor = async () => {
         emit('documentStateChange', event)
       },
       onError: (event) => {
-        const errorMsg = `编辑器错误: ${event.data || '未知错误'}`
+        const errorMsg = `编辑器错误: ${formatOnlyOfficeError(event)}`
         error.value = errorMsg
         emit('error', errorMsg)
       }
@@ -265,19 +300,31 @@ const loadOnlyOfficeScript = () => {
       return
     }
 
-    // 动态创建 script 标签
-    const script = document.createElement('script')
-    // 始终使用代理路径加载 OnlyOffice API（解决公网访问和跨域问题）
-    // 后端返回的 onlyoffice_server_url 用于服务器间通信，前端不需要直接访问
-    script.src = '/onlyoffice/web-apps/apps/api/documents/api.js'
-    script.async = true
-    script.onload = () => {
-      resolve()
+    const sources = getOnlyOfficeScriptUrls()
+    let index = 0
+
+    const tryNextSource = () => {
+      const src = sources[index]
+      if (!src) {
+        reject(new Error('无法加载 OnlyOffice API 脚本'))
+        return
+      }
+
+      const script = document.createElement('script')
+      script.src = src
+      script.async = true
+      script.onload = () => {
+        resolve()
+      }
+      script.onerror = () => {
+        script.remove()
+        index += 1
+        tryNextSource()
+      }
+      document.head.appendChild(script)
     }
-    script.onerror = () => {
-      reject(new Error('无法加载 OnlyOffice API 脚本'))
-    }
-    document.head.appendChild(script)
+
+    tryNextSource()
   })
 }
 
@@ -357,6 +404,7 @@ defineExpose({
 <style scoped>
 .onlyoffice-editor {
   width: 100%;
+  height: 100%;
   border: 1px solid #e4e7ed;
   border-radius: 4px;
   overflow: hidden;

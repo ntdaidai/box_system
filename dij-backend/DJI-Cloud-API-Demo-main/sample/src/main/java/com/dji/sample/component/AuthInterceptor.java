@@ -32,7 +32,11 @@ public class AuthInterceptor implements HandlerInterceptor {
             response.setStatus(HttpStatus.OK.value());
             return false;
         }
+        // 优先从 header 读取 token，其次从 URL 参数读取（支持 SSE）
         String token = request.getHeader(PARAM_TOKEN);
+        if (!StringUtils.hasText(token)) {
+            token = request.getParameter(PARAM_TOKEN);
+        }
         // Check if the token exists.
         if (!StringUtils.hasText(token)) {
             response.setStatus(HttpStatus.UNAUTHORIZED.value());

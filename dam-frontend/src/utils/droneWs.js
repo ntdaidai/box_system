@@ -27,6 +27,7 @@ export const WS_STATE = {
  * @param {function} options.onDeviceOnline - 设备上线回调
  * @param {function} options.onDeviceOffline - 设备下线回调
  * @param {function} options.onDeviceHms - HMS 告警回调
+ * @param {function} options.onFlightTaskProgress - 航线任务进度回调
  * @param {function} options.onState - 连接状态回调 (state) => void
  * @param {function} options.onError - 错误回调
  * @returns {function} 关闭连接的函数
@@ -42,6 +43,7 @@ export function connectDroneWs(options) {
     onDeviceOnline,
     onDeviceOffline,
     onDeviceHms,
+    onFlightTaskProgress,
     onState,
     onError,
   } = options
@@ -108,6 +110,12 @@ export function connectDroneWs(options) {
             break
           case 'device_hms':
             onDeviceHms?.(data)
+            break
+          case 'flighttask_progress':
+            onFlightTaskProgress?.(data)
+            break
+          case 'file_upload_callback':
+            // 媒体上传进度，暂不处理
             break
           default:
             // 其他消息类型忽略

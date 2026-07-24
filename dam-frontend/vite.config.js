@@ -27,7 +27,7 @@ export default defineConfig({
         target: 'http://localhost:8090',  // Python 后端端口
         changeOrigin: true,
       },
-      // DJI Cloud API 代理（dij 项目后端）
+      // DJI Cloud API 代理（dij 项目后端，Docker 映射 6790->6789）
       '/dij-api': {
         target: 'http://127.0.0.1:6790',
         changeOrigin: true,
@@ -62,8 +62,12 @@ export default defineConfig({
       },
       // OnlyOffice API 代理 - 解决跨域和端口访问问题
       '/onlyoffice': {
-        target: 'http://localhost:80',
+        target: 'http://127.0.0.1:80',
         changeOrigin: true,
+        ws: true,
+        secure: false,
+        timeout: 120000,
+        proxyTimeout: 120000,
         rewrite: (path) => path.replace(/^\/onlyoffice/, ''),
       },
     },

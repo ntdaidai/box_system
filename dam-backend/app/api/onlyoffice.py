@@ -32,6 +32,7 @@ BACKEND_PUBLIC_URL = settings.BACKEND_PUBLIC_URL.rstrip("/")
 JWT_SECRET = settings.ONLYOFFICE_JWT_SECRET
 BUCKET_NAME = settings.DOCUMENT_BUCKET
 OBJECT_PREFIX = "editable"
+EDITOR_KEY_VERSION = "download-v3"
 
 minio_client: Optional[Minio] = None
 
@@ -109,7 +110,8 @@ def parse_object_name(object_name: str) -> tuple[str, str, str]:
 
 
 def document_key(document_id: str) -> str:
-    return hashlib.sha256(document_id.encode("utf-8")).hexdigest()[:32]
+    key_source = f"{document_id}:{EDITOR_KEY_VERSION}"
+    return hashlib.sha256(key_source.encode("utf-8")).hexdigest()[:32]
 
 
 def find_document_object(document_id: str, user_id: Optional[str] = None) -> Optional[str]:
@@ -360,9 +362,9 @@ async def get_editor_config(
         stat = get_minio_client().stat_object(BUCKET_NAME, object_name)
         _, filename, ext = parse_object_name(object_name)
         title = get_original_title(stat, filename)
-        # 使用相对路径，让前端浏览器通过代理访问
-        # 这样无论从内网还是公网访问都能正常工作
-        doc_url = f"/api/onlyoffice/document/{document_id}"
+        # OnlyOffice Document Server downloads the document server-side, so the
+        # document URL must be absolute and reachable from that service.
+        doc_url = f"{BACKEND_PUBLIC_URL}/api/onlyoffice/document/{document_id}"
         # callback_url 必须使用完整 URL，OnlyOffice Document Server 需要它来回调保存文档
         callback_url = f"{BACKEND_PUBLIC_URL}/api/onlyoffice/callback/{document_id}"
         document_type = get_document_type(ext)

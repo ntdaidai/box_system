@@ -136,13 +136,48 @@ body {
 
 // 输入框
 .el-input__wrapper {
-  background-color: rgba(0, 0, 0, 0.25) !important;
+  background-color: rgba(10, 30, 48, 0.85) !important;
   border-color: rgba(0, 200, 255, 0.2) !important;
   box-shadow: none !important;
   .el-input__inner {
     color: #E2F0FE !important;
     &::placeholder { color: rgba(200, 218, 240, 0.4) !important; }
   }
+}
+
+// 下拉选择框
+.el-select-dropdown,
+.el-popper.is-light,
+.el-select__popper {
+  background: rgba(10, 30, 48, 0.95) !important;
+  border: 1px solid rgba(0, 200, 255, 0.25) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5) !important;
+}
+
+.el-select-dropdown__item {
+  color: #c8dce8 !important;
+  background: transparent !important;
+
+  &.hover,
+  &:hover {
+    background: rgba(0, 200, 255, 0.1) !important;
+    color: #e9f7ff !important;
+  }
+
+  &.selected {
+    color: #00e5ff !important;
+    font-weight: 700;
+  }
+}
+
+.el-select-dropdown__empty {
+  color: #7a9cc0 !important;
+  background: rgba(10, 30, 48, 0.95) !important;
+}
+
+.el-popper.is-light .el-popper__arrow::before {
+  background: rgba(10, 30, 48, 0.95) !important;
+  border-color: rgba(0, 200, 255, 0.25) !important;
 }
 
 // 标签
