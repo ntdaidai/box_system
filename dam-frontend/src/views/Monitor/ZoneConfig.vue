@@ -127,7 +127,7 @@
           >
             <i :style="{ background: zoneColor(zone) }"></i>
             <strong>{{ zone.zone_name || zoneTypeLabel(zone.zone_type) }}</strong>
-            <span>{{ zone.risk_level }}</span>
+            <span>{{ riskLevelLabel(zone.risk_level) }}</span>
           </button>
         </div>
 
@@ -148,9 +148,9 @@
             </el-form-item>
             <el-form-item label="风险等级">
               <el-select v-model="selectedZone.risk_level">
-                <el-option label="LOW" value="LOW" />
-                <el-option label="MEDIUM" value="MEDIUM" />
-                <el-option label="HIGH" value="HIGH" />
+                <el-option label="低风险" value="LOW" />
+                <el-option label="中风险" value="MEDIUM" />
+                <el-option label="高风险" value="HIGH" />
               </el-select>
             </el-form-item>
           </div>
@@ -201,6 +201,14 @@ const overlayWidth = computed(() => Number(stageImageRef.value?.naturalWidth) ||
 const overlayHeight = computed(() => Number(stageImageRef.value?.naturalHeight) || 1080)
 const selectedZone = computed(() => zones.value.find((zone) => zone.zone_id === selectedZoneId.value) || null)
 const draftPolyline = computed(() => draftPoints.value.map((point) => `${point.x * overlayWidth.value},${point.y * overlayHeight.value}`).join(' '))
+
+function riskLevelLabel(level) {
+  return ({
+    LOW: '低风险',
+    MEDIUM: '中风险',
+    HIGH: '高风险',
+  })[level] || '低风险'
+}
 
 async function loadCameras() {
   const response = await getCameraList()

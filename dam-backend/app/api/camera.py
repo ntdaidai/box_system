@@ -10,6 +10,7 @@ import json
 import re
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import List, Literal, Optional
 
@@ -23,9 +24,12 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field, model_validator
 
 from app.core.config import settings
+from app.core.cache import invalidate_cache
 from app.core.database import get_db
 from app.core.security import require_auth
+from app.models.alarm import Alarm
 from app.models.analysis_report import AnalysisReport
+from app.models.safety_event import SafetyEvent, SafetyEventLog
 from app.models.user import User
 from app.services.camera_stream import CameraStream, camera_manager
 from app.services.camera_config import normalize_camera_source
@@ -154,6 +158,11 @@ class DetectResponse(BaseModel):
     message: Optional[str] = None
 
 
+class SafetyEventActionRequest(BaseModel):
+    action_type: Literal["acknowledge", "dispatch_staff", "close"]
+    remark: Optional[str] = Field(None, max_length=500)
+
+
 VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 PEER_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{8,80}$")
 
@@ -263,6 +272,14 @@ def _report_markdown(report: dict) -> str:
     else:
         lines.append("- 今日无联动动作")
     return "\n".join(lines)
+
+
+def _safety_action_message(action_type: str) -> str:
+    return {
+        "acknowledge": "工作人员已确认告警",
+        "dispatch_staff": "已派出工作人员现场处置",
+        "close": "工作人员手动关闭事件",
+    }[action_type]
 
 
 def _validate_peer_id(peer_id: str) -> str:
@@ -712,6 +729,73 @@ async def get_today_safety_report(
         db.refresh(record)
         report["report_id"] = record.id
     return DetectResponse(code=200, data=report)
+
+
+@router.post(
+    "/safety/events/{event_id}/action",
+    response_model=DetectResponse,
+    summary="记录安全事件人工处置动作",
+)
+async def record_safety_event_action(
+    event_id: str,
+    payload: SafetyEventActionRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_auth),
+):
+    event = db.query(SafetyEvent).filter(SafetyEvent.event_id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="安全事件不存在")
+
+    now = dt.datetime.now()
+    operator = getattr(user, "username", None) or "UNKNOWN"
+    action_name = {
+        "acknowledge": "event_acknowledged",
+        "dispatch_staff": "staff_dispatched",
+        "close": "event_manual_closed",
+    }[payload.action_type]
+    log = SafetyEventLog(
+        action_id=uuid.uuid4().hex,
+        event_id=event.event_id,
+        action_type=action_name,
+        risk_level=event.risk_level,
+        status="success",
+        message=_safety_action_message(payload.action_type),
+        payload={
+            "operator": operator,
+            "remark": payload.remark,
+        },
+        create_time=now,
+    )
+    db.add(log)
+
+    alarm = db.query(Alarm).filter(Alarm.alarm_code == event.event_id).first()
+    if payload.action_type in {"acknowledge", "close"} and alarm:
+        alarm.handle_status = 1
+        alarm.handle_user = operator
+        alarm.handle_time = now
+        alarm.handle_remark = payload.remark or _safety_action_message(payload.action_type)
+
+    if payload.action_type == "close":
+        event.state = "RESOLVED"
+        event.resolved_at = now
+        event.resolve_reason = "manual_close"
+
+    db.commit()
+    if payload.action_type == "close":
+        get_safety_event_engine().resolve_event(
+            event.event_id,
+            reason="manual_close",
+            now=now.timestamp(),
+        )
+    await invalidate_cache("alarm:*")
+    return DetectResponse(
+        code=200,
+        data={
+            "event_id": event.event_id,
+            "action_type": action_name,
+            "message": _safety_action_message(payload.action_type),
+        },
+    )
 
 
 @router.get(

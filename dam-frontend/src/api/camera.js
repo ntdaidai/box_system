@@ -148,6 +148,24 @@ export function saveCameraZones(cameraId, zones) {
   return request.put(`/v1/camera/${encodeURIComponent(cameraId)}/zones`, { zones })
 }
 
+export function getSafetyEvents(params = {}) {
+  return request.get('/v1/camera/safety/events', {
+    params,
+    localCache: false,
+  })
+}
+
+export function getTodaySafetyReport(params = {}) {
+  return request.get('/v1/camera/safety/report/today', {
+    params,
+    localCache: false,
+  })
+}
+
+export function recordSafetyEventAction(eventId, data) {
+  return request.post(`/v1/camera/safety/events/${encodeURIComponent(eventId)}/action`, data)
+}
+
 export function getLatestDetection(cameraId) {
   return request.get(`/v1/camera/${cameraId}/detections/latest`, {
     localCache: false,

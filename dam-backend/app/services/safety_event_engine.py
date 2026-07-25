@@ -310,6 +310,40 @@ class SafetyEventEngine:
             "events": events,
         }
 
+    def resolve_event(
+        self,
+        event_id: str,
+        *,
+        reason: str = "manual_close",
+        now: Optional[float] = None,
+    ) -> bool:
+        now = float(now if now is not None else time.time())
+        with self._lock:
+            matched = False
+            for key, track in list(self.store.tracks.items()):
+                if track.event_id != event_id:
+                    continue
+                self._resolve(track, now, reason)
+                self.store.upsert_track(key, track)
+                matched = True
+            if not matched:
+                snapshot = self.store.snapshot()
+                event = dict(snapshot["events"].get(event_id) or {})
+                if not event:
+                    return False
+                event.update(
+                    {
+                        "state": STATE_RESOLVED,
+                        "resolved_at": now,
+                        "updated_at": now,
+                        "resolve_reason": reason,
+                    }
+                )
+                self.store.create_or_update_event(event)
+                matched = True
+            self.store.save()
+            return matched
+
     def _observations(
         self,
         camera_id: str,
@@ -824,6 +858,9 @@ def get_safety_event_engine() -> SafetyEventEngine:
 class _SafetyEventEngineProxy:
     def process_detection_payload(self, *args: Any, **kwargs: Any) -> List[Dict[str, Any]]:
         return get_safety_event_engine().process_detection_payload(*args, **kwargs)
+
+    def resolve_event(self, *args: Any, **kwargs: Any) -> bool:
+        return get_safety_event_engine().resolve_event(*args, **kwargs)
 
 
 safety_event_engine = _SafetyEventEngineProxy()

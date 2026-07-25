@@ -1,10 +1,7 @@
 <template>
   <div class="unified-sensors">
-    <section class="live-carousel" @mouseenter="pauseLiveCarousel" @mouseleave="resumeLiveCarousel">
-      <button type="button" class="carousel-arrow left" @click.stop="scrollLiveCards(-1)">
-        <el-icon><ArrowLeft /></el-icon>
-      </button>
-      <div ref="liveTrackRef" class="live-grid">
+    <section class="live-carousel">
+      <div class="live-grid">
         <button
           v-for="card in liveCards"
           :key="card.key"
@@ -38,16 +35,12 @@
           </div>
         </button>
       </div>
-      <button type="button" class="carousel-arrow right" @click.stop="scrollLiveCards(1)">
-        <el-icon><ArrowRight /></el-icon>
-      </button>
     </section>
 
     <section class="history-panel">
       <div class="history-header">
         <div class="history-title">
           <h3>历史记录</h3>
-          <span>{{ activeTabMeta.subtitle }}；实时卡片每 5 秒刷新，历史图表按半小时或 30 分钟窗口刷新</span>
         </div>
         <div class="history-controls">
           <button
@@ -171,7 +164,6 @@
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
-import { ArrowLeft, ArrowRight } from '@element-plus/icons-vue'
 import {
   getAllSensorRealtime,
   getRainTrends,
@@ -191,7 +183,6 @@ const WARNING_RMS = 0.10
 const ALARM_RMS = 0.15
 
 const chartRef = ref(null)
-const liveTrackRef = ref(null)
 const realtimeData = ref({})
 const vibrationProcessed = ref({})
 const activeCardKey = ref('temp_humidity')
@@ -220,8 +211,6 @@ let realtimeTimer = null
 let refreshTimer = null
 let summaryTimer = null
 let resizeHandler = null
-let liveCarouselFrame = null
-let liveCarouselPaused = false
 let requestSerial = 0
 let isMounted = false
 let lastPointerPixel = null
@@ -684,42 +673,6 @@ const retryHistory = () => {
   loadHistory(currentQuery(), true)
 }
 
-const liveCardStride = () => {
-  const track = liveTrackRef.value
-  const firstCard = track?.querySelector?.('.live-card')
-  if (!track || !firstCard) return 372
-  const gap = Number.parseFloat(getComputedStyle(track).columnGap || getComputedStyle(track).gap || '12')
-  return firstCard.getBoundingClientRect().width + (Number.isFinite(gap) ? gap : 12)
-}
-
-const startLiveCarousel = () => {
-  if (liveCarouselFrame) cancelAnimationFrame(liveCarouselFrame)
-  const tick = () => {
-    const track = liveTrackRef.value
-    if (track && !liveCarouselPaused && track.scrollWidth > track.clientWidth + 4) {
-      track.scrollLeft += 0.32
-      if (track.scrollLeft >= track.scrollWidth - track.clientWidth - 2) {
-        track.scrollTo({ left: 0, behavior: 'smooth' })
-      }
-    }
-    liveCarouselFrame = requestAnimationFrame(tick)
-  }
-  liveCarouselFrame = requestAnimationFrame(tick)
-}
-
-const pauseLiveCarousel = () => {
-  liveCarouselPaused = true
-}
-
-const resumeLiveCarousel = () => {
-  liveCarouselPaused = false
-}
-
-const scrollLiveCards = (direction) => {
-  pauseLiveCarousel()
-  liveTrackRef.value?.scrollBy({ left: liveCardStride() * direction, behavior: 'smooth' })
-}
-
 const normalizeLegacyVibrationRow = (row = {}) => {
   const timestamp = toNumber(row.timestamp ?? row.time)
   if (timestamp === null) return null
@@ -835,6 +788,18 @@ const formatXAxisLabel = (value) => {
     ? date.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', year: '2-digit', month: 'numeric', day: 'numeric' })
     : date.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric' })
 }
+
+const formatZoomDateLabel = (value) => {
+  const date = new Date(Number(value))
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleDateString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).replace(/\//g, '-')
+}
+
 const tooltipFormatter = (params) => {
   const item = (Array.isArray(params) ? params : [params]).find(entry => entry.value?.[1] != null)
   if (!item) return ''
@@ -900,11 +865,14 @@ const handleChartWheel = (event) => {
   if (!Number.isFinite(center) || currentEnd <= currentStart) return
 
   const zoomIn = Number(event.wheelDelta) > 0
-  const factor = zoomIn ? 0.78 : 1.24
+  const currentSpan = currentEnd - currentStart
   const minSpan = DAY
   const maxSpan = dataEnd - dataStart
-  let nextSpan = Math.min(maxSpan, Math.max(minSpan, (currentEnd - currentStart) * factor))
-  const leftRatio = (center - currentStart) / (currentEnd - currentStart)
+  if ((zoomIn && currentSpan <= minSpan + MINUTE) || (!zoomIn && currentSpan >= maxSpan - HOUR)) return
+
+  const factor = zoomIn ? 0.78 : 1.24
+  let nextSpan = Math.min(maxSpan, Math.max(minSpan, currentSpan * factor))
+  const leftRatio = (center - currentStart) / currentSpan
   let nextStart = center - nextSpan * leftRatio
   let nextEnd = nextStart + nextSpan
 
@@ -916,6 +884,7 @@ const handleChartWheel = (event) => {
     nextEnd = dataEnd
     nextStart = dataEnd - nextSpan
   }
+  if (Math.abs(nextStart - currentStart) < MINUTE && Math.abs(nextEnd - currentEnd) < MINUTE) return
 
   chart.dispatchAction({
     type: 'dataZoom',
@@ -934,8 +903,8 @@ const handleChartWheel = (event) => {
 const thresholdMarkLines = () => {
   if (activeHistoryTab.value !== 'vibration') return []
   const data = []
-  if (thresholdVisibility.warning) data.push({ yAxis: WARNING_RMS, lineStyle: { color: '#e6a23c', type: 'dashed' }, label: { show: true, formatter: '预警 0.10g', color: '#e6a23c' } })
-  if (thresholdVisibility.alarm) data.push({ yAxis: ALARM_RMS, lineStyle: { color: '#f56c6c', type: 'dashed' }, label: { show: true, formatter: '报警 0.15g', color: '#f56c6c' } })
+  if (thresholdVisibility.warning) data.push({ yAxis: WARNING_RMS, lineStyle: { color: '#e6a23c', type: 'dashed' }, label: { show: false } })
+  if (thresholdVisibility.alarm) data.push({ yAxis: ALARM_RMS, lineStyle: { color: '#f56c6c', type: 'dashed' }, label: { show: false } })
   return data
 }
 
@@ -1001,6 +970,7 @@ const fullChartOption = () => {
           handleStyle: { color: '#8fbfff', borderColor: '#d8e8ff' },
           moveHandleStyle: { color: '#5aa7ff' },
           textStyle: { color: '#9fb6d3' },
+          labelFormatter: value => formatZoomDateLabel(value),
           brushSelect: false,
           filterMode: 'none',
           minValueSpan: DAY,
@@ -1295,7 +1265,6 @@ onMounted(async () => {
     if (isMounted) loadSummary()
   }, 2200)
   realtimeTimer = setInterval(fetchRealtime, 5000)
-  startLiveCarousel()
 })
 
 onUnmounted(() => {
@@ -1304,7 +1273,6 @@ onUnmounted(() => {
   if (realtimeTimer) clearInterval(realtimeTimer)
   if (refreshTimer) clearTimeout(refreshTimer)
   if (summaryTimer) clearTimeout(summaryTimer)
-  if (liveCarouselFrame) cancelAnimationFrame(liveCarouselFrame)
   if (resizeHandler) window.removeEventListener('resize', resizeHandler)
   if (chart && !chart.isDisposed()) chart.dispose()
   chart = null
@@ -1322,28 +1290,19 @@ onUnmounted(() => {
   position: relative;
   margin-bottom: 12px;
   overflow: hidden;
-  padding: 0 42px;
+  padding: 0;
 }
 
 .live-grid {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
-  overflow-x: auto;
+  overflow-x: hidden;
   overflow-y: hidden;
-  scroll-snap-type: x mandatory;
-  scroll-behavior: smooth;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-  mask-image: linear-gradient(90deg, transparent 0, #000 26px, #000 calc(100% - 26px), transparent 100%);
-}
-
-.live-grid::-webkit-scrollbar {
-  display: none;
 }
 
 .live-card {
   min-width: 0;
-  flex: 0 0 clamp(320px, 30vw, 460px);
   min-height: 166px;
   padding: 16px;
   display: flex;
@@ -1358,7 +1317,6 @@ onUnmounted(() => {
   text-align: left;
   cursor: pointer;
   transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
-  scroll-snap-align: start;
 }
 
 .live-card:hover,
@@ -1371,44 +1329,6 @@ onUnmounted(() => {
 .live-card.ok { border-top: 3px solid #67c23a; }
 .live-card.warn { border-top: 3px solid #e6a23c; }
 .live-card.danger { border-top: 3px solid #f56c6c; }
-
-.carousel-arrow {
-  position: absolute;
-  top: 50%;
-  z-index: 6;
-  width: 34px;
-  height: 72px;
-  display: grid;
-  place-items: center;
-  border: 1px solid rgba(76, 166, 224, 0.3);
-  border-radius: 8px;
-  background: rgba(7, 24, 42, 0.86);
-  color: #9bdcf0;
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
-  cursor: pointer;
-  opacity: 0;
-  transform: translateY(-50%) scale(0.92);
-  transition: opacity 0.18s ease, transform 0.18s ease, background 0.18s ease;
-}
-
-.carousel-arrow.left {
-  left: 0;
-}
-
-.carousel-arrow.right {
-  right: 0;
-}
-
-.live-carousel:hover .carousel-arrow {
-  opacity: 1;
-  transform: translateY(-50%) scale(1);
-}
-
-.carousel-arrow:hover {
-  border-color: rgba(114, 205, 249, 0.55);
-  background: rgba(11, 44, 70, 0.96);
-  color: #dffbff;
-}
 
 .card-head,
 .card-foot {
@@ -1829,8 +1749,8 @@ onUnmounted(() => {
 }
 
 @media (max-width: 1280px) {
-  .live-card {
-    flex-basis: calc((100% - 12px) / 2);
+  .live-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -1851,8 +1771,8 @@ onUnmounted(() => {
 }
 
 @media (max-width: 640px) {
-  .live-card {
-    flex-basis: 88vw;
+  .live-grid {
+    grid-template-columns: 1fr;
   }
 
   .metric-row {

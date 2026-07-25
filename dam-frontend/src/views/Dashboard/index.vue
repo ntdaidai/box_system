@@ -16,10 +16,7 @@
     </el-row>
 
     <!-- 第二行：传感器实时数据卡片 -->
-    <div class="sensor-carousel" @mouseenter="pauseSensorCarousel" @mouseleave="resumeSensorCarousel">
-      <button type="button" class="carousel-arrow left" @click.stop="scrollSensorCards(-1)">
-        <el-icon><ArrowLeft /></el-icon>
-      </button>
+    <div class="sensor-carousel">
       <div ref="sensorTrackRef" class="sensor-row" aria-label="传感器实时数据">
         <div class="sensor-card-slot" v-for="s in sensorCards" :key="s.key">
           <div class="sensor-data-card" @click="router.push(s.path)">
@@ -44,9 +41,6 @@
           </div>
         </div>
       </div>
-      <button type="button" class="carousel-arrow right" @click.stop="scrollSensorCards(1)">
-        <el-icon><ArrowRight /></el-icon>
-      </button>
     </div>
 
     <!-- 第三行：系统状态 + 告警分布 -->
@@ -293,8 +287,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   Monitor, CircleCheck, Warning, WarningFilled,
-  Cpu, Clock, Timer, Connection, FolderOpened, Menu, Odometer, Aim,
-  ArrowLeft, ArrowRight
+  Cpu, Clock, Timer, Connection, FolderOpened, Menu, Odometer, Aim
 } from '@element-plus/icons-vue'
 import { getSystemInfo, getAllSensorRealtime, getDeviceStatus, getAlarmStatistics, getAlarmList } from '@/api/dashboard'
 import { getVibrationProcessed } from '@/api/sensor'
@@ -358,7 +351,6 @@ let vibrationTimer = null
 let cacheUpdateHandler = null
 let sensorPagePreloadTask = null
 let sensorCarouselFrame = null
-let sensorCarouselPaused = false
 const sensorTrackRef = ref(null)
 
 // ==================== 传感器卡片配置 ====================
@@ -706,7 +698,7 @@ const sensorCardStride = () => {
 }
 
 // 自动滚动速度（像素/帧，越小越慢，建议 0.15~0.25）
-const SCROLL_SPEED = 0.2
+const SCROLL_SPEED = 0.34
 // 滚动到末尾后回到起点前的停顿时间（毫秒）
 const LOOP_PAUSE_MS = 2000
 let sensorCarouselLooping = false
@@ -717,7 +709,7 @@ const startSensorCarousel = () => {
   const tick = () => {
     const track = sensorTrackRef.value
     // 检查是否需要滚动（内容宽度大于容器宽度）
-    if (track && !sensorCarouselPaused && !sensorCarouselLooping) {
+    if (track && !sensorCarouselLooping) {
       const needScroll = track.scrollWidth > track.clientWidth + 10
       if (needScroll) {
         track.scrollLeft += SCROLL_SPEED
@@ -736,16 +728,7 @@ const startSensorCarousel = () => {
   sensorCarouselFrame = requestAnimationFrame(tick)
 }
 
-const pauseSensorCarousel = () => {
-  sensorCarouselPaused = true
-}
-
-const resumeSensorCarousel = () => {
-  sensorCarouselPaused = false
-}
-
 const scrollSensorCards = (direction) => {
-  pauseSensorCarousel()
   sensorTrackRef.value?.scrollBy({ left: sensorCardStride() * direction, behavior: 'smooth' })
 }
 
@@ -916,7 +899,7 @@ onUnmounted(() => {
   margin-bottom: 14px;
   overflow: hidden;
   z-index: 10;
-  padding: 0 42px;
+  padding: 0;
 }
 
 .sensor-row {
@@ -940,44 +923,6 @@ onUnmounted(() => {
 .sensor-card-slot {
   min-width: 0;
   scroll-snap-align: start;
-}
-
-.carousel-arrow {
-  position: absolute;
-  top: 50%;
-  z-index: 6;
-  width: 34px;
-  height: 72px;
-  display: grid;
-  place-items: center;
-  border: 1px solid rgba(0, 200, 255, 0.28);
-  border-radius: 8px;
-  background: rgba(7, 24, 42, 0.86);
-  color: #9bdcf0;
-  box-shadow: 0 12px 26px rgba(0, 7, 18, 0.32), inset 0 1px rgba(255, 255, 255, 0.04);
-  cursor: pointer;
-  opacity: 0;
-  transform: translateY(-50%) scale(0.92);
-  transition: opacity 0.18s ease, transform 0.18s ease, background 0.18s ease;
-}
-
-.carousel-arrow.left {
-  left: 0;
-}
-
-.carousel-arrow.right {
-  right: 0;
-}
-
-.sensor-carousel:hover .carousel-arrow {
-  opacity: 1;
-  transform: translateY(-50%) scale(1);
-}
-
-.carousel-arrow:hover {
-  border-color: rgba(0, 229, 255, 0.5);
-  background: rgba(11, 44, 70, 0.96);
-  color: #dffbff;
 }
 
 /* ========== 系统状态+告警分布行 ========== */

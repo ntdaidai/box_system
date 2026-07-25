@@ -34,7 +34,6 @@ def _alarm_to_dict(a: Alarm) -> dict:
 
 
 @router.get("/list", response_model=PageResult)
-@cached(ttl=60, prefix="alarm:list")
 async def list_alarms(
     query: PageQuery = Depends(),
     db: Session = Depends(get_db),
@@ -61,7 +60,6 @@ async def list_alarms(
 
 
 @router.get("/statistics", response_model=Result)
-@cached(ttl=30, prefix="alarm:statistics")
 async def alarm_statistics(
     db: Session = Depends(get_db),
 ):

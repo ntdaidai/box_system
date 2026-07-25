@@ -151,6 +151,20 @@
             active-text="算法调试"
             inactive-text="值守视图"
           />
+          <el-button
+            class="ops-ghost-button"
+            :disabled="!currentCameraId"
+            @click="openEmergencyBroadcast"
+          >
+            <el-icon><Connection /></el-icon>应急喊话
+          </el-button>
+          <el-button
+            class="ops-ghost-button"
+            :loading="reportLoading"
+            @click="openPatrolReport(false)"
+          >
+            <el-icon><Files /></el-icon>今日报告
+          </el-button>
           <el-button class="ops-ghost-button" @click="goZoneConfig">
             <el-icon><Crop /></el-icon>AI规则配置
           </el-button>
@@ -878,6 +892,57 @@
       :event="broadcastTargetEvent"
       @played="handleBroadcastPlayed"
     />
+    <el-drawer
+      v-model="reportDrawerVisible"
+      title="今日巡逻报告"
+      size="520px"
+      class="patrol-report-drawer"
+    >
+      <div v-if="patrolReport" class="patrol-report">
+        <header>
+          <span>{{ patrolReport.date }}</span>
+          <strong>{{ patrolReport.camera_id || '全部摄像头' }}</strong>
+        </header>
+        <div class="report-stats">
+          <div><small>事件总数</small><b>{{ patrolReport.total_events || 0 }}</b></div>
+          <div><small>已闭环</small><b>{{ patrolReport.resolved_events || 0 }}</b></div>
+          <div><small>未闭环</small><b>{{ patrolReport.open_events || 0 }}</b></div>
+        </div>
+        <div class="report-risk-grid">
+          <div class="risk-low"><span>低风险</span><b>{{ reportRiskCounts.LOW || 0 }}</b></div>
+          <div class="risk-medium"><span>中风险</span><b>{{ reportRiskCounts.MEDIUM || 0 }}</b></div>
+          <div class="risk-high"><span>高风险</span><b>{{ reportRiskCounts.HIGH || 0 }}</b></div>
+        </div>
+        <section class="report-section">
+          <h3>联动动作</h3>
+          <p v-if="!Object.keys(reportActionCounts).length">今日暂无联动动作</p>
+          <div v-else class="action-count-list">
+            <span v-for="[type, count] in Object.entries(reportActionCounts)" :key="type">
+              {{ actionTypeText(type) }} <b>{{ count }}</b>
+            </span>
+          </div>
+        </section>
+        <section class="report-section">
+          <h3>事件明细</h3>
+          <p v-if="!reportEvents.length">今日暂无安全事件</p>
+          <article v-for="event in reportEvents" :key="event.event_id" class="report-event">
+            <b :class="riskThemeClass(event.risk_level)">{{ riskLevelText(event.risk_level) }}</b>
+            <div>
+              <strong>{{ eventTypeFromZoneType(event.zone_type) }}</strong>
+              <small>{{ event.event_id }}</small>
+              <small>{{ formatEventTime(event.started_at) }} / {{ stateText(event.state) }}</small>
+            </div>
+          </article>
+        </section>
+      </div>
+      <el-empty v-else description="暂无报告数据" />
+      <template #footer>
+        <el-button @click="reportDrawerVisible = false">关闭</el-button>
+        <el-button type="primary" :loading="reportSaving" @click="openPatrolReport(true)">
+          保存到报告库
+        </el-button>
+      </template>
+    </el-drawer>
   </div>
 </template>
 
@@ -892,6 +957,8 @@ import {
 import {
   addCamera, createStreamTicket, createVideoDetection, deleteVideoDetectionJob,
   detectImage, getCameraList, getCameraStatus, getCameraZones, getModelStatus,
+  getTodaySafetyReport,
+  recordSafetyEventAction,
   getVideoDetectionResult, getVideoDetectionStatus, saveCameraZones,
   setDetectionEnabled, snapshotDetect,
 } from '@/api/camera'
@@ -924,6 +991,10 @@ const nowTick = ref(Date.now())
 const eventActionState = ref({})
 const broadcastDialogVisible = ref(false)
 const broadcastTargetEvent = ref(null)
+const reportDrawerVisible = ref(false)
+const reportLoading = ref(false)
+const reportSaving = ref(false)
+const patrolReport = ref(null)
 const zoneOptions = [
   { label: '警戒区', value: 'warning_zone' },
   { label: '亲水区', value: 'waterside_zone' },
@@ -1012,6 +1083,9 @@ const imageClassifications = computed(() => normalizeClassifications(uploadResul
 const imagePrediction = computed(() => primaryClassification(uploadResult.value))
 const videoClassifications = computed(() => normalizeClassifications(videoSample.value))
 const videoPrediction = computed(() => primaryClassification(videoSample.value))
+const reportRiskCounts = computed(() => patrolReport.value?.risk_counts || {})
+const reportActionCounts = computed(() => patrolReport.value?.action_counts || {})
+const reportEvents = computed(() => Array.isArray(patrolReport.value?.events) ? patrolReport.value.events : [])
 const telemetryEmptyText = computed(() => {
   if (!detectionEnabled.value) return `启动${analysisTaskLabel.value}后在此显示实时结果`
   return analysisTask.value === 'detect'
@@ -1222,23 +1296,78 @@ function handleBroadcastPlayed({ event, result }) {
   setEventAction(event, 'broadcast', result === 'PARTIAL_SUCCESS' ? '部分喊话成功' : '人工喊话已执行')
 }
 
+function openEmergencyBroadcast() {
+  broadcastTargetEvent.value = {
+    event_id: null,
+    camera_id: currentCameraId.value,
+    camera_name: currentCamera.value?.name || currentCameraId.value,
+    event_type: '应急人工喊话',
+    risk_level: overallRiskLevel.value === 'NONE' ? 'LOW' : overallRiskLevel.value,
+  }
+  broadcastDialogVisible.value = true
+}
+
+async function openPatrolReport(persist = false) {
+  if (persist) reportSaving.value = true
+  else reportLoading.value = true
+  try {
+    const response = await getTodaySafetyReport({
+      camera_id: currentCameraId.value || undefined,
+      persist,
+    })
+    patrolReport.value = response.data || null
+    reportDrawerVisible.value = true
+    if (persist) ElMessage.success('今日巡逻报告已保存到报告库')
+  } finally {
+    reportLoading.value = false
+    reportSaving.value = false
+  }
+}
+
+function actionTypeText(type) {
+  return ({
+    event_created: '事件创建',
+    risk_changed: '风险变化',
+    broadcast_requested: '广播驱离',
+    push_requested: '告警推送',
+    drone_dispatch_requested: '无人机派飞',
+    staff_task_requested: '现场处置',
+    event_resolved: '事件关闭',
+  })[type] || type
+}
+
 function viewEvent(event) {
   ElMessage.info(`事件 ${event.event_id} 已进入详情查看`)
 }
 
-function acknowledgeEvent(event) {
+async function acknowledgeEvent(event) {
+  if (!event.event_id) return
+  await recordSafetyEventAction(event.event_id, {
+    action_type: 'acknowledge',
+    remark: '实时监控页确认告警',
+  })
   setEventAction(event, 'disposal', '值班员已确认')
-  ElMessage.success('告警已确认')
+  ElMessage.success('告警已确认并写入处置日志')
 }
 
-function dispatchStaff(event) {
+async function dispatchStaff(event) {
+  if (!event.event_id) return
+  await recordSafetyEventAction(event.event_id, {
+    action_type: 'dispatch_staff',
+    remark: '实时监控页派出现场人员',
+  })
   setEventAction(event, 'disposal', '已派现场人员')
   ElMessage.success('已记录派员处置')
 }
 
-function closeEvent(event) {
+async function closeEvent(event) {
+  if (!event.event_id) return
+  await recordSafetyEventAction(event.event_id, {
+    action_type: 'close',
+    remark: '实时监控页手动关闭',
+  })
   setEventAction(event, 'disposal', '已关闭')
-  ElMessage.success('事件关闭操作已记录')
+  ElMessage.success('事件已关闭并写入处置日志')
 }
 
 function sourceTypeLabel(type) {
@@ -1996,7 +2125,7 @@ h1, h2, h3, p { margin-top: 0; }
 
 .video-stage, .video-empty { position: relative; height: min(760px, calc(100vh - 132px)); min-height: 520px; overflow: hidden; border: 0; border-radius: 8px; background: #030b12; }
 .video-stream, .box-overlay, .zone-overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
-.video-stream { object-fit: cover; }
+.video-stream { object-fit: contain; background: #030b12; }
 .box-overlay { z-index: 3; pointer-events: none; }
 .zone-overlay { z-index: 4; pointer-events: none; }
 .zone-overlay.drawing { cursor: crosshair; pointer-events: auto; }
@@ -2332,7 +2461,9 @@ h1, h2, h3, p { margin-top: 0; }
 .ops-video-stage > .scan-grid,
 .ops-video-stage > .corner,
 .ops-video-stage > .stage-badge,
-.ops-video-stage > .alert-ribbon {
+.ops-video-stage > .alert-ribbon,
+.ops-video-stage > .video-topline,
+.ops-video-stage > .risk-banner {
   display: none;
 }
 .ops-detection-box,
@@ -2730,6 +2861,124 @@ h1, h2, h3, p { margin-top: 0; }
 .source-type-group :deep(.el-radio-button) { flex: 1; }
 .source-type-group :deep(.el-radio-button__inner) { width: 100%; }
 .source-help { margin: -6px 0 0; color: #71899a; font-size: 11px; line-height: 1.6; }
+
+.patrol-report {
+  display: grid;
+  gap: 14px;
+  color: #dbeaf1;
+}
+.patrol-report header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 8px;
+  background: #061927;
+}
+.patrol-report header span {
+  color: #84a8ba;
+  font: 700 13px monospace;
+}
+.patrol-report header strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.report-stats,
+.report-risk-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.report-stats div,
+.report-risk-grid div {
+  padding: 12px;
+  border: 1px solid rgba(83, 159, 191, 0.14);
+  border-radius: 8px;
+  background: #081f30;
+}
+.report-stats small,
+.report-risk-grid span {
+  display: block;
+  color: #7898aa;
+  font-size: 11px;
+}
+.report-stats b,
+.report-risk-grid b {
+  display: block;
+  margin-top: 6px;
+  color: #eefaff;
+  font: 800 22px monospace;
+}
+.report-risk-grid .risk-low b { color: #f1c45b; }
+.report-risk-grid .risk-medium b { color: #f08a3c; }
+.report-risk-grid .risk-high b { color: #ff4d5e; }
+.report-section {
+  padding: 12px;
+  border: 1px solid rgba(83, 159, 191, 0.14);
+  border-radius: 8px;
+  background: #061927;
+}
+.report-section h3 {
+  margin: 0 0 10px;
+  color: #eefaff;
+  font-size: 14px;
+}
+.report-section p {
+  margin: 0;
+  color: #7898aa;
+  font-size: 12px;
+}
+.action-count-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.action-count-list span {
+  padding: 6px 9px;
+  color: #b9d6e4;
+  border-radius: 6px;
+  background: rgba(39, 91, 114, 0.38);
+}
+.action-count-list b {
+  margin-left: 5px;
+  color: var(--cyan);
+}
+.report-event {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid rgba(83, 159, 191, 0.12);
+}
+.report-event:first-of-type { border-top: none; }
+.report-event > b {
+  align-self: start;
+  padding: 5px 7px;
+  text-align: center;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+}
+.report-event > b.risk-low { color: #f1c45b; }
+.report-event > b.risk-medium { color: #f08a3c; }
+.report-event > b.risk-high { color: #ff4d5e; }
+.report-event div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.report-event strong,
+.report-event small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.report-event small {
+  color: #7898aa;
+  font-size: 11px;
+}
 
 @media (max-width: 1200px) {
   .ops-header { grid-template-columns: 1fr; align-items: stretch; }
