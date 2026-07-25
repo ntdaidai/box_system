@@ -125,14 +125,13 @@ const menuMap = {
       ],
     },
     {
-      name: '视频监控',
-      path: '/monitor/camera',
+      name: '视频监测',
       icon: VideoCamera,
-    },
-    {
-      name: '图片/视频分析',
-      path: '/monitor/camera/image',
-      icon: DataAnalysis,
+      children: [
+        { name: '视频监控', path: '/monitor/camera', icon: VideoCamera },
+        { name: '区域配置', path: '/monitor/camera/zones', icon: Setting },
+        { name: '图片/视频分析', path: '/monitor/camera/image', icon: DataAnalysis },
+      ],
     },
     {
       name: '无人机监测',

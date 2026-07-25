@@ -1321,6 +1321,8 @@ onUnmounted(() => {
 .live-carousel {
   position: relative;
   margin-bottom: 12px;
+  overflow: hidden;
+  padding: 0 42px;
 }
 
 .live-grid {
@@ -1328,10 +1330,11 @@ onUnmounted(() => {
   gap: 12px;
   overflow-x: auto;
   overflow-y: hidden;
-  scroll-snap-type: x proximity;
+  scroll-snap-type: x mandatory;
   scroll-behavior: smooth;
   scrollbar-width: none;
   -ms-overflow-style: none;
+  mask-image: linear-gradient(90deg, transparent 0, #000 26px, #000 calc(100% - 26px), transparent 100%);
 }
 
 .live-grid::-webkit-scrollbar {
@@ -1340,7 +1343,7 @@ onUnmounted(() => {
 
 .live-card {
   min-width: 0;
-  flex: 0 0 calc((100% - 36px) / 4);
+  flex: 0 0 clamp(320px, 30vw, 460px);
   min-height: 166px;
   padding: 16px;
   display: flex;
@@ -1354,15 +1357,15 @@ onUnmounted(() => {
   color: inherit;
   text-align: left;
   cursor: pointer;
-  transition: 0.2s ease;
+  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
   scroll-snap-align: start;
 }
 
 .live-card:hover,
 .live-card.active {
   border-color: rgba(54, 151, 255, 0.72);
-  box-shadow: 0 10px 28px rgba(18, 86, 170, 0.24);
-  transform: translateY(-1px);
+  background: linear-gradient(145deg, rgba(18, 42, 72, 0.98), rgba(10, 29, 52, 0.98));
+  box-shadow: inset 0 0 0 1px rgba(74, 182, 255, 0.08);
 }
 
 .live-card.ok { border-top: 3px solid #67c23a; }
@@ -1373,14 +1376,14 @@ onUnmounted(() => {
   position: absolute;
   top: 50%;
   z-index: 6;
-  width: 32px;
-  height: 58px;
+  width: 34px;
+  height: 72px;
   display: grid;
   place-items: center;
-  border: 1px solid rgba(185, 176, 160, 0.58);
-  border-radius: 5px;
-  background: rgba(205, 195, 178, 0.88);
-  color: #4a3d31;
+  border: 1px solid rgba(76, 166, 224, 0.3);
+  border-radius: 8px;
+  background: rgba(7, 24, 42, 0.86);
+  color: #9bdcf0;
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
   cursor: pointer;
   opacity: 0;
@@ -1389,11 +1392,11 @@ onUnmounted(() => {
 }
 
 .carousel-arrow.left {
-  left: 4px;
+  left: 0;
 }
 
 .carousel-arrow.right {
-  right: 4px;
+  right: 0;
 }
 
 .live-carousel:hover .carousel-arrow {
@@ -1402,7 +1405,9 @@ onUnmounted(() => {
 }
 
 .carousel-arrow:hover {
-  background: rgba(224, 216, 201, 0.96);
+  border-color: rgba(114, 205, 249, 0.55);
+  background: rgba(11, 44, 70, 0.96);
+  color: #dffbff;
 }
 
 .card-head,

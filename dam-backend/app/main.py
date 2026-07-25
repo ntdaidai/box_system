@@ -19,6 +19,7 @@ from app.api import (
     sensor,
     vision,
     vision_detect,
+    broadcast,
 )
 from app.core.config import settings
 from app.core.database import init_db
@@ -28,8 +29,11 @@ from app.services.vision_detector import vision_detector
 from app.services.vision_model_registry import vision_model_registry
 from app.services.camera_stream import camera_manager
 from app.services.camera_config import load_camera_configs
+from app.services.camera_zone_store import get_camera_zone_store
 from app.services.video_detection import video_detection_service
 from app.services.eca_engine import set_main_event_loop, eca_scheduler, eca_engine
+from app.services.broadcast_service import broadcast_service
+from app.services.safety_event_engine import safety_event_bus
 
 import httpx
 import traceback
@@ -112,6 +116,7 @@ async def lifespan(app: FastAPI):
     # 未配置真实地址时保持空列表，页面会明确展示待接入状态。
     try:
         camera_configs = load_camera_configs(settings)
+        zone_store = get_camera_zone_store()
         for camera_config in camera_configs:
             camera_manager.add_camera(
                 camera_id=camera_config["camera_id"],
@@ -119,6 +124,11 @@ async def lifespan(app: FastAPI):
                 name=camera_config["name"],
                 auto_start=camera_config["auto_start"],
             )
+            camera_obj = camera_manager.get_camera(camera_config["camera_id"])
+            if camera_obj:
+                stored_zones = zone_store.get(camera_config["camera_id"])
+                if stored_zones:
+                    camera_obj.set_detection_zones(stored_zones)
         logger.info(f"已加载 {len(camera_configs)} 路摄像头配置")
     except Exception as e:
         logger.error(f"摄像头配置加载失败，本次不启动视频源: {e}")
@@ -128,6 +138,7 @@ async def lifespan(app: FastAPI):
 
     # 注册视觉检测结果变化回调（实时触发多源事件检查）
     vision_detector.register_callback(eca_engine.on_vision_detection_updated)
+    safety_event_bus.subscribe(broadcast_service.handle_safety_event_action)
 
     # 启动传感器数据采集
     sensor_collector.start_collection()
@@ -183,6 +194,7 @@ app.include_router(eca.router, prefix="/api/v1/eca", tags=["ECA规则引擎"])
 app.include_router(vision_detect.router, prefix="/api/v1/vision/detect", tags=["视觉检测结果"])
 app.include_router(image.router, prefix="/api/v1/image", tags=["图片管理"])
 app.include_router(camera.router, prefix="/api/v1/camera", tags=["摄像头与检测"])
+app.include_router(broadcast.router, prefix="/api/broadcast", tags=["广播联动"])
 app.include_router(document.router, tags=["文档管理"])
 app.include_router(onlyoffice.router)
 

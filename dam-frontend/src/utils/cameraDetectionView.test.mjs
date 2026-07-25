@@ -91,7 +91,12 @@ test('normalizes virtual zones and matches detector anchors inside areas', () =>
       {
         id: 'fish_area',
         type: 'illegal_fishing',
-        rect: { x: 0.1, y: 0.1, width: 0.5, height: 0.5 },
+        polygon_points: [
+          { x: 0.1, y: 0.1 },
+          { x: 0.6, y: 0.1 },
+          { x: 0.6, y: 0.6 },
+          { x: 0.1, y: 0.6 },
+        ],
       },
       { id: 'bad', type: 'unknown', rect: { x: 0, y: 0, width: 1, height: 1 } },
     ],
@@ -114,7 +119,17 @@ test('normalizes virtual zones and matches detector anchors inside areas', () =>
   assert.equal(
     detectionInZone(
       person,
-      { ...zones[0], type: 'person_intrusion', rect: { x: 0.1, y: 0.4, width: 0.2, height: 0.2 } },
+      {
+        ...zones[0],
+        zone_type: 'WARNING_ZONE',
+        type: 'WARNING_ZONE',
+        polygon_points: [
+          { x: 0.1, y: 0.4 },
+          { x: 0.3, y: 0.4 },
+          { x: 0.3, y: 0.6 },
+          { x: 0.1, y: 0.6 },
+        ],
+      },
       1000,
       1000,
     ),

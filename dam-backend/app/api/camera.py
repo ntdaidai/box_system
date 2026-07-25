@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import datetime as dt
 import json
 import re
 import tempfile
@@ -18,13 +19,18 @@ import numpy as np
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from loguru import logger
+from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field, model_validator
 
 from app.core.config import settings
+from app.core.database import get_db
 from app.core.security import require_auth
+from app.models.analysis_report import AnalysisReport
 from app.models.user import User
 from app.services.camera_stream import CameraStream, camera_manager
 from app.services.camera_config import normalize_camera_source
+from app.services.camera_zone_store import get_camera_zone_store
+from app.services.safety_event_engine import get_safety_event_engine
 from app.services.stream_ticket import stream_ticket_store
 from app.services.video_detection import video_detection_service
 from app.services.vision_model_registry import vision_model_registry
@@ -73,12 +79,50 @@ class DetectionZoneRect(BaseModel):
     height: float = Field(..., gt=0.0, le=1.0)
 
 
+class DetectionZonePoint(BaseModel):
+    x: float = Field(..., ge=0.0, le=1.0)
+    y: float = Field(..., ge=0.0, le=1.0)
+
+
 class DetectionZoneRequest(BaseModel):
     id: Optional[str] = Field(None, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    zone_id: Optional[str] = Field(None, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     name: str = Field("", max_length=80)
-    type: Literal["person_intrusion", "illegal_fishing"] = "person_intrusion"
+    zone_name: str = Field("", max_length=80)
+    type: Optional[Literal[
+        "person_intrusion",
+        "warning_zone",
+        "waterside_zone",
+        "wading_zone",
+        "illegal_fishing",
+        "WARNING_ZONE",
+        "WATERFRONT_ZONE",
+        "WATER_ZONE",
+    ]] = None
+    zone_type: Optional[Literal[
+        "WARNING_ZONE",
+        "WATERFRONT_ZONE",
+        "WATER_ZONE",
+        "person_intrusion",
+        "warning_zone",
+        "waterside_zone",
+        "wading_zone",
+        "illegal_fishing",
+    ]] = None
+    camera_id: Optional[str] = Field(None, max_length=50)
+    polygon_points: Optional[List[DetectionZonePoint]] = Field(None, min_length=3, max_length=20)
+    risk_level: Optional[Literal["LOW", "MEDIUM", "HIGH"]] = None
+    trigger_seconds: Optional[float] = Field(None, ge=0.0, le=3600.0)
     enabled: bool = True
-    rect: DetectionZoneRect
+    rect: Optional[DetectionZoneRect] = None
+
+    @model_validator(mode="after")
+    def validate_shape(self):
+        if not self.polygon_points and self.rect is None:
+            raise ValueError("必须提供 polygon_points 或兼容的 rect")
+        if not (self.zone_type or self.type):
+            self.zone_type = "WARNING_ZONE"
+        return self
 
 
 class DetectionZonesRequest(BaseModel):
@@ -174,6 +218,51 @@ def _validate_webrtc_camera(camera_id: str) -> CameraStream:
             detail="WebRTC 实时播放目前仅支持 RTSP/RTSPS 视频源",
         )
     return camera
+
+
+def _day_bounds(day: Optional[str] = None) -> tuple[str, float, float]:
+    if day:
+        try:
+            parsed = dt.datetime.strptime(day, "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="日期格式必须为 YYYY-MM-DD") from exc
+    else:
+        parsed = dt.date.today()
+    start = dt.datetime.combine(parsed, dt.time.min).timestamp()
+    end = start + 86400
+    return parsed.isoformat(), start, end
+
+
+def _report_risk_level(report: dict) -> str:
+    counts = report.get("risk_counts") or {}
+    if counts.get("HIGH"):
+        return "high"
+    if counts.get("MEDIUM"):
+        return "medium"
+    return "low"
+
+
+def _report_markdown(report: dict) -> str:
+    counts = report.get("risk_counts") or {}
+    actions = report.get("action_counts") or {}
+    lines = [
+        f"# {report['date']} 今日巡逻报告",
+        "",
+        f"- 摄像头: {report.get('camera_id') or '全部'}",
+        f"- 安全事件总数: {report.get('total_events', 0)}",
+        f"- 低风险: {counts.get('LOW', 0)}",
+        f"- 中风险: {counts.get('MEDIUM', 0)}",
+        f"- 高风险: {counts.get('HIGH', 0)}",
+        f"- 已闭环: {report.get('resolved_events', 0)}",
+        f"- 未闭环: {report.get('open_events', 0)}",
+        "",
+        "## 联动动作",
+    ]
+    if actions:
+        lines.extend(f"- {key}: {value}" for key, value in sorted(actions.items()))
+    else:
+        lines.append("- 今日无联动动作")
+    return "\n".join(lines)
 
 
 def _validate_peer_id(peer_id: str) -> str:
@@ -353,7 +442,12 @@ async def detect_uploaded_image(
             f"{payload.task_type}_{time.strftime('%Y%m%d_%H%M%S')}_"
             f"{time.time_ns()}.jpg"
         )
-        minio_url = minio_service.upload_image(jpeg_bytes, "image/jpeg", filename)
+        minio_url = minio_service.upload_image(
+            jpeg_bytes,
+            "image/jpeg",
+            filename,
+            folder="media-analysis/images",
+        )
     except Exception as exc:
         logger.warning(f"检测结果上传 MinIO 失败: {exc}")
 
@@ -405,6 +499,23 @@ async def create_video_detection_job(
             target,
             settings.MAX_VIDEO_SIZE_MB * 1024 * 1024,
         )
+        source_video_url = None
+        try:
+            from app.services.minio_service import minio_service
+
+            date_str = time.strftime("%Y-%m-%d")
+            clean_stem = re.sub(r"[^A-Za-z0-9_-]+", "_", Path(safe_name).stem)[:80] or "video"
+            object_name = (
+                f"media-analysis/videos/{date_str}/"
+                f"{clean_stem}_{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns()}{suffix}"
+            )
+            source_video_url = minio_service.upload_file(
+                str(target),
+                object_name=object_name,
+                content_type=file.content_type or "application/octet-stream",
+            )
+        except Exception as exc:
+            logger.warning(f"上传视频到 MinIO 失败: {exc}")
         job = video_detection_service.submit(
             file_path=str(target),
             filename=safe_name,
@@ -414,6 +525,7 @@ async def create_video_detection_job(
             confidence=confidence,
             iou=settings.YOLO_IOU,
             sample_fps=sample_fps,
+            source_video_url=source_video_url,
         )
     except ValueError as exc:
         target.unlink(missing_ok=True)
@@ -485,6 +597,11 @@ async def add_camera(
         source=payload.source,
         name=payload.name,
     )
+    if success:
+        camera = _get_camera_or_404(payload.camera_id)
+        stored_zones = get_camera_zone_store().get(payload.camera_id)
+        if stored_zones:
+            camera.set_detection_zones(stored_zones)
     if not success:
         raise HTTPException(status_code=409, detail="摄像头 ID 已存在")
     return DetectResponse(
@@ -544,6 +661,60 @@ async def get_detected_stream(
 
 
 @router.get(
+    "/safety/events",
+    response_model=DetectResponse,
+    summary="获取安全事件列表",
+)
+async def get_safety_events(
+    camera_id: Optional[str] = Query(None, max_length=50),
+    day: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    _user: User = Depends(require_auth),
+):
+    since = until = None
+    if day:
+        _, since, until = _day_bounds(day)
+    events = get_safety_event_engine().list_events(
+        camera_id=camera_id,
+        since=since,
+        until=until,
+    )
+    return DetectResponse(code=200, data={"events": events})
+
+
+@router.get(
+    "/safety/report/today",
+    response_model=DetectResponse,
+    summary="生成今日巡逻报告",
+)
+async def get_today_safety_report(
+    camera_id: Optional[str] = Query(None, max_length=50),
+    persist: bool = Query(False, description="是否保存到 analysis_report"),
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_auth),
+):
+    day, since, until = _day_bounds()
+    report = get_safety_event_engine().build_daily_report(
+        day=day,
+        since=since,
+        until=until,
+        camera_id=camera_id,
+    )
+    if persist:
+        record = AnalysisReport(
+            report_title=f"{day} 今日巡逻报告",
+            report_type="daily",
+            risk_level=_report_risk_level(report),
+            content=_report_markdown(report),
+            ai_model="safety_event_engine",
+        )
+        db.add(record)
+        db.commit()
+        db.refresh(record)
+        report["report_id"] = record.id
+    return DetectResponse(code=200, data=report)
+
+
+@router.get(
     "/{camera_id}/zones",
     response_model=DetectResponse,
     summary="获取摄像头虚拟检测区域",
@@ -572,8 +743,15 @@ async def save_detection_zones(
     camera = _get_camera_or_404(camera_id)
     try:
         zones = camera.set_detection_zones(
-            [zone.model_dump(exclude_none=True) for zone in payload.zones]
+            [
+                {
+                    **zone.model_dump(exclude_none=True),
+                    "camera_id": camera_id,
+                }
+                for zone in payload.zones
+            ]
         )
+        get_camera_zone_store().save(camera_id, zones)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return DetectResponse(

@@ -8,13 +8,27 @@ MinIO 对象存储服务
 """
 
 import io
+import mimetypes
 import uuid
+from datetime import datetime
 from datetime import timedelta
+from pathlib import Path
 from typing import Optional
-from loguru import logger
+try:
+    from loguru import logger
+except ImportError:  # pragma: no cover - standalone tests may not install app deps.
+    import logging
 
-from minio import Minio
-from minio.error import S3Error
+    logger = logging.getLogger(__name__)
+
+try:
+    from minio import Minio
+    from minio.error import S3Error
+except ImportError:  # pragma: no cover - MinIO is optional outside deployment.
+    Minio = None
+
+    class S3Error(Exception):
+        pass
 
 from app.core.config import settings
 
@@ -28,6 +42,10 @@ class MinioService:
 
     def connect(self):
         """连接 MinIO"""
+        if Minio is None:
+            logger.warning("MinIO 依赖未安装，文件上传功能将不可用")
+            self.client = None
+            return
         try:
             self.client = Minio(
                 settings.MINIO_ENDPOINT,
@@ -53,7 +71,8 @@ class MinioService:
         self,
         image_data: bytes,
         content_type: str = "image/jpeg",
-        filename: str = None
+        filename: str = None,
+        folder: str = "",
     ) -> Optional[str]:
         """
         上传图片到 MinIO
@@ -74,8 +93,6 @@ class MinioService:
             return None
 
         try:
-            from datetime import datetime
-
             # 生成文件路径：{日期}/{UUID}.{ext}
             ext = content_type.split("/")[-1]
             date_str = datetime.now().strftime("%Y-%m-%d")
@@ -84,27 +101,85 @@ class MinioService:
                 filename = f"{uuid.uuid4().hex}.{ext}"
 
             object_name = f"{date_str}/{filename}"
+            if folder:
+                object_name = f"{folder.strip('/')}/{object_name}"
 
-            # 上传文件
-            data_stream = io.BytesIO(image_data)
-            self.client.put_object(
-                self.bucket_name,
-                object_name,
-                data_stream,
-                len(image_data),
+            return self.upload_bytes(
+                image_data,
+                object_name=object_name,
                 content_type=content_type,
             )
-
-            # 生成访问 URL
-            url = f"http://{settings.MINIO_ENDPOINT}/{self.bucket_name}/{object_name}"
-            logger.info(f"图片上传成功: {object_name}")
-            return url
 
         except S3Error as e:
             logger.error(f"MinIO 上传失败: {e}")
             return None
         except Exception as e:
             logger.error(f"图片上传异常: {e}")
+            return None
+
+    def upload_bytes(
+        self,
+        data: bytes,
+        *,
+        object_name: str,
+        content_type: str = "application/octet-stream",
+    ) -> Optional[str]:
+        """上传字节数据到指定对象路径."""
+        if not self.client:
+            logger.error("MinIO 未连接")
+            return None
+        try:
+            clean_name = object_name.strip("/")
+            data_stream = io.BytesIO(data)
+            self.client.put_object(
+                self.bucket_name,
+                clean_name,
+                data_stream,
+                len(data),
+                content_type=content_type,
+            )
+            url = f"http://{settings.MINIO_ENDPOINT}/{self.bucket_name}/{clean_name}"
+            logger.info(f"文件上传成功: {clean_name}")
+            return url
+        except S3Error as e:
+            logger.error(f"MinIO 上传失败: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"文件上传异常: {e}")
+            return None
+
+    def upload_file(
+        self,
+        file_path: str,
+        *,
+        object_name: str,
+        content_type: Optional[str] = None,
+    ) -> Optional[str]:
+        """上传本地文件到指定对象路径，适合视频等大文件."""
+        if not self.client:
+            logger.error("MinIO 未连接")
+            return None
+        try:
+            path = Path(file_path)
+            guessed = mimetypes.guess_type(path.name)[0]
+            final_content_type = content_type or guessed or "application/octet-stream"
+            clean_name = object_name.strip("/")
+            with path.open("rb") as data_stream:
+                self.client.put_object(
+                    self.bucket_name,
+                    clean_name,
+                    data_stream,
+                    path.stat().st_size,
+                    content_type=final_content_type,
+                )
+            url = f"http://{settings.MINIO_ENDPOINT}/{self.bucket_name}/{clean_name}"
+            logger.info(f"文件上传成功: {clean_name}")
+            return url
+        except S3Error as e:
+            logger.error(f"MinIO 上传失败: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"文件上传异常: {e}")
             return None
 
     def get_presigned_url(self, filename: str, expires: timedelta = timedelta(hours=1)) -> Optional[str]:

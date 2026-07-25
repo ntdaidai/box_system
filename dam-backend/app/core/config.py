@@ -4,6 +4,9 @@ from typing import List
 from loguru import logger
 
 
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+
 def _require_env(key: str, is_secret: bool = False) -> str:
     """要求必须设置的环境变量，未设置时打印错误并退出"""
     value = os.getenv(key)
@@ -137,6 +140,44 @@ class Settings:
     CAMERA_AUTO_START: bool = _get_env("CAMERA_AUTO_START", "true").lower() == "true"
     CAMERA_DETECTION_FPS: float = float(_get_env("CAMERA_DETECTION_FPS", "5"))
     CAMERA_JPEG_QUALITY: int = int(_get_env("CAMERA_JPEG_QUALITY", "80"))
+    CAMERA_ZONE_STORE_PATH: str = _get_env(
+        "CAMERA_ZONE_STORE_PATH",
+        os.path.join(BASE_DIR, "data", "camera_zones.json"),
+    )
+    CAMERA_ZONE_STORE_BACKEND: str = _get_env("CAMERA_ZONE_STORE_BACKEND", "mysql")
+    SAFETY_EVENT_INTRUSION_SECONDS: float = float(
+        _get_env("SAFETY_EVENT_INTRUSION_SECONDS", "10")
+    )
+    SAFETY_EVENT_MEDIUM_AFTER_LOW_SECONDS: float = float(
+        _get_env("SAFETY_EVENT_MEDIUM_AFTER_LOW_SECONDS", "30")
+    )
+    SAFETY_EVENT_LOST_GRACE_SECONDS: float = float(
+        _get_env("SAFETY_EVENT_LOST_GRACE_SECONDS", "3")
+    )
+    SAFETY_EVENT_RESOLVE_CLEAR_SECONDS: float = float(
+        _get_env("SAFETY_EVENT_RESOLVE_CLEAR_SECONDS", "10")
+    )
+    SAFETY_EVENT_TRACK_IOU_THRESHOLD: float = float(
+        _get_env("SAFETY_EVENT_TRACK_IOU_THRESHOLD", "0.2")
+    )
+    SAFETY_EVENT_TRACK_MEMORY_SECONDS: float = float(
+        _get_env("SAFETY_EVENT_TRACK_MEMORY_SECONDS", "20")
+    )
+    SAFETY_EVENT_STATE_STORE_PATH: str = _get_env(
+        "SAFETY_EVENT_STATE_STORE_PATH",
+        os.path.join(BASE_DIR, "data", "safety_events_state.json"),
+    )
+    SAFETY_EVENT_STORE_BACKEND: str = _get_env("SAFETY_EVENT_STORE_BACKEND", "mysql")
+    SAFETY_EVENT_SNAPSHOT_DIR: str = _get_env(
+        "SAFETY_EVENT_SNAPSHOT_DIR",
+        os.path.join(BASE_DIR, "data", "safety_snapshots"),
+    )
+    BROADCAST_ENABLE_LOCAL_TEST_DEVICE: bool = (
+        _get_env("BROADCAST_ENABLE_LOCAL_TEST_DEVICE", "true").lower() == "true"
+    )
+    BROADCAST_AUTO_COOLDOWN_SECONDS: int = int(
+        _get_env("BROADCAST_AUTO_COOLDOWN_SECONDS", "60")
+    )
 
     # WebRTC Streamer 的 HTTP API 不直接暴露给浏览器，由 camera API 代理信令。
     WEBRTC_STREAMER_URL: str = _get_env(

@@ -13,15 +13,63 @@ import cv2
 import numpy as np
 from loguru import logger
 
+from app.services.safety_event_engine import safety_event_engine
+
 
 CaptureFactory = Callable[[str], Any]
 LOCAL_VIDEO_PATTERN = re.compile(r"^/dev/video\d+$")
-ZONE_TYPES = {"person_intrusion", "illegal_fishing"}
+ZONE_TYPES = {
+    "WARNING_ZONE",
+    "WATERFRONT_ZONE",
+    "WATER_ZONE",
+    "person_intrusion",
+    "warning_zone",
+    "waterside_zone",
+    "wading_zone",
+    "illegal_fishing",
+}
+ZONE_TYPE_ALIASES = {
+    "person_intrusion": "WARNING_ZONE",
+    "warning_zone": "WARNING_ZONE",
+    "WARNING_ZONE": "WARNING_ZONE",
+    "waterside_zone": "WATERFRONT_ZONE",
+    "waterfront_zone": "WATERFRONT_ZONE",
+    "WATERFRONT_ZONE": "WATERFRONT_ZONE",
+    "wading_zone": "WATER_ZONE",
+    "water_zone": "WATER_ZONE",
+    "WATER_ZONE": "WATER_ZONE",
+    "illegal_fishing": "illegal_fishing",
+}
 ZONE_LABELS = {
-    "person_intrusion": "人员入侵",
+    "WARNING_ZONE": "警戒区人员停留",
+    "WATERFRONT_ZONE": "亲水区人员进入",
+    "WATER_ZONE": "涉水区人员进入",
     "illegal_fishing": "违规捕鱼",
 }
+PERSON_ZONE_TYPES = {
+    "WARNING_ZONE",
+    "WATERFRONT_ZONE",
+    "WATER_ZONE",
+}
 ZONE_TARGET_CLASS_NAMES = {
+    "WARNING_ZONE": {
+        "person",
+        "normal_person",
+        "fishing_person",
+        "person_in_water",
+    },
+    "WATERFRONT_ZONE": {
+        "person",
+        "normal_person",
+        "fishing_person",
+        "person_in_water",
+    },
+    "WATER_ZONE": {
+        "person",
+        "normal_person",
+        "fishing_person",
+        "person_in_water",
+    },
     "person_intrusion": {
         "person",
         "normal_person",
@@ -36,8 +84,23 @@ ZONE_TARGET_CLASS_NAMES = {
     },
 }
 ZONE_TARGET_CLASS_IDS = {
+    "WARNING_ZONE": {1, 2, 3},
+    "WATERFRONT_ZONE": {1, 2, 3},
+    "WATER_ZONE": {1, 2, 3},
     "person_intrusion": {1, 2, 3},
     "illegal_fishing": {0},
+}
+DEFAULT_ZONE_RISK = {
+    "WARNING_ZONE": "LOW",
+    "WATERFRONT_ZONE": "MEDIUM",
+    "WATER_ZONE": "HIGH",
+    "illegal_fishing": "MEDIUM",
+}
+DEFAULT_ZONE_TRIGGER_SECONDS = {
+    "WARNING_ZONE": 10.0,
+    "WATERFRONT_ZONE": 0.0,
+    "WATER_ZONE": 0.0,
+    "illegal_fishing": 0.0,
 }
 DEFAULT_FFMPEG_CAPTURE_OPTIONS = (
     "rtsp_transport;tcp|"
@@ -72,37 +135,93 @@ def _clip_unit(value: Any) -> float:
     return max(0.0, min(float(value), 1.0))
 
 
-def normalize_detection_zone(zone: Dict[str, Any], fallback_id: str = "") -> Dict[str, Any]:
-    zone_type = str(zone.get("type") or "person_intrusion")
-    if zone_type not in ZONE_TYPES:
-        raise ValueError("区域类型仅支持 person_intrusion 或 illegal_fishing")
+def normalize_zone_type(zone_type: Any) -> str:
+    raw = str(zone_type or "WARNING_ZONE")
+    normalized = ZONE_TYPE_ALIASES.get(raw) or ZONE_TYPE_ALIASES.get(raw.lower())
+    if normalized not in ZONE_TYPES:
+        raise ValueError("区域类型仅支持 WARNING_ZONE、WATERFRONT_ZONE 或 WATER_ZONE")
+    return normalized
 
-    rect = zone.get("rect") or {}
+
+def _normalize_point(point: Any) -> Dict[str, float]:
+    if isinstance(point, dict):
+        x = point.get("x")
+        y = point.get("y")
+    elif isinstance(point, (list, tuple)) and len(point) >= 2:
+        x, y = point[0], point[1]
+    else:
+        raise ValueError("多边形顶点格式无效")
+    return {"x": round(_clip_unit(x), 6), "y": round(_clip_unit(y), 6)}
+
+
+def _rect_to_polygon(rect: Dict[str, Any]) -> List[Dict[str, float]]:
     x = _clip_unit(rect.get("x", 0))
     y = _clip_unit(rect.get("y", 0))
-    width = _clip_unit(rect.get("width", 0))
-    height = _clip_unit(rect.get("height", 0))
-    width = min(width, 1.0 - x)
-    height = min(height, 1.0 - y)
+    width = min(_clip_unit(rect.get("width", 0)), 1.0 - x)
+    height = min(_clip_unit(rect.get("height", 0)), 1.0 - y)
     if width <= 0.001 or height <= 0.001:
         raise ValueError("区域宽高必须大于 0")
+    return [
+        {"x": round(x, 6), "y": round(y, 6)},
+        {"x": round(x + width, 6), "y": round(y, 6)},
+        {"x": round(x + width, 6), "y": round(y + height, 6)},
+        {"x": round(x, 6), "y": round(y + height, 6)},
+    ]
 
-    zone_id = str(zone.get("id") or fallback_id or f"{zone_type}_{time.time_ns()}")
+
+def _polygon_bounds(points: List[Dict[str, float]]) -> Dict[str, float]:
+    xs = [point["x"] for point in points]
+    ys = [point["y"] for point in points]
+    x1, x2 = min(xs), max(xs)
+    y1, y2 = min(ys), max(ys)
+    return {
+        "x": round(x1, 6),
+        "y": round(y1, 6),
+        "width": round(x2 - x1, 6),
+        "height": round(y2 - y1, 6),
+    }
+
+
+def normalize_detection_zone(zone: Dict[str, Any], fallback_id: str = "") -> Dict[str, Any]:
+    zone_type = normalize_zone_type(zone.get("zone_type") or zone.get("type"))
+    raw_points = zone.get("polygon_points") or zone.get("points")
+    if raw_points:
+        polygon_points = [_normalize_point(point) for point in raw_points]
+    else:
+        polygon_points = _rect_to_polygon(zone.get("rect") or {})
+    if len(polygon_points) < 3:
+        raise ValueError("多边形区域至少需要 3 个顶点")
+
+    rect = _polygon_bounds(polygon_points)
+    if rect["width"] <= 0.001 or rect["height"] <= 0.001:
+        raise ValueError("多边形区域面积过小")
+
+    zone_id = str(zone.get("zone_id") or zone.get("id") or fallback_id or f"{zone_type}_{time.time_ns()}")
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", zone_id):
         raise ValueError("区域 ID 只能包含字母、数字、下划线和短横线")
 
-    name = str(zone.get("name") or ZONE_LABELS[zone_type])[:80]
+    name = str(zone.get("zone_name") or zone.get("name") or ZONE_LABELS[zone_type])[:80]
+    risk_level = str(zone.get("risk_level") or DEFAULT_ZONE_RISK[zone_type]).upper()
+    if risk_level not in {"LOW", "MEDIUM", "HIGH"}:
+        raise ValueError("风险等级仅支持 LOW、MEDIUM、HIGH")
+    try:
+        trigger_seconds = max(0.0, float(zone.get("trigger_seconds", DEFAULT_ZONE_TRIGGER_SECONDS[zone_type])))
+    except (TypeError, ValueError):
+        trigger_seconds = DEFAULT_ZONE_TRIGGER_SECONDS[zone_type]
     return {
+        "zone_id": zone_id,
+        "zone_name": name,
+        "zone_type": zone_type,
+        "camera_id": str(zone.get("camera_id") or ""),
+        "polygon_points": polygon_points,
+        "risk_level": risk_level,
+        "trigger_seconds": round(trigger_seconds, 3),
+        "enabled": bool(zone.get("enabled", True)),
+        # Backward-compatible aliases used by older frontend code/tests.
         "id": zone_id,
         "name": name,
         "type": zone_type,
-        "enabled": bool(zone.get("enabled", True)),
-        "rect": {
-            "x": round(x, 6),
-            "y": round(y, 6),
-            "width": round(width, 6),
-            "height": round(height, 6),
-        },
+        "rect": rect,
     }
 
 
@@ -139,18 +258,37 @@ def _detection_anchor_in_zone(
     if x2 <= x1 or y2 <= y1:
         return False
 
-    rect = zone["rect"]
-    zx1 = rect["x"]
-    zy1 = rect["y"]
-    zx2 = zx1 + rect["width"]
-    zy2 = zy1 + rect["height"]
-    if zone["type"] == "person_intrusion":
+    if zone["type"] in PERSON_ZONE_TYPES:
         anchor_x = (x1 + x2) / 2
         anchor_y = y2
     else:
         anchor_x = (x1 + x2) / 2
         anchor_y = (y1 + y2) / 2
-    return zx1 <= anchor_x <= zx2 and zy1 <= anchor_y <= zy2
+    return _point_in_polygon(anchor_x, anchor_y, zone.get("polygon_points") or [])
+
+
+def _point_in_polygon(x: float, y: float, points: List[Dict[str, float]]) -> bool:
+    inside = False
+    if len(points) < 3:
+        return False
+    previous = points[-1]
+    for current in points:
+        xi, yi = current["x"], current["y"]
+        xj, yj = previous["x"], previous["y"]
+        on_edge = (
+            min(xi, xj) <= x <= max(xi, xj)
+            and min(yi, yj) <= y <= max(yi, yj)
+            and abs((x - xi) * (yj - yi) - (y - yi) * (xj - xi)) < 1e-9
+        )
+        if on_edge:
+            return True
+        intersects = ((yi > y) != (yj > y)) and (
+            x < (xj - xi) * (y - yi) / ((yj - yi) or 1e-12) + xi
+        )
+        if intersects:
+            inside = not inside
+        previous = current
+    return inside
 
 
 def evaluate_detection_zones(
@@ -175,6 +313,9 @@ def evaluate_detection_zones(
                     "zone_id": zone["id"],
                     "zone_name": zone["name"],
                     "type": zone_type,
+                    "zone_type": zone_type,
+                    "risk_level": zone.get("risk_level"),
+                    "trigger_seconds": zone.get("trigger_seconds", 0),
                     "message": ZONE_LABELS.get(zone_type, "区域告警"),
                     "detection_index": index,
                     "class_id": detection.get("class_id"),
@@ -492,7 +633,14 @@ class CameraStream:
 
     def get_detection_zones(self) -> List[Dict[str, Any]]:
         with self.lock:
-            return [dict(zone, rect=dict(zone["rect"])) for zone in self.detection_zones]
+            return [
+                dict(
+                    zone,
+                    rect=dict(zone["rect"]),
+                    polygon_points=[dict(point) for point in zone["polygon_points"]],
+                )
+                for zone in self.detection_zones
+            ]
 
     def disable_detection(self) -> None:
         with self._detection_condition:
@@ -560,6 +708,12 @@ class CameraStream:
                     payload["zones"] = detection_zones
                     payload["alerts"] = evaluate_detection_zones(detection_zones, payload)
                     payload["alert_count"] = len(payload["alerts"])
+                    payload["safety_events"] = safety_event_engine.process_detection_payload(
+                        self.camera_id,
+                        payload,
+                        snapshot_bytes=jpeg,
+                        now=completed_at,
+                    )
             except Exception as exc:
                 logger.exception(f"摄像头 {self.camera_id} 实时分析异常: {exc}")
                 jpeg = None

@@ -51,6 +51,7 @@ class VideoDetectionService:
         confidence: float,
         iou: float,
         sample_fps: float,
+        source_video_url: Optional[str] = None,
     ) -> Dict[str, Any]:
         self._prune()
         now = time.time()
@@ -78,6 +79,7 @@ class VideoDetectionService:
                 "result": None,
                 "_file_path": str(file_path),
                 "task_type": str(task_type),
+                "source_video_url": source_video_url,
                 "_model": model,
                 "_confidence": float(confidence),
                 "_iou": float(iou),
@@ -268,6 +270,7 @@ class VideoDetectionService:
                 "total_occurrences": sum(class_counter.values()),
                 "class_summary": summary,
                 "timeline": timeline,
+                "source_video_url": job.get("source_video_url"),
             }
             with self.lock:
                 current = self.jobs.get(job_id)
@@ -346,6 +349,7 @@ class VideoDetectionService:
                 "duration_s",
                 "processed_samples",
                 "error",
+                "source_video_url",
             )
         }
 

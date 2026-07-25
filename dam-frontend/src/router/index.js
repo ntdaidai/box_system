@@ -61,6 +61,12 @@ const routes = [
             meta: { title: '视频监控' }
           },
           {
+            path: 'camera/zones',
+            name: 'CameraZoneConfig',
+            component: () => import('@/views/Monitor/ZoneConfig.vue'),
+            meta: { title: '区域配置' }
+          },
+          {
             path: 'camera/image',
             name: 'CameraImageAnalysis',
             component: () => import('@/views/Monitor/CameraView.vue'),

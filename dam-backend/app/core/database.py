@@ -1,14 +1,12 @@
-"""SQLAlchemy 数据库引擎与会话管理"""
+"""SQLAlchemy database engine and session management."""
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
 from loguru import logger
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 from app.core.config import settings
 
-# 创建引擎
-# pool_pre_ping=True: 每次从连接池取出连接时先 ping 检测可用性，避免使用已断开的连接
-# pool_recycle=3600: 每小时回收连接，防止 MySQL 默认 8h wait_timeout 导致的断开
+
 engine = create_engine(
     settings.MYSQL_URL,
     pool_pre_ping=True,
@@ -21,22 +19,21 @@ engine = create_engine(
     },
 )
 
-# 会话工厂
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# 声明式基类
 Base = declarative_base()
 
 
 def init_db():
-    """初始化数据库：创建所有表并确保默认管理员存在"""
-    from app.models.user import User
+    """Create tables and ensure required default data exists."""
+    import app.models  # noqa: F401 - register all SQLAlchemy models before create_all
     from app.core.security import hash_password
+    from app.models.user import User
 
     Base.metadata.create_all(bind=engine)
+    _ensure_camera_zone_schema()
+    _ensure_broadcast_schema()
     logger.info("数据库表已初始化")
 
-    # 确保默认管理员存在
     db = SessionLocal()
     try:
         admin = db.query(User).filter(User.username == settings.DEFAULT_ADMIN_USERNAME).first()
@@ -56,9 +53,116 @@ def init_db():
     finally:
         db.close()
 
+    db = SessionLocal()
+    try:
+        from app.services.broadcast_service import broadcast_service
+
+        broadcast_service.ensure_defaults(db)
+    finally:
+        db.close()
+
+
+def _ensure_broadcast_schema():
+    """Best-effort compatibility migration for legacy event_action tables."""
+    inspector = inspect(engine)
+    if "event_action" not in inspector.get_table_names():
+        return
+    existing = {column["name"] for column in inspector.get_columns("event_action")}
+    dialect = engine.dialect.name
+    column_defs = {
+        "action_type": "VARCHAR(32)",
+        "broadcast_event_id": "VARCHAR(128)",
+        "camera_id": "VARCHAR(64)",
+        "device_id": "BIGINT",
+        "template_id": "VARCHAR(64)",
+        "trigger_type": "VARCHAR(16)",
+        "content": "TEXT",
+        "start_time": "DATETIME",
+        "end_time": "DATETIME",
+        "result": "VARCHAR(32)",
+        "error_message": "TEXT",
+        "operator": "VARCHAR(128)",
+    }
+    with engine.begin() as conn:
+        if dialect == "mysql":
+            for ddl in (
+                "ALTER TABLE event_action MODIFY event_id BIGINT NULL",
+                "ALTER TABLE event_action MODIFY flow_id BIGINT NULL",
+            ):
+                try:
+                    conn.execute(text(ddl))
+                except Exception as exc:
+                    logger.warning(f"event_action nullable migration skipped: {exc}")
+        for name, definition in column_defs.items():
+            if name in existing:
+                continue
+            try:
+                conn.execute(text(f"ALTER TABLE event_action ADD COLUMN {name} {definition} NULL"))
+            except Exception as exc:
+                logger.warning(f"event_action add column {name} skipped: {exc}")
+
+
+def _ensure_camera_zone_schema():
+    """Best-effort compatibility migration for persisted polygon zones."""
+    inspector = inspect(engine)
+    if "camera_detection_zone" not in inspector.get_table_names():
+        return
+    existing = {
+        column["name"]
+        for column in inspector.get_columns("camera_detection_zone")
+    }
+    dialect = engine.dialect.name
+    if dialect == "mysql":
+        column_defs = {
+            "zone_id": "VARCHAR(64) NULL COMMENT '前端绘制区域唯一编号'",
+            "polygon_points": "JSON NULL COMMENT '多边形顶点坐标，0-1归一化'",
+            "risk_level": "VARCHAR(16) NOT NULL DEFAULT 'LOW' COMMENT '风险等级: LOW/MEDIUM/HIGH'",
+            "trigger_seconds": "DECIMAL(8,3) NOT NULL DEFAULT 10 COMMENT '触发持续时间秒数'",
+        }
+    else:
+        column_defs = {
+            "zone_id": "VARCHAR(64)",
+            "polygon_points": "JSON",
+            "risk_level": "VARCHAR(16) DEFAULT 'LOW'",
+            "trigger_seconds": "DECIMAL(8,3) DEFAULT 10",
+        }
+    with engine.begin() as conn:
+        for name, definition in column_defs.items():
+            if name in existing:
+                continue
+            try:
+                conn.execute(
+                    text(
+                        f"ALTER TABLE camera_detection_zone ADD COLUMN "
+                        f"{name} {definition}"
+                    )
+                )
+            except Exception as exc:
+                logger.warning(f"camera_detection_zone add column {name} skipped: {exc}")
+        if "zone_id" not in existing:
+            try:
+                if dialect == "mysql":
+                    conn.execute(
+                        text(
+                            "UPDATE camera_detection_zone "
+                            "SET zone_id = CONCAT('zone_', id) "
+                            "WHERE zone_id IS NULL OR zone_id = ''"
+                        )
+                    )
+                else:
+                    conn.execute(
+                        text(
+                            "UPDATE camera_detection_zone "
+                            "SET zone_id = 'zone_' || id "
+                            "WHERE zone_id IS NULL OR zone_id = ''"
+                        )
+                    )
+            except Exception as exc:
+                logger.warning(f"camera_detection_zone zone_id backfill skipped: {exc}")
+
 
 def get_db():
-    """FastAPI 依赖注入：获取数据库会话，请求结束后自动关闭"""
+    """FastAPI dependency: create and close one database session per request."""
     db = SessionLocal()
     try:
         yield db

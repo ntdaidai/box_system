@@ -916,19 +916,21 @@ onUnmounted(() => {
   margin-bottom: 14px;
   overflow: hidden;
   z-index: 10;
+  padding: 0 42px;
 }
 
 .sensor-row {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: minmax(420px, 1fr);
+  grid-auto-columns: clamp(360px, 31vw, 500px);
   gap: 14px;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 0 2px;
-  scroll-snap-type: x proximity;
+  padding: 0 2px 2px;
+  scroll-snap-type: x mandatory;
   scrollbar-width: none;
   -ms-overflow-style: none;
+  mask-image: linear-gradient(90deg, transparent 0, #000 28px, #000 calc(100% - 28px), transparent 100%);
 }
 
 .sensor-row::-webkit-scrollbar {
@@ -944,15 +946,15 @@ onUnmounted(() => {
   position: absolute;
   top: 50%;
   z-index: 6;
-  width: 32px;
-  height: 58px;
+  width: 34px;
+  height: 72px;
   display: grid;
   place-items: center;
-  border: 1px solid rgba(185, 176, 160, 0.58);
-  border-radius: 5px;
-  background: rgba(205, 195, 178, 0.88);
-  color: #4a3d31;
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(0, 200, 255, 0.28);
+  border-radius: 8px;
+  background: rgba(7, 24, 42, 0.86);
+  color: #9bdcf0;
+  box-shadow: 0 12px 26px rgba(0, 7, 18, 0.32), inset 0 1px rgba(255, 255, 255, 0.04);
   cursor: pointer;
   opacity: 0;
   transform: translateY(-50%) scale(0.92);
@@ -960,11 +962,11 @@ onUnmounted(() => {
 }
 
 .carousel-arrow.left {
-  left: 4px;
+  left: 0;
 }
 
 .carousel-arrow.right {
-  right: 4px;
+  right: 0;
 }
 
 .sensor-carousel:hover .carousel-arrow {
@@ -973,7 +975,9 @@ onUnmounted(() => {
 }
 
 .carousel-arrow:hover {
-  background: rgba(224, 216, 201, 0.96);
+  border-color: rgba(0, 229, 255, 0.5);
+  background: rgba(11, 44, 70, 0.96);
+  color: #dffbff;
 }
 
 /* ========== 系统状态+告警分布行 ========== */
@@ -1054,15 +1058,15 @@ onUnmounted(() => {
   border-radius: 8px;
   overflow: hidden;
   cursor: pointer;
-  transition: all 0.3s;
+  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
   height: 100%;
   display: flex;
   flex-direction: column;
 }
 .sensor-data-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 8px 24px rgba(0, 200, 255, 0.2);
-  border-color: rgba(0, 200, 255, 0.6);
+  background: rgba(18, 48, 80, 0.68);
+  box-shadow: inset 0 0 0 1px rgba(0, 229, 255, 0.08);
+  border-color: rgba(0, 200, 255, 0.55);
 }
 .sensor-card-top {
   padding: 14px 16px;
