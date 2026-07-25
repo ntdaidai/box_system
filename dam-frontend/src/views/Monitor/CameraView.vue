@@ -316,6 +316,29 @@
             <b :class="riskThemeClass(overallRiskLevel)">{{ overallRiskText }}</b>
           </div>
 
+          <div class="risk-diagnostics">
+            <div class="diagnostic-heading">
+              <span>实时诊断</span>
+              <small>{{ latestDetectionTimeText }}</small>
+            </div>
+            <div class="diagnostic-grid">
+              <div
+                v-for="item in diagnosticItems"
+                :key="item.label"
+                class="diagnostic-item"
+                :class="item.tone"
+              >
+                <small>{{ item.label }}</small>
+                <strong>{{ item.value }}</strong>
+                <span>{{ item.hint }}</span>
+              </div>
+            </div>
+            <div class="diagnostic-foot">
+              <span>最近目标</span>
+              <strong>{{ latestDetectionClasses }}</strong>
+            </div>
+          </div>
+
           <div v-if="activeRiskEvents.length" class="risk-event-list">
             <article
               v-for="event in activeRiskEvents"
@@ -1050,6 +1073,7 @@ const labelPadding = computed(() => labelFontSize.value * 0.35)
 const labelHeight = computed(() => labelFontSize.value * 1.35)
 const boxStrokeWidth = computed(() => Math.max(2, imageWidth.value / 500))
 const visibleDetections = computed(() => detections.value.filter(isValidDetection))
+const personDetections = computed(() => visibleDetections.value.filter(isPersonDetection))
 const liveAlerts = computed(() => Array.isArray(latestDetection.value.alerts) ? latestDetection.value.alerts : [])
 const liveAlertZoneIds = computed(() => new Set(liveAlerts.value.map((alert) => alert.zone_id)))
 const zonesForOverlay = computed(() => [...detectionZones.value, ...(draftZone.value ? [draftZone.value] : [])])
@@ -1086,6 +1110,58 @@ const videoPrediction = computed(() => primaryClassification(videoSample.value))
 const reportRiskCounts = computed(() => patrolReport.value?.risk_counts || {})
 const reportActionCounts = computed(() => patrolReport.value?.action_counts || {})
 const reportEvents = computed(() => Array.isArray(patrolReport.value?.events) ? patrolReport.value.events : [])
+const engineEventCount = computed(() => (
+  Array.isArray(latestDetection.value.safety_events) ? latestDetection.value.safety_events.length : 0
+))
+const watersideHitCount = computed(() => liveAlerts.value.filter((alert) => isZoneType(alert, ['WATERFRONT_ZONE', 'waterside_zone', 'waterfront_zone'])).length)
+const wadingHitCount = computed(() => liveAlerts.value.filter((alert) => isZoneType(alert, ['WATER_ZONE', 'wading_zone', 'water_zone'])).length)
+const latestDetectionTimeText = computed(() => latestDetection.value.timestamp ? formatDeviceCommTime(latestDetection.value.timestamp) : '--')
+const latestDetectionClasses = computed(() => {
+  if (!visibleDetections.value.length) return '--'
+  return visibleDetections.value
+    .slice(0, 4)
+    .map((detection) => `${detectionName(detection)} ${confidencePercent(detection)}%`)
+    .join(' / ')
+})
+const zoneHitSummary = computed(() => {
+  if (!liveAlerts.value.length) return '暂无区域命中'
+  return liveAlerts.value
+    .slice(0, 3)
+    .map((alert) => `${alert.zone_name || zoneTypeLabel(alert.zone_type || alert.type)} ${riskLevelText(alert.risk_level || 'LOW')}`)
+    .join(' / ')
+})
+const diagnosticItems = computed(() => [
+  {
+    label: '检测到人员',
+    value: String(personDetections.value.length),
+    hint: `总目标 ${visibleDetections.value.length}`,
+    tone: personDetections.value.length ? 'ok' : 'muted',
+  },
+  {
+    label: '区域命中',
+    value: String(liveAlerts.value.length),
+    hint: zoneHitSummary.value,
+    tone: liveAlerts.value.length ? 'warn' : 'muted',
+  },
+  {
+    label: '亲水/涉水',
+    value: `${watersideHitCount.value}/${wadingHitCount.value}`,
+    hint: '亲水命中 / 涉水命中',
+    tone: wadingHitCount.value ? 'high' : watersideHitCount.value ? 'medium' : 'muted',
+  },
+  {
+    label: '事件引擎',
+    value: String(engineEventCount.value),
+    hint: activeRiskEvents.value.length ? `${overallRiskText.value} ${activeRiskEvents.value.length} 起` : '暂无风险事件',
+    tone: activeRiskEvents.value.length ? riskThemeClass(overallRiskLevel.value).replace('risk-', '') : 'muted',
+  },
+  {
+    label: '结果通道',
+    value: detectionEnabled.value ? detectionStatusText.value : '未开启',
+    hint: analysisTask.value === 'detect' ? '目标检测模式' : '当前不是目标检测',
+    tone: detectionEnabled.value && analysisTask.value === 'detect' ? 'ok' : 'muted',
+  },
+])
 const telemetryEmptyText = computed(() => {
   if (!detectionEnabled.value) return `启动${analysisTaskLabel.value}后在此显示实时结果`
   return analysisTask.value === 'detect'
@@ -1127,6 +1203,24 @@ const mediaHeadingDescription = computed(() => (
 
 function riskRank(level) {
   return ({ NONE: 0, LOW: 1, MEDIUM: 2, HIGH: 3 })[level] || 0
+}
+
+function isPersonDetection(detection) {
+  const classId = Number(detection?.class_id)
+  const name = String(detection?.class_name || '').toLowerCase()
+  const nameCn = String(detection?.class_name_cn || '')
+  return [1, 2, 3].includes(classId)
+    || name.includes('person')
+    || nameCn.includes('人员')
+    || nameCn.includes('人')
+}
+
+function isZoneType(alert, candidates) {
+  const values = [
+    String(alert?.zone_type || ''),
+    String(alert?.type || ''),
+  ]
+  return values.some((value) => candidates.includes(value))
 }
 
 function riskLevelText(level) {
@@ -2619,6 +2713,79 @@ h1, h2, h3, p { margin-top: 0; }
 .risk-panel-heading b.risk-low { background: #f1c45b; }
 .risk-panel-heading b.risk-medium { background: #f08a3c; }
 .risk-panel-heading b.risk-high { color: #fff; background: #ff4d5e; }
+.risk-diagnostics {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid rgba(137, 174, 184, 0.14);
+  border-radius: 8px;
+  background: rgba(4, 16, 20, 0.74);
+}
+.diagnostic-heading,
+.diagnostic-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.diagnostic-heading span {
+  color: #edf8fa;
+  font-size: 13px;
+  font-weight: 800;
+}
+.diagnostic-heading small,
+.diagnostic-foot span {
+  color: #7d969c;
+  font-size: 11px;
+}
+.diagnostic-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 9px;
+}
+.diagnostic-item {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(137, 174, 184, 0.1);
+  border-radius: 7px;
+  background: rgba(9, 28, 33, 0.68);
+}
+.diagnostic-item small,
+.diagnostic-item span {
+  display: block;
+  overflow: hidden;
+  color: #809ba1;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.diagnostic-item strong {
+  display: block;
+  margin: 4px 0 3px;
+  color: #dcebed;
+  font: 800 18px/1 "Consolas", "Monaco", monospace;
+}
+.diagnostic-item.ok strong { color: #62d7b1; }
+.diagnostic-item.warn strong,
+.diagnostic-item.medium strong { color: #f08a3c; }
+.diagnostic-item.high strong { color: #ff4d5e; }
+.diagnostic-item.low strong { color: #f1c45b; }
+.diagnostic-item.muted strong { color: #8fa8ad; }
+.diagnostic-foot {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(137, 174, 184, 0.1);
+}
+.diagnostic-foot strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #c9dde2;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .risk-event-list {
   min-height: 0;
   overflow-y: auto;

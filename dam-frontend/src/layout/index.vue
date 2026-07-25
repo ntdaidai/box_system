@@ -129,6 +129,7 @@ const menuMap = {
       icon: VideoCamera,
       children: [
         { name: '视频监控', path: '/monitor/camera', icon: VideoCamera },
+        { name: '设备管理', path: '/monitor/camera/devices', icon: Setting },
         { name: '区域配置', path: '/monitor/camera/zones', icon: Setting },
         { name: '图片/视频分析', path: '/monitor/camera/image', icon: DataAnalysis },
       ],
