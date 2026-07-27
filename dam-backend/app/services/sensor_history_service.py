@@ -21,6 +21,7 @@ from app.services.history_config import (
     ROLLUP_CATCHUP_BUCKETS_PER_RUN,
     build_history_window,
 )
+from app.services.vibration_processor import dominant_freq_from_registers
 
 
 TEMP_EXTREMA_SCHEMA_VERSION = 1
@@ -454,14 +455,6 @@ class SensorHistoryService:
         return numeric if math.isfinite(numeric) else None
 
     @classmethod
-    def _mean_available(cls, values) -> float | None:
-        numeric = [cls._to_float(value) for value in values]
-        numeric = [value for value in numeric if value is not None]
-        if not numeric:
-            return None
-        return round(sum(numeric) / len(numeric), 4)
-
-    @classmethod
     def _vector_magnitude(cls, values) -> float | None:
         numeric = [cls._to_float(value) for value in values]
         numeric = [value for value in numeric if value is not None]
@@ -488,11 +481,7 @@ class SensorHistoryService:
 
         freq = cls._to_float(data.get("dominant_freq"))
         if freq is None:
-            freq = cls._mean_available([
-                data.get("频率X"),
-                data.get("频率Y"),
-                data.get("频率Z"),
-            ])
+            freq = dominant_freq_from_registers(data) or None
 
         temperature = cls._to_float(data.get("temperature"))
         if temperature is None:

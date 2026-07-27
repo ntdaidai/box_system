@@ -72,6 +72,8 @@ services:
       - /usr/sbin/nvidia-smi:/usr/sbin/nvidia-smi:ro
       - /usr/lib/aarch64-linux-gnu/nvidia:/usr/lib/aarch64-linux-gnu/nvidia:ro
       - /proc/device-tree:/proc/device-tree:ro
+      # 挂载宿主机 /proc（只读），用于检测 GPU 推理进程
+      - /proc:/host/proc:ro
       # 挂载 YOLO 模型权重目录
       - /home/jetson/wh_test/roboflow/runs:/models/runs:ro
       - /home/jetson/sep/disaster_idf/yolo26x/models:/models/disaster-classifier:ro

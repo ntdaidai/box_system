@@ -73,6 +73,12 @@ const routes = [
             meta: { title: '区域配置' }
           },
           {
+            path: 'camera/safety',
+            name: 'CameraSafetyClosure',
+            component: () => import('@/views/Monitor/SafetyClosure.vue'),
+            meta: { title: '安全闭环' }
+          },
+          {
             path: 'camera/image',
             name: 'CameraImageAnalysis',
             component: () => import('@/views/Monitor/CameraView.vue'),

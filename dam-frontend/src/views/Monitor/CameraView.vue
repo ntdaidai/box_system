@@ -126,31 +126,7 @@
           </div>
         </div>
 
-        <div class="ops-status-strip">
-          <div class="ops-status" :class="currentCamera?.connected ? 'online' : 'offline'">
-            <small>设备状态</small>
-            <strong>{{ currentCamera?.connected ? '在线' : '离线' }}</strong>
-            <span>{{ formatDeviceCommTime(currentCamera?.last_frame_time) }}</span>
-          </div>
-          <div class="ops-status" :class="detectionEnabled ? 'online' : 'standby'">
-            <small>AI运行</small>
-            <strong>{{ opsDetectionStatusText }}</strong>
-            <span>{{ streamMode === 'webrtc' ? 'WebRTC' : 'MJPEG' }}</span>
-          </div>
-          <div class="ops-status risk" :class="riskThemeClass(overallRiskLevel)">
-            <small>当前风险</small>
-            <strong>{{ overallRiskText }}</strong>
-            <span>{{ activeRiskEvents.length ? `${activeRiskEvents.length} 起事件` : '暂无事件' }}</span>
-          </div>
-        </div>
-
         <div class="ops-header-actions">
-          <el-switch
-            v-model="debugMode"
-            class="debug-switch"
-            active-text="算法调试"
-            inactive-text="值守视图"
-          />
           <el-button
             class="ops-ghost-button"
             :disabled="!currentCameraId"
@@ -1082,12 +1058,6 @@ const showZoneOverlay = computed(() => zoneDrawing.value || detectionZones.value
 const analysisTaskLabel = computed(() => taskTypeLabel(analysisTask.value))
 const selectedModelReady = computed(() => Boolean(modelStatus.value.models?.[analysisTask.value]?.loaded))
 const canToggleDetection = computed(() => Boolean(currentCamera.value?.connected && selectedModelReady.value))
-const opsDetectionStatusText = computed(() => {
-  if (!detectionEnabled.value) return '待机'
-  if (detectionConnectionState.value === 'connected') return '运行中'
-  if (detectionConnectionState.value === 'reconnecting') return '重连中'
-  return '启动中'
-})
 const normalizedSafetyEvents = computed(() => buildRiskEvents())
 const activeRiskEvents = computed(() => normalizedSafetyEvents.value.filter((event) => event.risk_level !== 'NONE' && event.state !== 'RESOLVED'))
 const primaryRiskEvent = computed(() => activeRiskEvents.value[0] || null)
@@ -2433,7 +2403,7 @@ h1, h2, h3, p { margin-top: 0; }
 .ops-header {
   min-height: 82px;
   display: grid;
-  grid-template-columns: minmax(320px, 1fr) auto auto;
+  grid-template-columns: minmax(320px, 1fr) auto;
   align-items: center;
   gap: 14px;
   padding: 12px 14px;
@@ -2467,52 +2437,17 @@ h1, h2, h3, p { margin-top: 0; }
   background: rgba(2, 12, 16, 0.72);
   box-shadow: 0 0 0 1px rgba(137, 174, 184, 0.22) inset;
 }
-.ops-status-strip {
-  display: grid;
-  grid-template-columns: repeat(3, 126px);
-  gap: 8px;
-}
-.ops-status {
-  min-height: 58px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 3px;
-  padding: 8px 10px;
-  border: 1px solid rgba(137, 174, 184, 0.14);
-  border-radius: 7px;
-  background: rgba(5, 18, 22, 0.58);
-}
-.ops-status small,
 .event-state-grid small,
 .debug-panel small {
   color: #7f969b;
   font-size: 10px;
 }
-.ops-status strong {
-  color: #d9edf0;
-  font-size: 15px;
-}
-.ops-status span {
-  overflow: hidden;
-  color: #8fa8ad;
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.ops-status.online strong { color: #62d7b1; }
-.ops-status.offline strong { color: #ff6f7d; }
-.ops-status.standby strong { color: #b9c2c5; }
-.ops-status.risk-low strong { color: #f1c45b; }
-.ops-status.risk-medium strong { color: #f08a3c; }
-.ops-status.risk-high strong { color: #ff4d5e; }
 .ops-header-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
 }
-.debug-switch :deep(.el-switch__label) { color: #91aab0; }
 .ops-ghost-button,
 .action-button {
   color: #c7d8dc;
@@ -3154,7 +3089,6 @@ h1, h2, h3, p { margin-top: 0; }
 
 @media (max-width: 1200px) {
   .ops-header { grid-template-columns: 1fr; align-items: stretch; }
-  .ops-status-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .ops-header-actions { justify-content: space-between; }
   .ops-layout { grid-template-columns: 1fr; }
   .risk-panel { min-height: 420px; }
@@ -3169,7 +3103,6 @@ h1, h2, h3, p { margin-top: 0; }
   .monitor-title-row,
   .ops-header-actions { align-items: stretch; flex-direction: column; }
   .ops-camera-select { width: 100%; }
-  .ops-status-strip { grid-template-columns: 1fr; }
   .risk-banner { grid-template-columns: 1fr; align-items: flex-start; }
   .event-actions { grid-template-columns: 1fr; }
   .debug-panel { grid-template-columns: 1fr 1fr; }

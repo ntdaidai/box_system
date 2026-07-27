@@ -19,20 +19,10 @@
     <div class="sensor-carousel">
       <div class="sensor-carousel-toolbar">
         <div class="sensor-carousel-title">
-          <span>传感器实时数据</span>
-          <strong>{{ sensorCards.length }} 条</strong>
-        </div>
-        <div class="sensor-carousel-actions">
-          <button type="button" class="carousel-btn" aria-label="向左滚动" @click="scrollSensorCards(-1)">
-            <el-icon :size="14"><ArrowLeft /></el-icon>
-          </button>
-          <span>{{ sensorCarouselIndex + 1 }} / {{ sensorCards.length }}</span>
-          <button type="button" class="carousel-btn" aria-label="向右滚动" @click="scrollSensorCards(1)">
-            <el-icon :size="14"><ArrowRight /></el-icon>
-          </button>
+          <span>实时数据</span>
         </div>
       </div>
-      <div ref="sensorTrackRef" class="sensor-row" aria-label="传感器实时数据" @scroll="syncSensorCarouselIndex">
+      <div ref="sensorTrackRef" class="sensor-row" aria-label="传感器实时数据">
         <div class="sensor-card-slot" v-for="s in sensorCards" :key="s.key">
           <div class="sensor-data-card" @click="router.push(s.path)">
             <div class="sensor-card-top">
@@ -117,25 +107,25 @@
                 </div>
               </div>
             </div>
-            <!-- GPU 使用率 -->
+            <!-- GPU 状态 -->
             <div class="health-item">
               <div class="health-icon" style="background: rgba(118,185,0,0.15);">
                 <el-icon :size="20" color="#76b900"><Odometer /></el-icon>
               </div>
               <div class="health-body">
                 <div class="health-label">
-                  GPU 推理负载
+                  GPU 状态
                   <span class="gpu-vendor" v-if="systemInfo.gpu?.vendor && systemInfo.gpu.vendor !== 'unknown'">
                     ({{ systemInfo.gpu.vendor }})
                   </span>
                 </div>
                 <div class="health-value">
-                  <el-progress :percentage="systemInfo.gpu?.utilization_percent || 0" :stroke-width="8"
-                    :color="gpuColor" :show-text="false" />
-                  <span>{{ systemInfo.gpu?.utilization_percent || 0 }}%</span>
+                  <span class="gpu-status-text" :style="{ color: gpuColor }">
+                    {{ systemInfo.gpu?.status || '未知' }}
+                  </span>
                   <span class="gpu-meta" v-if="systemInfo.gpu?.available">
-                    <i v-if="systemInfo.gpu.temperature_c">{{ systemInfo.gpu.temperature_c }}°C</i>
                     <i v-if="systemInfo.gpu.power_w">{{ systemInfo.gpu.power_w }}W</i>
+                    <i v-if="systemInfo.gpu.temperature_c">{{ systemInfo.gpu.temperature_c }}°C</i>
                   </span>
                 </div>
               </div>
@@ -245,6 +235,7 @@
       </div>
       <!-- 列表头 -->
       <div class="alarm-list-header" v-if="recentAlarms.length > 0">
+        <div class="col-index">序号</div>
         <div class="col-time sortable" @click="toggleSort('time')">
           告警时间
           <span class="sort-pill" :class="{ active: sortField === 'time' }">
@@ -257,7 +248,6 @@
             <span class="sort-icon">{{ sortIcon('level') }}</span>{{ sortText('level') }}
           </span>
         </div>
-        <div class="col-desc">描述</div>
         <div class="col-content">告警内容</div>
         <div class="col-status sortable" @click="toggleSort('status')">
           状态
@@ -269,19 +259,17 @@
       <div class="alarm-preview-list">
         <div v-if="recentAlarms.length === 0" class="alarm-empty">暂无告警记录</div>
         <div
-          v-for="row in sortedRecentAlarms"
+          v-for="(row, index) in sortedRecentAlarms"
           :key="row.id"
           class="alarm-item"
           :class="{ 'is-unhandled': row.handle_status === 0 }"
         >
+          <div class="col-index">{{ index + 1 }}</div>
           <div class="col-time">{{ formatAlarmTime(row.alarm_time) }}</div>
           <div class="col-level">
             <span class="level-tag" :class="'level-' + row.alarm_level">
               {{ alarmLevelText(row.alarm_level) }}
             </span>
-          </div>
-          <div class="col-desc">
-            <span class="desc-text" @click="router.push({ path: '/alarm/list', query: { report: row.id } })">{{ row.alarm_content || '--' }}</span>
           </div>
           <div class="col-content">
             <span class="report-link" @click="router.push({ path: '/alarm/list', query: { report: row.id } })">查看分析报告</span>
@@ -302,7 +290,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   Monitor, CircleCheck, Warning, WarningFilled,
-  Cpu, Clock, Timer, Connection, FolderOpened, Menu, Odometer, Aim, ArrowLeft, ArrowRight
+  Cpu, Clock, Timer, Connection, FolderOpened, Menu, Odometer, Aim
 } from '@element-plus/icons-vue'
 import { getSystemInfo, getAllSensorRealtime, getDeviceStatus, getAlarmStatistics, getAlarmList } from '@/api/dashboard'
 import { getVibrationProcessed } from '@/api/sensor'
@@ -342,7 +330,7 @@ const systemInfo = ref({
   cpu_percent: 0,
   memory: { total_gb: 0, used_gb: 0, percent: 0 },
   disk: { total_gb: 0, used_gb: 0, percent: 0 },
-  gpu: { available: false, vendor: 'unknown', utilization_percent: 0, memory: {}, temperature_c: 0, power_w: 0 },
+  gpu: { available: false, vendor: 'unknown', status: '未知', utilization_percent: 0, memory: {}, temperature_c: 0, power_w: 0 },
   system_uptime_hours: 0,
   service_uptime_hours: 0,
   sensor_collector_running: false,
@@ -365,9 +353,7 @@ let pollTimer = null
 let vibrationTimer = null
 let cacheUpdateHandler = null
 let sensorPagePreloadTask = null
-let sensorCarouselFrame = null
 const sensorTrackRef = ref(null)
-const sensorCarouselIndex = ref(0)
 
 // ==================== 传感器卡片配置 ====================
 
@@ -454,10 +440,10 @@ const diskColor = computed(() => {
 })
 
 const gpuColor = computed(() => {
-  const v = systemInfo.value.gpu?.utilization_percent || 0
-  if (v > 80) return '#f56c6c'
-  if (v > 50) return '#e6a23c'
-  return '#76b900'
+  const status = systemInfo.value.gpu?.status || '未知'
+  if (status === '推理中') return '#e6a23c'
+  if (status === '空闲') return '#67c23a'
+  return '#909399'  // 未知
 })
 
 // 告警摘要计算属性
@@ -706,64 +692,6 @@ const preloadSensorPagesLater = () => {
   }, 6000)
 }
 
-const sensorCardStride = () => {
-  const track = sensorTrackRef.value
-  const firstCard = track?.querySelector?.('.sensor-card-slot')
-  if (!track || !firstCard) return 430
-  const gap = Number.parseFloat(getComputedStyle(track).columnGap || getComputedStyle(track).gap || '14')
-  return firstCard.getBoundingClientRect().width + (Number.isFinite(gap) ? gap : 14)
-}
-
-const syncSensorCarouselIndex = () => {
-  const track = sensorTrackRef.value
-  if (!track) return
-  const stride = sensorCardStride()
-  sensorCarouselIndex.value = Math.min(
-    sensorCards.length - 1,
-    Math.max(0, Math.round(track.scrollLeft / stride)),
-  )
-}
-
-// 自动滚动速度（像素/帧，越小越慢，建议 0.15~0.25）
-const SCROLL_SPEED = 0.34
-// 滚动到末尾后回到起点前的停顿时间（毫秒）
-const LOOP_PAUSE_MS = 2000
-let sensorCarouselLooping = false
-
-const startSensorCarousel = () => {
-  if (sensorCarouselFrame) cancelAnimationFrame(sensorCarouselFrame)
-
-  const tick = () => {
-    const track = sensorTrackRef.value
-    // 检查是否需要滚动（内容宽度大于容器宽度）
-    if (track && !sensorCarouselLooping) {
-      const needScroll = track.scrollWidth > track.clientWidth + 10
-      if (needScroll) {
-        track.scrollLeft += SCROLL_SPEED
-        syncSensorCarouselIndex()
-        // 到达末尾时，暂停后平滑回到起点
-        if (track.scrollLeft >= track.scrollWidth - track.clientWidth - 1) {
-          sensorCarouselLooping = true
-          setTimeout(() => {
-            track.scrollTo({ left: 0, behavior: 'smooth' })
-            setTimeout(() => {
-              sensorCarouselLooping = false
-              syncSensorCarouselIndex()
-            }, 800)
-          }, LOOP_PAUSE_MS)
-        }
-      }
-    }
-    sensorCarouselFrame = requestAnimationFrame(tick)
-  }
-  sensorCarouselFrame = requestAnimationFrame(tick)
-}
-
-const scrollSensorCards = (direction) => {
-  sensorTrackRef.value?.scrollBy({ left: sensorCardStride() * direction, behavior: 'smooth' })
-  window.setTimeout(syncSensorCarouselIndex, 360)
-}
-
 // ==================== SSE 实时推送 ====================
 
 const connectSSE = () => {
@@ -893,7 +821,6 @@ onMounted(async () => {
   }, 30000)
 
   vibrationTimer = setInterval(fetchVibrationProcessed, 5000)
-  startSensorCarousel()
 })
 
 onUnmounted(() => {
@@ -903,7 +830,6 @@ onUnmounted(() => {
   if (vibrationTimer) clearInterval(vibrationTimer)
   if (cacheUpdateHandler) window.removeEventListener('dam-api-cache-updated', cacheUpdateHandler)
   if (sensorPagePreloadTask) cancelIdleTask(sensorPagePreloadTask)
-  if (sensorCarouselFrame) cancelAnimationFrame(sensorCarouselFrame)
 })
 </script>
 
@@ -935,16 +861,15 @@ onUnmounted(() => {
 }
 
 .sensor-carousel-toolbar {
-  height: 30px;
-  margin-bottom: 8px;
+  height: 24px;
+  margin-bottom: 6px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.sensor-carousel-title,
-.sensor-carousel-actions {
+.sensor-carousel-title {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -952,53 +877,36 @@ onUnmounted(() => {
 
 .sensor-carousel-title span {
   color: #e2f0fe;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
-}
-
-.sensor-carousel-title strong,
-.sensor-carousel-actions span {
-  color: #8fb8e8;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.carousel-btn {
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgba(0, 200, 255, 0.28);
-  border-radius: 6px;
-  background: rgba(17, 41, 70, 0.72);
-  color: #a8dfff;
-  cursor: pointer;
-  transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
-}
-
-.carousel-btn:hover {
-  border-color: rgba(0, 229, 255, 0.62);
-  background: rgba(0, 200, 255, 0.14);
-  color: #ffffff;
 }
 
 .sensor-row {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: clamp(360px, 31vw, 500px);
-  gap: 14px;
+  grid-auto-columns: clamp(280px, 24vw, 380px);
+  gap: 12px;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 0 2px 2px;
+  padding: 0 2px 10px;
   scroll-snap-type: x mandatory;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
   mask-image: linear-gradient(90deg, transparent 0, #000 28px, #000 calc(100% - 28px), transparent 100%);
+  scrollbar-color: rgba(0, 200, 255, 0.42) rgba(6, 24, 45, 0.75);
+  scrollbar-width: thin;
 }
 
 .sensor-row::-webkit-scrollbar {
-  display: none;
+  height: 8px;
+}
+
+.sensor-row::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(6, 24, 45, 0.75);
+}
+
+.sensor-row::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: linear-gradient(90deg, #178dde, #20d7ff);
 }
 
 .sensor-card-slot {
@@ -1086,6 +994,7 @@ onUnmounted(() => {
   cursor: pointer;
   transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
   height: 100%;
+  min-height: 150px;
   display: flex;
   flex-direction: column;
 }
@@ -1095,7 +1004,7 @@ onUnmounted(() => {
   border-color: rgba(0, 200, 255, 0.55);
 }
 .sensor-card-top {
-  padding: 14px 16px;
+  padding: 10px 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1103,8 +1012,8 @@ onUnmounted(() => {
   border-bottom: 1px solid rgba(0, 200, 255, 0.1);
 }
 .sensor-img {
-  width: 52px;
-  height: 52px;
+  width: 42px;
+  height: 42px;
   object-fit: cover;
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.3);
@@ -1116,7 +1025,7 @@ onUnmounted(() => {
   min-width: 0;
 }
 .sensor-card-name {
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
   color: #E2F0FE;
   margin-bottom: 3px;
@@ -1125,7 +1034,7 @@ onUnmounted(() => {
   text-overflow: ellipsis;
 }
 .sensor-card-status {
-  font-size: 15px;
+  font-size: 13px;
   color: #AECAF5;
   display: flex;
   align-items: center;
@@ -1133,8 +1042,8 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 .sensor-card-values {
-  padding: 12px 16px 14px;
-  flex: 1;
+  padding: 8px 12px 10px;
+  flex: 0 0 auto;
 }
 
 /* 数值网格：单列（默认）或两列（>2 个值时，如振动 X/Y/Z） */
@@ -1152,21 +1061,21 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 6px 0;
+  padding: 4px 0;
 }
 .sensor-value-grid.two-col .sensor-value-row {
   align-items: center;
   flex-direction: row;
   gap: 8px;
-  padding: 6px 0;
+  padding: 4px 0;
 }
 .sensor-value-label {
   color: #AECAF5;
-  font-size: 13px;
+  font-size: 12px;
 }
 .sensor-value-num {
   color: var(--accent-color);
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
   font-family: "Consolas", "Monaco", monospace;
 }
@@ -1252,6 +1161,11 @@ onUnmounted(() => {
   padding: 1px 5px;
   background: rgba(0, 200, 255, 0.08);
   border-radius: 3px;
+}
+
+.gpu-status-text {
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .health-item {
@@ -1512,6 +1426,14 @@ onUnmounted(() => {
   text-align: center;
 }
 
+.col-index {
+  width: 58px;
+  flex: 0 0 58px;
+  font-size: 12px;
+  color: rgba(224, 240, 255, 0.68);
+  text-align: center;
+}
+
 .col-level {
   flex: 1;
   text-align: center;
@@ -1573,17 +1495,6 @@ onUnmounted(() => {
   text-align: center;
 }
 
-.col-desc {
-  flex: 2;
-  font-size: 12px;
-  color: rgba(224, 240, 255, 0.8);
-  text-align: center;
-  padding: 0 8px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .desc-text {
   display: inline-block;
   max-width: 100%;
@@ -1602,8 +1513,9 @@ onUnmounted(() => {
 }
 
 .col-content {
-  flex: 1;
-  font-size: 13px;
+  flex: 2.4;
+  min-width: 0;
+  font-size: 12px;
   color: var(--text-primary);
   text-align: center;
 }

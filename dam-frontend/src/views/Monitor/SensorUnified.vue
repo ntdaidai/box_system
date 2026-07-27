@@ -13,9 +13,6 @@
           <div class="card-head">
             <span class="card-title">{{ card.title }}</span>
             <span v-if="card.key === 'wind'" class="wind-head-meta">
-              <span class="mini-compass" aria-hidden="true">
-                <i :style="{ transform: `translate(-50%, -50%) rotate(${card.angle}deg)` }"></i>
-              </span>
               <span class="card-state">{{ card.state }}</span>
             </span>
             <span v-else class="card-state">{{ card.state }}</span>
@@ -26,7 +23,16 @@
               <span>{{ card.metrics[0].label }}</span>
             </div>
             <div class="wind-direction metric-cell">
-              <strong>{{ card.directionText }}</strong>
+              <div class="wind-direction-value">
+                <strong>{{ card.directionText }}</strong>
+                <span class="mini-compass" aria-hidden="true">
+                  <b class="mini-n">N</b>
+                  <b class="mini-e">E</b>
+                  <b class="mini-s">S</b>
+                  <b class="mini-w">W</b>
+                  <i :style="{ transform: `translate(-50%, -50%) rotate(${card.angle}deg)` }"></i>
+                </span>
+              </div>
               <span>{{ card.metrics[1].label }}</span>
             </div>
           </div>
@@ -72,7 +78,7 @@
               />
             </el-select>
             <el-select v-model="selectedMonth" class="history-select month-select" @change="onMonthChange">
-              <el-option :label="`${selectedYear}全年`" value="all" />
+              <el-option label="所有月份" value="all" />
               <el-option
                 v-for="month in monthOptions"
                 :key="month"
@@ -133,20 +139,18 @@
       <div class="summary-card data-overview-card">
         <div class="summary-title overview">
           <h3>数据概览</h3>
-          <span>过去 12 个月</span>
-          <span>所有年份</span>
-          <span>最大值</span>
-          <span>平均值</span>
-          <span>最小值</span>
+          <span>近12月月份</span>
+          <span>近12月数值</span>
+          <span>全部年份月份</span>
+          <span>全部年份数值</span>
         </div>
         <div class="summary-table">
           <div v-for="item in dataOverviewRows" :key="item.label" class="summary-row overview">
             <span>{{ item.label }}</span>
-            <strong>{{ item.recent }}</strong>
-            <strong>{{ item.all }}</strong>
-            <strong>{{ item.max }}</strong>
-            <strong>{{ item.avg }}</strong>
-            <strong>{{ item.min }}</strong>
+            <strong>{{ item.recentMonth }}</strong>
+            <strong>{{ item.recentValue }}</strong>
+            <strong>{{ item.allMonth }}</strong>
+            <strong>{{ item.allValue }}</strong>
           </div>
         </div>
       </div>
@@ -186,7 +190,7 @@ const availablePeriods = ref([])
 const historyLoading = ref(false)
 const historyError = ref('')
 const chartData = ref({ view: 'recent24h', history: [], window: null })
-const thresholdVisibility = reactive({ warning: true, alarm: true })
+const thresholdVisibility = reactive({ warning: false, alarm: false })
 const summaryData = reactive({
   tempRecent: [],
   rainRecent: [],
@@ -313,11 +317,6 @@ const dataOverviewRows = computed(() => {
     monthlyOverviewRow('最潮湿的月份', recentStats.humidity, allStats.humidity, 'max', 1, '%'),
     monthlyOverviewRow('风最多的月份', recentStats.wind, allStats.wind, 'max', 1, 'km/h'),
     monthlyOverviewRow('振动最大的月份', recentStats.vibration, allStats.vibration, 'max', 3, 'g'),
-    summaryRow('高温 (℃)', summaryData.tempRecent.map(row => toNumber(row.data?.temperature_max ?? row.data?.temperature)).filter(v => v !== null), 0),
-    summaryRow('低温 (℃)', summaryData.tempRecent.map(row => toNumber(row.data?.temperature_min ?? row.data?.temperature)).filter(v => v !== null), 0),
-    summaryRow('降水 (mm)', summaryData.rainRecent.map(row => toNumber(row.data?.daily_rain)).filter(v => v !== null), 2),
-    summaryRow('风速 (km/h)', summaryData.windRecent.map(row => windSpeedKmh(row.data)).filter(v => v !== null), 1),
-    summaryRow('振动 RMS (g)', summaryData.vibrationRecent.map(row => toNumber(row.data?.rms)).filter(v => v !== null), 3),
   ]
 })
 
@@ -910,15 +909,7 @@ const fullChartOption = () => {
       textStyle: { color: '#f1f6ff', fontSize: 13 },
       axisPointer: { type: activeHistoryTab.value === 'rain' ? 'shadow' : 'line' },
     },
-    legend: activeHistoryTab.value === 'rain' ? {
-      show: true,
-      bottom: overview ? 34 : 4,
-      left: 12,
-      itemWidth: 18,
-      itemHeight: 8,
-      textStyle: { color: '#b7cae4', fontSize: 12 },
-      data: [rainLegend, '0 mm'],
-    } : undefined,
+    legend: undefined,
     grid: { left: 46, right: 54, bottom: overview ? 78 : 48, top: 44, containLabel: true },
     dataZoom: overview
       ? [{
@@ -997,8 +988,9 @@ const fullChartOption = () => {
       lineStyle: {
         color: meta.color,
         width: activeHistoryTab.value === 'rain' ? 0 : 2,
-        shadowBlur: activeHistoryTab.value === 'rain' ? 0 : 10,
-        shadowColor: `${meta.color}4d`,
+        shadowBlur: activeHistoryTab.value === 'rain' ? 0 : 16,
+        shadowColor: `${meta.color}8a`,
+        shadowOffsetY: activeHistoryTab.value === 'rain' ? 0 : 8,
       },
       itemStyle: {
         color: meta.color,
@@ -1008,11 +1000,11 @@ const fullChartOption = () => {
       },
       areaStyle: activeHistoryTab.value === 'rain' ? undefined : {
         color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-          { offset: 0, color: `${meta.color}72` },
-          { offset: 0.42, color: `${meta.color}36` },
-          { offset: 1, color: `${meta.color}10` },
+          { offset: 0, color: `${meta.color}96` },
+          { offset: 0.5, color: `${meta.color}48` },
+          { offset: 1, color: `${meta.color}08` },
         ]),
-        opacity: 0.86,
+        opacity: 0.95,
       },
       markLine: {
         silent: true,
@@ -1221,31 +1213,22 @@ const bestMonth = (source, mode) => {
 
 const monthSummary = (source, mode, decimals, unit) => {
   const result = bestMonth(source, mode)
-  if (!result) return '--'
-  return `${result.month}月 ${result.value.toFixed(decimals)}${unit}`
+  if (!result) return { month: '--', value: '--' }
+  return {
+    month: `${result.month}月`,
+    value: `${result.value.toFixed(decimals)}${unit}`,
+  }
 }
 
-const monthlyOverviewRow = (label, recentSource, allSource, mode, decimals, unit) => ({
-  label,
-  recent: monthSummary(recentSource, mode, decimals, unit),
-  all: monthSummary(allSource, mode, decimals, unit),
-  max: '--',
-  avg: '--',
-  min: '--',
-})
-
-const summaryRow = (label, values, decimals) => {
-  if (!values.length) return { label, recent: '--', all: '--', max: '--', avg: '--', min: '--' }
-  const max = Math.max(...values)
-  const min = Math.min(...values)
-  const avg = values.reduce((sum, value) => sum + value, 0) / values.length
+const monthlyOverviewRow = (label, recentSource, allSource, mode, decimals, unit) => {
+  const recent = monthSummary(recentSource, mode, decimals, unit)
+  const all = monthSummary(allSource, mode, decimals, unit)
   return {
     label,
-    recent: '--',
-    all: '--',
-    max: max.toFixed(decimals),
-    avg: avg.toFixed(decimals),
-    min: min.toFixed(decimals),
+    recentMonth: recent.month,
+    recentValue: recent.value,
+    allMonth: all.month,
+    allValue: all.value,
   }
 }
 
@@ -1366,14 +1349,24 @@ onUnmounted(() => {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 28px;
   margin: 6px 0 0;
+  align-items: start;
 }
 
 .metric-row.metric-columns {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.metric-cell {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
 .metric-cell strong {
-  display: block;
+  min-height: 38px;
+  display: flex;
+  align-items: flex-end;
   color: #fff;
   font: 800 31px/1 "Consolas", "Monaco", monospace;
   white-space: nowrap;
@@ -1396,8 +1389,8 @@ onUnmounted(() => {
   min-height: 78px;
   margin: 6px 0 0;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: center;
+  grid-template-columns: 0.9fr 1.1fr;
+  align-items: start;
   gap: 28px;
 }
 
@@ -1407,35 +1400,50 @@ onUnmounted(() => {
   letter-spacing: 0;
 }
 
-.mini-compass {
-  position: relative;
-  width: 32px;
-  height: 32px;
-  border: 1px solid rgba(116, 201, 249, 0.45);
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(38, 82, 128, 0.35), rgba(13, 31, 57, 0.2));
+.wind-direction-value {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
 }
 
-.mini-compass::before {
-  content: "N";
+.wind-direction-value .mini-compass {
+  display: block;
+  flex: 0 0 auto;
+  margin-top: 0;
+}
+
+.mini-compass {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  border: 1px solid rgba(116, 201, 249, 0.62);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(38, 82, 128, 0.5), rgba(13, 31, 57, 0.42));
+}
+
+.mini-compass b {
   position: absolute;
-  top: 2px;
-  left: 50%;
-  transform: translateX(-50%);
   color: #8ea8c9;
   font-size: 8px;
   font-weight: 700;
+  line-height: 1;
 }
+.mini-n { top: 3px; left: 50%; transform: translateX(-50%); color: #72cdf9 !important; }
+.mini-e { top: 50%; right: 3px; transform: translateY(-50%); }
+.mini-s { bottom: 3px; left: 50%; transform: translateX(-50%); }
+.mini-w { top: 50%; left: 3px; transform: translateY(-50%); }
 
 .mini-compass i {
   position: absolute;
-  top: 54%;
+  top: 50%;
   left: 50%;
   width: 0;
   height: 0;
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
-  border-bottom: 15px solid #72cdf9;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 18px solid #72cdf9;
   transform-origin: 50% 70%;
   filter: drop-shadow(0 0 8px rgba(114, 205, 249, 0.45));
 }
@@ -1681,7 +1689,7 @@ onUnmounted(() => {
   min-height: 44px;
   padding: 12px 16px;
   display: grid;
-  grid-template-columns: 1.4fr 1fr 1fr;
+  grid-template-columns: 1.4fr repeat(4, 1fr);
   align-items: center;
   gap: 12px;
   background: rgba(225, 237, 248, 0.08);
@@ -1691,7 +1699,7 @@ onUnmounted(() => {
 }
 
 .summary-title.overview {
-  grid-template-columns: minmax(150px, 1.4fr) repeat(2, minmax(120px, 1fr)) repeat(3, minmax(82px, 0.72fr));
+  grid-template-columns: minmax(150px, 1.25fr) repeat(4, minmax(96px, 1fr));
 }
 
 .summary-table {
@@ -1701,7 +1709,7 @@ onUnmounted(() => {
 .summary-row {
   min-height: 46px;
   display: grid;
-  grid-template-columns: 1.4fr 1fr 1fr;
+  grid-template-columns: 1.4fr repeat(4, 1fr);
   align-items: center;
   gap: 12px;
   border-top: 1px solid rgba(174, 202, 245, 0.12);
@@ -1710,7 +1718,7 @@ onUnmounted(() => {
 }
 
 .summary-row.overview {
-  grid-template-columns: minmax(150px, 1.4fr) repeat(2, minmax(120px, 1fr)) repeat(3, minmax(82px, 0.72fr));
+  grid-template-columns: minmax(150px, 1.25fr) repeat(4, minmax(96px, 1fr));
 }
 
 .summary-row span {
@@ -1780,8 +1788,8 @@ onUnmounted(() => {
 
   .summary-title.overview,
   .summary-row.overview {
-    grid-template-columns: minmax(128px, 1.2fr) repeat(5, minmax(86px, 1fr));
-    min-width: 660px;
+    grid-template-columns: minmax(128px, 1.15fr) repeat(4, minmax(76px, 1fr));
+    min-width: 560px;
   }
 
   .summary-card {

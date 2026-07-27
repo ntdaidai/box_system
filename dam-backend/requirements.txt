@@ -36,6 +36,7 @@ redis[hiredis]==5.0.1
 python-dotenv==1.0.0
 loguru==0.7.2
 minio>=7.2.0
+docxtpl>=0.16.8
 
 # YOLO 目标检测
 ultralytics>=8.0.0

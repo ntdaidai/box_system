@@ -17,9 +17,10 @@ from typing import List, Literal, Optional
 import cv2
 import httpx
 import numpy as np
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from loguru import logger
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field, model_validator
 
@@ -29,15 +30,17 @@ from app.core.database import get_db
 from app.core.security import require_auth
 from app.models.alarm import Alarm
 from app.models.analysis_report import AnalysisReport
-from app.models.safety_event import SafetyEvent, SafetyEventLog
+from app.models.safety_event import SafetyEvent, SafetyEventLog, SafetyEventTask
 from app.models.user import User
 from app.services.camera_stream import CameraStream, camera_manager
 from app.services.camera_config import normalize_camera_source
 from app.services.camera_zone_store import get_camera_zone_store
 from app.services.safety_event_engine import get_safety_event_engine
+from app.services.safety_event_ws import safety_event_ws_manager
 from app.services.stream_ticket import stream_ticket_store
 from app.services.video_detection import video_detection_service
 from app.services.vision_model_registry import vision_model_registry
+from app.services.broadcast_service import BroadcastException, broadcast_service
 
 
 router = APIRouter()
@@ -159,8 +162,24 @@ class DetectResponse(BaseModel):
 
 
 class SafetyEventActionRequest(BaseModel):
-    action_type: Literal["acknowledge", "dispatch_staff", "close"]
+    action_type: Literal[
+        "acknowledge",
+        "dispatch_staff",
+        "close",
+        "USER_ACK",
+        "MANUAL_BROADCAST",
+        "TASK_DISPATCH",
+        "FALSE_ALARM",
+        "MANUAL_RESOLVED",
+    ] = "USER_ACK"
     remark: Optional[str] = Field(None, max_length=500)
+    content: Optional[str] = Field(None, max_length=500)
+    reason: Optional[str] = Field(None, max_length=500)
+    assignee: Optional[str] = Field(None, max_length=128)
+    assignee_phone: Optional[str] = Field(None, max_length=64)
+    template_id: Optional[str] = Field(None, max_length=64)
+    device_ids: List[int] = Field(default_factory=list, max_length=32)
+    version: Optional[int] = Field(None, ge=0)
 
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
@@ -279,7 +298,151 @@ def _safety_action_message(action_type: str) -> str:
         "acknowledge": "工作人员已确认告警",
         "dispatch_staff": "已派出工作人员现场处置",
         "close": "工作人员手动关闭事件",
+        "USER_ACK": "工作人员已确认事件",
+        "MANUAL_BROADCAST": "人工一键喊话",
+        "TASK_DISPATCH": "已派现场人员处置",
+        "FALSE_ALARM": "工作人员判断为误报",
+        "MANUAL_RESOLVED": "工作人员确认事件解除",
     }[action_type]
+
+
+def _canonical_action_type(action_type: str) -> str:
+    return {
+        "acknowledge": "USER_ACK",
+        "dispatch_staff": "TASK_DISPATCH",
+        "close": "MANUAL_RESOLVED",
+    }.get(action_type, action_type)
+
+
+def _timeline_action_type(action: SafetyEventLog) -> str:
+    payload = action.payload or {}
+    canonical = payload.get("canonical_action_type")
+    if canonical:
+        return canonical
+    mapping = {
+        "event_created": "AI_DETECTED",
+        "risk_changed": {
+            "LOW": "RISK_LOW",
+            "MEDIUM": "RISK_MEDIUM",
+            "HIGH": "RISK_HIGH",
+        }.get(action.risk_level, "RISK_LOW"),
+        "broadcast_requested": "AUTO_BROADCAST",
+        "event_acknowledged": "USER_ACK",
+        "staff_dispatched": "TASK_DISPATCH",
+        "event_manual_closed": "MANUAL_RESOLVED",
+        "event_resolved": "MANUAL_RESOLVED" if (action.payload or {}).get("reason") == "manual_close" else "AUTO_RESOLVED",
+        "target_left": "TARGET_LEFT",
+    }
+    return mapping.get(action.action_type, action.action_type)
+
+
+def _timestamp(value: Optional[dt.datetime]) -> Optional[float]:
+    return value.timestamp() if value else None
+
+
+def _event_type_label(event: SafetyEvent) -> str:
+    if event.event_type:
+        return event.event_type
+    return eventTypeFromZoneType(event.zone_type)
+
+
+def eventTypeFromZoneType(zone_type: Optional[str]) -> str:
+    return {
+        "WARNING_ZONE": "人员警戒区停留",
+        "warning_zone": "人员警戒区停留",
+        "person_intrusion": "人员警戒区停留",
+        "WATERFRONT_ZONE": "人员进入亲水区",
+        "waterside_zone": "人员进入亲水区",
+        "WATER_ZONE": "人员进入涉水区",
+        "wading_zone": "人员进入涉水区",
+        "illegal_fishing": "疑似船只靠近",
+    }.get(str(zone_type), "区域风险事件")
+
+
+def _safety_event_to_dict(event: SafetyEvent) -> dict:
+    end_at = event.resolved_at or event.last_seen_at or dt.datetime.now()
+    duration = event.duration_seconds
+    if not duration and event.started_at:
+        duration = max(0, int((end_at - event.started_at).total_seconds()))
+    return {
+        "event_id": event.event_id,
+        "camera_id": event.camera_id,
+        "camera_name": event.camera_name or event.camera_id,
+        "entity_type": event.entity_type,
+        "track_id": event.track_id,
+        "state": event.state,
+        "status": event.status or ("RESOLVED" if event.state == "RESOLVED" else "PENDING"),
+        "event_type": _event_type_label(event),
+        "risk_level": event.risk_level,
+        "started_at": _timestamp(event.started_at),
+        "first_seen_at": _timestamp(event.first_seen_at),
+        "danger_started_at": _timestamp(event.danger_started_at),
+        "last_seen_at": _timestamp(event.last_seen_at),
+        "clear_since": _timestamp(event.clear_since),
+        "resolved_at": _timestamp(event.resolved_at),
+        "resolve_reason": event.resolve_reason,
+        "snapshot_path": event.snapshot_url,
+        "snapshot_url": event.snapshot_url,
+        "video_url": event.video_url,
+        "duration_seconds": duration or 0,
+        "zone_type": event.zone_type,
+        "zone_name": event.zone_name,
+        "zone_ids": event.zone_ids or [],
+        "latest_bbox": event.latest_bbox,
+        "latest_observation": event.latest_observation or {},
+        "ack_operator": event.ack_operator,
+        "ack_at": _timestamp(event.ack_at),
+        "resolved_operator": event.resolved_operator,
+        "false_alarm_operator": event.false_alarm_operator,
+        "false_alarm_reason": event.false_alarm_reason,
+        "version": event.version or 0,
+    }
+
+
+def _timeline_to_dict(action: SafetyEventLog) -> dict:
+    payload = action.payload or {}
+    return {
+        "action_id": action.action_id,
+        "event_id": action.event_id,
+        "action_type": _timeline_action_type(action),
+        "raw_action_type": action.action_type,
+        "risk_level": action.risk_level,
+        "status": action.status,
+        "from_status": action.from_status or payload.get("from_status"),
+        "to_status": action.to_status or payload.get("to_status"),
+        "operator": action.operator or payload.get("operator") or payload.get("operator_name"),
+        "operator_role": action.operator_role or payload.get("operator_role"),
+        "message": action.message,
+        "payload": payload,
+        "created_at": _timestamp(action.create_time),
+    }
+
+
+def _is_closed(event: SafetyEvent) -> bool:
+    return (event.status or "").upper() in {"RESOLVED", "FALSE_ALARM"} or event.state == "RESOLVED"
+
+
+def _transition_status(event: SafetyEvent, action_type: str) -> str:
+    current = event.status or ("RESOLVED" if event.state == "RESOLVED" else "PENDING")
+    if action_type in {"USER_ACK", "TASK_DISPATCH"}:
+        return "PROCESSING"
+    if action_type == "FALSE_ALARM":
+        return "FALSE_ALARM"
+    if action_type == "MANUAL_RESOLVED":
+        return "RESOLVED"
+    if action_type == "MANUAL_BROADCAST":
+        return current
+    return current
+
+
+def _broadcast_template_for_event(event: SafetyEvent) -> str:
+    if str(event.zone_type or "").upper() in {"FISHING", "BOAT", "ILLEGAL_FISHING"}:
+        return "FISHING"
+    return {
+        "LOW": "PERSON_LOW",
+        "MEDIUM": "PERSON_MEDIUM",
+        "HIGH": "PERSON_HIGH",
+    }.get(event.risk_level or "LOW", "PERSON_LOW")
 
 
 def _validate_peer_id(peer_id: str) -> str:
@@ -685,17 +848,102 @@ async def get_detected_stream(
 async def get_safety_events(
     camera_id: Optional[str] = Query(None, max_length=50),
     day: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    status: Optional[str] = Query(None, max_length=32),
+    risk_level: Optional[str] = Query(None, max_length=16),
+    event_type: Optional[str] = Query(None, max_length=64),
+    keyword: Optional[str] = Query(None, max_length=128),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    since = until = None
+    since_dt = until_dt = None
     if day:
         _, since, until = _day_bounds(day)
-    events = get_safety_event_engine().list_events(
-        camera_id=camera_id,
-        since=since,
-        until=until,
+        since_dt = dt.datetime.fromtimestamp(since)
+        until_dt = dt.datetime.fromtimestamp(until)
+    query = db.query(SafetyEvent)
+    if camera_id:
+        query = query.filter(SafetyEvent.camera_id == camera_id)
+    if status:
+        query = query.filter(SafetyEvent.status == status)
+    if risk_level:
+        query = query.filter(SafetyEvent.risk_level == risk_level)
+    if event_type:
+        query = query.filter(SafetyEvent.event_type == event_type)
+    if since_dt:
+        query = query.filter(SafetyEvent.started_at >= since_dt)
+    if until_dt:
+        query = query.filter(SafetyEvent.started_at < until_dt)
+    if keyword:
+        like = f"%{keyword}%"
+        query = query.filter(or_(
+            SafetyEvent.event_id.like(like),
+            SafetyEvent.camera_id.like(like),
+            SafetyEvent.camera_name.like(like),
+            SafetyEvent.event_type.like(like),
+            SafetyEvent.zone_name.like(like),
+        ))
+    total = query.count()
+    rows = (
+        query.order_by(SafetyEvent.started_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
     )
-    return DetectResponse(code=200, data={"events": events})
+    events = [_safety_event_to_dict(row) for row in rows]
+    return DetectResponse(code=200, data={
+        "events": events,
+        "items": events,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    })
+
+
+@router.get(
+    "/safety/events/{event_id}",
+    response_model=DetectResponse,
+    summary="获取安全事件闭环详情",
+)
+async def get_safety_event_detail(
+    event_id: str,
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_auth),
+):
+    event = db.query(SafetyEvent).filter(SafetyEvent.event_id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="安全事件不存在")
+    actions = (
+        db.query(SafetyEventLog)
+        .filter(SafetyEventLog.event_id == event_id)
+        .order_by(SafetyEventLog.create_time.asc(), SafetyEventLog.id.asc())
+        .all()
+    )
+    tasks = (
+        db.query(SafetyEventTask)
+        .filter(SafetyEventTask.event_id == event_id)
+        .order_by(SafetyEventTask.dispatched_at.desc())
+        .all()
+    )
+    return DetectResponse(code=200, data={
+        "event": _safety_event_to_dict(event),
+        "timeline": [_timeline_to_dict(action) for action in actions],
+        "tasks": [
+            {
+                "id": task.id,
+                "event_id": task.event_id,
+                "assignee": task.assignee,
+                "assignee_phone": task.assignee_phone,
+                "dispatch_operator": task.dispatch_operator,
+                "task_status": task.task_status,
+                "task_note": task.task_note,
+                "dispatched_at": _timestamp(task.dispatched_at),
+                "completed_at": _timestamp(task.completed_at),
+            }
+            for task in tasks
+        ],
+    })
 
 
 @router.get(
@@ -742,60 +990,228 @@ async def record_safety_event_action(
     db: Session = Depends(get_db),
     user: User = Depends(require_auth),
 ):
+    return await _record_safety_event_action(event_id, payload, db, user)
+
+
+async def _record_safety_event_action(
+    event_id: str,
+    payload: SafetyEventActionRequest,
+    db: Session,
+    user: User,
+):
     event = db.query(SafetyEvent).filter(SafetyEvent.event_id == event_id).first()
     if not event:
         raise HTTPException(status_code=404, detail="安全事件不存在")
+    if _is_closed(event):
+        raise HTTPException(status_code=409, detail="事件已结束，不能继续处置")
+    if payload.version is not None and (event.version or 0) != payload.version:
+        raise HTTPException(status_code=409, detail="事件状态已变化，请刷新后重试")
 
     now = dt.datetime.now()
     operator = getattr(user, "username", None) or "UNKNOWN"
+    canonical_action = _canonical_action_type(payload.action_type)
+    from_status = event.status or "PENDING"
+    to_status = _transition_status(event, canonical_action)
     action_name = {
-        "acknowledge": "event_acknowledged",
-        "dispatch_staff": "staff_dispatched",
-        "close": "event_manual_closed",
-    }[payload.action_type]
+        "USER_ACK": "event_acknowledged",
+        "TASK_DISPATCH": "staff_dispatched",
+        "MANUAL_RESOLVED": "event_manual_closed",
+        "MANUAL_BROADCAST": "manual_broadcast",
+        "FALSE_ALARM": "false_alarm",
+    }[canonical_action]
+
+    if canonical_action == "USER_ACK" and from_status != "PENDING":
+        raise HTTPException(status_code=409, detail="只有待确认事件可以执行确认")
+
+    if canonical_action == "TASK_DISPATCH":
+        task = SafetyEventTask(
+            event_id=event.event_id,
+            assignee=payload.assignee,
+            assignee_phone=payload.assignee_phone,
+            dispatch_operator=operator,
+            task_status="DISPATCHED",
+            task_note=payload.remark,
+            dispatched_at=now,
+        )
+        db.add(task)
+
     log = SafetyEventLog(
         action_id=uuid.uuid4().hex,
         event_id=event.event_id,
         action_type=action_name,
         risk_level=event.risk_level,
         status="success",
+        from_status=from_status,
+        to_status=to_status,
+        operator=operator,
+        operator_role=getattr(user, "role", None),
         message=_safety_action_message(payload.action_type),
         payload={
             "operator": operator,
             "remark": payload.remark,
+            "content": payload.content,
+            "reason": payload.reason,
+            "assignee": payload.assignee,
+            "assignee_phone": payload.assignee_phone,
+            "template_id": payload.template_id,
+            "device_ids": payload.device_ids,
+            "canonical_action_type": canonical_action,
+            "from_status": from_status,
+            "to_status": to_status,
+            "operator_role": getattr(user, "role", None),
         },
         create_time=now,
     )
     db.add(log)
 
     alarm = db.query(Alarm).filter(Alarm.alarm_code == event.event_id).first()
-    if payload.action_type in {"acknowledge", "close"} and alarm:
+    if canonical_action in {"USER_ACK", "MANUAL_RESOLVED", "FALSE_ALARM"} and alarm:
         alarm.handle_status = 1
         alarm.handle_user = operator
         alarm.handle_time = now
         alarm.handle_remark = payload.remark or _safety_action_message(payload.action_type)
 
-    if payload.action_type == "close":
+    event.status = to_status
+    if canonical_action == "USER_ACK":
+        event.ack_operator = operator
+        event.ack_at = now
+    if canonical_action == "FALSE_ALARM":
+        event.false_alarm_operator = operator
+        event.false_alarm_reason = payload.reason or payload.remark
+        event.resolved_at = now
+        event.resolve_reason = "false_alarm"
+    if canonical_action == "MANUAL_RESOLVED":
         event.state = "RESOLVED"
         event.resolved_at = now
         event.resolve_reason = "manual_close"
+        event.resolved_operator = operator
+    event.duration_seconds = max(0, int((now - event.started_at).total_seconds())) if event.started_at else 0
+    event.version = (event.version or 0) + 1
 
     db.commit()
-    if payload.action_type == "close":
+    if canonical_action == "MANUAL_BROADCAST":
+        try:
+            broadcast_result = broadcast_service.play(
+                db,
+                {
+                    "event_id": event.event_id,
+                    "camera_id": event.camera_id,
+                    "device_ids": payload.device_ids,
+                    "template_id": payload.template_id or _broadcast_template_for_event(event),
+                    "custom_text": payload.content,
+                    "trigger_type": "MANUAL",
+                    "operator": operator,
+                },
+            )
+            log.status = "success" if broadcast_result.get("success") else "failed"
+            log.message = broadcast_result.get("result") or _safety_action_message(payload.action_type)
+            log.payload = {
+                **(log.payload or {}),
+                "broadcast_result": broadcast_result,
+            }
+        except BroadcastException as exc:
+            log.status = "failed"
+            log.message = str(exc)[:255]
+            log.payload = {
+                **(log.payload or {}),
+                "broadcast_error": str(exc),
+            }
+        db.commit()
+        db.refresh(log)
+        db.refresh(event)
+    if canonical_action == "MANUAL_RESOLVED":
         get_safety_event_engine().resolve_event(
             event.event_id,
             reason="manual_close",
             now=now.timestamp(),
+            emit_action=False,
         )
     await invalidate_cache("alarm:*")
+    response_event = _safety_event_to_dict(event)
+    timeline_item = _timeline_to_dict(log)
+    await safety_event_ws_manager.broadcast({
+        "type": "EVENT_UPDATED",
+        "data": response_event,
+    })
+    await safety_event_ws_manager.broadcast({
+        "type": "EVENT_ACTION_ADDED",
+        "data": timeline_item,
+    })
     return DetectResponse(
         code=200,
         data={
             "event_id": event.event_id,
-            "action_type": action_name,
+            "action_type": canonical_action,
+            "event": response_event,
+            "timeline_item": timeline_item,
             "message": _safety_action_message(payload.action_type),
         },
     )
+
+
+@router.post("/safety/events/{event_id}/ack", response_model=DetectResponse, summary="确认安全事件")
+async def acknowledge_safety_event(
+    event_id: str,
+    payload: SafetyEventActionRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_auth),
+):
+    payload.action_type = "USER_ACK"
+    return await _record_safety_event_action(event_id, payload, db, user)
+
+
+@router.post("/safety/events/{event_id}/broadcast", response_model=DetectResponse, summary="人工一键喊话")
+async def manual_broadcast_safety_event(
+    event_id: str,
+    payload: SafetyEventActionRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_auth),
+):
+    payload.action_type = "MANUAL_BROADCAST"
+    return await _record_safety_event_action(event_id, payload, db, user)
+
+
+@router.post("/safety/events/{event_id}/dispatch", response_model=DetectResponse, summary="派现场人员")
+async def dispatch_safety_event(
+    event_id: str,
+    payload: SafetyEventActionRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_auth),
+):
+    payload.action_type = "TASK_DISPATCH"
+    return await _record_safety_event_action(event_id, payload, db, user)
+
+
+@router.post("/safety/events/{event_id}/false-alarm", response_model=DetectResponse, summary="标记误报")
+async def false_alarm_safety_event(
+    event_id: str,
+    payload: SafetyEventActionRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_auth),
+):
+    payload.action_type = "FALSE_ALARM"
+    return await _record_safety_event_action(event_id, payload, db, user)
+
+
+@router.post("/safety/events/{event_id}/resolve", response_model=DetectResponse, summary="人工确认解除")
+async def resolve_safety_event(
+    event_id: str,
+    payload: SafetyEventActionRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_auth),
+):
+    payload.action_type = "MANUAL_RESOLVED"
+    return await _record_safety_event_action(event_id, payload, db, user)
+
+
+@router.websocket("/safety/ws")
+async def safety_event_ws(websocket: WebSocket):
+    await safety_event_ws_manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        await safety_event_ws_manager.disconnect(websocket)
 
 
 @router.get(

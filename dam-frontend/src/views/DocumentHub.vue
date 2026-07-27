@@ -30,7 +30,34 @@
           <el-option label="文件大小" value="size" />
         </el-select>
       </div>
+      <div class="filter-field report-date-field">
+        <span class="filter-label">巡查日报日期</span>
+        <el-date-picker
+          v-model="reportDate"
+          type="date"
+          value-format="YYYY-MM-DD"
+          placeholder="选择日期"
+          class="report-date-picker"
+        />
+      </div>
       <div class="filter-actions">
+        <el-button
+          class="report-button"
+          :loading="reportGeneratingToday"
+          @click="generateTodayReport"
+        >
+          <el-icon><Calendar /></el-icon>
+          生成今日日报
+        </el-button>
+        <el-button
+          class="report-button"
+          :disabled="!reportDate"
+          :loading="reportGeneratingDate"
+          @click="generateSelectedDateReport"
+        >
+          <el-icon><Document /></el-icon>
+          生成历史日报
+        </el-button>
         <el-button type="primary" class="upload-button" @click="showUploadDialog">
           <el-icon><Upload /></el-icon>
           上传文档
@@ -115,7 +142,6 @@
         <div class="row-name">原始文件名</div>
         <div class="row-type">文件类型</div>
         <div class="row-size">文件大小</div>
-        <div class="row-category">文档分类（按格式归类）</div>
         <div class="row-date">创建时间</div>
         <div class="row-date">最后更新时间</div>
         <div class="row-actions">操作</div>
@@ -144,14 +170,20 @@
           </span>
         </div>
         <div class="row-size">{{ formatSize(doc.size) }}</div>
-        <div class="row-category">{{ doc.category }}</div>
         <div class="row-date">{{ formatDateTime(doc.created_at) }}</div>
         <div class="row-date">{{ formatDateTime(doc.updatedAt) }}</div>
         <div class="row-actions">
           <el-button class="action-button edit-button" size="small" @click="editDoc(doc)">编辑</el-button>
           <el-button class="action-button download-button" size="small" @click="downloadDoc(doc)">下载</el-button>
           <el-button class="action-button preview-button" size="small" @click="previewDoc(doc)">预览</el-button>
-          <el-button class="action-button delete-button" size="small" @click="deleteDoc(doc)">删除</el-button>
+          <el-button
+            class="action-button delete-button"
+            size="small"
+            :loading="deletingDocumentIds.includes(doc.document_id)"
+            @click="deleteDoc(doc)"
+          >
+            删除
+          </el-button>
         </div>
       </div>
     </div>
@@ -162,7 +194,7 @@
         :page-size="pageSize"
         :total="filteredDocuments.length"
         background
-        layout="total, prev, pager, next"
+        layout="prev, pager, next"
       />
     </div>
 
@@ -226,7 +258,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Upload, UploadFilled, Search, Document, FolderOpened,
-  Clock, Download
+  Clock, Download, Calendar
 } from '@element-plus/icons-vue'
 import axios from 'axios'
 import OnlyOfficeEditor from '@/components/OnlyOfficeEditor.vue'
@@ -237,6 +269,9 @@ const loading = ref(false)
 const uploading = ref(false)
 const exportingSelected = ref(false)
 const exportingMonth = ref(false)
+const reportGeneratingToday = ref(false)
+const reportGeneratingDate = ref(false)
+const deletingDocumentIds = ref([])
 const documents = ref([])
 const searchQuery = ref('')
 const selectedCategory = ref('')
@@ -245,6 +280,7 @@ const currentPage = ref(1)
 const pageSize = 10
 const selectedDocumentIds = ref([])
 const exportMonth = ref('')
+const reportDate = ref('')
 
 const uploadDialogVisible = ref(false)
 const uploadFileList = ref([])
@@ -384,6 +420,14 @@ const formatDate = (value) => {
   return String(value).slice(0, 10)
 }
 
+const todayString = () => {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 const buildExportFileName = (suffix) => `documents_${suffix}.zip`
 
 const downloadBlob = (blob, filename) => {
@@ -505,6 +549,55 @@ const exportMonthDocuments = async () => {
   })
 }
 
+const generatePatrolReport = async (date, loadingRef) => {
+  try {
+    loadingRef.value = true
+    const response = await axios.post('/api/patrol-report/daily/generate', {
+      report_date: date,
+      user_id: currentUser.value.id,
+      user_name: currentUser.value.name
+    }, {
+      timeout: 120000
+    })
+
+    if (!response.data.success) {
+      throw new Error(response.data.message || '生成巡查日报失败')
+    }
+
+    const data = response.data.data
+    ElMessage.success('巡查日报已生成，DOCX 与 PDF 已进入文档中心')
+    searchQuery.value = `坝区安全智能巡查日报_${date}`
+    currentPage.value = 1
+    await loadDocuments()
+    router.replace({
+      path: '/document/hub',
+      query: {
+        reportDoc: data.docx?.document_id || '',
+        reportDate: date
+      }
+    })
+  } catch (error) {
+    console.error('生成巡查日报失败:', error)
+    ElMessage.error(error.response?.data?.detail || error.message || '生成巡查日报失败')
+  } finally {
+    loadingRef.value = false
+  }
+}
+
+const generateTodayReport = async () => {
+  const date = todayString()
+  reportDate.value = date
+  await generatePatrolReport(date, reportGeneratingToday)
+}
+
+const generateSelectedDateReport = async () => {
+  if (!reportDate.value) {
+    ElMessage.warning('请选择巡查日报日期')
+    return
+  }
+  await generatePatrolReport(reportDate.value, reportGeneratingDate)
+}
+
 const showUploadDialog = () => {
   uploadFileList.value = []
   uploadDialogVisible.value = true
@@ -614,6 +707,8 @@ const downloadDoc = async (doc) => {
 }
 
 const deleteDoc = async (doc) => {
+  let previousDocuments = null
+  let previousSelection = null
   try {
     await ElMessageBox.confirm(
       `确定要删除“${doc.name}”吗？此操作不可恢复。`,
@@ -625,19 +720,31 @@ const deleteDoc = async (doc) => {
       }
     )
 
+    previousDocuments = documents.value
+    previousSelection = selectedDocumentIds.value
+    deletingDocumentIds.value.push(doc.document_id)
+    documents.value = documents.value.filter((item) => item.document_id !== doc.document_id)
+    selectedDocumentIds.value = selectedDocumentIds.value.filter((id) => id !== doc.document_id)
+
     const response = await axios.delete(`/api/onlyoffice/document/${doc.document_id}`)
     if (response.data.success) {
       ElMessage.success('删除成功')
-      selectedDocumentIds.value = selectedDocumentIds.value.filter((id) => id !== doc.document_id)
-      await loadDocuments()
     } else {
+      documents.value = previousDocuments
+      selectedDocumentIds.value = previousSelection
       ElMessage.error('删除失败')
     }
   } catch (error) {
     if (error !== 'cancel') {
+      if (previousDocuments && previousSelection) {
+        documents.value = previousDocuments
+        selectedDocumentIds.value = previousSelection
+      }
       console.error('删除失败:', error)
       ElMessage.error('删除失败')
     }
+  } finally {
+    deletingDocumentIds.value = deletingDocumentIds.value.filter((id) => id !== doc.document_id)
   }
 }
 
@@ -693,6 +800,7 @@ onMounted(() => {
 .filter-section {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 16px;
   margin-bottom: 16px;
   padding: 16px;
@@ -724,21 +832,55 @@ onMounted(() => {
 }
 
 .category-select,
-.sort-select {
+.sort-select,
+.report-date-picker {
   width: 260px;
 }
 
+.filter-section :deep(.el-input__wrapper),
+.filter-section :deep(.el-select__wrapper) {
+  min-height: 48px;
+  border-radius: 6px;
+  background: rgba(9, 30, 56, 0.88);
+  box-shadow: 0 0 0 1px rgba(77, 145, 210, 0.32) inset;
+}
+
+.filter-section :deep(.el-input__wrapper.is-focus),
+.filter-section :deep(.el-select__wrapper.is-focused) {
+  box-shadow: 0 0 0 1px #3da4ff inset, 0 0 0 2px rgba(61, 164, 255, 0.16);
+}
+
+.filter-section :deep(.el-input__inner),
+.filter-section :deep(.el-select__selected-item),
+.filter-section :deep(.el-select__placeholder) {
+  color: #dce9fa;
+}
+
+.filter-section :deep(.el-input__inner::placeholder) {
+  color: #8ea8c9;
+}
+
 .filter-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin-left: auto;
   white-space: nowrap;
 }
 
-.upload-button {
+.upload-button,
+.report-button {
   height: 48px;
   min-width: 150px;
   padding: 0 24px;
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 700;
+}
+
+.report-button {
+  color: #dce9fa;
+  background: rgba(22, 54, 93, 0.82);
+  border-color: rgba(88, 156, 222, 0.42);
 }
 
 .batch-toolbar {
@@ -790,7 +932,7 @@ onMounted(() => {
 .document-header,
 .document-row {
   display: grid;
-  grid-template-columns: 34px 48px minmax(220px, 2.8fr) 80px 96px minmax(140px, 1.2fr) 132px 132px 210px;
+  grid-template-columns: 34px 48px minmax(260px, 3fr) 80px 104px 150px 150px 210px;
   align-items: center;
   gap: 16px;
 }
@@ -809,7 +951,6 @@ onMounted(() => {
 .document-header .row-name,
 .document-header .row-type,
 .document-header .row-size,
-.document-header .row-category,
 .document-header .row-date,
 .document-header .row-actions {
   cursor: default;
@@ -822,7 +963,6 @@ onMounted(() => {
 
 .document-header .row-index,
 .document-header .row-size,
-.document-header .row-category,
 .document-header .row-date {
   color: var(--text-primary);
 }
@@ -842,7 +982,6 @@ onMounted(() => {
 
 .row-index,
 .row-size,
-.row-category,
 .row-date {
   font-size: 14px;
   font-weight: 600;
@@ -916,7 +1055,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 0;
+  gap: 6px;
   white-space: nowrap;
 }
 
@@ -928,26 +1067,31 @@ onMounted(() => {
   min-width: 44px;
   height: 30px;
   padding: 0 9px;
-  border: 0;
-  border-radius: 0;
-  font-weight: 500;
-  color: #fff;
+  border: 1px solid rgba(127, 178, 221, 0.24);
+  border-radius: 6px;
+  font-weight: 600;
+  color: #dce9fa;
+  background: rgba(37, 70, 106, 0.62);
 }
 
 .edit-button {
-  background: #5a7fa3;
+  color: #dce9fa;
 }
 
 .download-button {
-  background: #7ea7bd;
+  color: #c8f0ff;
 }
 
 .preview-button {
-  background: #0794a6;
+  color: #35e5f2;
+  border-color: rgba(53, 229, 242, 0.34);
+  background: rgba(7, 148, 166, 0.26);
 }
 
 .delete-button {
-  background: #bd315f;
+  color: #ffb8ca;
+  border-color: rgba(255, 92, 128, 0.35);
+  background: rgba(189, 49, 95, 0.24);
 }
 
 .action-button:hover,
@@ -985,16 +1129,107 @@ onMounted(() => {
 
 .pagination-bar {
   display: flex;
-  justify-content: flex-end;
+  justify-content: center;
   margin-top: 14px;
-  padding: 10px 12px;
-  background: rgba(16, 38, 72, 0.42);
-  border: 1px solid var(--border-light);
-  border-radius: 8px;
+  padding: 8px 12px;
+  background: transparent;
+  border: 0;
+}
+
+.pagination-bar :deep(.el-pagination.is-background .btn-prev),
+.pagination-bar :deep(.el-pagination.is-background .btn-next),
+.pagination-bar :deep(.el-pagination.is-background .el-pager li) {
+  min-width: 38px;
+  height: 34px;
+  margin: 0 5px;
+  color: var(--text-secondary);
+  background: rgba(16, 54, 87, 0.62);
+  border: 1px solid rgba(80, 165, 200, 0.58);
+  border-radius: 4px;
+}
+
+.pagination-bar :deep(.el-pagination.is-background .el-pager li.is-active) {
+  color: #fff;
+  background: rgba(64, 158, 255, 0.8);
+  border-color: rgba(94, 180, 255, 0.95);
+}
+
+.pagination-bar :deep(.el-pagination.is-background .btn-prev:disabled),
+.pagination-bar :deep(.el-pagination.is-background .btn-next:disabled) {
+  opacity: 0.45;
 }
 
 .upload-area {
   width: 100%;
+}
+
+.upload-area :deep(.el-upload-dragger) {
+  min-height: 220px;
+  background: rgba(10, 30, 48, 0.88);
+  border: 1px dashed rgba(0, 200, 255, 0.45);
+  border-radius: 8px;
+}
+
+.upload-area :deep(.el-upload-dragger:hover) {
+  border-color: var(--accent-color);
+  background: rgba(12, 39, 65, 0.94);
+}
+
+.upload-area :deep(.el-icon--upload) {
+  color: rgba(174, 202, 245, 0.78);
+}
+
+.upload-area :deep(.el-upload__text) {
+  color: var(--text-secondary);
+}
+
+.upload-area :deep(.el-upload__text em) {
+  color: var(--accent-color);
+}
+
+.upload-area :deep(.el-upload__tip) {
+  color: var(--text-secondary);
+}
+
+.document-list :deep(.el-loading-mask) {
+  background: rgba(8, 20, 38, 0.72);
+}
+
+.document-list :deep(.el-loading-spinner .path) {
+  stroke: var(--accent-color);
+}
+
+.document-list :deep(.el-loading-spinner .el-loading-text) {
+  color: var(--text-secondary);
+}
+
+:global(.el-picker-panel),
+:global(.el-date-picker) {
+  color: var(--text-primary);
+  background: #0a1e30 !important;
+  border-color: rgba(0, 200, 255, 0.25) !important;
+}
+
+:global(.el-picker-panel__body-wrapper),
+:global(.el-picker-panel__body),
+:global(.el-picker-panel__content) {
+  background: #0a1e30 !important;
+}
+
+:global(.el-date-picker__header-label),
+:global(.el-picker-panel__icon-btn),
+:global(.el-month-table td .cell) {
+  color: var(--text-secondary) !important;
+}
+
+:global(.el-month-table td.current:not(.disabled) .cell) {
+  color: var(--accent-color) !important;
+  font-weight: 700;
+}
+
+:global(.el-month-table td .cell:hover) {
+  color: var(--accent-color) !important;
+  background: rgba(0, 200, 255, 0.12);
 }
 
 .preview-editor-shell {
@@ -1065,7 +1300,15 @@ onMounted(() => {
     width: 100%;
   }
 
+  .category-select,
+  .sort-select,
+  .report-date-picker {
+    width: 100%;
+  }
+
   .filter-actions {
+    flex-direction: column;
+    align-items: stretch;
     width: 100%;
     margin-left: 0;
   }
@@ -1102,7 +1345,6 @@ onMounted(() => {
 
   .row-type,
   .row-size,
-  .row-category,
   .row-date,
   .row-actions {
     grid-column: 3;

@@ -26,6 +26,7 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8090',  // Python 后端端口
         changeOrigin: true,
+        ws: true,
       },
       // DJI Cloud API 代理（dij 项目后端，Docker 映射 6790->6789）
       '/dij-api': {

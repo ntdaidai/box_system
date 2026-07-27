@@ -379,7 +379,7 @@ class SensorHistoryApiTest(unittest.TestCase):
         self.assertEqual(response.data["coverage_ratio"], 0.0208)
         self.assertEqual(response.data["window"], {"start": 1.0, "end": 2.0})
         self.assertEqual(response.data["history"][0]["rms"], 5.0)
-        self.assertEqual(response.data["history"][0]["freq"], 3.0)
+        self.assertEqual(response.data["history"][0]["freq"], 4.0)
         self.assertEqual(response.data["history"][0]["temperature"], 26.5)
 
     def test_vibration_history_prefers_persisted_rms(self):

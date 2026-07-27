@@ -18,6 +18,7 @@ from app.models.user import User
 from app.core.database import get_db
 from app.services.sensor_history_service import get_sensor_history_service
 from app.services.iotdb_service import IoTDBUnavailableError
+from app.services.vibration_processor import dominant_freq_from_registers
 
 # 用于阻塞 I/O 操作的线程池
 _io_executor = ThreadPoolExecutor(max_workers=4)
@@ -135,14 +136,6 @@ def _to_float(value):
         return None
 
 
-def _mean_available(values):
-    numeric = [_to_float(value) for value in values]
-    numeric = [value for value in numeric if value is not None]
-    if not numeric:
-        return None
-    return round(sum(numeric) / len(numeric), 4)
-
-
 def _vector_magnitude(values):
     numeric = [_to_float(value) for value in values]
     numeric = [value for value in numeric if value is not None]
@@ -161,7 +154,7 @@ def _vibration_history_point(point: dict) -> dict:
 
     freq = _to_float(data.get("dominant_freq"))
     if freq is None:
-        freq = _mean_available([data.get("频率X"), data.get("频率Y"), data.get("频率Z")])
+        freq = dominant_freq_from_registers(data) or None
 
     temperature = _to_float(data.get("temperature"))
     if temperature is None:

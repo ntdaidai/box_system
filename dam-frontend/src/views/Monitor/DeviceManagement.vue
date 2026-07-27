@@ -5,24 +5,19 @@
         <p class="eyebrow">视频监测 / 设备管理</p>
         <h2>摄像头设备管理</h2>
       </div>
-      <button type="button" class="primary-action" @click="openCreate()">
-        <el-icon><Plus /></el-icon>
-        添加设备
-      </button>
-    </header>
-
-    <section class="source-panel">
-      <div class="panel-toolbar">
-        <div>
-          <h3>摄像头设备</h3>
-          <span>管理视频监控与视觉识别数据源。</span>
-        </div>
-        <button type="button" class="ghost-action" @click="fetchSources">
+      <div class="admin-actions">
+        <button type="button" class="primary-action" @click="openCreate()">
+          <el-icon><Plus /></el-icon>
+          添加设备
+        </button>
+        <button type="button" class="ghost-action" :class="{ loading }" @click="fetchSources">
           <el-icon><Refresh /></el-icon>
           刷新
         </button>
       </div>
+    </header>
 
+    <section class="source-panel">
       <div class="source-table" v-loading="loading">
         <div class="table-head">
           <span>设备名称</span>
@@ -56,7 +51,7 @@
       </div>
     </section>
 
-    <el-drawer v-model="drawerVisible" :title="editingSource ? '编辑摄像头设备' : '添加摄像头设备'" size="420px">
+    <el-drawer v-model="drawerVisible" :title="editingSource ? '编辑摄像头设备' : '添加摄像头设备'" size="420px" class="source-drawer">
       <el-form label-position="top" class="source-form">
         <el-form-item label="设备名称">
           <el-input v-model.trim="form.source_name" placeholder="例如：坝顶 RTSP 摄像头" />
@@ -211,6 +206,12 @@ onMounted(fetchSources)
   gap: 18px;
 }
 
+.admin-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .eyebrow {
   margin: 0 0 6px;
   color: #7fbbe8;
@@ -274,6 +275,14 @@ onMounted(fetchSources)
   border: 1px solid rgba(120, 155, 211, 0.24);
   color: #cfe3fa;
   background: rgba(32, 57, 92, 0.58);
+}
+
+.ghost-action.loading .el-icon {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 .source-table {
@@ -361,6 +370,51 @@ onMounted(fetchSources)
 
 .source-form :deep(.el-input-number) {
   width: 100%;
+}
+
+:global(.source-drawer.el-drawer) {
+  color: #dce9fa;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(49, 217, 255, 0.11), transparent 30%),
+    linear-gradient(180deg, #0d2137 0%, #081827 100%);
+  border-left: 1px solid rgba(49, 217, 255, 0.28);
+}
+
+:global(.source-drawer .el-drawer__header) {
+  margin-bottom: 0;
+  padding: 22px 24px 14px;
+  color: #f4f8ff;
+  border-bottom: 1px solid rgba(143, 181, 225, 0.14);
+}
+
+:global(.source-drawer .el-drawer__body) {
+  padding: 22px 24px;
+}
+
+:global(.source-drawer .el-drawer__footer) {
+  padding: 14px 24px 22px;
+  border-top: 1px solid rgba(143, 181, 225, 0.12);
+}
+
+:global(.source-drawer .el-form-item__label) {
+  color: #a8bddb;
+}
+
+:global(.source-drawer .el-input__wrapper),
+:global(.source-drawer .el-textarea__inner),
+:global(.source-drawer .el-input-number .el-input__wrapper) {
+  color: #f4f8ff;
+  background: rgba(6, 22, 38, 0.76);
+  box-shadow: 0 0 0 1px rgba(120, 155, 211, 0.24) inset;
+}
+
+:global(.source-drawer .el-input__inner),
+:global(.source-drawer .el-textarea__inner) {
+  color: #f4f8ff;
+}
+
+:global(.source-drawer .el-checkbox__label) {
+  color: #bcd1ec;
 }
 
 @media (max-width: 980px) {

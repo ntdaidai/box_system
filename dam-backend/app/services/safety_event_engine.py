@@ -316,6 +316,7 @@ class SafetyEventEngine:
         *,
         reason: str = "manual_close",
         now: Optional[float] = None,
+        emit_action: bool = True,
     ) -> bool:
         now = float(now if now is not None else time.time())
         with self._lock:
@@ -323,7 +324,7 @@ class SafetyEventEngine:
             for key, track in list(self.store.tracks.items()):
                 if track.event_id != event_id:
                     continue
-                self._resolve(track, now, reason)
+                self._resolve(track, now, reason, emit_action=emit_action)
                 self.store.upsert_track(key, track)
                 matched = True
             if not matched:
@@ -487,6 +488,8 @@ class SafetyEventEngine:
         if not track.current_zone_roles:
             if track.clear_since is None:
                 track.clear_since = now
+                if track.event_id:
+                    self._log_action(track, "target_left", now, {"clear_since": now})
                 changed = True
             if track.event_id and now - track.clear_since >= self.config.resolve_clear_seconds:
                 self._resolve(track, now, "left_danger_zones")
@@ -523,6 +526,8 @@ class SafetyEventEngine:
             return False
         if track.clear_since is None:
             track.clear_since = track.missing_since + self.config.lost_grace_seconds
+            if track.event_id:
+                self._log_action(track, "target_left", now, {"clear_since": track.clear_since})
             return True
         if track.event_id and now - track.clear_since >= self.config.resolve_clear_seconds:
             self._resolve(track, now, "missing_then_clear")
@@ -574,6 +579,8 @@ class SafetyEventEngine:
                 "entity_type": track.entity_type,
                 "track_id": track.track_id,
                 "state": STATE_DETECTED,
+                "status": "PENDING",
+                "event_type": self._event_type(observation),
                 "risk_level": RISK_NONE,
                 "started_at": now,
                 "first_seen_at": track.first_seen_at,
@@ -627,20 +634,29 @@ class SafetyEventEngine:
         for action_type in self._actions_for_risk(risk_level):
             self._log_action(track, action_type, now, {"risk_level": risk_level})
 
-    def _resolve(self, track: TrackContext, now: float, reason: str) -> None:
+    def _resolve(
+        self,
+        track: TrackContext,
+        now: float,
+        reason: str,
+        *,
+        emit_action: bool = True,
+    ) -> None:
         track.state = STATE_RESOLVED
         if track.event_id:
             event = dict(self.store.events.get(track.event_id, {}))
             event.update(
                 {
                     "state": STATE_RESOLVED,
+                    "status": "RESOLVED",
                     "resolved_at": now,
                     "updated_at": now,
                     "resolve_reason": reason,
                 }
             )
             self.store.create_or_update_event(event)
-            self._log_action(track, "event_resolved", now, {"reason": reason})
+            if emit_action:
+                self._log_action(track, "event_resolved", now, {"reason": reason})
 
     def _log_action(
         self,
@@ -716,6 +732,20 @@ class SafetyEventEngine:
             RISK_MEDIUM: STATE_MEDIUM_RISK,
             RISK_HIGH: STATE_HIGH_RISK,
         }[risk_level]
+
+    @staticmethod
+    def _event_type(observation: Dict[str, Any]) -> str:
+        zone_type = (observation.get("zone_types") or [None])[0]
+        return {
+            "WARNING_ZONE": "人员警戒区停留",
+            "warning_zone": "人员警戒区停留",
+            "person_intrusion": "人员警戒区停留",
+            "WATERFRONT_ZONE": "人员进入亲水区",
+            "waterside_zone": "人员进入亲水区",
+            "WATER_ZONE": "人员进入涉水区",
+            "wading_zone": "人员进入涉水区",
+            "illegal_fishing": "疑似船只靠近",
+        }.get(str(zone_type), "区域风险事件")
 
     @staticmethod
     def _new_event_id() -> str:

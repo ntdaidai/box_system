@@ -5,16 +5,19 @@
 
 import math
 import time
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 from loguru import logger
 
 # 关键参数（硬编码）
 SAMPLE_RATE = 100  # 采样率 100Hz
 RMS_WINDOW = 100  # RMS窗口 1秒（100个采样点）
 FFT_POINTS = 256  # FFT点数
+MAX_BUFFER_POINTS = max(RMS_WINDOW, FFT_POINTS)
 HIGHPASS_CUTOFF = 0.5  # 高通截止频率 Hz
 CREST_FACTOR_THRESHOLD = 3.5  # 冲击阈值（峰值因子）
 FREQ_DRIFT_THRESHOLD = 15  # 主频偏移阈值 %
+FREQ_CLUSTER_TOLERANCE_HZ = 1.0  # 多轴同一模态的频率聚合容差
+MIN_AXIS_WEIGHT_RATIO = 0.15  # 参与同一模态聚合的最小轴能量占比
 
 # 分级报警阈值
 ALERT_THRESHOLDS = {
@@ -24,12 +27,69 @@ ALERT_THRESHOLDS = {
 }
 
 
+def dominant_freq_from_registers(raw_data: Dict[str, Any]) -> float:
+    """根据传感器三轴频率寄存器计算综合主频。"""
+    candidates = []
+    for axis in ("X", "Y", "Z"):
+        freq = _to_float_value(raw_data.get(f"频率{axis}"))
+        if freq is None or freq <= 0:
+            continue
+        weight = _axis_weight(raw_data, axis)
+        candidates.append({"axis": axis, "freq": freq, "weight": max(weight, 0.0)})
+
+    if not candidates:
+        return 0.0
+
+    max_weight = max(item["weight"] for item in candidates)
+    if max_weight <= 0:
+        return _median([item["freq"] for item in candidates])
+
+    primary = max(candidates, key=lambda item: item["weight"])
+    same_mode = [
+        item for item in candidates
+        if item["weight"] >= max_weight * MIN_AXIS_WEIGHT_RATIO
+        and abs(item["freq"] - primary["freq"]) <= FREQ_CLUSTER_TOLERANCE_HZ
+    ]
+    total_weight = sum(item["weight"] for item in same_mode)
+    if total_weight <= 0:
+        return primary["freq"]
+    return sum(item["freq"] * item["weight"] for item in same_mode) / total_weight
+
+
+def _axis_weight(raw_data: Dict[str, Any], axis: str) -> float:
+    for key in (f"加速度幅值{axis}", f"速度{axis}", f"位移{axis}", f"加速度{axis}"):
+        value = _to_float_value(raw_data.get(key))
+        if value is not None:
+            return abs(value)
+    return 0.0
+
+
+def _to_float_value(value: Any) -> Optional[float]:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric):
+        return None
+    return numeric
+
+
+def _median(values: List[float]) -> float:
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2
+
+
 class VibrationProcessor:
     """振动数据处理器"""
 
-    def __init__(self):
+    def __init__(self, sample_rate: float = SAMPLE_RATE):
         # 数据缓冲区
         self.accel_buffer: List[float] = []  # 加速度合成值缓冲区
+        self.axis_buffers: Dict[str, List[float]] = {"x": [], "y": [], "z": []}  # 三轴原始加速度缓冲
+        self.sample_rate = float(sample_rate) if sample_rate > 0 else SAMPLE_RATE
         self.rms_history: List[Dict[str, Any]] = []  # RMS历史记录
         self.event_list: List[Dict[str, Any]] = []  # 事件列表
 
@@ -58,13 +118,9 @@ class VibrationProcessor:
         Returns:
             处理后的数据字典
         """
-        # 1. 三轴合成
+        # 1. 三轴合成并更新缓冲区。RMS 使用合成幅值；频谱分析使用三轴原始值，避免幅值化导致主频翻倍。
         total_accel = self.calc_total_acceleration(raw_data)
-
-        # 2. 更新缓冲区
-        self.accel_buffer.append(total_accel)
-        if len(self.accel_buffer) > RMS_WINDOW:
-            self.accel_buffer.pop(0)
+        self._append_sample(raw_data, total_accel)
 
         # 3. 计算RMS
         rms = self.calc_rms(self.accel_buffer)
@@ -72,8 +128,8 @@ class VibrationProcessor:
         # 4. 计算峰值因子
         crest_factor = self.calc_crest_factor(self.accel_buffer, rms)
 
-        # 5. FFT求主频
-        dominant_freq = self.calc_dominant_freq(self.accel_buffer)
+        # 5. 综合主频：优先采用传感器三轴频率寄存器的主振动轴结果；缺失时使用三轴能量合成FFT兜底。
+        dominant_freq = self.calc_dominant_freq(raw_data)
 
         # 6. 更新基线主频
         self._update_baseline_freq(dominant_freq)
@@ -111,10 +167,25 @@ class VibrationProcessor:
         Returns:
             合成加速度值
         """
-        ax = data.get("加速度X", 0) or 0
-        ay = data.get("加速度Y", 0) or 0
-        az = data.get("加速度Z", 0) or 0
+        ax = _to_float_value(data.get("加速度X")) or 0
+        ay = _to_float_value(data.get("加速度Y")) or 0
+        az = _to_float_value(data.get("加速度Z")) or 0
         return math.sqrt(ax**2 + ay**2 + az**2)
+
+    def _append_sample(self, raw_data: Dict[str, Any], total_accel: float):
+        self.accel_buffer.append(total_accel)
+        if len(self.accel_buffer) > MAX_BUFFER_POINTS:
+            self.accel_buffer.pop(0)
+
+        axis_values = {
+            "x": _to_float_value(raw_data.get("加速度X")) or 0.0,
+            "y": _to_float_value(raw_data.get("加速度Y")) or 0.0,
+            "z": _to_float_value(raw_data.get("加速度Z")) or 0.0,
+        }
+        for axis, value in axis_values.items():
+            self.axis_buffers[axis].append(value)
+            if len(self.axis_buffers[axis]) > MAX_BUFFER_POINTS:
+                self.axis_buffers[axis].pop(0)
 
     def calc_rms(self, data: List[float]) -> float:
         """滑动窗口RMS：A_RMS = √( (a₁² + a₂² + ... + aₙ²) / N )
@@ -157,81 +228,94 @@ class VibrationProcessor:
         peak = max(abs(x) for x in recent)
         return peak / rms
 
-    def calc_dominant_freq(self, data: List[float]) -> float:
-        """FFT求主频
+    def calc_dominant_freq(self, raw_data: Optional[Dict[str, Any]] = None) -> float:
+        """计算综合主频
 
-        取256点加Hanning窗，做FFT，在1~20Hz范围内找幅值最大的频率
+        传感器已经提供三轴主频寄存器时，综合主频取主振动轴所在模态：
+        - 按加速度幅值/速度/位移选择能量最大的轴
+        - 如果其它轴频率接近该轴，按能量做小范围加权稳定
+        - 不把相距较远的多个频率简单平均，避免产生物理上不存在的主频
 
-        Args:
-            data: 加速度数据列表
+        寄存器缺失时，使用三轴原始加速度分别去均值、加Hanning窗、做FFT，
+        再按频点合成三轴频谱能量，在1~20Hz范围内找能量峰。
 
         Returns:
             主频 Hz
         """
-        if len(data) < FFT_POINTS:
+        register_freq = self.calc_register_dominant_freq(raw_data or {})
+        if register_freq > 0:
+            return register_freq
+        return self.calc_fft_dominant_freq()
+
+    def calc_register_dominant_freq(self, raw_data: Dict[str, Any]) -> float:
+        """根据传感器三轴频率寄存器计算综合主频。"""
+        return dominant_freq_from_registers(raw_data)
+
+    def calc_fft_dominant_freq(self) -> float:
+        """三轴能量合成FFT求主频。"""
+        if any(len(values) < FFT_POINTS for values in self.axis_buffers.values()):
             return 0.0
 
-        # 取最近256点
-        recent = data[-FFT_POINTS:]
-
-        # 加Hanning窗
         window = [0.5 * (1 - math.cos(2 * math.pi * i / (FFT_POINTS - 1))) for i in range(FFT_POINTS)]
-        windowed = [recent[i] * window[i] for i in range(FFT_POINTS)]
+        axis_windows = []
+        for axis in ("x", "y", "z"):
+            recent = self.axis_buffers[axis][-FFT_POINTS:]
+            mean_value = sum(recent) / FFT_POINTS
+            axis_windows.append([(recent[i] - mean_value) * window[i] for i in range(FFT_POINTS)])
 
-        # 使用numpy进行FFT
         try:
             import numpy as np
 
-            fft_result = np.fft.fft(windowed)
-            freqs = np.fft.fftfreq(FFT_POINTS, 1.0/SAMPLE_RATE)
+            fft_results = [np.fft.rfft(values) for values in axis_windows]
+            freqs = np.fft.rfftfreq(FFT_POINTS, 1.0 / self.sample_rate)
+            combined_power = sum(np.abs(result) ** 2 for result in fft_results)
 
-            # 只取正频率部分，在1-20Hz范围内找最大值
-            max_magnitude = 0
+            max_power = 0
             max_freq = 0.0
-
-            for i in range(FFT_POINTS // 2):
+            max_search_freq = min(20.0, self.sample_rate / 2.0)
+            for i in range(1, len(freqs)):
                 freq = freqs[i]
-                if 1.0 <= freq <= 20.0:
-                    magnitude = abs(fft_result[i])
-                    if magnitude > max_magnitude:
-                        max_magnitude = magnitude
+                if 1.0 <= freq <= max_search_freq:
+                    power = combined_power[i]
+                    if power > max_power:
+                        max_power = power
                         max_freq = freq
 
-            return max_freq
+            return float(max_freq)
 
         except ImportError:
-            # 如果没有numpy，使用简化的DFT
             logger.warning("numpy未安装，使用简化DFT算法")
-            return self._calc_dominant_freq_dft(recent)
+            return self._calc_dominant_freq_dft(axis_windows)
 
-    def _calc_dominant_freq_dft(self, data: List[float]) -> float:
+    def _calc_dominant_freq_dft(self, axis_windows: List[List[float]]) -> float:
         """简化的DFT算法（不依赖numpy）
 
         Args:
-            data: 数据列表（长度应为FFT_POINTS）
+            axis_windows: 三轴去均值加窗后的数据
 
         Returns:
             主频 Hz
         """
-        if len(data) < FFT_POINTS:
+        if not axis_windows or any(len(data) < FFT_POINTS for data in axis_windows):
             return 0.0
 
-        max_magnitude = 0
+        max_power = 0
         max_freq = 0.0
+        max_search_freq = min(20, int(self.sample_rate / 2))
 
-        # 只检查1-20Hz范围
-        for freq in range(1, 21):
-            # 计算该频率的幅值
-            real = 0.0
-            imag = 0.0
-            for i in range(FFT_POINTS):
-                angle = 2 * math.pi * freq * i / SAMPLE_RATE
-                real += data[i] * math.cos(angle)
-                imag -= data[i] * math.sin(angle)
+        for freq in range(1, max_search_freq + 1):
+            power = 0.0
+            for data in axis_windows:
+                real = 0.0
+                imag = 0.0
+                for i in range(FFT_POINTS):
+                    angle = 2 * math.pi * freq * i / self.sample_rate
+                    real += data[i] * math.cos(angle)
+                    imag -= data[i] * math.sin(angle)
+                power += real**2 + imag**2
 
-            magnitude = math.sqrt(real**2 + imag**2)
-            if magnitude > max_magnitude:
-                max_magnitude = magnitude
+            if power > max_power:
+                max_power = power
                 max_freq = float(freq)
 
         return max_freq

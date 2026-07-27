@@ -32,6 +32,7 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     _ensure_camera_zone_schema()
     _ensure_broadcast_schema()
+    _ensure_safety_event_schema()
     logger.info("数据库表已初始化")
 
     db = SessionLocal()
@@ -159,6 +160,77 @@ def _ensure_camera_zone_schema():
                     )
             except Exception as exc:
                 logger.warning(f"camera_detection_zone zone_id backfill skipped: {exc}")
+
+
+def _ensure_safety_event_schema():
+    """Best-effort compatibility migration for event lifecycle closure fields."""
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+    if "safety_event" not in table_names:
+        return
+
+    existing_event = {column["name"] for column in inspector.get_columns("safety_event")}
+    existing_log = (
+        {column["name"] for column in inspector.get_columns("safety_event_log")}
+        if "safety_event_log" in table_names else set()
+    )
+    dialect = engine.dialect.name
+    if dialect == "mysql":
+        event_columns = {
+            "status": "VARCHAR(32) NOT NULL DEFAULT 'PENDING' COMMENT '处置闭环状态'",
+            "event_type": "VARCHAR(64) NULL COMMENT '事件类型'",
+            "camera_name": "VARCHAR(128) NULL COMMENT '摄像头名称'",
+            "video_url": "VARCHAR(512) NULL COMMENT '事件录像地址'",
+            "duration_seconds": "INT NOT NULL DEFAULT 0 COMMENT '事件持续秒数'",
+            "ack_operator": "VARCHAR(128) NULL COMMENT '确认人员'",
+            "ack_at": "DATETIME NULL COMMENT '确认时间'",
+            "resolved_operator": "VARCHAR(128) NULL COMMENT '解除人员'",
+            "false_alarm_operator": "VARCHAR(128) NULL COMMENT '误报确认人员'",
+            "false_alarm_reason": "VARCHAR(500) NULL COMMENT '误报原因'",
+            "version": "INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本号'",
+        }
+        log_columns = {
+            "from_status": "VARCHAR(32) NULL COMMENT '操作前处置状态'",
+            "to_status": "VARCHAR(32) NULL COMMENT '操作后处置状态'",
+            "operator": "VARCHAR(128) NULL COMMENT '操作人员'",
+            "operator_role": "VARCHAR(64) NULL COMMENT '操作人员角色'",
+        }
+    else:
+        event_columns = {
+            "status": "VARCHAR(32) DEFAULT 'PENDING'",
+            "event_type": "VARCHAR(64)",
+            "camera_name": "VARCHAR(128)",
+            "video_url": "VARCHAR(512)",
+            "duration_seconds": "INT DEFAULT 0",
+            "ack_operator": "VARCHAR(128)",
+            "ack_at": "DATETIME",
+            "resolved_operator": "VARCHAR(128)",
+            "false_alarm_operator": "VARCHAR(128)",
+            "false_alarm_reason": "VARCHAR(500)",
+            "version": "INT DEFAULT 0",
+        }
+        log_columns = {
+            "from_status": "VARCHAR(32)",
+            "to_status": "VARCHAR(32)",
+            "operator": "VARCHAR(128)",
+            "operator_role": "VARCHAR(64)",
+        }
+
+    with engine.begin() as conn:
+        for name, definition in event_columns.items():
+            if name in existing_event:
+                continue
+            try:
+                conn.execute(text(f"ALTER TABLE safety_event ADD COLUMN {name} {definition}"))
+            except Exception as exc:
+                logger.warning(f"safety_event add column {name} skipped: {exc}")
+        for name, definition in log_columns.items():
+            if name in existing_log:
+                continue
+            try:
+                conn.execute(text(f"ALTER TABLE safety_event_log ADD COLUMN {name} {definition}"))
+            except Exception as exc:
+                logger.warning(f"safety_event_log add column {name} skipped: {exc}")
 
 
 def get_db():

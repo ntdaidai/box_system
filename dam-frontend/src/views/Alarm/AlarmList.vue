@@ -85,7 +85,6 @@
               <span class="sort-icon">{{ sortIcon('level') }}</span>{{ sortText('level') }}
             </span>
           </div>
-          <div class="col-desc">描述</div>
           <div class="col-content">告警内容</div>
           <div class="col-status sortable" @click="toggleSort('status')">
             状态
@@ -107,9 +106,6 @@
             <span class="level-tag" :class="'level-' + row.alarm_level">
               {{ levelText(row.alarm_level) }}
             </span>
-          </div>
-          <div class="col-desc">
-            <span class="desc-text" @click="showFullContent(row)">{{ row.alarm_content || '--' }}</span>
           </div>
           <div class="col-content">
             <span class="report-link" @click="openReport(row)">查看分析报告</span>
@@ -751,17 +747,6 @@ onMounted(async () => {
   text-align: center;
 }
 
-.col-desc {
-  flex: 2;
-  font-size: 13px;
-  color: rgba(224, 240, 255, 0.8);
-  text-align: center;
-  padding: 0 10px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .desc-text {
   display: inline-block;
   max-width: 100%;
@@ -780,7 +765,8 @@ onMounted(async () => {
 }
 
 .col-content {
-  flex: 1;
+  flex: 2.4;
+  min-width: 0;
   font-size: 13px;
   text-align: center;
 }

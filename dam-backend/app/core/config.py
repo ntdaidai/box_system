@@ -110,6 +110,12 @@ class Settings:
     )
     ONLYOFFICE_JWT_SECRET: str = _get_env("ONLYOFFICE_JWT_SECRET", "mysecretkey")
 
+    # ── 自动巡查日报 ─────────────────────────────────────────
+    PATROL_REPORT_AUTO_ENABLED: bool = _get_env("PATROL_REPORT_AUTO_ENABLED", "true").lower() == "true"
+    PATROL_REPORT_AUTO_TIME: str = _get_env("PATROL_REPORT_AUTO_TIME", "23:55")
+    PATROL_REPORT_USER_ID: str = _get_env("PATROL_REPORT_USER_ID", "user_001")
+    PATROL_REPORT_USER_NAME: str = _get_env("PATROL_REPORT_USER_NAME", "管理员")
+
     # ── 可扩展视觉模型 ──────────────────────────────────────
     # YOLO_MODEL_PATH remains a compatibility fallback for older deployments.
     YOLO_MODEL_PATH: str = _get_env(

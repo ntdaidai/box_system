@@ -159,6 +159,12 @@ export function getSafetyEvents(params = {}) {
   })
 }
 
+export function getSafetyEventDetail(eventId) {
+  return request.get(`/v1/camera/safety/events/${encodeURIComponent(eventId)}`, {
+    localCache: false,
+  })
+}
+
 export function getTodaySafetyReport(params = {}) {
   return request.get('/v1/camera/safety/report/today', {
     params,
@@ -168,6 +174,26 @@ export function getTodaySafetyReport(params = {}) {
 
 export function recordSafetyEventAction(eventId, data) {
   return request.post(`/v1/camera/safety/events/${encodeURIComponent(eventId)}/action`, data)
+}
+
+export function acknowledgeSafetyEvent(eventId, data = {}) {
+  return request.post(`/v1/camera/safety/events/${encodeURIComponent(eventId)}/ack`, data)
+}
+
+export function broadcastSafetyEvent(eventId, data = {}) {
+  return request.post(`/v1/camera/safety/events/${encodeURIComponent(eventId)}/broadcast`, data)
+}
+
+export function dispatchSafetyEvent(eventId, data = {}) {
+  return request.post(`/v1/camera/safety/events/${encodeURIComponent(eventId)}/dispatch`, data)
+}
+
+export function markSafetyEventFalseAlarm(eventId, data = {}) {
+  return request.post(`/v1/camera/safety/events/${encodeURIComponent(eventId)}/false-alarm`, data)
+}
+
+export function resolveSafetyEvent(eventId, data = {}) {
+  return request.post(`/v1/camera/safety/events/${encodeURIComponent(eventId)}/resolve`, data)
 }
 
 export function getLatestDetection(cameraId) {

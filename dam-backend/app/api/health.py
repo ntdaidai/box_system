@@ -124,22 +124,98 @@ def _get_system_uptime() -> float:
         return 0.0
 
 
+def _detect_gpu_processes() -> dict:
+    """检测是否有 GPU 推理进程在运行
+
+    兼容容器环境：优先读宿主机 /proc（需挂载），回退到容器内 ps aux。
+
+    返回：
+      - active: bool 是否有推理任务
+      - processes: list 检测到的进程信息
+    """
+    import subprocess
+    import os
+    gpu_keywords = [
+        "tensorrt", "trtexec", "onnxruntime", "cuda",
+        "vllm", "torch", "tensorflow", "inference",
+        "nvcr.io", "deepstream", "yolo", "model_server",
+    ]
+    processes = []
+
+    # 方案一：遍历宿主机 /proc（容器内通过 volume 挂载到 /host/proc）
+    try:
+        proc_dir = "/host/proc" if os.path.isdir("/host/proc") else "/proc"
+        for entry in os.listdir(proc_dir):
+            if not entry.isdigit():
+                continue
+            cmdline_path = os.path.join(proc_dir, entry, "cmdline")
+            try:
+                with open(cmdline_path, "r") as f:
+                    cmdline = f.read().replace("\x00", " ").strip()
+                if not cmdline:
+                    continue
+                lower = cmdline.lower()
+                for kw in gpu_keywords:
+                    if kw in lower:
+                        processes.append({"keyword": kw, "command": cmdline[:80]})
+                        break
+                if len(processes) >= 5:
+                    break
+            except (PermissionError, FileNotFoundError, OSError):
+                continue
+    except Exception as e:
+        logger.warning(f"/proc 遍历失败: {e}")
+
+    # 方案二：回退到 ps aux（容器内场景）
+    if not processes:
+        try:
+            out = subprocess.run(
+                ["ps", "aux"], capture_output=True, text=True, timeout=3,
+            )
+            if out.returncode == 0:
+                for line in out.stdout.splitlines():
+                    lower = line.lower()
+                    if "ps aux" in lower or "grep" in lower:
+                        continue
+                    for kw in gpu_keywords:
+                        if kw in lower:
+                            parts = line.split(None, 10)
+                            cmd = parts[10][:80] if len(parts) > 10 else line[:80]
+                            processes.append({"keyword": kw, "command": cmd})
+                            break
+                    if len(processes) >= 5:
+                        break
+        except Exception as e:
+            logger.warning(f"GPU 进程检测失败: {e}")
+
+    return {
+        "active": len(processes) > 0,
+        "processes": processes[:5],  # 最多返回 5 个
+    }
+
+
 def _get_gpu_info() -> dict:
     """获取 GPU 状态信息（Jetson 平台使用 tegrastats，通用平台回退 nvidia-smi）
 
     返回字段：
       - available: 是否获取成功
       - vendor: GPU 厂商（如 "NVIDIA Jetson Orin"）
-      - utilization_percent: GPU 使用率（0-100）
+      - status: GPU 状态（"推理中" / "空闲" / "未知"）
+      - inference: 推理进程检测详情
       - memory: {total_mb, used_mb, percent}
       - temperature_c: 温度（摄氏度）
       - power_w: 当前功耗（瓦）
       - source: 数据来源（"tegrastats" / "nvidia-smi" / "none"）
     """
+    # 检测 GPU 推理进程
+    inference = _detect_gpu_processes()
+
     result = {
         "available": False,
         "vendor": "unknown",
-        "utilization_percent": 0.0,
+        "status": "推理中" if inference["active"] else "空闲",
+        "inference": inference,
+        "utilization_percent": 0.0,  # 保留兼容（ECA 引擎使用）
         "memory": {"total_mb": 0, "used_mb": 0, "percent": 0.0},
         "temperature_c": 0.0,
         "power_w": 0.0,

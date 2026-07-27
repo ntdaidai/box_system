@@ -51,7 +51,7 @@
             {{ formatDrift(processedData.freq_drift_percent) }}
           </div>
           <div class="card-label">当前主频</div>
-          <div class="card-desc">FFT分析1-20Hz范围内主频</div>
+          <div class="card-desc">主振动轴优先，FFT综合兜底</div>
         </div>
 
         <div class="indicator-card status-card">
@@ -237,7 +237,7 @@ const isAlertFlashing = ref(false)
 const historyLoading = ref(false)
 const historyError = ref('')
 const chartData = ref({ view: 'recent24h', history: [], window: null })
-const thresholdVisibility = reactive({ warning: true, alarm: true })
+const thresholdVisibility = reactive({ warning: false, alarm: false })
 const historyCache = new Map()
 
 let chart = null
@@ -683,13 +683,20 @@ const fullChartOption = () => {
       connectNulls: false,
       clip: true,
       z: 3,
-      lineStyle: { color: '#20d7ff', width: recent ? 2.4 : 1.8 },
+      lineStyle: {
+        color: '#20d7ff',
+        width: recent ? 2.4 : 1.8,
+        shadowBlur: 16,
+        shadowColor: 'rgba(32, 215, 255, 0.58)',
+        shadowOffsetY: 8,
+      },
       itemStyle: { color: '#20d7ff', borderColor: '#ffffff', borderWidth: 1 },
       emphasis: { focus: 'series', scale: true },
       universalTransition: true,
       areaStyle: {
         color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-          { offset: 0, color: 'rgba(32, 215, 255, 0.24)' },
+          { offset: 0, color: 'rgba(32, 215, 255, 0.46)' },
+          { offset: 0.48, color: 'rgba(32, 215, 255, 0.18)' },
           { offset: 1, color: 'rgba(32, 215, 255, 0)' },
         ]),
       },

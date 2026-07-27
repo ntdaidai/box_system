@@ -24,10 +24,6 @@
             <span class="compass-label label-e">东</span>
             <span class="compass-label label-s">南</span>
             <span class="compass-label label-w">西</span>
-            <span class="compass-label compass-label-sub label-ne">东北</span>
-            <span class="compass-label compass-label-sub label-se">东南</span>
-            <span class="compass-label compass-label-sub label-sw">西南</span>
-            <span class="compass-label compass-label-sub label-nw">西北</span>
             <div v-if="compassState.angle != null" class="compass-pointer" :style="compassState.pointerStyle">
               <span class="compass-arrow"></span>
             </div>
@@ -115,14 +111,13 @@
               <el-option
                 v-for="year in yearOptions"
                 :key="year"
-                :label="year === 'last12' ? '过去12个月' : `${year}年`"
+                :label="`${year}年`"
                 :value="year"
               />
             </el-select>
             <el-select
               v-model="selectedMonth"
               class="history-select month-select"
-              :disabled="selectedYear === 'last12'"
               @change="onMonthChange"
             >
               <el-option label="所有月份" value="all" />
@@ -211,7 +206,7 @@ const yearOptions = computed(() => {
   const years = availablePeriods.value.map(item => Number(item.year)).filter(Number.isFinite)
   const selected = Number(selectedYear.value)
   if (Number.isInteger(selected) && !years.includes(selected)) years.push(selected)
-  return ['last12', ...(years.length ? [...new Set(years)].sort((a, b) => b - a) : [initialShanghaiYear])]
+  return years.length ? [...new Set(years)].sort((a, b) => b - a) : [initialShanghaiYear]
 })
 
 const monthOptions = computed(() => {
@@ -311,13 +306,11 @@ const readHistoryCache = (query) => {
 
 const currentQuery = () => historyMode.value === 'recent24h'
   ? { view: 'recent24h' }
-  : selectedYear.value === 'last12'
-    ? { view: 'rolling12' }
-    : {
-      view: 'calendar',
-      year: Number(selectedYear.value),
-      month: selectedMonth.value === 'all' ? null : Number(selectedMonth.value),
-    }
+  : {
+    view: 'calendar',
+    year: Number(selectedYear.value),
+    month: selectedMonth.value === 'all' ? null : Number(selectedMonth.value),
+  }
 
 const syncAvailablePeriods = (periods = []) => {
   if (!Array.isArray(periods) || !periods.length) return
@@ -433,11 +426,6 @@ const restoreSelectionFromChart = () => {
   }
 
   historyMode.value = 'calendar'
-  if (view === 'rolling12') {
-    selectedYear.value = 'last12'
-    selectedMonth.value = 'all'
-    return
-  }
 
   const year = Number(chartData.value.year)
   selectedYear.value = Number.isInteger(year) ? year : initialShanghaiYear
@@ -476,7 +464,6 @@ const selectRecent24h = async () => {
 
 const onYearChange = async () => {
   historyMode.value = 'calendar'
-  if (selectedYear.value === 'last12') selectedMonth.value = 'all'
   if (selectedMonth.value !== 'all' && !monthOptions.value.includes(Number(selectedMonth.value))) {
     selectedMonth.value = 'all'
   }
@@ -649,13 +636,20 @@ const fullChartOption = () => {
       connectNulls: false,
       clip: true,
       z: 3,
-      lineStyle: { color: '#72cdf9', width: observedMax <= 1 ? 2.2 : (monthly ? 1.8 : 1.35) },
+      lineStyle: {
+        color: '#72cdf9',
+        width: observedMax <= 1 ? 2.2 : (monthly ? 1.8 : 1.35),
+        shadowBlur: 16,
+        shadowColor: 'rgba(114, 205, 249, 0.56)',
+        shadowOffsetY: 8,
+      },
       itemStyle: { color: '#76d4ff', borderColor: '#dff5ff', borderWidth: 1 },
       emphasis: { focus: 'series', scale: true },
       areaStyle: {
         color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-          { offset: 0, color: 'rgba(113, 198, 246, 0.58)' },
-          { offset: 1, color: 'rgba(68, 119, 195, 0.14)' },
+          { offset: 0, color: 'rgba(113, 198, 246, 0.72)' },
+          { offset: 0.48, color: 'rgba(68, 119, 195, 0.28)' },
+          { offset: 1, color: 'rgba(68, 119, 195, 0.06)' },
         ]),
       },
       markLine: currentDayMark(),
@@ -746,12 +740,12 @@ onUnmounted(() => {
   position: relative;
   width: 188px;
   height: 188px;
-  border: 1px solid rgba(0, 216, 255, 0.18);
+  border: 1px solid rgba(0, 216, 255, 0.28);
   border-radius: 50%;
   background:
-    radial-gradient(circle at center, rgba(0, 216, 255, 0.07) 0 1px, transparent 2px),
-    radial-gradient(circle at center, rgba(10, 31, 55, 0.45) 0 58%, rgba(10, 31, 55, 0.32) 59% 100%);
-  box-shadow: inset 0 0 0 28px rgba(0, 216, 255, 0.025);
+    radial-gradient(circle at center, rgba(0, 216, 255, 0.13) 0 2px, transparent 3px),
+    radial-gradient(circle at center, rgba(11, 40, 67, 0.64) 0 54%, rgba(7, 25, 45, 0.94) 55% 100%);
+  box-shadow: inset 0 0 0 24px rgba(0, 216, 255, 0.035), 0 0 24px rgba(0, 216, 255, 0.08);
 }
 .wind-compass::before,
 .wind-compass::after {
@@ -761,13 +755,13 @@ onUnmounted(() => {
   border-radius: 50%;
   pointer-events: none;
 }
-.wind-compass::before { border: 1px solid rgba(0, 216, 255, 0.10); }
-.wind-compass::after { inset: 46px; border: 1px solid rgba(0, 216, 255, 0.08); }
+.wind-compass::before { border: 1px solid rgba(0, 216, 255, 0.18); }
+.wind-compass::after { inset: 48px; border: 1px solid rgba(0, 216, 255, 0.11); }
 .compass-axis {
   position: absolute;
   left: 50%;
   top: 50%;
-  background: rgba(0, 216, 255, 0.10);
+  background: rgba(0, 216, 255, 0.18);
   transform: translate(-50%, -50%);
 }
 .axis-vertical { width: 1px; height: 132px; }
@@ -775,26 +769,17 @@ onUnmounted(() => {
 .compass-label {
   position: absolute;
   z-index: 2;
-  color: #9fc4df;
-  font-size: 12px;
-  font-weight: 600;
+  color: #c3e9ff;
+  font-size: 16px;
+  font-weight: 800;
   line-height: 1;
   transform: translate(-50%, -50%);
   white-space: nowrap;
 }
-.label-n { top: 12px; left: 50%; color: #00d8ff; }
-.label-e { top: 50%; left: calc(100% - 12px); }
-.label-s { top: calc(100% - 12px); left: 50%; }
-.label-w { top: 50%; left: 12px; }
-.compass-label-sub {
-  color: rgba(159, 196, 223, 0.55);
-  font-size: 10px;
-  font-weight: 500;
-}
-.label-ne { top: 28%; left: 72%; }
-.label-se { top: 72%; left: 72%; }
-.label-sw { top: 72%; left: 28%; }
-.label-nw { top: 28%; left: 28%; }
+.label-n { top: 14px; left: 50%; color: #00d8ff; }
+.label-e { top: 50%; left: calc(100% - 15px); }
+.label-s { top: calc(100% - 14px); left: 50%; }
+.label-w { top: 50%; left: 15px; }
 .compass-pointer {
   position: absolute;
   inset: 0;
@@ -806,35 +791,28 @@ onUnmounted(() => {
 .compass-arrow {
   position: absolute;
   left: 50%;
-  top: 22px;
-  width: 2px;
-  height: 68px;
-  background: #00d8ff;
-  border-radius: 2px;
+  top: 34px;
+  width: 0;
+  height: 0;
+  border-left: 13px solid transparent;
+  border-right: 13px solid transparent;
+  border-bottom: 62px solid #20d7ff;
+  filter: drop-shadow(0 0 10px rgba(32, 215, 255, 0.5));
   transform: translateX(-50%);
 }
 .compass-arrow::before {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: -9px;
-  width: 0;
-  height: 0;
-  border-left: 7px solid transparent;
-  border-right: 7px solid transparent;
-  border-bottom: 15px solid #00d8ff;
-  transform: translateX(-50%);
+  display: none;
 }
 .compass-arrow::after {
   content: "";
   position: absolute;
   left: 50%;
-  bottom: -5px;
-  width: 6px;
-  height: 6px;
+  top: 56px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: #00d8ff;
-  transform: translateX(-50%);
+  transform: translate(-50%, -50%);
 }
 .compass-center-info {
   position: absolute;

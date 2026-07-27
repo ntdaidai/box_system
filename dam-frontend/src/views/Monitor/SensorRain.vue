@@ -88,14 +88,13 @@
               <el-option
                 v-for="year in yearOptions"
                 :key="year"
-                :label="year === 'last12' ? '过去12个月' : `${year}年`"
+                :label="`${year}年`"
                 :value="year"
               />
             </el-select>
             <el-select
               v-model="selectedMonth"
               class="history-select month-select"
-              :disabled="selectedYear === 'last12'"
               @change="onMonthChange"
             >
               <el-option label="所有月份" value="all" />
@@ -130,12 +129,6 @@
           </div>
         </div>
 
-        <div class="rain-series-legend">
-          <i></i>
-          <span>{{ historyLegendLabel }}</span>
-          <i class="zero-marker"></i>
-          <span>0 mm</span>
-        </div>
       </div>
     </div>
   </div>
@@ -195,7 +188,7 @@ const yearOptions = computed(() => {
   const years = availablePeriods.value.map(item => Number(item.year)).filter(Number.isFinite)
   const selected = Number(selectedYear.value)
   if (Number.isInteger(selected) && !years.includes(selected)) years.push(selected)
-  return ['last12', ...(years.length ? [...new Set(years)].sort((a, b) => b - a) : [initialShanghaiYear])]
+  return years.length ? [...new Set(years)].sort((a, b) => b - a) : [initialShanghaiYear]
 })
 
 const monthOptions = computed(() => {
@@ -209,7 +202,6 @@ const historyValues = computed(() => buildRainChartValues(
   chartData.value.view,
 ).filter(value => value !== null))
 const historyEmpty = computed(() => historyValues.value.length === 0)
-const historyLegendLabel = computed(() => rainLegendLabel(chartData.value.view))
 
 // 防汛预警条（0-100mm 映射）
 const rainWarnPosition = computed(() => {
@@ -289,13 +281,11 @@ const readHistoryCache = (query) => {
 
 const currentQuery = () => historyMode.value === 'recent24h'
   ? { view: 'recent24h' }
-  : selectedYear.value === 'last12'
-    ? { view: 'rolling12' }
-    : {
-      view: 'calendar',
-      year: Number(selectedYear.value),
-      month: selectedMonth.value === 'all' ? null : Number(selectedMonth.value),
-    }
+  : {
+    view: 'calendar',
+    year: Number(selectedYear.value),
+    month: selectedMonth.value === 'all' ? null : Number(selectedMonth.value),
+  }
 
 const syncAvailablePeriods = (periods = []) => {
   if (Array.isArray(periods) && periods.length) availablePeriods.value = periods
@@ -387,11 +377,6 @@ const restoreSelectionFromChart = () => {
     return
   }
   historyMode.value = 'calendar'
-  if (view === 'rolling12') {
-    selectedYear.value = 'last12'
-    selectedMonth.value = 'all'
-    return
-  }
   const year = Number(chartData.value.year)
   selectedYear.value = Number.isInteger(year) ? year : initialShanghaiYear
   const month = Number(chartData.value.month)
@@ -431,7 +416,6 @@ const selectRecent24h = async () => {
 
 const onYearChange = async () => {
   historyMode.value = 'calendar'
-  if (selectedYear.value === 'last12') selectedMonth.value = 'all'
   if (selectedMonth.value !== 'all' && !monthOptions.value.includes(Number(selectedMonth.value))) {
     selectedMonth.value = 'all'
   }
@@ -991,31 +975,6 @@ onUnmounted(() => {
   color: #AECAF5;
   font-size: 14px;
 }
-.rain-series-legend {
-  min-height: 38px;
-  padding: 4px 10px 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  border-top: 1px solid rgba(123, 154, 201, 0.1);
-  color: #b7cae4;
-  font-size: 12px;
-}
-.rain-series-legend i {
-  width: 18px;
-  height: 4px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #1762d5, #16c5ff);
-  box-shadow: 0 0 8px rgba(22, 149, 255, 0.45);
-}
-.rain-series-legend .zero-marker {
-  width: 12px;
-  height: 3px;
-  margin-left: 14px;
-  background: rgba(151, 190, 255, 0.72);
-  box-shadow: none;
-}
-
 @media (max-width: 900px) {
   .history-panel-header { align-items: flex-start; flex-wrap: wrap; }
   .history-controls { width: 100%; flex-wrap: wrap; }

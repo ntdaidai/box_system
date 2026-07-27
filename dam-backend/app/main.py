@@ -15,6 +15,7 @@ from app.api import (
     health,
     image,
     onlyoffice,
+    patrol_report,
     rule,
     sensor,
     vision,
@@ -34,6 +35,8 @@ from app.services.video_detection import video_detection_service
 from app.services.eca_engine import set_main_event_loop, eca_scheduler, eca_engine
 from app.services.broadcast_service import broadcast_service
 from app.services.safety_event_engine import safety_event_bus
+from app.services.safety_event_ws import safety_event_ws_manager
+from app.services.patrol_report_scheduler import patrol_report_scheduler
 
 import httpx
 import traceback
@@ -77,6 +80,7 @@ async def lifespan(app: FastAPI):
     # 设置主事件循环引用（用于 ECA 引擎的异步任务调度）
     loop = asyncio.get_running_loop()
     set_main_event_loop(loop)
+    safety_event_ws_manager.set_loop(loop)
 
     # 连接 Redis
     try:
@@ -147,10 +151,12 @@ async def lifespan(app: FastAPI):
     # 启动 ECA 定时调度器（每60秒兜底检查一次，防止实时触发遗漏）
     eca_scheduler.set_interval(60)
     await eca_scheduler.start()
+    await patrol_report_scheduler.start()
 
     yield
 
     # 关闭阶段
+    await patrol_report_scheduler.stop()
     await eca_scheduler.stop()
     sensor_collector.stop_collection()
     camera_manager.stop_all()
@@ -197,6 +203,7 @@ app.include_router(camera.router, prefix="/api/v1/camera", tags=["摄像头与�
 app.include_router(broadcast.router, prefix="/api/broadcast", tags=["广播联动"])
 app.include_router(document.router, tags=["文档管理"])
 app.include_router(onlyoffice.router)
+app.include_router(patrol_report.router)
 
 
 # ── 共享 HTTP 客户端依赖 ─────────────────────────────────────

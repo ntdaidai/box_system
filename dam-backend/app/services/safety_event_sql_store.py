@@ -142,19 +142,33 @@ class SqlSafetyEventStore:
                     SafetyEventLog.action_id == action["action_id"]
                 ).first()
                 if not log_row:
+                    payload = action.get("payload") or {}
                     log_row = SafetyEventLog(
                         action_id=action["action_id"],
                         event_id=action["event_id"],
                         action_type=action["action_type"],
                         risk_level=action["risk_level"],
                         status=self._initial_action_status(action["action_type"]),
+                        from_status=payload.get("from_status"),
+                        to_status=payload.get("to_status"),
+                        operator=payload.get("operator"),
+                        operator_role=payload.get("operator_role"),
                         message=self._action_message(action),
-                        payload=action.get("payload") or {},
+                        payload=payload,
                         create_time=_to_datetime(action.get("created_at")) or dt.datetime.now(),
                     )
                     db.add(log_row)
                 self._sync_alarm_locked(db, action)
                 db.commit()
+                try:
+                    from app.services.safety_event_ws import safety_event_ws_manager
+
+                    safety_event_ws_manager.publish({
+                        "type": "EVENT_ACTION_ADDED",
+                        "data": self._action_to_dict(log_row),
+                    })
+                except Exception:
+                    pass
             except Exception:
                 db.rollback()
                 raise
@@ -228,6 +242,7 @@ class SqlSafetyEventStore:
     def _track_update_payload(track: TrackContext) -> Dict[str, Any]:
         return {
             "state": track.state,
+            "status": "RESOLVED" if track.state == STATE_RESOLVED else None,
             "risk_level": track.risk_level,
             "last_seen_at": track.last_seen_at,
             "missing_since": track.missing_since,
@@ -269,7 +284,10 @@ class SqlSafetyEventStore:
             "entity_type": row.entity_type,
             "track_id": row.track_id,
             "state": row.state,
+            "status": row.status or ("RESOLVED" if row.state == STATE_RESOLVED else "PENDING"),
+            "event_type": row.event_type,
             "risk_level": row.risk_level,
+            "camera_name": row.camera_name,
             "started_at": _to_timestamp(row.started_at),
             "first_seen_at": _to_timestamp(row.first_seen_at),
             "danger_started_at": _to_timestamp(row.danger_started_at),
@@ -280,6 +298,15 @@ class SqlSafetyEventStore:
             "resolved_at": _to_timestamp(row.resolved_at),
             "resolve_reason": row.resolve_reason,
             "snapshot_path": row.snapshot_url,
+            "snapshot_url": row.snapshot_url,
+            "video_url": row.video_url,
+            "duration_seconds": row.duration_seconds or 0,
+            "ack_operator": row.ack_operator,
+            "ack_at": _to_timestamp(row.ack_at),
+            "resolved_operator": row.resolved_operator,
+            "false_alarm_operator": row.false_alarm_operator,
+            "false_alarm_reason": row.false_alarm_reason,
+            "version": row.version or 0,
             "zone_type": row.zone_type,
             "zone_name": row.zone_name,
             "zone_ids": _json_value(row.zone_ids, []),
@@ -296,6 +323,10 @@ class SqlSafetyEventStore:
             "action_type": row.action_type,
             "risk_level": row.risk_level,
             "status": row.status,
+            "from_status": row.from_status,
+            "to_status": row.to_status,
+            "operator": row.operator,
+            "operator_role": row.operator_role,
             "message": row.message,
             "payload": _json_value(row.payload, {}),
             "created_at": _to_timestamp(row.create_time),
@@ -304,11 +335,15 @@ class SqlSafetyEventStore:
     @staticmethod
     def _apply_event(row: SafetyEvent, event: Dict[str, Any]) -> None:
         observation = event.get("latest_observation") or {}
+        previous_status = row.status
         row.camera_id = event.get("camera_id")
         row.entity_type = event.get("entity_type")
         row.track_id = event.get("track_id")
         row.state = event.get("state")
+        row.status = event.get("status") or ("RESOLVED" if event.get("state") == STATE_RESOLVED else (row.status or "PENDING"))
+        row.event_type = event.get("event_type") or row.event_type
         row.risk_level = event.get("risk_level")
+        row.camera_name = event.get("camera_name") or row.camera_name
         row.started_at = _to_datetime(event.get("started_at")) or dt.datetime.now()
         row.first_seen_at = _to_datetime(event.get("first_seen_at")) or row.started_at
         row.danger_started_at = _to_datetime(event.get("danger_started_at")) or row.started_at
@@ -319,6 +354,12 @@ class SqlSafetyEventStore:
         row.resolved_at = _to_datetime(event.get("resolved_at"))
         row.resolve_reason = event.get("resolve_reason")
         row.snapshot_url = event.get("snapshot_path")
+        row.video_url = event.get("video_url") or row.video_url
+        if row.started_at:
+            end_at = row.resolved_at or row.last_seen_at or dt.datetime.now()
+            row.duration_seconds = max(0, int((end_at - row.started_at).total_seconds()))
+        if previous_status and row.status != previous_status:
+            row.version = (row.version or 0) + 1
         row.zone_type = event.get("zone_type") or (observation.get("zone_types") or [None])[0]
         row.zone_name = event.get("zone_name") or (observation.get("zone_names") or [None])[0]
         row.zone_ids = event.get("zone_ids") or []
@@ -342,6 +383,7 @@ class SqlSafetyEventStore:
             "push_requested": "请求消息推送",
             "drone_dispatch_requested": "请求无人机派飞",
             "staff_task_requested": "请求工作人员现场处置",
+            "target_left": "目标离开危险区域",
             "event_resolved": "安全事件已关闭",
         }
         return names.get(action.get("action_type"), "安全事件动作")
