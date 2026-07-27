@@ -74,10 +74,9 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores'
-import { silentLogin } from '@/api/auth'
 import { HomeFilled, UserFilled, ArrowDown, Monitor, DataAnalysis, Warning, Setting, VideoCamera, Cpu, Sunny, WindPower, Cloudy, Odometer, Bell, Document, Upload, Picture, VideoPlay } from '@element-plus/icons-vue'
 
 const route = useRoute()
@@ -201,20 +200,6 @@ const handleNavClick = (item) => {
   router.push(item.path)
 }
 
-// 静默登录 Python 后端（页面加载时自动获取 token）
-onMounted(async () => {
-  if (!userStore.token) {
-    try {
-      const res = await silentLogin()
-      if (res.data?.token) {
-        userStore.setToken(res.data.token)
-        console.log('[auth] 静默登录成功')
-      }
-    } catch (err) {
-      console.warn('[auth] 静默登录失败:', err.message)
-    }
-  }
-})
 </script>
 
 <style scoped>

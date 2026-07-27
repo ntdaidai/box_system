@@ -1,11 +1,12 @@
 """JWT 令牌管理与密码哈希"""
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Optional, Dict, Any
 
 from jose import jwt, JWTError
 from passlib.context import CryptContext
-from fastapi import HTTPException, status, Depends
+from fastapi import Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from loguru import logger
@@ -56,47 +57,57 @@ def decode_token(token: str) -> Optional[Dict[str, Any]]:
 _bearer = HTTPBearer(auto_error=False)
 
 
+def get_default_user(db: Session):
+    """Return the default operator used by this deployment's no-auth mode."""
+    from app.models.user import User
+
+    user = (
+        db.query(User)
+        .filter(User.username == settings.DEFAULT_ADMIN_USERNAME)
+        .first()
+    )
+    if user is None:
+        user = db.query(User).filter(User.role == "admin").first()
+    if user is None:
+        user = db.query(User).first()
+    if user is not None:
+        return user
+    return SimpleNamespace(
+        id=0,
+        username=settings.DEFAULT_ADMIN_USERNAME,
+        role="admin",
+        status=1,
+        real_name=settings.DEFAULT_ADMIN_REALNAME,
+    )
+
+
 def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
     db: Session = Depends(get_db),
 ):
-    """从 Authorization: Bearer <token> 中解析当前用户。
-
-    未携带令牌或令牌无效时返回 None（允许公开接口自行判断）。
-    需要强制认证的路由通过 ``require_auth`` 依赖处理。
-    """
+    """Resolve a user when a legacy token exists; otherwise use no-auth default."""
     if credentials is None:
-        return None
+        return get_default_user(db)
 
     payload = decode_token(credentials.credentials)
     if payload is None:
-        return None
+        return get_default_user(db)
 
     user_id = payload.get("sub")
     if user_id is None:
-        return None
+        return get_default_user(db)
 
     from app.models.user import User
 
     user = db.query(User).filter(User.id == int(user_id)).first()
-    return user
+    return user or get_default_user(db)
 
 
 def require_auth(user=Depends(get_current_user)):
-    """强制认证依赖：未登录或令牌无效时返回 401"""
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="请先登录",
-        )
+    """No-auth deployment: keep dependency shape but never reject requests."""
     return user
 
 
 def require_admin(user=Depends(require_auth)):
-    """管理员权限依赖：非 admin 角色返回 403"""
-    if user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="需要管理员权限",
-        )
+    """No-auth deployment: treat all requests as the default operator."""
     return user

@@ -405,10 +405,10 @@ defineExpose({
 .onlyoffice-editor {
   width: 100%;
   height: 100%;
-  border: 1px solid #e4e7ed;
+  border: 1px solid var(--border-color);
   border-radius: 4px;
   overflow: hidden;
-  background: #fff;
+  background: var(--bg-panel);
 }
 
 .loading-container {
@@ -417,7 +417,7 @@ defineExpose({
   align-items: center;
   justify-content: center;
   height: 200px;
-  color: #909399;
+  color: var(--text-secondary);
 }
 
 .loading-icon {

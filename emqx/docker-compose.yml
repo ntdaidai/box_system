@@ -1,0 +1,38 @@
+services:
+  emqx:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/emqx:5.8.8-linuxarm64
+    container_name: emqx-server
+    restart: unless-stopped
+    ports:
+      # MQTT
+      - "1883:1883"
+      # MQTT SSL
+      - "8883:8883"
+      # MQTT over WebSocket
+      - "8083:8083"
+      # MQTT over WebSocket SSL
+      - "8084:8084"
+      # EMQX Dashboard
+      - "18083:18083"
+    environment:
+      # Dashboard 默认用户名密码
+      EMQX_NAME: emqx
+      EMQX_HOST: 127.0.0.1
+      # 默认管理员密码
+      EMQX_DASHBOARD__DEFAULT_USERNAME: admin
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: admin
+    volumes:
+      # 数据持久化
+      - ./data:/opt/emqx/data
+      # 日志
+      - ./log:/opt/emqx/log
+    healthcheck:
+      test: ["CMD", "/opt/emqx/bin/emqx", "ctl", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G

@@ -1,6 +1,7 @@
 package com.dji.sample.manage.controller;
 
 import com.dji.sdk.common.HttpResultResponse;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -36,7 +37,7 @@ public class DroneSimulationController {
 
         // 创建模拟任务
         SimulationTask task = new SimulationTask(jobId, request.getRouteName(),
-                request.getWaypoints(), request.getDuration());
+                request.getWaypoints(), request.getDuration(), request.getStartProgress());
         runningTasks.put(jobId, task);
 
         // 异步执行模拟
@@ -133,8 +134,9 @@ public class DroneSimulationController {
 
         int totalSteps = (int) (task.getDuration() / 200); // 每200ms一步
         int totalSegments = waypoints.size() - 1;
+        int startStep = (int) (task.getStartProgress() * totalSteps); // 从指定进度开始
 
-        for (int step = 0; step <= totalSteps && !task.isStopped(); step++) {
+        for (int step = startStep; step <= totalSteps && !task.isStopped(); step++) {
             double progress = (double) step / totalSteps;
             int currentSegment = Math.min((int) (progress * totalSegments), totalSegments - 1);
             double segmentLocalProgress = (progress * totalSegments) - currentSegment;
@@ -188,6 +190,7 @@ public class DroneSimulationController {
         private final String routeName;
         private final List<Waypoint> waypoints;
         private final long duration;
+        private final double startProgress;
         private final List<SseEmitter> emitters = new CopyOnWriteArrayList<>();
         private volatile double currentX;
         private volatile double currentY;
@@ -196,10 +199,16 @@ public class DroneSimulationController {
         private volatile boolean stopped = false;
 
         public SimulationTask(String jobId, String routeName, List<Waypoint> waypoints, long duration) {
+            this(jobId, routeName, waypoints, duration, 0);
+        }
+
+        public SimulationTask(String jobId, String routeName, List<Waypoint> waypoints, long duration, double startProgress) {
             this.jobId = jobId;
             this.routeName = routeName;
             this.waypoints = waypoints;
             this.duration = duration > 0 ? duration : 60000;
+            this.startProgress = Math.max(0, Math.min(1, startProgress));
+            this.progress = this.startProgress;
             if (waypoints != null && !waypoints.isEmpty()) {
                 this.currentX = waypoints.get(0).getX();
                 this.currentY = waypoints.get(0).getY();
@@ -242,6 +251,7 @@ public class DroneSimulationController {
         public String getRouteName() { return routeName; }
         public List<Waypoint> getWaypoints() { return waypoints; }
         public long getDuration() { return duration; }
+        public double getStartProgress() { return startProgress; }
         public double getCurrentX() { return currentX; }
         public void setCurrentX(double x) { this.currentX = x; }
         public double getCurrentY() { return currentY; }
@@ -299,10 +309,14 @@ public class DroneSimulationController {
      * 模拟开始请求
      */
     public static class SimulationStartRequest {
+        @JsonProperty("job_id")
         private String jobId;
+        @JsonProperty("route_name")
         private String routeName;
         private List<Waypoint> waypoints;
         private long duration = 60000;
+        @JsonProperty("start_progress")
+        private double startProgress = 0;
 
         public String getJobId() { return jobId; }
         public void setJobId(String jobId) { this.jobId = jobId; }
@@ -312,5 +326,7 @@ public class DroneSimulationController {
         public void setWaypoints(List<Waypoint> waypoints) { this.waypoints = waypoints; }
         public long getDuration() { return duration; }
         public void setDuration(long duration) { this.duration = duration; }
+        public double getStartProgress() { return startProgress; }
+        public void setStartProgress(double startProgress) { this.startProgress = startProgress; }
     }
 }

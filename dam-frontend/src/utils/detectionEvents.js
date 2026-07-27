@@ -1,6 +1,5 @@
 // dai
-// Authenticated SSE reader for the camera detection list. Native EventSource
-// cannot send the JWT Authorization header used by this application.
+// SSE reader for the camera detection list.
 
 export function createSseParser(onEvent) {
   let buffer = ''
@@ -49,11 +48,9 @@ export function subscribeDetectionEvents(cameraId, handlers = {}) {
     while (!stopped) {
       controller = new AbortController()
       try {
-        const token = globalThis.localStorage?.getItem('token')
-        const headers = token ? { Authorization: `Bearer ${token}` } : {}
         const response = await fetch(
           `/api/v1/camera/${encodeURIComponent(cameraId)}/detections/events`,
-          { headers, signal: controller.signal, cache: 'no-store' },
+          { signal: controller.signal, cache: 'no-store' },
         )
         if (!response.ok || !response.body) {
           const error = new Error(`检测事件连接失败 (${response.status})`)

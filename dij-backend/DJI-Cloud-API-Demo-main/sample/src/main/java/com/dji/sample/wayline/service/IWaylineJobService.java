@@ -60,6 +60,14 @@ public interface IWaylineJobService {
     Boolean updateJob(WaylineJobDTO dto);
 
     /**
+     * Update job status by job ids.
+     * @param jobIds
+     * @param status
+     * @return
+     */
+    Boolean updateJobStatusByJobIds(Collection<String> jobIds, WaylineJobStatusEnum status);
+
+    /**
      * Paginate through all jobs in this workspace.
      * @param workspaceId
      * @param page

@@ -94,7 +94,7 @@ public class WaylineJobServiceImpl implements IWaylineJobService {
                 .jobId(UUID.randomUUID().toString())
                 .beginTime(beginTime)
                 .endTime(endTime)
-                .status(WaylineJobStatusEnum.PENDING.getVal())
+                .status(WaylineJobStatusEnum.IN_PROGRESS.getVal())
                 .taskType(param.getTaskType().getType())
                 .waylineType(param.getWaylineType().getValue())
                 .outOfControlAction(param.getOutOfControlAction().getAction())
@@ -148,6 +148,17 @@ public class WaylineJobServiceImpl implements IWaylineJobService {
         return mapper.update(this.dto2Entity(dto),
                 new LambdaUpdateWrapper<WaylineJobEntity>()
                         .eq(WaylineJobEntity::getJobId, dto.getJobId())) > 0;
+    }
+
+    @Override
+    public Boolean updateJobStatusByJobIds(Collection<String> jobIds, WaylineJobStatusEnum status) {
+        if (jobIds == null || jobIds.isEmpty()) {
+            return false;
+        }
+        return mapper.update(null,
+                new LambdaUpdateWrapper<WaylineJobEntity>()
+                        .in(WaylineJobEntity::getJobId, jobIds)
+                        .set(WaylineJobEntity::getStatus, status.getVal())) > 0;
     }
 
     @Override

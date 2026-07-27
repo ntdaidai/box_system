@@ -1052,6 +1052,7 @@ let videoPollTimer = null
 let closeDetectionEvents = null
 let streamRequestGeneration = 0
 let cameraMutationRevision = 0
+let statusRefreshing = false
 let webRtcPlayer = null
 
 const imageWidth = computed(() => Number(latestDetection.value.image_width) || 0)
@@ -1703,6 +1704,8 @@ async function handleAnalysisTaskChange(taskType) {
 
 async function refreshCameraStatus() {
   if (!currentCameraId.value) return
+  if (statusRefreshing) return
+  statusRefreshing = true
   const statusRevision = cameraMutationRevision
   try {
     const response = await getCameraStatus(currentCameraId.value)
@@ -1728,6 +1731,8 @@ async function refreshCameraStatus() {
     }
   } catch {
     // Keep the active MJPEG connection during a transient status request failure.
+  } finally {
+    statusRefreshing = false
   }
 }
 

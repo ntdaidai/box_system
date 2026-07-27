@@ -17,7 +17,22 @@
 
     <!-- 第二行：传感器实时数据卡片 -->
     <div class="sensor-carousel">
-      <div ref="sensorTrackRef" class="sensor-row" aria-label="传感器实时数据">
+      <div class="sensor-carousel-toolbar">
+        <div class="sensor-carousel-title">
+          <span>传感器实时数据</span>
+          <strong>{{ sensorCards.length }} 条</strong>
+        </div>
+        <div class="sensor-carousel-actions">
+          <button type="button" class="carousel-btn" aria-label="向左滚动" @click="scrollSensorCards(-1)">
+            <el-icon :size="14"><ArrowLeft /></el-icon>
+          </button>
+          <span>{{ sensorCarouselIndex + 1 }} / {{ sensorCards.length }}</span>
+          <button type="button" class="carousel-btn" aria-label="向右滚动" @click="scrollSensorCards(1)">
+            <el-icon :size="14"><ArrowRight /></el-icon>
+          </button>
+        </div>
+      </div>
+      <div ref="sensorTrackRef" class="sensor-row" aria-label="传感器实时数据" @scroll="syncSensorCarouselIndex">
         <div class="sensor-card-slot" v-for="s in sensorCards" :key="s.key">
           <div class="sensor-data-card" @click="router.push(s.path)">
             <div class="sensor-card-top">
@@ -287,7 +302,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   Monitor, CircleCheck, Warning, WarningFilled,
-  Cpu, Clock, Timer, Connection, FolderOpened, Menu, Odometer, Aim
+  Cpu, Clock, Timer, Connection, FolderOpened, Menu, Odometer, Aim, ArrowLeft, ArrowRight
 } from '@element-plus/icons-vue'
 import { getSystemInfo, getAllSensorRealtime, getDeviceStatus, getAlarmStatistics, getAlarmList } from '@/api/dashboard'
 import { getVibrationProcessed } from '@/api/sensor'
@@ -301,7 +316,7 @@ import windIcon from '@/assets/images/sensors/wind.png'
 import rainIcon from '@/assets/images/sensors/rain.png'
 import vibrationIcon from '@/assets/images/sensors/vibration.png'
 import cameraIcon from '@/assets/images/sensors/camera.png'
-import beidouIcon from '@/assets/images/sensors/beidou.png'
+import uavIcon from '/drone.png'
 
 const router = useRouter()
 
@@ -352,6 +367,7 @@ let cacheUpdateHandler = null
 let sensorPagePreloadTask = null
 let sensorCarouselFrame = null
 const sensorTrackRef = ref(null)
+const sensorCarouselIndex = ref(0)
 
 // ==================== 传感器卡片配置 ====================
 
@@ -393,7 +409,7 @@ const sensorCards = [
     ],
   },
   {
-    key: 'beidou', name: '北斗通信', path: '/monitor/device', icon: beidouIcon,
+    key: 'uav', name: '大疆 Matrice 4E', path: '/monitor/drone', icon: uavIcon,
     values: [
       { label: '链路状态', field: 'device_status' },
       { label: '定位状态', field: 'position_status' },
@@ -526,22 +542,23 @@ const applySensorRealtime = (data) => {
 
 const applyDeviceStatus = (data) => {
   if (!data) return
-  deviceStatus.value = data
-  const keys = Object.keys(data)
-  deviceTotal.value = keys.length
-  deviceOnline.value = keys.filter(k => data[k]?.status === 'online').length
+  deviceStatus.value = { ...deviceStatus.value, ...data }
+  syncDeviceCounts()
 }
 
 const applySystemInfo = (data) => {
   if (!data) return
   systemInfo.value = data
-  if (data.sensor_count) {
-    deviceTotal.value = data.sensor_count.total || deviceTotal.value
-    deviceOnline.value = data.sensor_count.online || deviceOnline.value
-  }
   if (data.sensor_status) {
     deviceStatus.value = { ...deviceStatus.value, ...data.sensor_status }
   }
+  syncDeviceCounts()
+}
+
+const syncDeviceCounts = () => {
+  const keys = sensorCards.map(card => card.key)
+  deviceTotal.value = keys.length
+  deviceOnline.value = keys.filter(key => getSensorOnline(key)).length
 }
 
 const applyAlarmStats = (data) => {
@@ -697,6 +714,16 @@ const sensorCardStride = () => {
   return firstCard.getBoundingClientRect().width + (Number.isFinite(gap) ? gap : 14)
 }
 
+const syncSensorCarouselIndex = () => {
+  const track = sensorTrackRef.value
+  if (!track) return
+  const stride = sensorCardStride()
+  sensorCarouselIndex.value = Math.min(
+    sensorCards.length - 1,
+    Math.max(0, Math.round(track.scrollLeft / stride)),
+  )
+}
+
 // 自动滚动速度（像素/帧，越小越慢，建议 0.15~0.25）
 const SCROLL_SPEED = 0.34
 // 滚动到末尾后回到起点前的停顿时间（毫秒）
@@ -713,12 +740,16 @@ const startSensorCarousel = () => {
       const needScroll = track.scrollWidth > track.clientWidth + 10
       if (needScroll) {
         track.scrollLeft += SCROLL_SPEED
+        syncSensorCarouselIndex()
         // 到达末尾时，暂停后平滑回到起点
         if (track.scrollLeft >= track.scrollWidth - track.clientWidth - 1) {
           sensorCarouselLooping = true
           setTimeout(() => {
             track.scrollTo({ left: 0, behavior: 'smooth' })
-            setTimeout(() => { sensorCarouselLooping = false }, 800)
+            setTimeout(() => {
+              sensorCarouselLooping = false
+              syncSensorCarouselIndex()
+            }, 800)
           }, LOOP_PAUSE_MS)
         }
       }
@@ -730,6 +761,7 @@ const startSensorCarousel = () => {
 
 const scrollSensorCards = (direction) => {
   sensorTrackRef.value?.scrollBy({ left: sensorCardStride() * direction, behavior: 'smooth' })
+  window.setTimeout(syncSensorCarouselIndex, 360)
 }
 
 // ==================== SSE 实时推送 ====================
@@ -900,6 +932,55 @@ onUnmounted(() => {
   overflow: hidden;
   z-index: 10;
   padding: 0;
+}
+
+.sensor-carousel-toolbar {
+  height: 30px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sensor-carousel-title,
+.sensor-carousel-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sensor-carousel-title span {
+  color: #e2f0fe;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.sensor-carousel-title strong,
+.sensor-carousel-actions span {
+  color: #8fb8e8;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.carousel-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(0, 200, 255, 0.28);
+  border-radius: 6px;
+  background: rgba(17, 41, 70, 0.72);
+  color: #a8dfff;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+
+.carousel-btn:hover {
+  border-color: rgba(0, 229, 255, 0.62);
+  background: rgba(0, 200, 255, 0.14);
+  color: #ffffff;
 }
 
 .sensor-row {

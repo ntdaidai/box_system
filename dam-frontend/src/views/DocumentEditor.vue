@@ -1,44 +1,47 @@
 <template>
   <div class="document-editor-page">
-    <!-- 页面头部 -->
     <div class="page-header">
       <div class="header-left">
-        <el-button @click="goBack" :icon="ArrowLeft">返回</el-button>
-        <h2 class="page-title">文档编辑</h2>
+        <el-button class="back-button" @click="goBack" :icon="ArrowLeft">返回</el-button>
+        <div class="title-stack">
+          <span class="page-kicker">文档编辑</span>
+          <h2 class="page-title" :title="documentInfo.title">
+            {{ documentInfo.title || '未命名文档' }}
+          </h2>
+        </div>
       </div>
       <div class="header-right">
+        <span class="save-state" :class="saveStateClass">{{ saveStateLabel }}</span>
         <el-button type="primary" @click="handleSave" :loading="saving">
           <el-icon><Check /></el-icon>
-          保存
+          保存到文档库
         </el-button>
         <el-button @click="handleReload">
           <el-icon><Refresh /></el-icon>
-          刷新
+          重新加载
         </el-button>
       </div>
     </div>
 
-    <!-- 文档信息栏 -->
-    <div class="document-info">
-      <el-descriptions :column="4" border>
-        <el-descriptions-item label="文档名称">
-          {{ documentInfo.title || '未命名文档' }}
-        </el-descriptions-item>
-        <el-descriptions-item label="文档类型">
-          <el-tag :type="getFileTypeTag(documentInfo.file_type)">
-            {{ getFileTypeLabel(documentInfo.file_type) }}
-          </el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="文件大小">
-          {{ formatFileSize(documentInfo.file_size) }}
-        </el-descriptions-item>
-        <el-descriptions-item label="最后修改">
-          {{ documentInfo.updated_at || '-' }}
-        </el-descriptions-item>
-      </el-descriptions>
+    <div class="document-meta-bar">
+      <span class="meta-pill">
+        <span>类型</span>
+        <strong>{{ getFileTypeLabel(documentInfo.file_type) }}</strong>
+      </span>
+      <span class="meta-pill">
+        <span>大小</span>
+        <strong>{{ formatFileSize(documentInfo.file_size) }}</strong>
+      </span>
+      <span class="meta-pill">
+        <span>最后修改</span>
+        <strong>{{ formatDateTime(documentInfo.updated_at) }}</strong>
+      </span>
+      <span v-if="lastSavedAt" class="meta-pill">
+        <span>本次保存</span>
+        <strong>{{ lastSavedAt }}</strong>
+      </span>
     </div>
 
-    <!-- 编辑器组件 -->
     <div class="editor-container">
       <OnlyOfficeEditor
         ref="editorRef"
@@ -93,6 +96,8 @@ const editorConfig = ref(null)
 const editorMode = ref('edit')
 const collaborators = ref([])
 const isDocumentModified = ref(false)
+const editorReady = ref(false)
+const lastSavedAt = ref('')
 
 // 文档信息
 const documentInfo = ref({
@@ -112,22 +117,23 @@ const currentUser = ref({
 // 回调 URL 由后端完整 OnlyOffice config 提供，这里仅保留兼容兜底。
 const callbackUrl = computed(() => editorConfig.value?.editorConfig?.callbackUrl || '')
 
-// 获取文档类型标签
-const getFileTypeTag = (type) => {
-  const tagMap = {
-    'docx': 'primary',
-    'doc': 'primary',
-    'xlsx': 'success',
-    'xls': 'success',
-    'pptx': 'warning',
-    'ppt': 'warning',
-    'pdf': 'info'
-  }
-  return tagMap[type] || 'info'
-}
+const saveStateLabel = computed(() => {
+  if (saving.value) return '正在保存'
+  if (!editorReady.value) return '编辑器加载中'
+  if (isDocumentModified.value) return '有未保存修改'
+  return '已同步'
+})
+
+const saveStateClass = computed(() => {
+  if (saving.value) return 'is-saving'
+  if (!editorReady.value) return 'is-loading'
+  if (isDocumentModified.value) return 'is-dirty'
+  return 'is-saved'
+})
 
 // 获取文档类型显示名称
 const getFileTypeLabel = (type) => {
+  const ext = String(type || '').toLowerCase()
   const labelMap = {
     'docx': 'Word 文档',
     'doc': 'Word 文档',
@@ -137,7 +143,7 @@ const getFileTypeLabel = (type) => {
     'ppt': 'PPT 演示',
     'pdf': 'PDF 文档'
   }
-  return labelMap[type] || type.toUpperCase()
+  return labelMap[ext] || ext.toUpperCase() || '-'
 }
 
 // 格式化文件大小
@@ -151,6 +157,18 @@ const formatFileSize = (bytes) => {
     unitIndex++
   }
   return `${size.toFixed(2)} ${units[unitIndex]}`
+}
+
+const formatDateTime = (value) => {
+  if (!value) return '-'
+  const raw = String(value).replace('T', ' ')
+  const [date = '-', time = ''] = raw.split(' ')
+  return time ? `${date} ${time.slice(0, 5)}` : date
+}
+
+const formatNowTime = () => {
+  const now = new Date()
+  return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
 }
 
 // 加载文档信息
@@ -207,12 +225,13 @@ const loadDocumentInfo = async () => {
 // 编辑器准备就绪
 const onEditorReady = () => {
   console.log('OnlyOffice 编辑器已准备就绪')
+  editorReady.value = true
 }
 
 // 文档状态变化
 const onDocumentStateChange = (event) => {
   console.log('文档状态变化:', event)
-  isDocumentModified.value = true
+  isDocumentModified.value = Boolean(event?.data)
 }
 
 // 编辑器错误
@@ -224,12 +243,29 @@ const onEditorError = (error) => {
 // 保存文档
 const handleSave = async () => {
   try {
+    if (!documentInfo.value.document_id) {
+      ElMessage.warning('文档信息还未加载完成')
+      return
+    }
+
+    if (!isDocumentModified.value) {
+      lastSavedAt.value = formatNowTime()
+      ElMessage.success('当前没有新的修改')
+      return
+    }
+
     saving.value = true
 
-    await axios.post(`/api/onlyoffice/force-save/${documentInfo.value.document_id}`, {
+    const response = await axios.post(`/api/onlyoffice/force-save/${documentInfo.value.document_id}`, {
       user_id: currentUser.value.id
     })
-    ElMessage.success('已提交保存，请稍后刷新查看最新文件')
+
+    if (response.data?.already_saved) {
+      ElMessage.success('文档已是最新')
+    } else {
+      ElMessage.success('保存请求已提交')
+    }
+    lastSavedAt.value = formatNowTime()
     isDocumentModified.value = false
 
   } catch (error) {
@@ -243,19 +279,22 @@ const handleSave = async () => {
 // 刷新文档
 const handleReload = async () => {
   try {
-    await ElMessageBox.confirm(
-      '刷新将重新加载文档，未保存的修改将丢失。是否继续？',
-      '确认刷新',
-      {
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
-        type: 'warning'
-      }
-    )
+    if (isDocumentModified.value) {
+      await ElMessageBox.confirm(
+        '重新加载会丢弃当前未保存的修改。是否继续？',
+        '确认重新加载',
+        {
+          confirmButtonText: '重新加载',
+          cancelButtonText: '取消',
+          type: 'warning'
+        }
+      )
+    }
 
     if (editorRef.value) {
       editorRef.value.reload()
       isDocumentModified.value = false
+      editorReady.value = false
     }
 
   } catch {
@@ -305,7 +344,7 @@ onBeforeUnmount(() => {
   height: calc(100vh - 92px);
   min-height: 640px;
   padding: 12px 20px 16px;
-  background: #f5f7fa;
+  background: transparent;
   overflow: hidden;
 }
 
@@ -315,45 +354,122 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 12px;
-  padding: 10px 14px;
-  background: #fff;
+  padding: 12px 14px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
-  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.05);
+  box-shadow: inset 0 0 18px rgba(0, 200, 255, 0.025);
 }
 
 .header-left {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
+  min-width: 0;
+}
+
+.back-button {
+  flex: 0 0 auto;
+}
+
+.title-stack {
+  min-width: 0;
+}
+
+.page-kicker {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .page-title {
   margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-  color: #303133;
+  max-width: min(46vw, 720px);
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .header-right {
   display: flex;
+  align-items: center;
   gap: 12px;
+  flex: 0 0 auto;
 }
 
-.document-info {
+.save-state {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border-light);
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: rgba(10, 30, 48, 0.65);
+}
+
+.save-state.is-dirty {
+  color: #ffe5a3;
+  border-color: rgba(230, 162, 60, 0.45);
+}
+
+.save-state.is-saved {
+  color: #9df0bd;
+  border-color: rgba(103, 194, 58, 0.42);
+}
+
+.save-state.is-saving,
+.save-state.is-loading {
+  color: var(--accent-color);
+}
+
+.document-meta-bar {
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin-bottom: 12px;
   padding: 10px 12px;
-  background: #fff;
+  background: rgba(16, 38, 72, 0.42);
+  border: 1px solid var(--border-light);
   border-radius: 8px;
-  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.05);
+  overflow-x: auto;
+}
+
+.meta-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 10px;
+  white-space: nowrap;
+  border-radius: 4px;
+  background: rgba(10, 30, 48, 0.58);
+  border: 1px solid rgba(0, 200, 255, 0.12);
+}
+
+.meta-pill span {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.meta-pill strong {
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 
 .editor-container {
   flex: 1 1 auto;
   min-height: 0;
-  background: #fff;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
-  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.05);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
   overflow: hidden;
 }
 
@@ -368,17 +484,14 @@ onBeforeUnmount(() => {
   border-radius: 0;
 }
 
-.document-info :deep(.el-descriptions__cell) {
-  padding: 8px 12px !important;
-}
-
 .collaborators-bar {
   position: fixed;
   bottom: 0;
   left: 0;
   right: 0;
   padding: 12px 20px;
-  background: #fff;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border-color);
   box-shadow: 0 -2px 12px 0 rgba(0, 0, 0, 0.05);
   display: flex;
   align-items: center;
@@ -388,7 +501,7 @@ onBeforeUnmount(() => {
 
 .collaborators-label {
   font-size: 14px;
-  color: #606266;
+  color: var(--text-secondary);
 }
 
 .collaborator-tag {
@@ -406,10 +519,21 @@ onBeforeUnmount(() => {
   .page-header {
     flex-direction: column;
     gap: 12px;
+    align-items: stretch;
   }
 
   .header-left,
   .header-right {
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .page-title {
+    max-width: 100%;
+  }
+
+  .save-state {
     width: 100%;
     justify-content: center;
   }

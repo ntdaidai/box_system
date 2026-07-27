@@ -28,6 +28,17 @@ dam-ai-service/data/
 # Runtime data
 dam-backend/data/
 
+# 基础服务数据（Docker 容器生成，不应提交）
+emqx/data/
+emqx/log/
+iotdb/data/
+iotdb/logs/
+minio/data/
+mysql/data/
+mysql/logs/
+redis/data/
+redis/logs/
+
 # OS
 .DS_Store
 Thumbs.db

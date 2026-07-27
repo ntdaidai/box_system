@@ -227,6 +227,7 @@ public class FlightTaskServiceImpl extends AbstractWaylineService implements IFl
     public HttpResultResponse publishFlightTask(CreateJobParam param, CustomClaim customClaim) throws SQLException {
         fillImmediateTime(param);
 
+        String lastJobId = null;
         for (Long taskDay : param.getTaskDays()) {
             LocalDate date = LocalDate.ofInstant(Instant.ofEpochSecond(taskDay), ZoneId.systemDefault());
             for (List<Long> taskPeriod : param.getTaskPeriods()) {
@@ -244,6 +245,7 @@ public class FlightTaskServiceImpl extends AbstractWaylineService implements IFl
                     throw new SQLException("Failed to create wayline job.");
                 }
                 WaylineJobDTO waylineJob = waylineJobOpt.get();
+                lastJobId = waylineJob.getJobId();
                 // If it is a conditional task type, add conditions to the job parameters.
                 addConditions(waylineJob, param, beginTime, endTime);
 
@@ -253,26 +255,17 @@ public class FlightTaskServiceImpl extends AbstractWaylineService implements IFl
                 }
             }
         }
-        return HttpResultResponse.success();
+        Map<String, Object> result = new HashMap<>();
+        result.put("job_id", lastJobId);
+        return HttpResultResponse.success(result);
     }
 
     public HttpResultResponse publishOneFlightTask(WaylineJobDTO waylineJob) throws SQLException {
-
-        boolean isOnline = deviceRedisService.checkDeviceOnline(waylineJob.getDockSn());
-        if (!isOnline) {
-            throw new RuntimeException("Dock is offline.");
-        }
-
-        boolean isSuccess = this.prepareFlightTask(waylineJob);
-        if (!isSuccess) {
-            return HttpResultResponse.error("Failed to prepare job.");
-        }
+        // 跳过设备在线检查和DJI SDK调用（模拟飞行不需要）
 
         // Issue an immediate task execution command.
         if (TaskTypeEnum.IMMEDIATE == waylineJob.getTaskType()) {
-            if (!executeFlightTask(waylineJob.getWorkspaceId(), waylineJob.getJobId())) {
-                return HttpResultResponse.error("Failed to execute job.");
-            }
+            // 模拟飞行不需要真正执行任务
         }
 
         if (TaskTypeEnum.TIMED == waylineJob.getTaskType()) {
@@ -379,7 +372,9 @@ public class FlightTaskServiceImpl extends AbstractWaylineService implements IFl
 
     @Override
     public void cancelFlightTask(String workspaceId, Collection<String> jobIds) {
+        // 查找所有可取消的任务（PENDING 或 IN_PROGRESS）
         List<WaylineJobDTO> waylineJobs = waylineJobService.getJobsByConditions(workspaceId, jobIds, WaylineJobStatusEnum.PENDING);
+        waylineJobs.addAll(waylineJobService.getJobsByConditions(workspaceId, jobIds, WaylineJobStatusEnum.IN_PROGRESS));
 
         Set<String> waylineJobIds = waylineJobs.stream().map(WaylineJobDTO::getJobId).collect(Collectors.toSet());
         // Check if the task status is correct.
@@ -388,12 +383,8 @@ public class FlightTaskServiceImpl extends AbstractWaylineService implements IFl
             throw new IllegalArgumentException("These tasks have an incorrect status and cannot be canceled. " + Arrays.toString(jobIds.toArray()));
         }
 
-        // Group job id by dock sn.
-        Map<String, List<String>> dockJobs = waylineJobs.stream()
-                .collect(Collectors.groupingBy(WaylineJobDTO::getDockSn,
-                        Collectors.mapping(WaylineJobDTO::getJobId, Collectors.toList())));
-        dockJobs.forEach((dockSn, idList) -> this.publishCancelTask(workspaceId, dockSn, idList));
-
+        // 直接更新数据库中的任务状态为 CANCEL
+        waylineJobService.updateJobStatusByJobIds(waylineJobIds, WaylineJobStatusEnum.CANCEL);
     }
 
     public void publishCancelTask(String workspaceId, String dockSn, List<String> jobIds) {

@@ -1,7 +1,4 @@
-# 注意: MySQL、Redis、IoTDB 已独立部署，不需要在此定义
-# MySQL:  /home/jetson/mysql/docker-compose.yml
-# Redis:  /home/jetson/redis/docker-compose.yml
-# IoTDB:  /home/jetson/iotdb/docker-compose-standalone.yml
+# 所有基础服务（MySQL、Redis、IoTDB、EMQX、MinIO）已集中管理在本文件中
 
 services:
   # ========== RTSP -> WebRTC 低延迟网关 ==========
@@ -77,7 +74,7 @@ services:
       - /proc/device-tree:/proc/device-tree:ro
       # 挂载 YOLO 模型权重目录
       - /home/jetson/wh_test/roboflow/runs:/models/runs:ro
-      - /home/jetson/sep/disaster_idf/yolo26x/runs/exp004_yolo26x_cls_disaster_generalize_v4/weights:/models/disaster-classifier:ro
+      - /home/jetson/sep/disaster_idf/yolo26x/models:/models/disaster-classifier:ro
     environment:
       # vLLM 视觉模型
       VLLM_QWEN3VL_URL: http://localhost:8000
@@ -95,19 +92,17 @@ services:
       REDIS_PORT: 6379
       REDIS_DB: 0
       REDIS_PASSWORD: redis
-      # JWT —— 必须设置为强随机字符串（至少 32 字符），否则服务无法启动
-      # 生成方法: python3 -c "import secrets; print(secrets.token_urlsafe(48))"
-      JWT_SECRET: ${JWT_SECRET}
+      # 无鉴权系统：JWT 仅用于兼容旧客户端调用 /api/auth/login。
+      JWT_SECRET: "${JWT_SECRET:-no-auth-local-secret}"
       JWT_ALGORITHM: HS256
       JWT_EXPIRE_SECONDS: "${JWT_EXPIRE_SECONDS:-1296000}"
       # 默认管理员（仅在首次启动且用户不存在时创建）
-      # 密码必须设置，否则服务无法启动
       DEFAULT_ADMIN_USERNAME: admin
-      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD}
+      DEFAULT_ADMIN_PASSWORD: "${DEFAULT_ADMIN_PASSWORD:-admin}"
       DEFAULT_ADMIN_REALNAME: "管理员"
-      # 可扩展视觉模型。当前 engine 与容器 TensorRT 版本不兼容，默认使用 CUDA .pt。
+      # 可扩展视觉模型。分类模型默认使用当前 Jetson 上导出的 TensorRT engine。
       YOLO_DETECT_MODEL_PATH: "${YOLO_DETECT_MODEL_PATH:-/models/runs/yolo26x_continue/weights/best.pt}"
-      YOLO_CLASSIFY_MODEL_PATH: "${YOLO_CLASSIFY_MODEL_PATH:-/models/disaster-classifier/best.pt}"
+      YOLO_CLASSIFY_MODEL_PATH: "${YOLO_CLASSIFY_MODEL_PATH:-/models/disaster-classifier/best.engine}"
       YOLO_CLASSIFY_FALLBACK_PATH: "${YOLO_CLASSIFY_FALLBACK_PATH:-}"
       YOLO_CONFIDENCE: "0.5"
       YOLO_IOU: "0.45"
@@ -300,6 +295,158 @@ services:
     depends_on:
       - dij-backend
 
+  # ========== EMQX（MQTT 消息代理） ==========
+  emqx:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/emqx:5.8.8-linuxarm64
+    container_name: emqx-server
+    restart: unless-stopped
+    ports:
+      # MQTT
+      - "1883:1883"
+      # MQTT SSL
+      - "8883:8883"
+      # MQTT over WebSocket
+      - "8083:8083"
+      # MQTT over WebSocket SSL
+      - "8084:8084"
+      # EMQX Dashboard
+      - "18083:18083"
+    environment:
+      # Dashboard 默认用户名密码
+      EMQX_NAME: emqx
+      EMQX_HOST: 127.0.0.1
+      # 默认管理员密码
+      EMQX_DASHBOARD__DEFAULT_USERNAME: admin
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: admin
+    volumes:
+      # 数据持久化
+      - ./emqx/data:/opt/emqx/data
+      # 日志
+      - ./emqx/log:/opt/emqx/log
+    healthcheck:
+      test: ["CMD", "/opt/emqx/bin/emqx", "ctl", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # ========== IoTDB（时序数据库） ==========
+  iotdb:
+    image: apache/iotdb:2.0.8-standalone
+    hostname: iotdb-service
+    container_name: iotdb-service
+    restart: always
+    ports:
+      - "6667:6667"
+      - "8080:8080"
+    environment:
+      - TZ=Asia/Shanghai
+      - MEMORY_SIZE=8G
+      - IOTDB_JMX_OPTS=-Xms6G -Xmx6G -XX:MaxDirectMemorySize=1500M -XX:+CrashOnOutOfMemoryError -XX:+UseAdaptiveSizePolicy -Xss512k
+      - CONFIGNODE_JMX_OPTS=-Xms2G -Xmx2G -XX:MaxDirectMemorySize=500M -XX:+CrashOnOutOfMemoryError -Dsun.jnu.encoding=UTF-8 -Dfile.encoding=UTF-8
+      - cn_internal_address=iotdb-service
+      - cn_internal_port=10710
+      - cn_consensus_port=10720
+      - cn_seed_config_node=iotdb-service:10710
+      - dn_rpc_address=iotdb-service
+      - dn_internal_address=iotdb-service
+      - dn_rpc_port=6667
+      - dn_mpp_data_exchange_port=10740
+      - dn_schema_region_consensus_port=10750
+      - dn_data_region_consensus_port=10760
+      - dn_seed_config_node=iotdb-service:10710
+    volumes:
+      - ./iotdb/data:/iotdb/data
+      - ./iotdb/logs:/iotdb/logs
+    networks:
+      iotdb:
+        ipv4_address: 172.18.0.6
+    healthcheck:
+      test: ["CMD-SHELL", "/iotdb/sbin/start-cli.sh -h iotdb-service -e 'SHOW VERSION' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ========== MinIO（对象存储） ==========
+  minio:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z-linuxarm64
+    container_name: minio
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - ./minio/data:/data
+    command: server /data --console-address ":9001"
+
+  # ========== MySQL（关系数据库） ==========
+  mysql:
+    image: mysql:8.0
+    container_name: mysql-server
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: mydb
+      MYSQL_CHARSET: utf8mb4
+      MYSQL_COLLATION: utf8mb4_unicode_ci
+    volumes:
+      # 数据持久化
+      - ./mysql/data:/var/lib/mysql
+      # 自定义配置
+      - ./mysql/conf/my.cnf:/etc/mysql/conf.d/custom.cnf:ro
+      # 初始化脚本（首次启动执行）
+      - ./mysql/init:/docker-entrypoint-initdb.d:ro
+      # 日志
+      - ./mysql/logs:/var/log/mysql
+    command:
+      - --default-authentication-plugin=caching_sha2_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p$$MYSQL_ROOT_PASSWORD"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 32G
+
+  # ========== Redis（缓存） ==========
+  redis:
+    image: redis:7-alpine
+    container_name: redis-server
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      # 数据持久化
+      - ./redis/data:/data
+      # 自定义配置
+      - ./redis/conf/redis.conf:/usr/local/etc/redis/redis.conf:ro
+      # 日志
+      - ./redis/logs:/var/log/redis
+    command: redis-server /usr/local/etc/redis/redis.conf
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
 volumes:
   onlyoffice_data:
   onlyoffice_logs:
@@ -309,3 +456,7 @@ volumes:
   onlyoffice_postgresql:
   dij-maven-repo:
   dij-frontend-node-modules:
+
+networks:
+  iotdb:
+    external: true

@@ -9,6 +9,7 @@ import hashlib
 import io
 import os
 import time
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -50,6 +51,12 @@ class CallbackData(BaseModel):
 
 class ForceSaveRequest(BaseModel):
     user_id: str = "user_001"
+
+
+class ExportRequest(BaseModel):
+    user_id: str = "user_001"
+    document_ids: list[str] = []
+    month: Optional[str] = None
 
 
 def get_minio_client() -> Minio:
@@ -338,9 +345,15 @@ async def force_save_document(document_id: str, payload: ForceSaveRequest):
             )
         response.raise_for_status()
         data = response.json()
-        if data.get("error") not in (0, None):
+        error_code = data.get("error")
+        # OnlyOffice returns error=4 when there are no pending changes to force-save.
+        # This can happen after the user presses Ctrl+S inside the editor and then
+        # clicks our save button. Treat it as an idempotent success.
+        if error_code == 4:
+            return {"success": True, "data": data, "already_saved": True}
+        if error_code not in (0, None):
             raise HTTPException(status_code=502, detail=f"OnlyOffice 强制保存失败: {data}")
-        return {"success": True, "data": data}
+        return {"success": True, "data": data, "already_saved": False}
     except HTTPException:
         raise
     except Exception as exc:
@@ -480,6 +493,57 @@ async def list_documents(
             "documents": docs[start:end],
         },
     }
+
+
+@router.post("/documents/export")
+async def export_documents(payload: ExportRequest):
+    client = get_minio_client()
+    selected_ids = set(payload.document_ids or [])
+    prefix = f"{OBJECT_PREFIX}/{payload.user_id}/"
+    archive = io.BytesIO()
+    added_names: set[str] = set()
+    added_count = 0
+
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
+        for obj in client.list_objects(BUCKET_NAME, prefix=prefix, recursive=True):
+            if obj.object_name.endswith(".bak"):
+                continue
+            try:
+                document_id, filename, _ = parse_object_name(obj.object_name)
+            except ValueError:
+                continue
+            if selected_ids and document_id not in selected_ids:
+                continue
+            updated_at = obj.last_modified.isoformat() if obj.last_modified else ""
+            if payload.month and not updated_at.startswith(payload.month):
+                continue
+            try:
+                stat = client.stat_object(BUCKET_NAME, obj.object_name)
+                title = get_original_title(stat, filename)
+                content = client.get_object(BUCKET_NAME, obj.object_name).read()
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"导出文档失败: {exc}") from exc
+
+            archive_name = Path(title).name or filename
+            if archive_name in added_names:
+                stem = Path(archive_name).stem
+                suffix = Path(archive_name).suffix
+                archive_name = f"{stem}_{document_id}{suffix}"
+            added_names.add(archive_name)
+            zip_file.writestr(archive_name, content)
+            added_count += 1
+
+    if added_count == 0:
+        raise HTTPException(status_code=404, detail="没有找到可导出的文档")
+
+    archive.seek(0)
+    suffix = payload.month or datetime.now().strftime("%Y-%m-%d")
+    filename = f"documents_{suffix}.zip"
+    return StreamingResponse(
+        archive,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
 
 
 @router.get("/health")

@@ -1109,24 +1109,6 @@ function getRouteByFileName(fileName) {
 let currentEventSource = null
 
 /** 从 localStorage 加载任务列表 */
-function loadTasksFromStorage() {
-  try {
-    const saved = localStorage.getItem('flight_tasks')
-    if (saved) flightTasks.value = JSON.parse(saved)
-  } catch (e) {
-    console.warn('加载任务列表失败:', e)
-  }
-}
-
-/** 保存任务列表到 localStorage */
-function saveTasksToStorage() {
-  try {
-    localStorage.setItem('flight_tasks', JSON.stringify(flightTasks.value))
-  } catch (e) {
-    console.warn('保存任务列表失败:', e)
-  }
-}
-
 /** 从数据库加载航线文件列表 */
 async function fetchWaylineFiles() {
   if (!workspaceId.value) return
@@ -1149,19 +1131,13 @@ async function fetchFlightTasks() {
         page: taskPagination.value.page,
         page_size: taskPagination.value.page_size,
       })
-      const backendTasks = res.data?.list || res.data || []
-      if (backendTasks.length > 0) {
-        flightTasks.value = backendTasks
-        taskPagination.value.total = res.data?.total || backendTasks.length
-        saveTasksToStorage()
-        taskLoading.value = false
-        return
-      }
+      flightTasks.value = res.data?.list || res.data || []
+      taskPagination.value.total = flightTasks.value.length
     }
   } catch (err) {
-    console.warn('从后端获取任务列表失败，使用本地存储:', err)
+    console.warn('从后端获取任务列表失败:', err)
+    flightTasks.value = []
   }
-  loadTasksFromStorage()
   taskLoading.value = false
 }
 
@@ -1176,13 +1152,13 @@ async function handleCreateTask() {
   if (!route) return ElMessage.warning(`航线"${routeName}"暂不支持模拟飞行`)
 
   createTaskLoading.value = true
-  let jobId = 'job_' + Date.now()
   const taskName = `${routeName}_${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`
 
   const drone = selectedDevice.value
   const dockSn = drone?.parent_sn || drone?.device_sn || currentDeviceSn.value || 'DOCK_DEFAULT'
 
   // 调用后端API保存任务到数据库
+  let jobId = null
   try {
     const res = await createFlightTask(workspaceId.value, {
       name: taskName, file_id: selectedFileId.value, dock_sn: dockSn,
@@ -1191,16 +1167,13 @@ async function handleCreateTask() {
     if (res.data?.job_id) jobId = res.data.job_id
   } catch (err) {
     console.warn('[任务] 保存到数据库失败:', err)
+    ElMessage.error('创建任务失败: ' + (err.message || '未知错误'))
+    createTaskLoading.value = false
+    return
   }
 
-  // 添加到本地任务列表
-  const newTask = {
-    job_id: jobId, job_name: taskName, file_id: selectedFileId.value,
-    file_name: routeName, dock_name: '大藤峡机场',
-    status: 2, progress: 0, media_count: 0, create_time: new Date().toISOString(),
-  }
-  flightTasks.value.unshift(newTask)
-  saveTasksToStorage()
+  // 刷新任务列表（从后端获取正确的 dock_name）
+  await fetchFlightTasks()
 
   // 调用后端模拟飞行接口（SSE）
   try {
@@ -1262,7 +1235,6 @@ function connectSimulationSSE(jobId) {
     if (task) {
       task.status = 3
       task.progress = 1
-      saveTasksToStorage()
     }
     es.close()
     currentEventSource = null
@@ -1309,9 +1281,8 @@ async function handlePauseTask(jobId) {
 
   // 更新本地状态
   task.status = 6 // 已暂停
-  saveTasksToStorage()
 
-  // 停止当前模拟飞行（不调用后端API，只更新本地状态）
+  // 停止当前模拟飞行
   await stopCurrentSimulation(jobId)
 }
 
@@ -1322,9 +1293,8 @@ async function handleResumeTask(jobId) {
 
   // 更新本地状态
   task.status = 2 // 执行中
-  saveTasksToStorage()
 
-  // 重新启动模拟飞行
+  // 重新启动模拟飞行，从上次暂停的进度继续
   const routeName = task.file_name
   const route = getRouteByFileName(routeName)
   if (route) {
@@ -1334,6 +1304,7 @@ async function handleResumeTask(jobId) {
         route_name: routeName,
         waypoints: route.waypoints,
         duration: 60000,
+        start_progress: task.progress || 0, // 传递当前进度
       })
       connectSimulationSSE(jobId)
     } catch (err) {
@@ -1347,11 +1318,17 @@ async function handleCancelTask(jobId) {
   const task = flightTasks.value.find(t => t.job_id === jobId)
   if (!task || task.status === 3 || task.status === 4 || task.status === 5) return
 
+  // 调用后端API取消任务
+  try {
+    await cancelFlightTask(workspaceId.value, jobId)
+  } catch (err) {
+    console.warn('[任务] 取消任务失败:', err)
+  }
+
   // 更新本地状态
   task.status = 4 // 已取消
-  saveTasksToStorage()
 
-  // 停止当前模拟飞行（不调用后端API，只更新本地状态）
+  // 停止当前模拟飞行
   await stopCurrentSimulation(jobId)
 }
 
@@ -1373,10 +1350,12 @@ function formatProgress(progress) {
 
 /** 格式化任务时间 */
 function formatTaskTime(task) {
-  const time = task.create_time || task.execute_time || task.start_time
+  const time = task.create_time || task.execute_time || task.start_time || task.begin_time || task.beginTime
   if (!time) return '--'
   try {
+    // LocalDateTime 格式 "2026-07-27T12:44:37" 或时间戳
     const d = new Date(time)
+    if (isNaN(d.getTime())) return '--'
     return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
   } catch {
     return '--'

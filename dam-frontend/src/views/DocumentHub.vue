@@ -1,12 +1,37 @@
 <template>
   <div class="document-hub">
-    <div class="page-header">
-      <div class="header-content">
-        <h2 class="page-title">文档中心</h2>
-        <p class="page-desc">上传、预览和管理您的文档</p>
+    <div class="filter-section">
+      <div class="filter-field search-field">
+        <span class="filter-label">搜索</span>
+        <el-input
+          v-model="searchQuery"
+          placeholder="输入文件名"
+          :prefix-icon="Search"
+          clearable
+          class="search-input"
+        />
       </div>
-      <div class="header-actions">
-        <el-button type="primary" @click="showUploadDialog">
+      <div class="filter-field">
+        <span class="filter-label">文档分类</span>
+        <el-select v-model="selectedCategory" placeholder="全部分类" clearable class="category-select">
+          <el-option
+            v-for="cat in categories"
+            :key="cat"
+            :label="cat"
+            :value="cat"
+          />
+        </el-select>
+      </div>
+      <div class="filter-field">
+        <span class="filter-label">排序方式</span>
+        <el-select v-model="sortBy" placeholder="排序方式" class="sort-select">
+          <el-option label="最近修改" value="updated" />
+          <el-option label="文件名称" value="name" />
+          <el-option label="文件大小" value="size" />
+        </el-select>
+      </div>
+      <div class="filter-actions">
+        <el-button type="primary" class="upload-button" @click="showUploadDialog">
           <el-icon><Upload /></el-icon>
           上传文档
         </el-button>
@@ -43,80 +68,108 @@
       </el-card>
     </div>
 
-    <div class="filter-section">
-      <el-input
-        v-model="searchQuery"
-        placeholder="搜索文档..."
-        :prefix-icon="Search"
-        clearable
-        class="search-input"
-      />
-      <el-select v-model="selectedCategory" placeholder="文档分类" clearable>
-        <el-option
-          v-for="cat in categories"
-          :key="cat"
-          :label="cat"
-          :value="cat"
+    <div class="batch-toolbar">
+      <div class="batch-status">
+        已选择 <strong>{{ selectedDocumentIds.length }}</strong> 个文档
+      </div>
+      <el-button
+        class="batch-button"
+        :disabled="selectedDocumentIds.length === 0"
+        :loading="exportingSelected"
+        @click="exportSelectedDocuments"
+      >
+        <el-icon><Download /></el-icon>
+        导出勾选文档
+      </el-button>
+      <div class="month-export">
+        <span class="filter-label">按最后更新时间月份导出</span>
+        <el-date-picker
+          v-model="exportMonth"
+          type="month"
+          value-format="YYYY-MM"
+          placeholder="选择月份"
+          class="month-picker"
         />
-      </el-select>
-      <el-select v-model="sortBy" placeholder="排序方式">
-        <el-option label="最近修改" value="updated" />
-        <el-option label="文件名称" value="name" />
-        <el-option label="文件大小" value="size" />
-      </el-select>
+        <el-button
+          class="batch-button"
+          :disabled="!exportMonth"
+          :loading="exportingMonth"
+          @click="exportMonthDocuments"
+        >
+          <el-icon><Download /></el-icon>
+          导出该月
+        </el-button>
+      </div>
     </div>
 
-    <div v-loading="loading" class="document-grid">
-      <el-card
-        v-for="doc in filteredDocuments"
+    <div v-loading="loading" class="document-list">
+      <div class="document-header">
+        <div class="row-select">
+          <el-checkbox
+            :model-value="isCurrentPageAllSelected"
+            :indeterminate="isCurrentPageIndeterminate"
+            @change="toggleCurrentPageSelection"
+          />
+        </div>
+        <div class="row-index">序号</div>
+        <div class="row-name">原始文件名</div>
+        <div class="row-type">文件类型</div>
+        <div class="row-size">文件大小</div>
+        <div class="row-category">文档分类（按格式归类）</div>
+        <div class="row-date">创建时间</div>
+        <div class="row-date">最后更新时间</div>
+        <div class="row-actions">操作</div>
+      </div>
+      <div
+        v-for="(doc, index) in paginatedDocuments"
         :key="doc.document_id"
-        class="document-card"
-        shadow="hover"
+        class="document-row"
       >
-        <div class="card-header">
+        <div class="row-select">
+          <el-checkbox
+            :model-value="selectedDocumentIds.includes(doc.document_id)"
+            @change="(checked) => toggleDocumentSelection(doc.document_id, checked)"
+          />
+        </div>
+        <div class="row-index">{{ pageStartIndex + index + 1 }}</div>
+        <div class="row-name" @click="editDoc(doc)">
           <el-icon class="doc-icon" :class="getIconClass(doc.type)">
             <Document />
           </el-icon>
-          <el-dropdown trigger="click">
-            <el-button link>
-              <el-icon><MoreFilled /></el-icon>
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item @click="previewDoc(doc)">
-                  <el-icon><View /></el-icon>
-                  预览
-                </el-dropdown-item>
-                <el-dropdown-item @click="editDoc(doc)">
-                  <el-icon><Edit /></el-icon>
-                  编辑
-                </el-dropdown-item>
-                <el-dropdown-item @click="downloadDoc(doc)">
-                  <el-icon><Download /></el-icon>
-                  下载
-                </el-dropdown-item>
-                <el-dropdown-item divided @click="deleteDoc(doc)">
-                  <el-icon><Delete /></el-icon>
-                  删除
-                </el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+          <span class="doc-name" :title="doc.name">{{ doc.name }}</span>
         </div>
-        <div class="card-body" @click="editDoc(doc)">
-          <h4 class="doc-name" :title="doc.name">{{ doc.name }}</h4>
-          <p class="doc-meta">
-            <span>{{ formatSize(doc.size) }}</span>
-            <span>{{ formatDate(doc.updatedAt) }}</span>
-          </p>
+        <div class="row-type">
+          <span class="type-badge" :class="getTypeBadgeClass(doc.type)">
+            {{ getTypeLabel(doc.file_type) }}
+          </span>
         </div>
-      </el-card>
+        <div class="row-size">{{ formatSize(doc.size) }}</div>
+        <div class="row-category">{{ doc.category }}</div>
+        <div class="row-date">{{ formatDateTime(doc.created_at) }}</div>
+        <div class="row-date">{{ formatDateTime(doc.updatedAt) }}</div>
+        <div class="row-actions">
+          <el-button class="action-button edit-button" size="small" @click="editDoc(doc)">编辑</el-button>
+          <el-button class="action-button download-button" size="small" @click="downloadDoc(doc)">下载</el-button>
+          <el-button class="action-button preview-button" size="small" @click="previewDoc(doc)">预览</el-button>
+          <el-button class="action-button delete-button" size="small" @click="deleteDoc(doc)">删除</el-button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="!loading && filteredDocuments.length > 0" class="pagination-bar">
+      <el-pagination
+        v-model:current-page="currentPage"
+        :page-size="pageSize"
+        :total="filteredDocuments.length"
+        background
+        layout="total, prev, pager, next"
+      />
     </div>
 
     <div v-if="!loading && filteredDocuments.length === 0" class="empty-state">
       <el-icon class="empty-icon"><FolderOpened /></el-icon>
       <h3>暂无文档</h3>
-      <p>点击上方“上传文档”按钮开始上传</p>
+      <p>点击右上方“上传文档”按钮开始上传</p>
     </div>
 
     <el-dialog v-model="uploadDialogVisible" title="上传文档" width="500px">
@@ -168,12 +221,12 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Upload, UploadFilled, Search, Document, FolderOpened,
-  Clock, MoreFilled, View, Edit, Download, Delete
+  Clock, Download
 } from '@element-plus/icons-vue'
 import axios from 'axios'
 import OnlyOfficeEditor from '@/components/OnlyOfficeEditor.vue'
@@ -182,10 +235,16 @@ const router = useRouter()
 
 const loading = ref(false)
 const uploading = ref(false)
+const exportingSelected = ref(false)
+const exportingMonth = ref(false)
 const documents = ref([])
 const searchQuery = ref('')
 const selectedCategory = ref('')
 const sortBy = ref('updated')
+const currentPage = ref(1)
+const pageSize = 10
+const selectedDocumentIds = ref([])
+const exportMonth = ref('')
 
 const uploadDialogVisible = ref(false)
 const uploadFileList = ref([])
@@ -231,6 +290,33 @@ const filteredDocuments = computed(() => {
   return result
 })
 
+const pageStartIndex = computed(() => (currentPage.value - 1) * pageSize)
+
+const paginatedDocuments = computed(() => (
+  filteredDocuments.value.slice(pageStartIndex.value, pageStartIndex.value + pageSize)
+))
+
+const currentPageIds = computed(() => paginatedDocuments.value.map((doc) => doc.document_id))
+
+const isCurrentPageAllSelected = computed(() => (
+  currentPageIds.value.length > 0 &&
+  currentPageIds.value.every((id) => selectedDocumentIds.value.includes(id))
+))
+
+const isCurrentPageIndeterminate = computed(() => {
+  const selectedCount = currentPageIds.value.filter((id) => selectedDocumentIds.value.includes(id)).length
+  return selectedCount > 0 && selectedCount < currentPageIds.value.length
+})
+
+watch([searchQuery, selectedCategory, sortBy], () => {
+  currentPage.value = 1
+})
+
+watch(filteredDocuments, (docs) => {
+  const maxPage = Math.max(1, Math.ceil(docs.length / pageSize))
+  if (currentPage.value > maxPage) currentPage.value = maxPage
+})
+
 const getDocumentType = (extension) => {
   const ext = String(extension || '').toLowerCase()
   const typeMap = {
@@ -269,6 +355,18 @@ const getIconClass = (type) => {
   return classMap[type] || 'default-icon'
 }
 
+const getTypeBadgeClass = (type) => {
+  const classMap = {
+    word: 'word-badge',
+    excel: 'excel-badge',
+    powerpoint: 'ppt-badge',
+    pdf: 'pdf-badge'
+  }
+  return classMap[type] || 'default-badge'
+}
+
+const getTypeLabel = (extension) => String(extension || '').toUpperCase() || 'FILE'
+
 const formatSize = (bytes) => {
   if (!bytes) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB']
@@ -284,6 +382,26 @@ const formatSize = (bytes) => {
 const formatDate = (value) => {
   if (!value) return '-'
   return String(value).slice(0, 10)
+}
+
+const buildExportFileName = (suffix) => `documents_${suffix}.zip`
+
+const downloadBlob = (blob, filename) => {
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.setAttribute('download', filename)
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  window.URL.revokeObjectURL(url)
+}
+
+const formatDateTime = (value) => {
+  if (!value) return '-'
+  const raw = String(value).replace('T', ' ')
+  const [date = '-', time = ''] = raw.split(' ')
+  return time ? `${date} ${time.slice(0, 5)}` : date
 }
 
 const normalizeDocument = (doc) => ({
@@ -303,12 +421,15 @@ const loadDocuments = async () => {
       params: {
         user_id: currentUser.value.id,
         page: 1,
-        page_size: 200
+        page_size: 10000
       }
     })
 
     if (response.data.success) {
       documents.value = response.data.data.documents.map(normalizeDocument)
+      selectedDocumentIds.value = selectedDocumentIds.value.filter((id) => (
+        documents.value.some((doc) => doc.document_id === id)
+      ))
     } else {
       ElMessage.error('加载文档列表失败')
     }
@@ -318,6 +439,70 @@ const loadDocuments = async () => {
   } finally {
     loading.value = false
   }
+}
+
+const toggleDocumentSelection = (documentId, checked) => {
+  if (checked) {
+    if (!selectedDocumentIds.value.includes(documentId)) {
+      selectedDocumentIds.value.push(documentId)
+    }
+  } else {
+    selectedDocumentIds.value = selectedDocumentIds.value.filter((id) => id !== documentId)
+  }
+}
+
+const toggleCurrentPageSelection = (checked) => {
+  if (checked) {
+    const ids = new Set(selectedDocumentIds.value)
+    currentPageIds.value.forEach((id) => ids.add(id))
+    selectedDocumentIds.value = Array.from(ids)
+  } else {
+    selectedDocumentIds.value = selectedDocumentIds.value.filter((id) => !currentPageIds.value.includes(id))
+  }
+}
+
+const exportDocuments = async ({ documentIds = [], month = '', filename, loadingRef }) => {
+  try {
+    loadingRef.value = true
+    const response = await axios.post('/api/onlyoffice/documents/export', {
+      user_id: currentUser.value.id,
+      document_ids: documentIds,
+      month
+    }, {
+      responseType: 'blob'
+    })
+    downloadBlob(response.data, filename)
+    ElMessage.success('导出成功')
+  } catch (error) {
+    console.error('导出失败:', error)
+    ElMessage.error(error.response?.data?.detail || '导出失败')
+  } finally {
+    loadingRef.value = false
+  }
+}
+
+const exportSelectedDocuments = async () => {
+  if (selectedDocumentIds.value.length === 0) {
+    ElMessage.warning('请先勾选要导出的文档')
+    return
+  }
+  await exportDocuments({
+    documentIds: selectedDocumentIds.value,
+    filename: buildExportFileName('selected'),
+    loadingRef: exportingSelected
+  })
+}
+
+const exportMonthDocuments = async () => {
+  if (!exportMonth.value) {
+    ElMessage.warning('请选择要导出的月份')
+    return
+  }
+  await exportDocuments({
+    month: exportMonth.value,
+    filename: buildExportFileName(exportMonth.value),
+    loadingRef: exportingMonth
+  })
 }
 
 const showUploadDialog = () => {
@@ -364,6 +549,7 @@ const handleUpload = async () => {
 
     ElMessage.success('上传成功')
     uploadDialogVisible.value = false
+    currentPage.value = 1
     await loadDocuments()
   } catch (error) {
     console.error('上传失败:', error)
@@ -442,6 +628,7 @@ const deleteDoc = async (doc) => {
     const response = await axios.delete(`/api/onlyoffice/document/${doc.document_id}`)
     if (response.data.success) {
       ElMessage.success('删除成功')
+      selectedDocumentIds.value = selectedDocumentIds.value.filter((id) => id !== doc.document_id)
       await loadDocuments()
     } else {
       ElMessage.error('删除失败')
@@ -462,30 +649,8 @@ onMounted(() => {
 <style scoped>
 .document-hub {
   padding: 20px;
-  background: #f5f7fa;
-  min-height: 100vh;
-}
-
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 24px;
-  padding: 24px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  border-radius: 12px;
-  color: #fff;
-}
-
-.page-title {
-  margin: 0 0 8px 0;
-  font-size: 24px;
-  font-weight: 600;
-}
-
-.page-desc {
-  margin: 0;
-  opacity: 0.9;
+  background: transparent;
+  min-height: 100%;
 }
 
 .stats-cards {
@@ -517,82 +682,278 @@ onMounted(() => {
 .stat-value {
   font-size: 28px;
   font-weight: 600;
-  color: #303133;
+  color: var(--text-primary);
 }
 
 .stat-label {
   font-size: 14px;
-  color: #909399;
+  color: var(--text-muted);
 }
 
 .filter-section {
   display: flex;
+  align-items: center;
   gap: 16px;
-  margin-bottom: 24px;
+  margin-bottom: 16px;
   padding: 16px;
-  background: #fff;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
+}
+
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  gap: 6px;
+  min-width: 180px;
+}
+
+.search-field {
+  min-width: 260px;
+}
+
+.filter-label {
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-muted);
 }
 
 .search-input {
   width: 300px;
 }
 
-.document-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 16px;
-  min-height: 120px;
+.category-select,
+.sort-select {
+  width: 260px;
 }
 
-.document-card {
-  cursor: pointer;
-  transition: all 0.3s ease;
+.filter-actions {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.upload-button {
+  height: 48px;
+  min-width: 150px;
+  padding: 0 24px;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.batch-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  background: rgba(16, 38, 72, 0.42);
+  border: 1px solid var(--border-light);
   border-radius: 8px;
 }
 
-.document-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.1);
+.batch-status {
+  color: var(--text-secondary);
+  font-size: 14px;
+  white-space: nowrap;
 }
 
-.card-header {
+.batch-status strong {
+  color: var(--accent-color);
+}
+
+.batch-button {
+  height: 34px;
+  color: var(--text-primary);
+  background: rgba(0, 200, 255, 0.12);
+  border-color: rgba(0, 200, 255, 0.32);
+}
+
+.month-export {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  gap: 10px;
+  margin-left: auto;
 }
 
-.doc-icon {
-  font-size: 32px;
+.month-picker {
+  width: 150px;
 }
 
-.word-icon { color: #2b579a; }
-.excel-icon { color: #217346; }
-.ppt-icon { color: #d24726; }
-.pdf-icon { color: #f40f02; }
-.default-icon { color: #909399; }
+.document-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 120px;
+}
 
-.card-body {
+.document-header,
+.document-row {
+  display: grid;
+  grid-template-columns: 34px 48px minmax(220px, 2.8fr) 80px 96px minmax(140px, 1.2fr) 132px 132px 210px;
+  align-items: center;
+  gap: 16px;
+}
+
+.document-header {
+  min-height: 54px;
+  padding: 0 22px;
+  color: var(--text-primary);
+  background: #24527e;
+  border-radius: 2px;
+  border: 1px solid rgba(0, 200, 255, 0.18);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.document-header .row-name,
+.document-header .row-type,
+.document-header .row-size,
+.document-header .row-category,
+.document-header .row-date,
+.document-header .row-actions {
+  cursor: default;
+  color: var(--text-primary);
+}
+
+.document-header .row-actions {
+  justify-content: center;
+}
+
+.document-header .row-index,
+.document-header .row-size,
+.document-header .row-category,
+.document-header .row-date {
+  color: var(--text-primary);
+}
+
+.document-row {
+  min-height: 82px;
+  padding: 14px 22px;
+  color: #d8e7ff;
+  background: #213e64;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px rgba(103, 164, 217, 0.08);
+}
+
+.document-row:nth-child(even) {
+  background: #25466f;
+}
+
+.row-index,
+.row-size,
+.row-category,
+.row-date {
+  font-size: 14px;
+  font-weight: 600;
+  color: #d7e4f7;
+  overflow-wrap: anywhere;
+}
+
+.row-index {
+  color: #f2f7ff;
+}
+
+.row-name {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
   cursor: pointer;
 }
 
+.row-select {
+  display: flex;
+  justify-content: center;
+}
+
+.doc-icon {
+  flex: 0 0 auto;
+  font-size: 26px;
+}
+
+.word-icon { color: #3d8cff; }
+.excel-icon { color: #58d36f; }
+.ppt-icon { color: #f0a043; }
+.pdf-icon { color: #ff5967; }
+.default-icon { color: #9bb6d5; }
+
 .doc-name {
-  margin: 0 0 8px 0;
+  min-width: 0;
   font-size: 16px;
-  font-weight: 500;
-  color: #303133;
+  font-weight: 700;
+  color: #f3f600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.doc-meta {
+.row-type {
   display: flex;
-  justify-content: space-between;
-  margin: 0;
+}
+
+.type-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 3px;
   font-size: 12px;
-  color: #909399;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+}
+
+.word-badge { background: #3977dc; }
+.excel-badge { background: #2f9e5a; }
+.ppt-badge { background: #d9852f; }
+.pdf-badge { background: #ff4057; }
+.default-badge { background: #617a99; }
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0;
+  white-space: nowrap;
+}
+
+.row-actions .el-button + .el-button {
+  margin-left: 0;
+}
+
+.action-button {
+  min-width: 44px;
+  height: 30px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 0;
+  font-weight: 500;
+  color: #fff;
+}
+
+.edit-button {
+  background: #5a7fa3;
+}
+
+.download-button {
+  background: #7ea7bd;
+}
+
+.preview-button {
+  background: #0794a6;
+}
+
+.delete-button {
+  background: #bd315f;
+}
+
+.action-button:hover,
+.action-button:focus {
+  color: #fff;
+  filter: brightness(1.08);
 }
 
 .empty-state {
@@ -601,7 +962,8 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   padding: 80px 20px;
-  background: #fff;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
 }
 
@@ -613,12 +975,22 @@ onMounted(() => {
 
 .empty-state h3 {
   margin: 0 0 8px 0;
-  color: #606266;
+  color: var(--text-primary);
 }
 
 .empty-state p {
   margin: 0;
-  color: #909399;
+  color: var(--text-muted);
+}
+
+.pagination-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+  padding: 10px 12px;
+  background: rgba(16, 38, 72, 0.42);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
 }
 
 .upload-area {
@@ -630,7 +1002,9 @@ onMounted(() => {
   height: calc(100vh - 76px);
   min-height: 520px;
   overflow: hidden;
-  background: #f5f7fb;
+  background: var(--bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
 }
 
 .preview-editor-shell :deep(.onlyoffice-editor),
@@ -659,36 +1033,84 @@ onMounted(() => {
   align-items: center;
   margin: 0;
   padding: 0 20px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-color);
 }
 
 :global(.document-preview-dialog .el-dialog__body) {
   flex: 1;
   min-height: 0;
-  padding: 0 20px 20px;
+  padding: 16px 20px 20px;
   overflow: hidden;
+  background: var(--bg-color);
 }
 
 @media (max-width: 768px) {
-  .page-header {
-    flex-direction: column;
-    gap: 16px;
-    text-align: center;
-  }
-
   .stats-cards {
     grid-template-columns: 1fr;
   }
 
   .filter-section {
     flex-direction: column;
+    align-items: stretch;
+  }
+
+  .filter-field,
+  .search-field {
+    width: 100%;
+    min-width: 0;
   }
 
   .search-input {
     width: 100%;
   }
 
-  .document-grid {
-    grid-template-columns: 1fr;
+  .filter-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .filter-actions .el-button {
+    width: 100%;
+  }
+
+  .batch-toolbar,
+  .month-export {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .month-export {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .month-picker,
+  .batch-button {
+    width: 100%;
+  }
+
+  .document-header {
+    display: none;
+  }
+
+  .document-row {
+    grid-template-columns: 28px 32px minmax(0, 1fr);
+    gap: 10px 12px;
+    padding: 16px;
+  }
+
+  .row-type,
+  .row-size,
+  .row-category,
+  .row-date,
+  .row-actions {
+    grid-column: 3;
+  }
+
+  .row-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
   }
 
   .preview-editor-shell {

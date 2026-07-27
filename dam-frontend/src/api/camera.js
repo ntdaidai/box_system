@@ -11,7 +11,11 @@ export function getCameraList() {
 
 // 获取摄像头状态
 export function getCameraStatus(cameraId) {
-  return request.get(`/v1/camera/${cameraId}/status`, { localCache: false })
+  return request.get(`/v1/camera/${cameraId}/status`, {
+    localCache: false,
+    silentError: true,
+    timeout: 5000,
+  })
 }
 
 // 添加摄像头

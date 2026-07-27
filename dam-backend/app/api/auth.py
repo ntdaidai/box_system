@@ -1,15 +1,14 @@
 """认证接口 — 登录、获取当前用户、用户管理"""
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from loguru import logger
 
 from app.core.database import get_db
 from app.core.config import settings
-from app.core.rate_limiter import login_limiter
 from app.core.security import (
-    hash_password, verify_password, create_token,
-    require_auth, require_admin,
+    hash_password, create_token,
+    require_auth, require_admin, get_default_user,
 )
 from app.models.user import User
 from app.schemas.common import Result, PageResult, PageQuery
@@ -19,6 +18,14 @@ router = APIRouter()
 
 
 def _user_to_dict(u: User) -> dict:
+    if not hasattr(u, "to_dict"):
+        return {
+            "id": getattr(u, "id", 0),
+            "username": getattr(u, "username", settings.DEFAULT_ADMIN_USERNAME),
+            "real_name": getattr(u, "real_name", settings.DEFAULT_ADMIN_REALNAME),
+            "role": getattr(u, "role", "admin"),
+            "status": getattr(u, "status", 1),
+        }
     return u.to_dict()
 
 
@@ -26,33 +33,13 @@ def _user_to_dict(u: User) -> dict:
 
 @router.post("/login", response_model=Result)
 async def login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
-    """用户登录，返回 JWT 令牌"""
+    """Compatibility endpoint for old clients in no-auth mode."""
 
-    # 速率限制: 按客户端 IP 限制
-    client_ip = request.client.host if request.client else "unknown"
-    allowed, remaining = await login_limiter.is_allowed(client_ip)
-    if not allowed:
-        logger.warning(f"登录速率限制触发: IP={client_ip}")
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="登录尝试过于频繁，请稍后再试",
-            headers={"Retry-After": "60"},
-        )
-
-    user = db.query(User).filter(User.username == req.username).first()
-    if not user or not verify_password(req.password, user.password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="用户名或密码错误",
-        )
-    if user.status != 1:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="账号已被禁用",
-        )
+    del req, request
+    user = get_default_user(db)
 
     token = create_token(user.id, user.username, user.role)
-    logger.info(f"用户登录: {user.username}")
+    logger.info(f"无鉴权兼容登录: {user.username}")
 
     return Result.success({
         "token": token,

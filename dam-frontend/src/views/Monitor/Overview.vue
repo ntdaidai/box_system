@@ -28,7 +28,7 @@ import windIcon from '@/assets/images/sensors/wind.png'
 import rainIcon from '@/assets/images/sensors/rain.png'
 import vibrationIcon from '@/assets/images/sensors/vibration.png'
 import cameraIcon from '@/assets/images/sensors/camera.png'
-import beidouIcon from '@/assets/images/sensors/beidou.png'
+import uavIcon from '/drone.png'
 
 const router = useRouter()
 const deviceStatus = ref({})
@@ -39,7 +39,7 @@ const sensors = [
   { name: '雨量计', key: 'rain', path: '/monitor/rain', icon: rainIcon },
   { name: '振动传感器', key: 'vibration', path: '/monitor/vibration', icon: vibrationIcon },
   { name: '视频监控', key: 'camera', path: '/monitor/camera', icon: cameraIcon },
-  { name: '北斗通讯', key: 'beidou', path: '/monitor/device', icon: beidouIcon },
+  { name: '大疆 Matrice 4E', key: 'uav', path: '/monitor/drone', icon: uavIcon },
 ]
 
 const goTo = (path) => router.push(path)
@@ -56,21 +56,25 @@ const getStatusText = (key) => {
   return '离线'
 }
 
+const defaultStatus = {
+  temp_humidity: { status: 'online' },
+  wind: { status: 'online' },
+  rain: { status: 'online' },
+  vibration: { status: 'online' },
+  camera: { status: 'offline' },
+  uav: { status: 'online' },
+}
+
 const fetchStatus = async () => {
   try {
     const res = await getDeviceStatus()
     if (res.code === 200) {
-      deviceStatus.value = res.data || {}
+      deviceStatus.value = { ...defaultStatus, ...(res.data || {}) }
+    } else {
+      deviceStatus.value = { ...defaultStatus }
     }
   } catch (error) {
-    deviceStatus.value = {
-      temp_humidity: { status: 'online' },
-      wind: { status: 'online' },
-      rain: { status: 'online' },
-      vibration: { status: 'online' },
-      camera: { status: 'offline' },
-      beidou: { status: 'offline' },
-    }
+    deviceStatus.value = { ...defaultStatus }
   }
 }
 
@@ -82,13 +86,16 @@ onMounted(() => {
 <style scoped>
 .overview-container {
   width: 100%;
-  height: 100%;
+  min-height: 100%;
   background: radial-gradient(ellipse at center, #0a1a2f 0%, #050d18 100%);
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   overflow-y: auto;
+  overflow-x: hidden;
+  padding: clamp(28px, 5vh, 56px) 20px;
+  box-sizing: border-box;
 }
 
 .title {
@@ -96,19 +103,25 @@ onMounted(() => {
   font-weight: bold;
   color: var(--accent-color);
   text-shadow: 0 0 30px var(--accent-glow), 0 0 60px rgba(0, 229, 255, 0.3);
-  margin-bottom: 60px;
+  margin: 0 0 clamp(28px, 5vh, 56px);
   letter-spacing: 8px;
+  line-height: 1.2;
+  text-align: center;
 }
 
 .sensor-grid {
   display: grid;
-  grid-template-columns: repeat(3, 300px);
-  gap: 50px;
+  grid-template-columns: repeat(3, minmax(220px, 300px));
+  gap: clamp(24px, 4vw, 50px);
+  width: min(100%, 1000px);
+  justify-content: center;
 }
 
 .sensor-card {
-  width: 300px;
-  height: 300px;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  min-height: 220px;
+  max-height: 300px;
   background: rgba(0, 40, 80, 0.4);
   border: 1px solid rgba(0, 200, 255, 0.4);
   box-shadow: 0 0 20px rgba(0, 150, 255, 0.6), inset 0 0 30px rgba(0, 100, 200, 0.1);
@@ -174,18 +187,12 @@ onMounted(() => {
 
 @media (max-width: 1180px) {
   .overview-container {
-    justify-content: flex-start;
     padding: 48px 20px;
   }
 
   .sensor-grid {
-    grid-template-columns: repeat(2, 260px);
+    grid-template-columns: repeat(2, minmax(220px, 260px));
     gap: 30px;
-  }
-
-  .sensor-card {
-    width: 260px;
-    height: 260px;
   }
 }
 
@@ -197,11 +204,11 @@ onMounted(() => {
   }
 
   .sensor-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, min(300px, calc(100vw - 56px)));
   }
 
   .sensor-card {
-    width: min(300px, calc(100vw - 56px));
+    min-height: 220px;
   }
 }
 </style>

@@ -1,0 +1,44 @@
+version: "3.8"  # ✅ 升级到3.8以支持更完善的资源限制语法
+
+services:
+  iotdb-service:
+    image: apache/iotdb:2.0.8-standalone  # ✅ 锁定具体版本，切勿使用latest
+    hostname: iotdb-service
+    container_name: iotdb-service
+    restart: always                       # ✅ 新增：崩溃自动重启
+    ports:
+      - "6667:6667"
+      - "8080:8080"                       # ✅ 可选：暴露REST API供Python/Flink使用
+    environment:
+      - TZ=Asia/Shanghai                  # ✅ 新增：强制同步北京时间
+      - MEMORY_SIZE=8G                    # 限制 IoTDB 总内存为 8G
+      - IOTDB_JMX_OPTS=-Xms6G -Xmx6G -XX:MaxDirectMemorySize=1500M -XX:+CrashOnOutOfMemoryError -XX:+UseAdaptiveSizePolicy -Xss512k
+      - CONFIGNODE_JMX_OPTS=-Xms2G -Xmx2G -XX:MaxDirectMemorySize=500M -XX:+CrashOnOutOfMemoryError -Dsun.jnu.encoding=UTF-8 -Dfile.encoding=UTF-8
+      - cn_internal_address=iotdb-service
+      - cn_internal_port=10710
+      - cn_consensus_port=10720
+      - cn_seed_config_node=iotdb-service:10710
+      - dn_rpc_address=iotdb-service
+      - dn_internal_address=iotdb-service
+      - dn_rpc_port=6667
+      - dn_mpp_data_exchange_port=10740
+      - dn_schema_region_consensus_port=10750
+      - dn_data_region_consensus_port=10760
+      - dn_seed_config_node=iotdb-service:10710
+    volumes:
+      - ./data:/iotdb/data                # ✅ 已包含：数据持久化
+      - ./logs:/iotdb/logs                # ✅ 已包含：日志持久化
+    networks:
+      iotdb:
+        ipv4_address: 172.18.0.6
+    # ✅ 新增：健康检查，确保服务真正可用
+    healthcheck:
+      test: ["CMD-SHELL", "/iotdb/sbin/start-cli.sh -h iotdb-service -e 'SHOW VERSION' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s                   # IoTDB冷启动较慢，给予充足初始化时间
+
+networks:
+  iotdb:
+    external: true                        # ✅ 保持外部网络，与您的原始设计一致

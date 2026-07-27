@@ -66,14 +66,14 @@ class Settings:
             "?charset=utf8mb4"
         )
 
-    # ── JWT (必须设置，无默认值) ──────────────────────────────
-    JWT_SECRET: str = _require_env("JWT_SECRET", is_secret=True)
+    # ── JWT (无鉴权模式下仅用于兼容旧登录接口) ───────────────
+    JWT_SECRET: str = _get_env("JWT_SECRET", "no-auth-local-secret")
     JWT_ALGORITHM: str = _get_env("JWT_ALGORITHM", "HS256")
     JWT_EXPIRE_SECONDS: int = int(_get_env("JWT_EXPIRE_SECONDS", "1296000"))  # 15d
 
-    # ── 默认管理员 (首次启动时创建，密码必须设置) ─────────────
+    # ── 默认管理员 (无鉴权模式下作为接口操作者占位) ───────────
     DEFAULT_ADMIN_USERNAME: str = _get_env("DEFAULT_ADMIN_USERNAME", "admin")
-    DEFAULT_ADMIN_PASSWORD: str = _require_env("DEFAULT_ADMIN_PASSWORD", is_secret=True)
+    DEFAULT_ADMIN_PASSWORD: str = _get_env("DEFAULT_ADMIN_PASSWORD", "admin")
     DEFAULT_ADMIN_REALNAME: str = _get_env("DEFAULT_ADMIN_REALNAME", "管理员")
 
     # ── Redis ──────────────────────────────────────────────────
@@ -121,7 +121,7 @@ class Settings:
     )
     YOLO_CLASSIFY_MODEL_PATH: str = _get_env(
         "YOLO_CLASSIFY_MODEL_PATH",
-        "/models/disaster-classifier/best.pt",
+        "/models/disaster-classifier/best.engine",
     )
     YOLO_CLASSIFY_FALLBACK_PATH: str = _get_env(
         "YOLO_CLASSIFY_FALLBACK_PATH",

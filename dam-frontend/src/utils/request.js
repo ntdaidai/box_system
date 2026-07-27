@@ -34,13 +34,8 @@ function withCacheDefaults(url, config = {}) {
   }
 }
 
-// 请求拦截器
 service.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('token')
-    if (token) {
-      config.headers['Authorization'] = `Bearer ${token}`
-    }
     return config
   },
   (error) => {
@@ -67,16 +62,6 @@ service.interceptors.response.use(
     return res
   },
   (error) => {
-    // dai: Convert an expired/missing token into one clear login flow. This
-    // also clears cached authenticated responses before leaving the page.
-    if (error.response?.status === 401) {
-      // 登录已移除，401 仅提示错误
-      const detail = error.response?.data?.detail || '认证失败'
-      if (!error.config?.silentError) {
-        ElMessage.warning(detail)
-      }
-      return Promise.reject(error)
-    }
     if (!error.config?.silentError) {
       ElMessage.error(error.response?.data?.detail || error.message || '网络错误')
     }

@@ -144,14 +144,16 @@ docker compose up -d
 
 ```dotenv
 YOLO_DETECT_MODEL_PATH=/models/runs/yolo26x_continue/weights/best.pt
-YOLO_CLASSIFY_MODEL_PATH=/models/disaster-classifier/best.pt
+YOLO_CLASSIFY_MODEL_PATH=/models/disaster-classifier/best.engine
 YOLO_CLASSIFY_FALLBACK_PATH=
 ```
 
 灾害分类模型输出 `earthquake / flood / landslide / mudslide`，分类模式只返回整图类别
-与置信度，页面不会绘制检测框。已有 `best.engine` 只能在构建它的 TensorRT/CUDA 环境
-中使用；为目标容器重新导出兼容 engine 后，可通过 `YOLO_CLASSIFY_MODEL_PATH` 覆盖为
-`/models/disaster-classifier/best.engine`。
+与置信度，页面不会绘制检测框。当前默认挂载
+`/home/jetson/sep/disaster_idf/yolo26x/models`，其中 `best.engine` 是面向当前
+Jetson/TensorRT/CUDA 环境导出的 TensorRT FP16 engine；如果部署到不同 Jetson 或不同
+TensorRT 版本机器，需要在目标机器上重新导出 engine，或临时把
+`YOLO_CLASSIFY_MODEL_PATH` 覆盖为 `/models/disaster-classifier/best.pt`。
 
 未接入摄像头时 `CAMERA_RTSP_URL` 保持为空，系统会正常启动，`/monitor/camera`
 页面显示待配置状态。接入单路海康摄像头时，在项目 `.env` 中配置：
