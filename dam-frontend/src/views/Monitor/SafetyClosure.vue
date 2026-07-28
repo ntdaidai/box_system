@@ -67,7 +67,7 @@
       />
     </div>
 
-    <el-drawer v-model="drawerVisible" title="安全事件详情" size="860px">
+    <el-drawer v-model="drawerVisible" title="安全事件详情" size="860px" class="safety-drawer">
       <div v-if="currentEvent" class="detail">
         <section class="media-grid">
           <div class="media-box">
@@ -386,7 +386,10 @@ function formatDuration(seconds) {
 .safety-page {
   height: 100%;
   padding: 18px;
-  background: #f4f7fb;
+  background:
+    radial-gradient(circle at 18% 0%, rgba(27, 105, 150, 0.22), transparent 30%),
+    linear-gradient(180deg, #071625 0%, #08121f 100%);
+  color: #dce9fa;
 }
 
 .toolbar {
@@ -394,6 +397,11 @@ function formatDuration(seconds) {
   align-items: center;
   gap: 12px;
   margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid rgba(0, 200, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(12, 31, 55, 0.82);
+  box-shadow: inset 0 0 0 1px rgba(116, 201, 249, 0.04);
 }
 
 .w-140 {
@@ -417,13 +425,14 @@ function formatDuration(seconds) {
   justify-content: space-between;
   height: 76px;
   padding: 0 20px;
-  border: 1px solid #dbe4ee;
+  border: 1px solid rgba(88, 137, 205, 0.24);
   border-radius: 6px;
-  background: #fff;
+  background: linear-gradient(145deg, rgba(16, 34, 61, 0.96), rgba(9, 23, 43, 0.96));
+  box-shadow: inset 0 0 0 1px rgba(74, 182, 255, 0.05);
 }
 
 .metric span {
-  color: #66768a;
+  color: #8ea8c9;
 }
 
 .metric b {
@@ -436,14 +445,72 @@ function formatDuration(seconds) {
 .metric.closed b { color: #1f8f53; }
 
 .event-table {
-  border: 1px solid #dbe4ee;
+  border: 1px solid rgba(88, 137, 205, 0.26);
   border-radius: 6px;
+  background: rgba(12, 31, 55, 0.72);
+  color: #dce9fa;
 }
 
 .pager {
   display: flex;
   justify-content: flex-end;
   padding: 14px 0 0;
+}
+
+.toolbar :deep(.el-select__wrapper),
+.toolbar :deep(.el-input__wrapper) {
+  min-height: 36px;
+  border-radius: 6px;
+  background: rgba(6, 20, 38, 0.9);
+  box-shadow: 0 0 0 1px rgba(89, 155, 255, 0.28) inset;
+}
+
+.toolbar :deep(.el-select__wrapper.is-focused),
+.toolbar :deep(.el-input__wrapper.is-focus) {
+  box-shadow: 0 0 0 1px rgba(0, 214, 255, 0.72) inset;
+}
+
+.toolbar :deep(.el-select__placeholder),
+.toolbar :deep(.el-input__inner) {
+  color: #dce9fa;
+}
+
+.toolbar :deep(.el-input__inner::placeholder) {
+  color: rgba(174, 202, 245, 0.62);
+}
+
+.event-table :deep(.el-table__inner-wrapper::before),
+.event-table :deep(.el-table__border-left-patch) {
+  display: none;
+}
+
+.event-table :deep(.el-table__header-wrapper th),
+.event-table :deep(.el-table__fixed-header-wrapper th) {
+  background: rgba(18, 42, 72, 0.98);
+  color: #b7d8ff;
+  border-bottom-color: rgba(88, 137, 205, 0.22);
+}
+
+.event-table :deep(.el-table__body-wrapper tr),
+.event-table :deep(.el-table__fixed-body-wrapper tr),
+.event-table :deep(.el-table__body-wrapper td),
+.event-table :deep(.el-table__fixed-body-wrapper td) {
+  background: rgba(10, 25, 46, 0.96);
+  color: #dce9fa;
+  border-bottom-color: rgba(88, 137, 205, 0.14);
+}
+
+.event-table :deep(.el-table__body tr:hover > td),
+.event-table :deep(.el-table__fixed-body-wrapper tr:hover > td) {
+  background: rgba(28, 68, 110, 0.98);
+}
+
+.pager :deep(.el-pagination) {
+  --el-pagination-bg-color: rgba(12, 31, 55, 0.86);
+  --el-pagination-button-bg-color: rgba(12, 31, 55, 0.86);
+  --el-pagination-text-color: #a8bdd8;
+  --el-pagination-button-color: #dce9fa;
+  --el-pagination-hover-color: #20d7ff;
 }
 
 .media-grid {
@@ -455,13 +522,14 @@ function formatDuration(seconds) {
 .media-box {
   min-height: 236px;
   padding: 12px;
-  border: 1px solid #dde7f0;
+  border: 1px solid rgba(88, 137, 205, 0.24);
   border-radius: 6px;
+  background: rgba(8, 22, 40, 0.72);
 }
 
 .media-box header {
   margin-bottom: 10px;
-  color: #334155;
+  color: #dce9fa;
   font-weight: 700;
 }
 
@@ -483,20 +551,21 @@ function formatDuration(seconds) {
 .info-grid div {
   min-height: 54px;
   padding: 8px 10px;
-  border: 1px solid #dde7f0;
+  border: 1px solid rgba(88, 137, 205, 0.24);
   border-radius: 6px;
+  background: rgba(8, 22, 40, 0.72);
 }
 
 .info-grid span {
   display: block;
-  color: #708093;
+  color: #8ea8c9;
   font-size: 12px;
 }
 
 .info-grid b {
   display: block;
   margin-top: 5px;
-  color: #1f2f46;
+  color: #f4f8ff;
 }
 
 .info-grid .risk-HIGH { color: #d93030; }
@@ -512,22 +581,42 @@ function formatDuration(seconds) {
 
 .timeline h3 {
   margin: 0 0 14px;
-  color: #1f2f46;
+  color: #f4f8ff;
 }
 
 .timeline-card strong {
   display: block;
-  color: #1f2f46;
+  color: #f4f8ff;
 }
 
 .timeline-card small {
   display: block;
   margin-top: 3px;
-  color: #75879a;
+  color: #8ea8c9;
 }
 
 .timeline-card p {
   margin: 6px 0 0;
-  color: #405167;
+  color: #b7cae4;
+}
+
+:global(.safety-drawer.el-drawer) {
+  background: linear-gradient(180deg, #0c1f37 0%, #081522 100%);
+  color: #dce9fa;
+}
+
+:global(.safety-drawer .el-drawer__header) {
+  margin-bottom: 0;
+  padding: 18px 22px;
+  border-bottom: 1px solid rgba(88, 137, 205, 0.24);
+  color: #f4f8ff;
+}
+
+:global(.safety-drawer .el-drawer__body) {
+  padding: 18px 22px;
+}
+
+:global(.safety-drawer .el-empty__description p) {
+  color: #8ea8c9;
 }
 </style>

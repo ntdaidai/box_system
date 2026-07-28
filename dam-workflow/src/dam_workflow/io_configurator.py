@@ -98,6 +98,7 @@ def llm_io_match(source_io: Dict, target_io: Dict, context: str = "") -> Dict:
         result = model_registry_client.infer(
             model_id=settings.llm_0_8b_model_id,
             request_data={"prompt": prompt},
+            model_name=settings.llm_0_8b_model_name,
         )
     except Exception as e:
         logger.warning("LLM IO 匹配推理调用失败: %s", e)

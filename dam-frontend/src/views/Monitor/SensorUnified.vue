@@ -909,7 +909,15 @@ const fullChartOption = () => {
       textStyle: { color: '#f1f6ff', fontSize: 13 },
       axisPointer: { type: activeHistoryTab.value === 'rain' ? 'shadow' : 'line' },
     },
-    legend: undefined,
+    legend: activeHistoryTab.value === 'rain' ? {
+      show: true,
+      bottom: overview ? 34 : 4,
+      left: 12,
+      itemWidth: 18,
+      itemHeight: 8,
+      textStyle: { color: '#b7cae4', fontSize: 12 },
+      data: [rainLegend],
+    } : undefined,
     grid: { left: 46, right: 54, bottom: overview ? 78 : 48, top: 44, containLabel: true },
     dataZoom: overview
       ? [{
@@ -1401,23 +1409,30 @@ onUnmounted(() => {
 }
 
 .wind-direction-value {
-  min-height: 38px;
+  min-height: 42px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
+}
+
+.wind-direction-value strong {
+  min-height: 42px;
+  align-items: center;
+  line-height: 1;
 }
 
 .wind-direction-value .mini-compass {
   display: block;
   flex: 0 0 auto;
   margin-top: 0;
+  transform: translateY(1px);
 }
 
 .mini-compass {
   position: relative;
-  width: 42px;
-  height: 42px;
+  width: 38px;
+  height: 38px;
   border: 1px solid rgba(116, 201, 249, 0.62);
   border-radius: 50%;
   background: radial-gradient(circle, rgba(38, 82, 128, 0.5), rgba(13, 31, 57, 0.42));
@@ -1441,9 +1456,9 @@ onUnmounted(() => {
   left: 50%;
   width: 0;
   height: 0;
-  border-left: 6px solid transparent;
-  border-right: 6px solid transparent;
-  border-bottom: 18px solid #72cdf9;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 16px solid #72cdf9;
   transform-origin: 50% 70%;
   filter: drop-shadow(0 0 8px rgba(114, 205, 249, 0.45));
 }

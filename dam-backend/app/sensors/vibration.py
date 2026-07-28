@@ -5,6 +5,8 @@
 
 import time
 import logging
+from collections import deque
+from threading import Lock
 
 from app.sensors.device_model import DeviceModel
 
@@ -51,6 +53,9 @@ class VibrationSensor:
         self.port = port or self.DEFAULT_PORT
         self.addr = addr or self.DEFAULT_ADDR
         self.device = None
+        self._sample_lock = Lock()
+        self._samples = deque(maxlen=1024)
+        self._latest_named_data = {}
 
     def open(self):
         """打开设备"""
@@ -58,6 +63,7 @@ class VibrationSensor:
             self.device = DeviceModel(
                 "VB05振动传感器", self.port, self.DEFAULT_BAUD, self.addr
             )
+            self.device.on_data_callback = self._handle_device_update
             self.device.openDevice()
             self.device.startLoopRead()
             time.sleep(0.5)  # 等待数据稳定
@@ -81,11 +87,38 @@ class VibrationSensor:
         if not self.device:
             raise RuntimeError("设备未打开")
 
+        with self._sample_lock:
+            if self._latest_named_data:
+                return {
+                    key: value
+                    for key, value in self._latest_named_data.items()
+                    if not key.startswith("_")
+                }
+
+        return self._snapshot_from_device()
+
+    def drain_samples(self) -> list[dict]:
+        """取出底层轮询期间积累的高频样本。"""
+        with self._sample_lock:
+            samples = list(self._samples)
+            self._samples.clear()
+        return samples
+
+    def _snapshot_from_device(self) -> dict:
         data = {}
         for addr, name, unit, decimals in REGISTERS:
             value = self.device.get(str(addr))
             data[name] = value
         return data
+
+    def _handle_device_update(self, _raw_device_data):
+        if not self.device:
+            return
+        data = self._snapshot_from_device()
+        data["_sample_timestamp"] = time.time()
+        with self._sample_lock:
+            self._latest_named_data = data.copy()
+            self._samples.append(data)
 
     def read_loop(self, callback=None):
         """循环读取数据"""

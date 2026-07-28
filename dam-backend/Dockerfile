@@ -9,6 +9,8 @@ WORKDIR /app
 # 安装系统依赖（基础镜像已包含 Jetson PyTorch、CUDA 与编译工具）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libusb-1.0-0 \
+    libreoffice-writer \
+    fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
 # 安装 Python 依赖

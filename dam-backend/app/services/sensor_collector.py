@@ -188,7 +188,11 @@ class SensorCollector:
                     history_data = data
                     if name == "vibration":
                         try:
-                            processed = vibration_processor.process_raw_data(data)
+                            samples = sensor.drain_samples() if hasattr(sensor, "drain_samples") else []
+                            if not samples:
+                                samples = [data]
+                            for sample in samples:
+                                processed = vibration_processor.process_raw_data(sample)
                             history_data = {
                                 **data,
                                 **{key: value for key, value in processed.items() if key != "timestamp"},

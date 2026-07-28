@@ -20,12 +20,15 @@ class ModelRegistryClient:
         self.base_url = (base_url or settings.model_registry_api_base).rstrip("/")
         self.timeout = timeout
 
-    def infer(self, model_id: int, request_data: Dict) -> Dict:
+    def infer(self, model_id: int, request_data: Dict, model_name: str = None) -> Dict:
         """调用模型推理
 
         Args:
             model_id: 模型 ID
-            request_data: 推理请求数据
+            request_data: 推理请求数据（支持两种格式）：
+                - chat 格式：{"messages": [...], "max_tokens": 100}
+                - prompt 格式：{"prompt": "...", "max_tokens": 100}（自动转换为 messages 格式）
+            model_name: vLLM 模型名称（served-model-name），如果提供则自动添加到请求中
 
         Returns:
             推理结果
@@ -36,10 +39,23 @@ class ModelRegistryClient:
             httpx.HTTPStatusError: HTTP 错误状态码
         """
         url = f"{self.base_url}/api/model-registry/{model_id}/infer"
+
+        # 构建请求数据
+        payload = request_data.copy()
+
+        # 自动添加 model 参数
+        if model_name and "model" not in payload:
+            payload["model"] = model_name
+
+        # 自动将 prompt 格式转换为 messages 格式
+        if "prompt" in payload and "messages" not in payload:
+            prompt = payload.pop("prompt")
+            payload["messages"] = [{"role": "user", "content": prompt}]
+
         try:
             response = httpx.post(
                 url,
-                json={"request_data": request_data},
+                json={"request_data": payload},
                 timeout=self.timeout,
             )
             response.raise_for_status()

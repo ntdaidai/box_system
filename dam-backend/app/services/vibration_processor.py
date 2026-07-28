@@ -9,15 +9,16 @@ from typing import Dict, Any, List, Tuple, Optional
 from loguru import logger
 
 # 关键参数（硬编码）
-SAMPLE_RATE = 100  # 采样率 100Hz
-RMS_WINDOW = 100  # RMS窗口 1秒（100个采样点）
-FFT_POINTS = 256  # FFT点数
+SAMPLE_RATE = 10  # 底层Modbus轮询约10Hz
+RMS_WINDOW = 10  # RMS窗口约1秒（10个采样点）
+FFT_POINTS = 64  # FFT点数，约6.4秒低频运动窗口
 MAX_BUFFER_POINTS = max(RMS_WINDOW, FFT_POINTS)
 HIGHPASS_CUTOFF = 0.5  # 高通截止频率 Hz
 CREST_FACTOR_THRESHOLD = 3.5  # 冲击阈值（峰值因子）
 FREQ_DRIFT_THRESHOLD = 15  # 主频偏移阈值 %
 FREQ_CLUSTER_TOLERANCE_HZ = 1.0  # 多轴同一模态的频率聚合容差
 MIN_AXIS_WEIGHT_RATIO = 0.15  # 参与同一模态聚合的最小轴能量占比
+LOW_FREQ_MOTION_RMS_G = 0.03  # 手晃/低频运动优先阈值
 
 # 分级报警阈值
 ALERT_THRESHOLDS = {
@@ -129,7 +130,7 @@ class VibrationProcessor:
         crest_factor = self.calc_crest_factor(self.accel_buffer, rms)
 
         # 5. 综合主频：优先采用传感器三轴频率寄存器的主振动轴结果；缺失时使用三轴能量合成FFT兜底。
-        dominant_freq = self.calc_dominant_freq(raw_data)
+        dominant_freq = self.calc_dominant_freq(raw_data, rms)
 
         # 6. 更新基线主频
         self._update_baseline_freq(dominant_freq)
@@ -228,7 +229,7 @@ class VibrationProcessor:
         peak = max(abs(x) for x in recent)
         return peak / rms
 
-    def calc_dominant_freq(self, raw_data: Optional[Dict[str, Any]] = None) -> float:
+    def calc_dominant_freq(self, raw_data: Optional[Dict[str, Any]] = None, rms: Optional[float] = None) -> float:
         """计算综合主频
 
         传感器已经提供三轴主频寄存器时，综合主频取主振动轴所在模态：
@@ -243,9 +244,15 @@ class VibrationProcessor:
             主频 Hz
         """
         register_freq = self.calc_register_dominant_freq(raw_data or {})
+        fft_freq = self.calc_fft_dominant_freq()
+
+        # 手动晃动和低频摆动通常不会稳定写入传感器频率寄存器；
+        # 当低频能量明显时，优先展示实际采样序列的低频主频。
+        if fft_freq > 0 and (rms or 0) >= LOW_FREQ_MOTION_RMS_G:
+            return fft_freq
         if register_freq > 0:
             return register_freq
-        return self.calc_fft_dominant_freq()
+        return fft_freq
 
     def calc_register_dominant_freq(self, raw_data: Dict[str, Any]) -> float:
         """根据传感器三轴频率寄存器计算综合主频。"""

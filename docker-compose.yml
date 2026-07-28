@@ -105,7 +105,7 @@ services:
       # 可扩展视觉模型。分类模型默认使用当前 Jetson 上导出的 TensorRT engine。
       YOLO_DETECT_MODEL_PATH: "${YOLO_DETECT_MODEL_PATH:-/models/runs/yolo26x_continue/weights/best.pt}"
       YOLO_CLASSIFY_MODEL_PATH: "${YOLO_CLASSIFY_MODEL_PATH:-/models/disaster-classifier/best.engine}"
-      YOLO_CLASSIFY_FALLBACK_PATH: "${YOLO_CLASSIFY_FALLBACK_PATH:-}"
+      YOLO_CLASSIFY_FALLBACK_PATH: "${YOLO_CLASSIFY_FALLBACK_PATH:-/models/disaster-classifier/best.pt}"
       YOLO_CONFIDENCE: "0.5"
       YOLO_IOU: "0.45"
       # dai: 未接入摄像头时保持为空；接入后在 .env 中填写真实海康地址。
@@ -271,6 +271,11 @@ services:
       - "host.docker.internal:host-gateway"
     depends_on:
       - dij-mediamtx
+    deploy:
+      resources:
+      
+        limits:
+          memory: 1G
 
   # ========== DJI Cloud API 前端（手柄上云必需） ==========
   dij-frontend:
@@ -334,7 +339,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
+          memory: 1G
 
   # ========== IoTDB（时序数据库） ==========
   iotdb:
@@ -347,9 +352,9 @@ services:
       - "8080:8080"
     environment:
       - TZ=Asia/Shanghai
-      - MEMORY_SIZE=8G
-      - IOTDB_JMX_OPTS=-Xms6G -Xmx6G -XX:MaxDirectMemorySize=1500M -XX:+CrashOnOutOfMemoryError -XX:+UseAdaptiveSizePolicy -Xss512k
-      - CONFIGNODE_JMX_OPTS=-Xms2G -Xmx2G -XX:MaxDirectMemorySize=500M -XX:+CrashOnOutOfMemoryError -Dsun.jnu.encoding=UTF-8 -Dfile.encoding=UTF-8
+      - MEMORY_SIZE=4G
+      - IOTDB_JMX_OPTS=-Xms2G -Xmx2G -XX:MaxDirectMemorySize=512M -XX:+CrashOnOutOfMemoryError -XX:+UseAdaptiveSizePolicy -Xss512k
+      - CONFIGNODE_JMX_OPTS=-Xms1G -Xmx1G -XX:MaxDirectMemorySize=256M -XX:+CrashOnOutOfMemoryError -Dsun.jnu.encoding=UTF-8 -Dfile.encoding=UTF-8
       - cn_internal_address=iotdb-service
       - cn_internal_port=10710
       - cn_consensus_port=10720
@@ -421,7 +426,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 32G
+          memory: 4G
 
   # ========== Redis（缓存） ==========
   redis:
@@ -447,7 +452,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
+          memory: 512M
 
 volumes:
   onlyoffice_data:

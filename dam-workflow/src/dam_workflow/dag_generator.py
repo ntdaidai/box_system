@@ -175,6 +175,7 @@ def generate_dag_via_llm(event_type: str, user_prompt: str) -> Dict:
         result = model_registry_client.infer(
             model_id=settings.llm_8b_model_id,
             request_data={"prompt": prompt},
+            model_name=settings.llm_8b_model_name,
         )
     except Exception as e:
         raise RuntimeError(f"LLM 推理接口调用失败: {e}") from e

@@ -129,6 +129,10 @@
           </div>
         </div>
 
+        <div class="rain-series-legend">
+          <i></i>
+          <span>{{ historyLegendLabel }}</span>
+        </div>
       </div>
     </div>
   </div>
@@ -202,6 +206,7 @@ const historyValues = computed(() => buildRainChartValues(
   chartData.value.view,
 ).filter(value => value !== null))
 const historyEmpty = computed(() => historyValues.value.length === 0)
+const historyLegendLabel = computed(() => rainLegendLabel(chartData.value.view))
 
 // 防汛预警条（0-100mm 映射）
 const rainWarnPosition = computed(() => {
@@ -974,6 +979,23 @@ onUnmounted(() => {
   margin-top: 12px;
   color: #AECAF5;
   font-size: 14px;
+}
+.rain-series-legend {
+  min-height: 38px;
+  padding: 4px 10px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid rgba(123, 154, 201, 0.1);
+  color: #b7cae4;
+  font-size: 12px;
+}
+.rain-series-legend i {
+  width: 18px;
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #1762d5, #16c5ff);
+  box-shadow: 0 0 8px rgba(22, 149, 255, 0.45);
 }
 @media (max-width: 900px) {
   .history-panel-header { align-items: flex-start; flex-wrap: wrap; }

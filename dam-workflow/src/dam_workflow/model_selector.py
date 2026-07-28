@@ -65,10 +65,7 @@ def get_model_with_inference_url(model_id: int, db: Session) -> Optional[Dict]:
 
     binding = (
         db.query(ModelDeployBinding)
-        .filter(
-            ModelDeployBinding.model_id == model_id,
-            ModelDeployBinding.deploy_status == "running",
-        )
+        .filter(ModelDeployBinding.model_id == model_id)
         .first()
     )
     schema = (

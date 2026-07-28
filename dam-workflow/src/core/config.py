@@ -23,8 +23,14 @@ class Settings(BaseSettings):
     port: int = 5002
 
     # LLM 模型 ID（在模型库中的记录 ID）
-    llm_8b_model_id: Optional[int] = None      # 8B 大模型 ID
-    llm_0_8b_model_id: Optional[int] = None    # 0.8B 大模型 ID
+    # 主模型：ID=7，qwen4B（4B 视觉语言模型），用于 DAG 生成等复杂推理任务
+    llm_8b_model_id: Optional[int] = None      # 主模型 ID（设计文档中的 8B，实际使用 4B）
+    # 兜底模型：ID=8，0.8B 轻量模型，用于 IO 匹配等轻量任务
+    llm_0_8b_model_id: Optional[int] = None    # 兜底模型 ID（0.8B）
+
+    # LLM 模型名称（vLLM served-model-name）
+    llm_8b_model_name: str = "qwen4B"          # 主模型名称（4B）
+    llm_0_8b_model_name: str = "qwen4B"        # 兜底模型名称（暂用 4B，后续可改为 0.8B）
 
     @field_validator("llm_8b_model_id", "llm_0_8b_model_id", mode="before")
     @classmethod

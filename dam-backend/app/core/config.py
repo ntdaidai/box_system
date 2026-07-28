@@ -131,7 +131,7 @@ class Settings:
     )
     YOLO_CLASSIFY_FALLBACK_PATH: str = _get_env(
         "YOLO_CLASSIFY_FALLBACK_PATH",
-        "",
+        "/models/disaster-classifier/best.pt",
     )
     YOLO_CONFIDENCE: float = float(_get_env("YOLO_CONFIDENCE", "0.5"))
     YOLO_IOU: float = float(_get_env("YOLO_IOU", "0.45"))

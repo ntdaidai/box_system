@@ -19,12 +19,20 @@ cat > /root/.m2/settings.xml << 'EOF'
 </settings>
 EOF
 
-echo "编译项目..."
-cd /app
-mvn clean package -Dmaven.test.skip=true -pl sample -am
+JAR_PATH="/app/sample/target/sample-1.10.0.jar"
+
+# 只在 jar 不存在时才编译，避免每次启动都重新编译
+if [ ! -f "$JAR_PATH" ]; then
+  echo "首次启动，编译项目..."
+  cd /app
+  mvn clean package -Dmaven.test.skip=true -pl sample -am
+else
+  echo "jar 已存在，跳过编译"
+fi
 
 echo "启动应用..."
-java -Xmx512m -Xms256m -XX:MaxMetaspaceSize=128m -XX:ReservedCodeCacheSize=64m \
+java -Xmx384m -Xms128m -XX:MaxMetaspaceSize=96m -XX:ReservedCodeCacheSize=48m \
   -XX:+UseG1GC -XX:MaxGCPauseMillis=200 \
-  -jar /app/sample/target/sample-1.10.0.jar \
+  -XX:+UseStringDeduplication \
+  -jar "$JAR_PATH" \
   --spring.config.location=file:/app/sample/src/main/resources/application.yml

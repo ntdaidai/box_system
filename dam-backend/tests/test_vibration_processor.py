@@ -1,7 +1,7 @@
 import math
 import unittest
 
-from app.services.vibration_processor import VibrationProcessor
+from app.services.vibration_processor import FFT_POINTS, VibrationProcessor
 
 
 class VibrationProcessorTests(unittest.TestCase):
@@ -53,8 +53,22 @@ class VibrationProcessorTests(unittest.TestCase):
                 "加速度Z": 0.0,
             })
 
-        self.assertGreaterEqual(len(processor.axis_buffers["x"]), 256)
+        self.assertGreaterEqual(len(processor.axis_buffers["x"]), FFT_POINTS)
         self.assertGreater(processor.calc_fft_dominant_freq(), 0)
+
+    def test_low_frequency_motion_can_override_stale_register_frequency(self):
+        processor = VibrationProcessor(sample_rate=10)
+        for index in range(90):
+            sample = 0.12 * math.sin(2 * math.pi * 2 * index / 10)
+            result = processor.process_raw_data({
+                "加速度X": sample,
+                "加速度Y": 0.0,
+                "加速度Z": 0.0,
+                "加速度幅值X": 0.01,
+                "频率X": 45.0,
+            })
+
+        self.assertAlmostEqual(result["dominant_freq"], 2.0, delta=0.25)
 
 
 if __name__ == "__main__":
