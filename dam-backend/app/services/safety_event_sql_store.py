@@ -10,10 +10,13 @@ from typing import Any, Dict, List, Optional
 
 from app.models.safety_event import SafetyEvent, SafetyEventLog
 from app.services.safety_event_engine import (
+    DISPOSAL_MONITORING,
+    HANDLING_AUTO,
     RISK_HIGH,
     RISK_LOW,
     RISK_MEDIUM,
     STATE_RESOLVED,
+    TARGET_IN_DANGER,
     TrackContext,
 )
 
@@ -244,10 +247,15 @@ class SqlSafetyEventStore:
             "state": track.state,
             "status": "RESOLVED" if track.state == STATE_RESOLVED else None,
             "risk_level": track.risk_level,
+            "max_risk_level": track.max_risk_level,
+            "handling_mode": track.handling_mode,
+            "disposal_status": track.disposal_status,
+            "target_status": track.target_status,
             "last_seen_at": track.last_seen_at,
             "missing_since": track.missing_since,
             "clear_since": track.clear_since,
             "low_entered_at": track.low_entered_at,
+            "medium_entered_at": track.medium_entered_at,
             "zone_ids": track.current_zone_ids,
             "latest_bbox": track.bbox,
             "updated_at": track.last_seen_at,
@@ -262,6 +270,10 @@ class SqlSafetyEventStore:
             track_id=event["track_id"],
             state=event["state"],
             risk_level=event["risk_level"],
+            max_risk_level=event.get("max_risk_level") or event["risk_level"],
+            handling_mode=event.get("handling_mode") or HANDLING_AUTO,
+            disposal_status=event.get("disposal_status") or DISPOSAL_MONITORING,
+            target_status=event.get("target_status") or TARGET_IN_DANGER,
             event_id=event["event_id"],
             first_seen_at=float(event.get("first_seen_at") or event.get("started_at") or 0),
             danger_started_at=float(event.get("danger_started_at") or event.get("started_at") or 0),
@@ -269,6 +281,7 @@ class SqlSafetyEventStore:
             missing_since=event.get("missing_since"),
             clear_since=event.get("clear_since"),
             low_entered_at=event.get("low_entered_at"),
+            medium_entered_at=event.get("medium_entered_at"),
             current_zone_roles=list(observation.get("zone_roles") or []),
             current_zone_ids=list(event.get("zone_ids") or []),
             current_trigger_seconds=dict(observation.get("trigger_seconds") or {}),
@@ -287,12 +300,17 @@ class SqlSafetyEventStore:
             "status": row.status or ("RESOLVED" if row.state == STATE_RESOLVED else "PENDING"),
             "event_type": row.event_type,
             "risk_level": row.risk_level,
+            "max_risk_level": row.max_risk_level or row.risk_level,
+            "handling_mode": row.handling_mode or HANDLING_AUTO,
+            "disposal_status": row.disposal_status or DISPOSAL_MONITORING,
+            "target_status": row.target_status or TARGET_IN_DANGER,
             "camera_name": row.camera_name,
             "started_at": _to_timestamp(row.started_at),
             "first_seen_at": _to_timestamp(row.first_seen_at),
             "danger_started_at": _to_timestamp(row.danger_started_at),
             "last_seen_at": _to_timestamp(row.last_seen_at),
             "low_entered_at": _to_timestamp(row.low_entered_at),
+            "medium_entered_at": _to_timestamp(row.medium_entered_at),
             "missing_since": _to_timestamp(row.missing_since),
             "clear_since": _to_timestamp(row.clear_since),
             "resolved_at": _to_timestamp(row.resolved_at),
@@ -343,12 +361,17 @@ class SqlSafetyEventStore:
         row.status = event.get("status") or ("RESOLVED" if event.get("state") == STATE_RESOLVED else (row.status or "PENDING"))
         row.event_type = event.get("event_type") or row.event_type
         row.risk_level = event.get("risk_level")
+        row.max_risk_level = event.get("max_risk_level") or row.max_risk_level or row.risk_level
+        row.handling_mode = event.get("handling_mode") or row.handling_mode or HANDLING_AUTO
+        row.disposal_status = event.get("disposal_status") or row.disposal_status or DISPOSAL_MONITORING
+        row.target_status = event.get("target_status") or row.target_status or TARGET_IN_DANGER
         row.camera_name = event.get("camera_name") or row.camera_name
         row.started_at = _to_datetime(event.get("started_at")) or dt.datetime.now()
         row.first_seen_at = _to_datetime(event.get("first_seen_at")) or row.started_at
         row.danger_started_at = _to_datetime(event.get("danger_started_at")) or row.started_at
         row.last_seen_at = _to_datetime(event.get("last_seen_at")) or row.started_at
         row.low_entered_at = _to_datetime(event.get("low_entered_at"))
+        row.medium_entered_at = _to_datetime(event.get("medium_entered_at"))
         row.missing_since = _to_datetime(event.get("missing_since"))
         row.clear_since = _to_datetime(event.get("clear_since"))
         row.resolved_at = _to_datetime(event.get("resolved_at"))
@@ -368,9 +391,13 @@ class SqlSafetyEventStore:
 
     @staticmethod
     def _initial_action_status(action_type: str) -> str:
-        if action_type == "push_requested":
+        if action_type in {"push_requested", "PUSH_REQUESTED"}:
             return "success"
-        if action_type.endswith("_requested"):
+        if action_type.endswith("_requested") or action_type in {
+            "AUTO_BROADCAST",
+            "DRONE_DISPATCH",
+            "STAFF_DISPATCH",
+        }:
             return "pending"
         return "success"
 
@@ -379,12 +406,18 @@ class SqlSafetyEventStore:
         names = {
             "event_created": "安全事件已创建",
             "risk_changed": "风险等级变化",
+            "RISK_CHANGED": "风险等级变化",
             "broadcast_requested": "请求广播驱离",
+            "AUTO_BROADCAST": "系统自动广播",
             "push_requested": "请求消息推送",
             "drone_dispatch_requested": "请求无人机派飞",
+            "DRONE_DISPATCH": "系统自动派出无人机",
             "staff_task_requested": "请求工作人员现场处置",
+            "STAFF_DISPATCH": "创建人工处置任务",
             "target_left": "目标离开危险区域",
+            "TARGET_LEFT": "目标离开危险区域",
             "event_resolved": "安全事件已关闭",
+            "EVENT_RESOLVED": "安全事件已关闭",
         }
         return names.get(action.get("action_type"), "安全事件动作")
 
@@ -395,17 +428,24 @@ class SqlSafetyEventStore:
         if not event_id:
             return
         action_type = action.get("action_type")
-        if action_type not in {"risk_changed", "push_requested", "event_resolved"}:
+        if action_type not in {
+            "risk_changed",
+            "RISK_CHANGED",
+            "push_requested",
+            "PUSH_REQUESTED",
+            "event_resolved",
+            "EVENT_RESOLVED",
+        }:
             return
         alarm = db.query(Alarm).filter(Alarm.alarm_code == event_id).first()
-        if action_type == "event_resolved":
+        if action_type in {"event_resolved", "EVENT_RESOLVED"}:
             if alarm:
                 alarm.handle_status = 1
                 alarm.handle_user = "系统"
                 alarm.handle_time = dt.datetime.now()
                 alarm.handle_remark = "安全事件自动关闭"
             return
-        if action_type == "push_requested" and alarm is not None:
+        if action_type in {"push_requested", "PUSH_REQUESTED"} and alarm is not None:
             return
         risk_level = action.get("risk_level")
         if risk_level not in {RISK_LOW, RISK_MEDIUM, RISK_HIGH}:

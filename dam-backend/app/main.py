@@ -34,8 +34,10 @@ from app.services.camera_zone_store import get_camera_zone_store
 from app.services.video_detection import video_detection_service
 from app.services.eca_engine import set_main_event_loop, eca_scheduler, eca_engine
 from app.services.broadcast_service import broadcast_service
+from app.services.drone_adapter import drone_dispatch_service
 from app.services.safety_event_engine import safety_event_bus
 from app.services.safety_event_ws import safety_event_ws_manager
+from app.services.staff_task_service import staff_task_service
 from app.services.patrol_report_scheduler import patrol_report_scheduler
 
 import httpx
@@ -143,6 +145,8 @@ async def lifespan(app: FastAPI):
     # 注册视觉检测结果变化回调（实时触发多源事件检查）
     vision_detector.register_callback(eca_engine.on_vision_detection_updated)
     safety_event_bus.subscribe(broadcast_service.handle_safety_event_action)
+    safety_event_bus.subscribe(drone_dispatch_service.handle_safety_event_action)
+    safety_event_bus.subscribe(staff_task_service.handle_safety_event_action)
 
     # 启动传感器数据采集
     sensor_collector.start_collection()

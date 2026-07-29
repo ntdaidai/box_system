@@ -180,6 +180,10 @@ export function acknowledgeSafetyEvent(eventId, data = {}) {
   return request.post(`/v1/camera/safety/events/${encodeURIComponent(eventId)}/ack`, data)
 }
 
+export function acceptSafetyEvent(eventId, data = {}) {
+  return request.post(`/v1/camera/safety/events/${encodeURIComponent(eventId)}/accept`, data)
+}
+
 export function broadcastSafetyEvent(eventId, data = {}) {
   return request.post(`/v1/camera/safety/events/${encodeURIComponent(eventId)}/broadcast`, data)
 }
@@ -194,6 +198,10 @@ export function markSafetyEventFalseAlarm(eventId, data = {}) {
 
 export function resolveSafetyEvent(eventId, data = {}) {
   return request.post(`/v1/camera/safety/events/${encodeURIComponent(eventId)}/resolve`, data)
+}
+
+export function completeSafetyEvent(eventId, data = {}) {
+  return request.post(`/v1/camera/safety/events/${encodeURIComponent(eventId)}/complete`, data)
 }
 
 export function getLatestDetection(cameraId) {

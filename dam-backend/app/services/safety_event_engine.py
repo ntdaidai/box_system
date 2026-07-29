@@ -47,11 +47,34 @@ RISK_RANK = {
     RISK_HIGH: 3,
 }
 
+HANDLING_AUTO = "AUTO"
+HANDLING_AUTO_DEVICE = "AUTO_DEVICE"
+HANDLING_MANUAL = "MANUAL"
+
+DISPOSAL_MONITORING = "MONITORING"
+DISPOSAL_AUTO_HANDLING = "AUTO_HANDLING"
+DISPOSAL_DEVICE_HANDLING = "DEVICE_HANDLING"
+DISPOSAL_WAITING_MANUAL = "WAITING_MANUAL"
+DISPOSAL_MANUAL_HANDLING = "MANUAL_HANDLING"
+DISPOSAL_RESOLVED = "RESOLVED"
+DISPOSAL_FAILED = "FAILED"
+
+TARGET_IN_DANGER = "IN_DANGER"
+TARGET_LEFT = "LEFT"
+
+ACTION_RISK_CHANGED = "RISK_CHANGED"
+ACTION_AUTO_BROADCAST = "AUTO_BROADCAST"
+ACTION_DRONE_DISPATCH = "DRONE_DISPATCH"
+ACTION_STAFF_DISPATCH = "STAFF_DISPATCH"
+ACTION_TARGET_LEFT = "TARGET_LEFT"
+ACTION_EVENT_RESOLVED = "EVENT_RESOLVED"
+
 
 @dataclass(frozen=True)
 class SafetyEventConfig:
     intrusion_seconds: float = 10.0
     medium_after_low_seconds: float = 30.0
+    high_after_medium_seconds: float = 60.0
     lost_grace_seconds: float = 3.0
     resolve_clear_seconds: float = 10.0
     track_iou_threshold: float = 0.2
@@ -67,6 +90,10 @@ class TrackContext:
     track_id: str
     state: str = STATE_DETECTED
     risk_level: str = RISK_NONE
+    max_risk_level: str = RISK_NONE
+    handling_mode: str = HANDLING_AUTO
+    disposal_status: str = DISPOSAL_MONITORING
+    target_status: str = TARGET_IN_DANGER
     event_id: Optional[str] = None
     first_seen_at: float = 0.0
     danger_started_at: float = 0.0
@@ -74,11 +101,13 @@ class TrackContext:
     missing_since: Optional[float] = None
     clear_since: Optional[float] = None
     low_entered_at: Optional[float] = None
+    medium_entered_at: Optional[float] = None
     current_zone_roles: List[str] = field(default_factory=list)
     current_zone_ids: List[str] = field(default_factory=list)
     current_trigger_seconds: Dict[str, float] = field(default_factory=dict)
     bbox: Optional[Dict[str, float]] = None
     snapshot_path: Optional[str] = None
+    automatic_action_keys: List[str] = field(default_factory=list)
 
 
 class JsonSafetyEventStore:
@@ -488,8 +517,9 @@ class SafetyEventEngine:
         if not track.current_zone_roles:
             if track.clear_since is None:
                 track.clear_since = now
+                track.target_status = TARGET_LEFT
                 if track.event_id:
-                    self._log_action(track, "target_left", now, {"clear_since": now})
+                    self._log_action(track, ACTION_TARGET_LEFT, now, {"clear_since": now})
                 changed = True
             if track.event_id and now - track.clear_since >= self.config.resolve_clear_seconds:
                 self._resolve(track, now, "left_danger_zones")
@@ -505,6 +535,7 @@ class SafetyEventEngine:
             track.danger_started_at = now
             changed = True
         track.clear_since = None
+        track.target_status = TARGET_IN_DANGER
 
         if track.danger_started_at <= 0 and track.first_seen_at > 0:
             track.danger_started_at = track.first_seen_at
@@ -526,8 +557,9 @@ class SafetyEventEngine:
             return False
         if track.clear_since is None:
             track.clear_since = track.missing_since + self.config.lost_grace_seconds
+            track.target_status = TARGET_LEFT
             if track.event_id:
-                self._log_action(track, "target_left", now, {"clear_since": track.clear_since})
+                self._log_action(track, ACTION_TARGET_LEFT, now, {"clear_since": track.clear_since})
             return True
         if track.event_id and now - track.clear_since >= self.config.resolve_clear_seconds:
             self._resolve(track, now, "missing_then_clear")
@@ -541,6 +573,12 @@ class SafetyEventEngine:
         roles = set(track.current_zone_roles)
         if ZONE_WADING in roles:
             return RISK_HIGH
+        if track.risk_level == RISK_MEDIUM and track.medium_entered_at is not None:
+            if (
+                self._has_stage_action(track, RISK_MEDIUM, ACTION_DRONE_DISPATCH)
+                and now - track.medium_entered_at >= self.config.high_after_medium_seconds
+            ):
+                return RISK_HIGH
         if ZONE_WATERSIDE in roles:
             return RISK_MEDIUM
         if track.risk_level == RISK_LOW and track.low_entered_at is not None:
@@ -566,6 +604,8 @@ class SafetyEventEngine:
         snapshot_bytes: Optional[bytes],
     ) -> None:
         previous_risk = track.risk_level
+        previous_mode = track.handling_mode
+        previous_disposal = track.disposal_status
         if track.event_id is None:
             track.event_id = self._new_event_id()
             track.snapshot_path = self._save_snapshot(
@@ -582,11 +622,16 @@ class SafetyEventEngine:
                 "status": "PENDING",
                 "event_type": self._event_type(observation),
                 "risk_level": RISK_NONE,
+                "max_risk_level": RISK_NONE,
+                "handling_mode": track.handling_mode,
+                "disposal_status": track.disposal_status,
+                "target_status": track.target_status,
                 "started_at": now,
                 "first_seen_at": track.first_seen_at,
                 "danger_started_at": track.danger_started_at,
                 "last_seen_at": track.last_seen_at,
                 "low_entered_at": track.low_entered_at,
+                "medium_entered_at": track.medium_entered_at,
                 "missing_since": track.missing_since,
                 "clear_since": track.clear_since,
                 "resolved_at": None,
@@ -601,20 +646,33 @@ class SafetyEventEngine:
             self._log_action(track, "event_created", now, {"risk_level": risk_level})
 
         track.risk_level = risk_level
+        if RISK_RANK[risk_level] > RISK_RANK.get(track.max_risk_level, 0):
+            track.max_risk_level = risk_level
         track.state = self._state_for_risk(risk_level)
+        track.handling_mode = self._handling_mode_for_risk(risk_level)
+        track.disposal_status = self._disposal_status_for_risk(risk_level)
+        track.target_status = TARGET_IN_DANGER
         if risk_level == RISK_LOW and track.low_entered_at is None:
             track.low_entered_at = now
+        if risk_level == RISK_MEDIUM and track.medium_entered_at is None:
+            track.medium_entered_at = now
 
         event = dict(self.store.events.get(track.event_id, {}))
         event.update(
             {
                 "state": track.state,
+                "status": "PENDING",
                 "risk_level": track.risk_level,
+                "max_risk_level": track.max_risk_level,
+                "handling_mode": track.handling_mode,
+                "disposal_status": track.disposal_status,
+                "target_status": track.target_status,
                 "updated_at": now,
                 "first_seen_at": track.first_seen_at,
                 "danger_started_at": track.danger_started_at,
                 "last_seen_at": track.last_seen_at,
                 "low_entered_at": track.low_entered_at,
+                "medium_entered_at": track.medium_entered_at,
                 "missing_since": track.missing_since,
                 "clear_since": track.clear_since,
                 "zone_ids": track.current_zone_ids,
@@ -627,12 +685,20 @@ class SafetyEventEngine:
         self.store.create_or_update_event(event)
         self._log_action(
             track,
-            "risk_changed",
+            ACTION_RISK_CHANGED,
             now,
-            {"from": previous_risk, "to": risk_level},
+            {
+                "from": previous_risk,
+                "to": risk_level,
+                "from_handling_mode": previous_mode,
+                "to_handling_mode": track.handling_mode,
+                "from_disposal_status": previous_disposal,
+                "to_disposal_status": track.disposal_status,
+                "reason": self._risk_change_reason(previous_risk, risk_level, observation),
+            },
         )
         for action_type in self._actions_for_risk(risk_level):
-            self._log_action(track, action_type, now, {"risk_level": risk_level})
+            self._log_stage_action(track, risk_level, action_type, now)
 
     def _resolve(
         self,
@@ -643,12 +709,16 @@ class SafetyEventEngine:
         emit_action: bool = True,
     ) -> None:
         track.state = STATE_RESOLVED
+        track.disposal_status = DISPOSAL_RESOLVED
+        track.target_status = TARGET_LEFT
         if track.event_id:
             event = dict(self.store.events.get(track.event_id, {}))
             event.update(
                 {
                     "state": STATE_RESOLVED,
                     "status": "RESOLVED",
+                    "disposal_status": DISPOSAL_RESOLVED,
+                    "target_status": TARGET_LEFT,
                     "resolved_at": now,
                     "updated_at": now,
                     "resolve_reason": reason,
@@ -656,7 +726,50 @@ class SafetyEventEngine:
             )
             self.store.create_or_update_event(event)
             if emit_action:
-                self._log_action(track, "event_resolved", now, {"reason": reason})
+                self._log_action(track, ACTION_EVENT_RESOLVED, now, {"reason": reason})
+
+    def _log_stage_action(
+        self,
+        track: TrackContext,
+        risk_level: str,
+        action_type: str,
+        now: float,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        action_key = self._action_key(track.event_id, risk_level, action_type)
+        if action_key in track.automatic_action_keys:
+            return False
+        if self._has_stage_action(track, risk_level, action_type):
+            track.automatic_action_keys.append(action_key)
+            return False
+        track.automatic_action_keys.append(action_key)
+        self._log_action(
+            track,
+            action_type,
+            now,
+            {
+                "risk_level": risk_level,
+                "action_key": action_key,
+                "trigger_type": "AUTO",
+                **(payload or {}),
+            },
+        )
+        return True
+
+    def _has_stage_action(self, track: TrackContext, risk_level: str, action_type: str) -> bool:
+        event_id = track.event_id
+        if not event_id:
+            return False
+        return any(
+            action.get("event_id") == event_id
+            and action.get("risk_level") == risk_level
+            and action.get("action_type") == action_type
+            for action in self.store.actions
+        )
+
+    @staticmethod
+    def _action_key(event_id: Optional[str], risk_level: str, action_type: str) -> str:
+        return f"{event_id}:{risk_level}:{action_type}"
 
     def _log_action(
         self,
@@ -718,12 +831,43 @@ class SafetyEventEngine:
     @staticmethod
     def _actions_for_risk(risk_level: str) -> List[str]:
         if risk_level == RISK_LOW:
-            return ["broadcast_requested", "push_requested"]
+            return [ACTION_AUTO_BROADCAST]
         if risk_level == RISK_MEDIUM:
-            return ["drone_dispatch_requested", "push_requested"]
+            return [ACTION_DRONE_DISPATCH]
         if risk_level == RISK_HIGH:
-            return ["staff_task_requested", "push_requested"]
+            return [ACTION_STAFF_DISPATCH]
         return []
+
+    @staticmethod
+    def _handling_mode_for_risk(risk_level: str) -> str:
+        return {
+            RISK_LOW: HANDLING_AUTO,
+            RISK_MEDIUM: HANDLING_AUTO_DEVICE,
+            RISK_HIGH: HANDLING_MANUAL,
+        }[risk_level]
+
+    @staticmethod
+    def _disposal_status_for_risk(risk_level: str) -> str:
+        return {
+            RISK_LOW: DISPOSAL_AUTO_HANDLING,
+            RISK_MEDIUM: DISPOSAL_DEVICE_HANDLING,
+            RISK_HIGH: DISPOSAL_WAITING_MANUAL,
+        }[risk_level]
+
+    @staticmethod
+    def _risk_change_reason(previous_risk: str, risk_level: str, observation: Dict[str, Any]) -> str:
+        roles = set(observation.get("zone_roles") or [])
+        if risk_level == RISK_HIGH and ZONE_WADING in roles:
+            return "目标进入涉水区域"
+        if risk_level == RISK_HIGH:
+            return "AUTO_DEVICE处置后风险仍未解除"
+        if previous_risk == RISK_LOW and risk_level == RISK_MEDIUM:
+            return "AUTO_BROADCAST后目标持续未离开"
+        if risk_level == RISK_MEDIUM and ZONE_WATERSIDE in roles:
+            return "目标进入亲水区域"
+        if risk_level == RISK_LOW:
+            return "触发低风险区域规则"
+        return "风险等级变化"
 
     @staticmethod
     def _state_for_risk(risk_level: str) -> str:
@@ -837,6 +981,10 @@ class SafetyEventEngine:
             "track_id": track.track_id,
             "state": track.state,
             "risk_level": track.risk_level,
+            "max_risk_level": track.max_risk_level,
+            "handling_mode": track.handling_mode,
+            "disposal_status": track.disposal_status,
+            "target_status": track.target_status,
             "first_seen_at": track.first_seen_at,
             "danger_started_at": track.danger_started_at,
             "last_seen_at": track.last_seen_at,
@@ -852,6 +1000,7 @@ def _config_from_settings() -> SafetyEventConfig:
     return SafetyEventConfig(
         intrusion_seconds=settings.SAFETY_EVENT_INTRUSION_SECONDS,
         medium_after_low_seconds=settings.SAFETY_EVENT_MEDIUM_AFTER_LOW_SECONDS,
+        high_after_medium_seconds=settings.SAFETY_EVENT_HIGH_AFTER_MEDIUM_SECONDS,
         lost_grace_seconds=settings.SAFETY_EVENT_LOST_GRACE_SECONDS,
         resolve_clear_seconds=settings.SAFETY_EVENT_RESOLVE_CLEAR_SECONDS,
         track_iou_threshold=settings.SAFETY_EVENT_TRACK_IOU_THRESHOLD,

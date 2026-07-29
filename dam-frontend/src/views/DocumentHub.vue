@@ -30,34 +30,7 @@
           <el-option label="文件大小" value="size" />
         </el-select>
       </div>
-      <div class="filter-field report-date-field">
-        <span class="filter-label">巡查日报日期</span>
-        <el-date-picker
-          v-model="reportDate"
-          type="date"
-          value-format="YYYY-MM-DD"
-          placeholder="选择日期"
-          class="report-date-picker"
-        />
-      </div>
       <div class="filter-actions">
-        <el-button
-          class="report-button"
-          :loading="reportGeneratingToday"
-          @click="generateTodayReport"
-        >
-          <el-icon><Calendar /></el-icon>
-          生成今日日报
-        </el-button>
-        <el-button
-          class="report-button"
-          :disabled="!reportDate"
-          :loading="reportGeneratingDate"
-          @click="generateSelectedDateReport"
-        >
-          <el-icon><Document /></el-icon>
-          生成历史日报
-        </el-button>
         <el-button type="primary" class="upload-button" @click="showUploadDialog">
           <el-icon><Upload /></el-icon>
           上传文档
@@ -116,6 +89,7 @@
           value-format="YYYY-MM"
           placeholder="选择月份"
           class="month-picker"
+          popper-class="document-month-popper"
         />
         <el-button
           class="batch-button"
@@ -254,23 +228,22 @@
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Upload, UploadFilled, Search, Document, FolderOpened,
-  Clock, Download, Calendar
+  Clock, Download
 } from '@element-plus/icons-vue'
 import axios from 'axios'
 import OnlyOfficeEditor from '@/components/OnlyOfficeEditor.vue'
 
 const router = useRouter()
+const route = useRoute()
 
 const loading = ref(false)
 const uploading = ref(false)
 const exportingSelected = ref(false)
 const exportingMonth = ref(false)
-const reportGeneratingToday = ref(false)
-const reportGeneratingDate = ref(false)
 const deletingDocumentIds = ref([])
 const documents = ref([])
 const searchQuery = ref('')
@@ -280,7 +253,6 @@ const currentPage = ref(1)
 const pageSize = 10
 const selectedDocumentIds = ref([])
 const exportMonth = ref('')
-const reportDate = ref('')
 
 const uploadDialogVisible = ref(false)
 const uploadFileList = ref([])
@@ -317,6 +289,10 @@ const filteredDocuments = computed(() => {
     result = result.filter((doc) => doc.category === selectedCategory.value)
   }
 
+  if (exportMonth.value) {
+    result = result.filter((doc) => getDocumentMonth(doc.updatedAt) === exportMonth.value)
+  }
+
   result.sort((a, b) => {
     if (sortBy.value === 'name') return a.name.localeCompare(b.name)
     if (sortBy.value === 'size') return b.size - a.size
@@ -344,7 +320,7 @@ const isCurrentPageIndeterminate = computed(() => {
   return selectedCount > 0 && selectedCount < currentPageIds.value.length
 })
 
-watch([searchQuery, selectedCategory, sortBy], () => {
+watch([searchQuery, selectedCategory, sortBy, exportMonth], () => {
   currentPage.value = 1
 })
 
@@ -415,19 +391,6 @@ const formatSize = (bytes) => {
   return `${size.toFixed(1)} ${units[unitIndex]}`
 }
 
-const formatDate = (value) => {
-  if (!value) return '-'
-  return String(value).slice(0, 10)
-}
-
-const todayString = () => {
-  const now = new Date()
-  const year = now.getFullYear()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  const day = String(now.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
 const buildExportFileName = (suffix) => `documents_${suffix}.zip`
 
 const downloadBlob = (blob, filename) => {
@@ -446,6 +409,16 @@ const formatDateTime = (value) => {
   const raw = String(value).replace('T', ' ')
   const [date = '-', time = ''] = raw.split(' ')
   return time ? `${date} ${time.slice(0, 5)}` : date
+}
+
+const getDocumentMonth = (value) => {
+  if (!value) return ''
+  const raw = String(value).replace('T', ' ')
+  const datePart = raw.split(' ')[0]
+  if (/^\d{4}-\d{2}/.test(datePart)) return datePart.slice(0, 7)
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
 }
 
 const normalizeDocument = (doc) => ({
@@ -547,55 +520,6 @@ const exportMonthDocuments = async () => {
     filename: buildExportFileName(exportMonth.value),
     loadingRef: exportingMonth
   })
-}
-
-const generatePatrolReport = async (date, loadingRef) => {
-  try {
-    loadingRef.value = true
-    const response = await axios.post('/api/patrol-report/daily/generate', {
-      report_date: date,
-      user_id: currentUser.value.id,
-      user_name: currentUser.value.name
-    }, {
-      timeout: 120000
-    })
-
-    if (!response.data.success) {
-      throw new Error(response.data.message || '生成巡查日报失败')
-    }
-
-    const data = response.data.data
-    ElMessage.success('巡查日报已生成，DOCX 与 PDF 已进入文档中心')
-    searchQuery.value = `坝区安全智能巡查日报_${date}`
-    currentPage.value = 1
-    await loadDocuments()
-    router.replace({
-      path: '/document/hub',
-      query: {
-        reportDoc: data.docx?.document_id || '',
-        reportDate: date
-      }
-    })
-  } catch (error) {
-    console.error('生成巡查日报失败:', error)
-    ElMessage.error(error.response?.data?.detail || error.message || '生成巡查日报失败')
-  } finally {
-    loadingRef.value = false
-  }
-}
-
-const generateTodayReport = async () => {
-  const date = todayString()
-  reportDate.value = date
-  await generatePatrolReport(date, reportGeneratingToday)
-}
-
-const generateSelectedDateReport = async () => {
-  if (!reportDate.value) {
-    ElMessage.warning('请选择巡查日报日期')
-    return
-  }
-  await generatePatrolReport(reportDate.value, reportGeneratingDate)
 }
 
 const showUploadDialog = () => {
@@ -749,6 +673,10 @@ const deleteDoc = async (doc) => {
 }
 
 onMounted(() => {
+  if (route.query.reportDate) {
+    const date = String(route.query.reportDate)
+    searchQuery.value = `坝区安全智能巡查日报_${date}`
+  }
   loadDocuments()
 })
 </script>
@@ -832,8 +760,7 @@ onMounted(() => {
 }
 
 .category-select,
-.sort-select,
-.report-date-picker {
+.sort-select {
   width: 260px;
 }
 
@@ -868,19 +795,12 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-.upload-button,
-.report-button {
+.upload-button {
   height: 48px;
   min-width: 150px;
   padding: 0 24px;
   font-size: 15px;
   font-weight: 700;
-}
-
-.report-button {
-  color: #dce9fa;
-  background: rgba(22, 54, 93, 0.82);
-  border-color: rgba(88, 156, 222, 0.42);
 }
 
 .batch-toolbar {
@@ -1203,32 +1123,59 @@ onMounted(() => {
   color: var(--text-secondary);
 }
 
-:global(.el-picker-panel),
-:global(.el-date-picker) {
+:global(.document-month-popper.el-picker__popper),
+:global(.document-month-popper .el-picker-panel),
+:global(.document-month-popper .el-date-picker) {
   color: var(--text-primary);
   background: #0a1e30 !important;
   border-color: rgba(0, 200, 255, 0.25) !important;
 }
 
-:global(.el-picker-panel__body-wrapper),
-:global(.el-picker-panel__body),
-:global(.el-picker-panel__content) {
+:global(.document-month-popper.el-popper.is-light),
+:global(.document-month-popper.el-popper.is-pure) {
+  background: #0a1e30 !important;
+  border: 1px solid rgba(0, 200, 255, 0.25) !important;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+}
+
+:global(.document-month-popper .el-popper__arrow::before) {
+  background: #0a1e30 !important;
+  border-color: rgba(0, 200, 255, 0.25) !important;
+}
+
+:global(.document-month-popper .el-picker-panel__body-wrapper),
+:global(.document-month-popper .el-picker-panel__body),
+:global(.document-month-popper .el-picker-panel__content) {
   background: #0a1e30 !important;
 }
 
-:global(.el-date-picker__header-label),
-:global(.el-picker-panel__icon-btn),
-:global(.el-month-table td .cell) {
+:global(.document-month-popper .el-date-picker__header),
+:global(.document-month-popper .el-date-picker__header--bordered) {
+  border-color: rgba(103, 164, 217, 0.18) !important;
+}
+
+:global(.document-month-popper .el-date-picker__header-label),
+:global(.document-month-popper .el-picker-panel__icon-btn) {
+  color: #dce9fa !important;
+}
+
+:global(.document-month-popper .el-month-table td .cell) {
+  color: #dce9fa !important;
+}
+
+:global(.document-month-popper .el-month-table td.disabled .cell) {
   color: var(--text-secondary) !important;
 }
 
-:global(.el-month-table td.current:not(.disabled) .cell) {
-  color: var(--accent-color) !important;
+:global(.document-month-popper .el-month-table td.current:not(.disabled) .cell) {
+  color: #fff !important;
+  background: #3da4ff !important;
+  border-radius: 24px;
   font-weight: 700;
 }
 
-:global(.el-month-table td .cell:hover) {
-  color: var(--accent-color) !important;
+:global(.document-month-popper .el-month-table td .cell:hover) {
+  color: #fff !important;
   background: rgba(0, 200, 255, 0.12);
 }
 
@@ -1301,8 +1248,7 @@ onMounted(() => {
   }
 
   .category-select,
-  .sort-select,
-  .report-date-picker {
+  .sort-select {
     width: 100%;
   }
 

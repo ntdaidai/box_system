@@ -74,11 +74,15 @@ def _ensure_broadcast_schema():
         "action_type": "VARCHAR(32)",
         "broadcast_event_id": "VARCHAR(128)",
         "camera_id": "VARCHAR(64)",
+        "risk_level": "VARCHAR(16)",
         "device_id": "BIGINT",
+        "drone_id": "VARCHAR(64)",
+        "strategy_id": "VARCHAR(64)",
         "template_id": "VARCHAR(64)",
         "trigger_type": "VARCHAR(16)",
         "content": "TEXT",
         "start_time": "DATETIME",
+        "dispatch_time": "DATETIME",
         "end_time": "DATETIME",
         "result": "VARCHAR(32)",
         "error_message": "TEXT",
@@ -89,6 +93,7 @@ def _ensure_broadcast_schema():
             for ddl in (
                 "ALTER TABLE event_action MODIFY event_id BIGINT NULL",
                 "ALTER TABLE event_action MODIFY flow_id BIGINT NULL",
+                "ALTER TABLE event_action MODIFY action_type VARCHAR(64) NULL",
             ):
                 try:
                     conn.execute(text(ddl))
@@ -174,16 +179,25 @@ def _ensure_safety_event_schema():
         {column["name"] for column in inspector.get_columns("safety_event_log")}
         if "safety_event_log" in table_names else set()
     )
+    existing_task = (
+        {column["name"] for column in inspector.get_columns("safety_event_task")}
+        if "safety_event_task" in table_names else set()
+    )
     dialect = engine.dialect.name
     if dialect == "mysql":
         event_columns = {
             "status": "VARCHAR(32) NOT NULL DEFAULT 'PENDING' COMMENT '处置闭环状态'",
             "event_type": "VARCHAR(64) NULL COMMENT '事件类型'",
+            "max_risk_level": "VARCHAR(16) NOT NULL DEFAULT 'NONE' COMMENT '最高风险等级'",
+            "handling_mode": "VARCHAR(32) NOT NULL DEFAULT 'AUTO' COMMENT '处置责任模式'",
+            "disposal_status": "VARCHAR(32) NOT NULL DEFAULT 'MONITORING' COMMENT '处置状态'",
+            "target_status": "VARCHAR(32) NOT NULL DEFAULT 'IN_DANGER' COMMENT '目标状态'",
             "camera_name": "VARCHAR(128) NULL COMMENT '摄像头名称'",
             "video_url": "VARCHAR(512) NULL COMMENT '事件录像地址'",
             "duration_seconds": "INT NOT NULL DEFAULT 0 COMMENT '事件持续秒数'",
             "ack_operator": "VARCHAR(128) NULL COMMENT '确认人员'",
             "ack_at": "DATETIME NULL COMMENT '确认时间'",
+            "medium_entered_at": "DATETIME NULL COMMENT '进入中风险时间'",
             "resolved_operator": "VARCHAR(128) NULL COMMENT '解除人员'",
             "false_alarm_operator": "VARCHAR(128) NULL COMMENT '误报确认人员'",
             "false_alarm_reason": "VARCHAR(500) NULL COMMENT '误报原因'",
@@ -195,15 +209,23 @@ def _ensure_safety_event_schema():
             "operator": "VARCHAR(128) NULL COMMENT '操作人员'",
             "operator_role": "VARCHAR(64) NULL COMMENT '操作人员角色'",
         }
+        task_columns = {
+            "accepted_at": "DATETIME NULL COMMENT '接单时间'",
+        }
     else:
         event_columns = {
             "status": "VARCHAR(32) DEFAULT 'PENDING'",
             "event_type": "VARCHAR(64)",
+            "max_risk_level": "VARCHAR(16) DEFAULT 'NONE'",
+            "handling_mode": "VARCHAR(32) DEFAULT 'AUTO'",
+            "disposal_status": "VARCHAR(32) DEFAULT 'MONITORING'",
+            "target_status": "VARCHAR(32) DEFAULT 'IN_DANGER'",
             "camera_name": "VARCHAR(128)",
             "video_url": "VARCHAR(512)",
             "duration_seconds": "INT DEFAULT 0",
             "ack_operator": "VARCHAR(128)",
             "ack_at": "DATETIME",
+            "medium_entered_at": "DATETIME",
             "resolved_operator": "VARCHAR(128)",
             "false_alarm_operator": "VARCHAR(128)",
             "false_alarm_reason": "VARCHAR(500)",
@@ -214,6 +236,9 @@ def _ensure_safety_event_schema():
             "to_status": "VARCHAR(32)",
             "operator": "VARCHAR(128)",
             "operator_role": "VARCHAR(64)",
+        }
+        task_columns = {
+            "accepted_at": "DATETIME",
         }
 
     with engine.begin() as conn:
@@ -231,6 +256,13 @@ def _ensure_safety_event_schema():
                 conn.execute(text(f"ALTER TABLE safety_event_log ADD COLUMN {name} {definition}"))
             except Exception as exc:
                 logger.warning(f"safety_event_log add column {name} skipped: {exc}")
+        for name, definition in task_columns.items():
+            if name in existing_task:
+                continue
+            try:
+                conn.execute(text(f"ALTER TABLE safety_event_task ADD COLUMN {name} {definition}"))
+            except Exception as exc:
+                logger.warning(f"safety_event_task add column {name} skipped: {exc}")
 
 
 def get_db():

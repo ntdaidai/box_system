@@ -111,7 +111,7 @@ def validate_dag(dag: Dict) -> tuple[bool, str]:
 
 
 def generate_dag_via_llm(event_type: str, user_prompt: str) -> Dict:
-    """使用 8B 模型通过 LLM 生成 DAG（兜底路径）
+    """使用主模型通过 LLM 生成 DAG（兜底路径）
 
     Args:
         event_type: 事件类型
@@ -123,9 +123,9 @@ def generate_dag_via_llm(event_type: str, user_prompt: str) -> Dict:
     Raises:
         RuntimeError: LLM 调用失败
     """
-    if not settings.llm_8b_model_id:
+    if not settings.llm_main_model_id:
         raise RuntimeError(
-            f"事件类型 '{event_type}' 未找到预定义模板，且未配置 8B LLM 模型 ID（llm_8b_model_id）。"
+            f"事件类型 '{event_type}' 未找到预定义模板，且未配置主模型 ID（llm_main_model_id）。"
             f"支持的事件类型: {get_supported_event_types()}"
         )
 
@@ -173,14 +173,21 @@ def generate_dag_via_llm(event_type: str, user_prompt: str) -> Dict:
 
     try:
         result = model_registry_client.infer(
-            model_id=settings.llm_8b_model_id,
+            model_id=settings.llm_main_model_id,
             request_data={"prompt": prompt},
-            model_name=settings.llm_8b_model_name,
         )
     except Exception as e:
         raise RuntimeError(f"LLM 推理接口调用失败: {e}") from e
 
-    content = result.get("data", {}).get("content", "")
+    # 解析 vLLM 返回格式：{"data": {"choices": [{"message": {"content": "..."}}]}}
+    try:
+        choices = result.get("data", {}).get("choices", [])
+        if not choices:
+            raise RuntimeError("LLM 返回的 choices 为空")
+        content = choices[0].get("message", {}).get("content", "")
+    except (KeyError, IndexError) as e:
+        raise RuntimeError(f"LLM 返回格式解析失败: {e}") from e
+
     if not isinstance(content, str) or not content.strip():
         raise RuntimeError("LLM 返回内容为空")
 

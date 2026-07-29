@@ -3,8 +3,10 @@
 import sys
 import os
 
-# 确保项目根目录在 sys.path 中
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# 确保项目根目录在 sys.path 中，并切换工作目录
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
+os.chdir(project_root)
 
 
 def test_config_loads():
@@ -13,6 +15,8 @@ def test_config_loads():
     assert settings.host == "0.0.0.0"
     assert settings.port == 5002
     assert settings.model_registry_db_host == "192.168.31.52"
+    assert settings.llm_main_model_id == 10
+    assert settings.llm_fallback_model_id == 9
     print("PASS: config loads")
 
 

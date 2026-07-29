@@ -279,10 +279,10 @@ def configure_evaluation_node(node: Dict, event_type: str, user_prompt: str, db:
         )
 
     # 4. 标记使用模型库推理接口
-    if not settings.llm_0_8b_model_id:
-        logger.warning("llm_0_8b_model_id 未配置，EVALUATION 节点将无法调用大模型生成报告")
+    if not settings.llm_fallback_model_id:
+        logger.warning("llm_fallback_model_id 未配置，EVALUATION 节点将无法调用大模型生成报告")
 
-    node["implementation"] = {"type": "MODEL_API", "model_id": settings.llm_0_8b_model_id}
+    node["implementation"] = {"type": "MODEL_API", "model_id": settings.llm_fallback_model_id}
     node["model_name"] = "大模型（通过模型库推理接口）"
     node["inference_method"] = "model_registry_api"
 

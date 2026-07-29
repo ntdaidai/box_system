@@ -156,6 +156,7 @@ class BroadcastService:
                 trigger_type=trigger_type,
                 operator=operator,
                 content=audio.text,
+                risk_level=command.get("risk_level"),
             )
             try:
                 if not device.enabled:
@@ -195,7 +196,7 @@ class BroadcastService:
         }
 
     def handle_safety_event_action(self, action: Dict[str, Any]) -> None:
-        if action.get("action_type") != "broadcast_requested":
+        if action.get("action_type") not in {"AUTO_BROADCAST", "broadcast_requested"}:
             return
         risk_level = action.get("risk_level")
         if risk_level not in {"LOW", "MEDIUM", "HIGH"}:
@@ -216,6 +217,7 @@ class BroadcastService:
                     "template_id": self._template_for_action(action),
                     "trigger_type": TRIGGER_AUTO,
                     "operator": "SYSTEM",
+                    "risk_level": risk_level,
                 },
             )
             self._mark_safety_action(
@@ -367,11 +369,13 @@ class BroadcastService:
         trigger_type: str,
         operator: str,
         content: str,
+        risk_level: Optional[str] = None,
     ) -> EventAction:
         action = EventAction(
-            action_type="BROADCAST",
+            action_type="AUTO_BROADCAST" if trigger_type == TRIGGER_AUTO else "MANUAL_BROADCAST",
             broadcast_event_id=str(event_id) if event_id else None,
             camera_id=str(camera_id) if camera_id else None,
+            risk_level=str(risk_level) if risk_level else None,
             device_id=device.id,
             template_id=template_id,
             trigger_type=trigger_type,

@@ -1,0 +1,149 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="760" viewBox="0 0 1180 760">
+  <defs>
+    <filter id="cyanGlow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="2.4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <style>
+      .bg { fill: #07172b; }
+      .panel { fill: #0d213d; stroke: rgba(0, 200, 255, .22); }
+      .tile { fill: #102744; stroke: rgba(0, 200, 255, .12); }
+      .text { fill: #cfeaff; font: 600 17px Arial, sans-serif; }
+      .caption { fill: #8db7d8; font: 13px Arial, sans-serif; }
+      .icon { fill: none; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2.2; filter: url(#cyanGlow); }
+      .thin { stroke-width: 1.55; opacity: .72; }
+      .fill-cyan { fill: rgba(0, 229, 255, .12); }
+      .fill-blue { fill: rgba(100, 200, 255, .12); }
+      .fill-green { fill: rgba(103, 194, 58, .12); }
+      .fill-amber { fill: rgba(230, 162, 60, .13); }
+      .fill-red { fill: rgba(245, 108, 108, .13); }
+    </style>
+
+    <symbol id="i-overview" viewBox="0 0 40 40">
+      <path class="icon" d="M8 25.5V15.8L20 7l12 8.8v9.7"/>
+      <path class="icon thin" d="M13 27.5h14M15 32h10M17 25v-6h6v6"/>
+      <path class="icon thin" d="M11.5 18.5h3.5M25 18.5h3.5"/>
+    </symbol>
+
+    <symbol id="i-realtime" viewBox="0 0 40 40">
+      <rect class="icon" x="7" y="10" width="26" height="17" rx="2.5"/>
+      <path class="icon thin" d="M14 31h12M20 27v4"/>
+      <path class="icon" d="M12.5 20h4l2-4.5 3.5 9 2.2-4.5h3.3"/>
+    </symbol>
+
+    <symbol id="i-alarm" viewBox="0 0 40 40">
+      <path class="icon" d="M20 8 33 31H7L20 8Z"/>
+      <path class="icon" d="M20 16v7"/>
+      <path class="icon" d="M20 27.8h.1"/>
+      <path class="icon thin" d="M13 30.8h14"/>
+    </symbol>
+
+    <symbol id="i-docs" viewBox="0 0 40 40">
+      <path class="icon" d="M12 7h12l5 5v21H12z"/>
+      <path class="icon thin" d="M24 7v6h5M16 18h10M16 23h10M16 28h7"/>
+    </symbol>
+
+    <symbol id="i-user" viewBox="0 0 40 40">
+      <circle class="icon" cx="20" cy="15" r="5"/>
+      <path class="icon" d="M10.5 31c1.8-5 5.4-7.5 9.5-7.5S27.7 26 29.5 31"/>
+      <path class="icon thin" d="M31.5 13.5h2.8M32.9 12.1v2.8"/>
+    </symbol>
+
+    <symbol id="i-sensor" viewBox="0 0 40 40">
+      <rect class="icon" x="14" y="11" width="12" height="18" rx="3"/>
+      <path class="icon thin" d="M10 15h4M10 20h4M10 25h4M26 15h4M26 20h4M26 25h4"/>
+      <path class="icon thin" d="M18 8v3M22 8v3M18 29v3M22 29v3"/>
+      <path class="icon" d="M18 17h4M18 22h4"/>
+    </symbol>
+
+    <symbol id="i-video" viewBox="0 0 40 40">
+      <rect class="icon" x="8" y="12" width="19" height="16" rx="3"/>
+      <path class="icon" d="M27 17.5 33 14v12l-6-3.5"/>
+      <path class="icon thin" d="M14 30h9M18.5 28v2"/>
+    </symbol>
+
+    <symbol id="i-platform-time" viewBox="0 0 40 40">
+      <rect class="icon" x="10" y="13" width="20" height="18" rx="4"/>
+      <path class="icon thin" d="M15 9v4M25 9v4M14.5 18h11"/>
+      <path class="icon" d="M20 22v4l3 1.8"/>
+    </symbol>
+
+    <symbol id="i-host-time" viewBox="0 0 40 40">
+      <circle class="icon" cx="20" cy="20" r="11"/>
+      <path class="icon" d="M20 14v7h6"/>
+      <path class="icon thin" d="M20 5.8v3M20 31.2v3M5.8 20h3M31.2 20h3"/>
+    </symbol>
+
+    <symbol id="i-cpu-load" viewBox="0 0 40 40">
+      <rect class="icon" x="12" y="12" width="16" height="16" rx="3"/>
+      <rect class="icon thin" x="16" y="16" width="8" height="8" rx="1.5"/>
+      <path class="icon thin" d="M9 15h3M9 20h3M9 25h3M28 15h3M28 20h3M28 25h3M15 9v3M20 9v3M25 9v3M15 28v3M20 28v3M25 28v3"/>
+    </symbol>
+
+    <symbol id="i-memory" viewBox="0 0 40 40">
+      <rect class="icon" x="9" y="13" width="22" height="14" rx="3"/>
+      <path class="icon thin" d="M13 17h4v6h-4zM19 17h4v6h-4zM25 17h2M12 10v3M17 10v3M22 10v3M27 10v3M12 27v3M17 27v3M22 27v3M27 27v3"/>
+    </symbol>
+
+    <symbol id="i-gpu" viewBox="0 0 40 40">
+      <path class="icon" d="M9 14h18a4 4 0 0 1 4 4v4a4 4 0 0 1-4 4H9z"/>
+      <path class="icon thin" d="M13 18h7v4h-7zM31 18h3v4h-3M11 11v18"/>
+      <path class="icon" d="M22 18.2c2.8.7 4.4 2.3 5 4.8"/>
+    </symbol>
+
+    <symbol id="i-storage" viewBox="0 0 40 40">
+      <ellipse class="icon" cx="20" cy="12" rx="10" ry="4"/>
+      <path class="icon" d="M10 12v16c0 2.2 4.5 4 10 4s10-1.8 10-4V12"/>
+      <path class="icon thin" d="M10 20c0 2.2 4.5 4 10 4s10-1.8 10-4M10 26c0 2.2 4.5 4 10 4s10-1.8 10-4"/>
+    </symbol>
+
+    <symbol id="i-edge" viewBox="0 0 40 40">
+      <rect class="icon" x="8" y="13" width="10" height="10" rx="2"/>
+      <rect class="icon" x="22" y="17" width="10" height="10" rx="2"/>
+      <path class="icon" d="M18 18h4M15 23v3.5c0 1.4 1.1 2.5 2.5 2.5H22"/>
+      <path class="icon thin" d="M12 10v3M27 27v3M6 18h2M32 22h2"/>
+    </symbol>
+
+    <symbol id="i-ai" viewBox="0 0 40 40">
+      <circle class="icon" cx="20" cy="20" r="9"/>
+      <path class="icon" d="M20 11v-4M20 33v-4M11 20H7M33 20h-4"/>
+      <path class="icon thin" d="M16 22c1.1 1.6 2.4 2.4 4 2.4s2.9-.8 4-2.4M16.8 17.2h.1M23.1 17.2h.1"/>
+    </symbol>
+  </defs>
+
+  <rect class="bg" width="1180" height="760"/>
+  <rect class="panel" x="24" y="24" width="1132" height="712" rx="8"/>
+  <text class="text" x="48" y="62">Icon redesign preview</text>
+  <text class="caption" x="48" y="87">Theme preserved: dark blue shell, cyan active glow, existing status colors. Only icon glyphs change.</text>
+
+  <text class="text" x="48" y="134">Top navigation</text>
+  <g transform="translate(48 154)">
+    <g><rect class="tile" width="150" height="74" rx="8"/><use href="#i-overview" x="17" y="16" width="40" height="40" stroke="#00e5ff"/><text class="caption" x="68" y="42">overview</text></g>
+    <g transform="translate(166 0)"><rect class="tile" width="150" height="74" rx="8"/><use href="#i-realtime" x="17" y="16" width="40" height="40" stroke="#8db7d8"/><text class="caption" x="68" y="42">monitor</text></g>
+    <g transform="translate(332 0)"><rect class="tile" width="150" height="74" rx="8"/><use href="#i-alarm" x="17" y="16" width="40" height="40" stroke="#8db7d8"/><text class="caption" x="68" y="42">alarm</text></g>
+    <g transform="translate(498 0)"><rect class="tile" width="150" height="74" rx="8"/><use href="#i-docs" x="17" y="16" width="40" height="40" stroke="#8db7d8"/><text class="caption" x="68" y="42">docs</text></g>
+    <g transform="translate(664 0)"><rect class="tile" width="150" height="74" rx="8"/><use href="#i-user" x="17" y="16" width="40" height="40" stroke="#8db7d8"/><text class="caption" x="68" y="42">admin</text></g>
+  </g>
+
+  <text class="text" x="48" y="286">Sidebar</text>
+  <g transform="translate(48 306)">
+    <g><rect class="tile" width="180" height="74" rx="8"/><use href="#i-realtime" x="18" y="16" width="40" height="40" stroke="#00e5ff"/><text class="caption" x="70" y="42">monitor overview</text></g>
+    <g transform="translate(196 0)"><rect class="tile" width="180" height="74" rx="8"/><use href="#i-sensor" x="18" y="16" width="40" height="40" stroke="#8db7d8"/><text class="caption" x="70" y="42">sensors</text></g>
+    <g transform="translate(392 0)"><rect class="tile" width="180" height="74" rx="8"/><use href="#i-video" x="18" y="16" width="40" height="40" stroke="#8db7d8"/><text class="caption" x="70" y="42">video</text></g>
+  </g>
+
+  <text class="text" x="48" y="438">System runtime panel</text>
+  <g transform="translate(48 458)">
+    <g><rect class="tile" width="250" height="86" rx="8"/><rect class="fill-blue" x="16" y="14" width="56" height="56" rx="8"/><use href="#i-platform-time" x="24" y="22" width="40" height="40" stroke="#64c8ff"/><text class="caption" x="88" y="48">platform uptime</text></g>
+    <g transform="translate(266 0)"><rect class="tile" width="250" height="86" rx="8"/><rect class="fill-cyan" x="16" y="14" width="56" height="56" rx="8"/><use href="#i-host-time" x="24" y="22" width="40" height="40" stroke="#00e5ff"/><text class="caption" x="88" y="48">host uptime</text></g>
+    <g transform="translate(532 0)"><rect class="tile" width="250" height="86" rx="8"/><rect class="fill-green" x="16" y="14" width="56" height="56" rx="8"/><use href="#i-cpu-load" x="24" y="22" width="40" height="40" stroke="#67c23a"/><text class="caption" x="88" y="48">CPU load</text></g>
+    <g transform="translate(798 0)"><rect class="tile" width="250" height="86" rx="8"/><rect class="fill-amber" x="16" y="14" width="56" height="56" rx="8"/><use href="#i-memory" x="24" y="22" width="40" height="40" stroke="#e6a23c"/><text class="caption" x="88" y="48">memory</text></g>
+    <g transform="translate(0 102)"><rect class="tile" width="250" height="86" rx="8"/><rect class="fill-green" x="16" y="14" width="56" height="56" rx="8"/><use href="#i-gpu" x="24" y="22" width="40" height="40" stroke="#76b900"/><text class="caption" x="88" y="48">GPU state</text></g>
+    <g transform="translate(266 102)"><rect class="tile" width="250" height="86" rx="8"/><rect class="fill-red" x="16" y="14" width="56" height="56" rx="8"/><use href="#i-storage" x="24" y="22" width="40" height="40" stroke="#f56c6c"/><text class="caption" x="88" y="48">storage</text></g>
+    <g transform="translate(532 102)"><rect class="tile" width="250" height="86" rx="8"/><rect class="fill-green" x="16" y="14" width="56" height="56" rx="8"/><use href="#i-edge" x="24" y="22" width="40" height="40" stroke="#67c23a"/><text class="caption" x="88" y="48">edge collector</text></g>
+    <g transform="translate(798 102)"><rect class="tile" width="250" height="86" rx="8"/><rect class="fill-red" x="16" y="14" width="56" height="56" rx="8"/><use href="#i-ai" x="24" y="22" width="40" height="40" stroke="#f56c6c"/><text class="caption" x="88" y="48">AI inference</text></g>
+  </g>
+</svg>

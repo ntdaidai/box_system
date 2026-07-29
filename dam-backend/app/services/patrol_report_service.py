@@ -240,7 +240,7 @@ def load_broadcast_actions(
     rows = (
         db.query(EventAction)
         .filter(
-            EventAction.action_type == "BROADCAST",
+            EventAction.action_type.in_(["BROADCAST", "AUTO_BROADCAST", "MANUAL_BROADCAST"]),
             EventAction.broadcast_event_id.in_(ids),
             or_(EventAction.start_time == None, and_(EventAction.start_time >= since, EventAction.start_time < until)),  # noqa: E711
         )
@@ -419,7 +419,7 @@ def first_response_time(event: dict[str, Any], broadcasts: list[EventAction], lo
 
 
 def latest_close_time(logs: list[SafetyEventLog]):
-    close_actions = {"event_resolved", "event_manual_closed"}
+    close_actions = {"event_resolved", "EVENT_RESOLVED", "event_manual_closed"}
     times = [log.create_time for log in logs if log.action_type in close_actions and log.create_time]
     return max(times) if times else None
 
@@ -459,7 +459,7 @@ def disposal_operator(logs: list[SafetyEventLog], broadcasts: list[EventAction],
 def disposal_result(status: Any, completed_at: Optional[dt.datetime], logs: list[SafetyEventLog]) -> str:
     if is_event_closed(status, completed_at):
         for log in reversed(logs):
-            if log.action_type in {"event_resolved", "event_manual_closed"} and log.message:
+            if log.action_type in {"event_resolved", "EVENT_RESOLVED", "event_manual_closed"} and log.message:
                 return log.message
         return "已闭环"
     return "未闭环"

@@ -77,7 +77,7 @@ def llm_io_match(source_io: Dict, target_io: Dict, context: str = "") -> Dict:
     Returns:
         data_flow 字典
     """
-    if not settings.llm_0_8b_model_id:
+    if not settings.llm_fallback_model_id:
         # 无可用 LLM，返回空映射
         return {"inputs": {}, "outputs": {}}
 
@@ -96,15 +96,24 @@ def llm_io_match(source_io: Dict, target_io: Dict, context: str = "") -> Dict:
 
     try:
         result = model_registry_client.infer(
-            model_id=settings.llm_0_8b_model_id,
+            model_id=settings.llm_fallback_model_id,
             request_data={"prompt": prompt},
-            model_name=settings.llm_0_8b_model_name,
         )
     except Exception as e:
         logger.warning("LLM IO 匹配推理调用失败: %s", e)
         return {"inputs": {}, "outputs": {}}
 
-    content = result.get("data", {}).get("content", "")
+    # 解析 vLLM 返回格式：{"data": {"choices": [{"message": {"content": "..."}}]}}
+    try:
+        choices = result.get("data", {}).get("choices", [])
+        if not choices:
+            logger.warning("LLM IO 匹配返回的 choices 为空")
+            return {"inputs": {}, "outputs": {}}
+        content = choices[0].get("message", {}).get("content", "")
+    except (KeyError, IndexError) as e:
+        logger.warning("LLM IO 匹配返回格式解析失败: %s", e)
+        return {"inputs": {}, "outputs": {}}
+
     if not isinstance(content, str) or not content.strip():
         logger.warning("LLM IO 匹配返回内容为空")
         return {"inputs": {}, "outputs": {}}

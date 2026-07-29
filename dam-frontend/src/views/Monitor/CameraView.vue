@@ -127,6 +127,29 @@
         </div>
 
         <div class="ops-header-actions">
+          <div class="view-mode-switch" aria-label="视频画面布局">
+            <button
+              type="button"
+              :class="{ active: cameraViewMode === 'single' }"
+              @click="setCameraViewMode('single')"
+            >
+              单画面
+            </button>
+            <button
+              type="button"
+              :class="{ active: cameraViewMode === 'quad' }"
+              @click="setCameraViewMode('quad')"
+            >
+              四宫格
+            </button>
+            <button
+              type="button"
+              :class="{ active: cameraViewMode === 'nine' }"
+              @click="setCameraViewMode('nine')"
+            >
+              九宫格
+            </button>
+          </div>
           <el-button
             class="ops-ghost-button"
             :disabled="!currentCameraId"
@@ -147,9 +170,39 @@
         </div>
       </header>
 
-      <main class="ops-layout">
+      <main v-if="isMultiCameraMode" class="multi-camera-layout" :class="`mode-${cameraViewMode}`">
+        <article
+          v-for="camera in gridCameras"
+          :key="camera.camera_id"
+          class="multi-camera-tile"
+          :class="{ online: camera.connected, active: camera.camera_id === currentCameraId }"
+          @click="activateGridCamera(camera.camera_id)"
+        >
+          <header>
+            <strong>{{ camera.name || camera.camera_id }}</strong>
+            <span :class="camera.connected ? 'online' : 'offline'">
+              <i></i>{{ camera.connected ? '在线' : '离线' }}
+            </span>
+          </header>
+          <div class="tile-video-box">
+            <img
+              v-if="gridStreamUrls[camera.camera_id]"
+              :src="gridStreamUrls[camera.camera_id]"
+              :alt="`${camera.name || camera.camera_id}实时画面`"
+              class="tile-video"
+              @error="handleGridStreamError(camera.camera_id)"
+            />
+            <div v-else class="tile-empty">
+              <el-icon><VideoCamera /></el-icon>
+              <span>{{ camera.connected ? '正在建立视频链路' : (camera.last_error || '暂未连接') }}</span>
+            </div>
+          </div>
+        </article>
+      </main>
+
+      <main v-else class="ops-layout">
         <article class="ops-video-panel">
-          <div v-if="currentCamera?.connected" class="video-stage ops-video-stage" :class="riskThemeClass(overallRiskLevel)">
+          <div v-if="canRenderCurrentStream" class="video-stage ops-video-stage" :class="riskThemeClass(overallRiskLevel)">
             <video
               v-show="streamMode === 'webrtc'"
               ref="liveVideoRef"
@@ -344,21 +397,24 @@
                 <div><small>处置状态</small><strong>{{ event.disposal_status }}</strong></div>
               </div>
               <div class="event-actions">
-                <el-button class="action-button warn" @click="manualBroadcast(event)">
-                  <el-icon><Connection /></el-icon>一键喊话
-                </el-button>
                 <el-button class="action-button" @click="viewEvent(event)">
                   <el-icon><DataAnalysis /></el-icon>查看事件
                 </el-button>
-                <el-button class="action-button" @click="acknowledgeEvent(event)">
-                  <el-icon><Aim /></el-icon>确认告警
-                </el-button>
-                <el-button class="action-button" @click="dispatchStaff(event)">
-                  <el-icon><Monitor /></el-icon>派现场人员
-                </el-button>
-                <el-button class="action-button danger" @click="closeEvent(event)">
-                  <el-icon><Delete /></el-icon>关闭事件
-                </el-button>
+                <template v-if="requiresManual(event)">
+                  <el-button class="action-button" :disabled="event.raw_disposal_status !== 'WAITING_MANUAL'" @click="acceptEvent(event)">
+                    <el-icon><Aim /></el-icon>接受任务
+                  </el-button>
+                  <el-button class="action-button warn" @click="manualBroadcast(event)">
+                    <el-icon><Connection /></el-icon>一键喊话
+                  </el-button>
+                  <el-button class="action-button" @click="completeEvent(event)">
+                    <el-icon><Monitor /></el-icon>现场处置
+                  </el-button>
+                  <el-button class="action-button danger" @click="closeEvent(event)">
+                    <el-icon><Delete /></el-icon>关闭事件
+                  </el-button>
+                </template>
+                <span v-else class="event-no-manual">无需人工处置</span>
               </div>
             </article>
           </div>
@@ -1010,6 +1066,8 @@ const streamLoading = ref(false)
 const showAddDialog = ref(false)
 const addingCamera = ref(false)
 const addForm = ref({ camera_id: '', name: '', source_type: 'rtsp', source: '' })
+const cameraViewMode = ref('single')
+const gridStreamUrls = ref({})
 
 const imageUploading = ref(false)
 const uploadResult = ref(null)
@@ -1030,6 +1088,7 @@ let streamRequestGeneration = 0
 let cameraMutationRevision = 0
 let statusRefreshing = false
 let webRtcPlayer = null
+let gridStreamRefreshAt = 0
 
 const imageWidth = computed(() => Number(latestDetection.value.image_width) || 0)
 const imageHeight = computed(() => Number(latestDetection.value.image_height) || 0)
@@ -1058,6 +1117,10 @@ const showZoneOverlay = computed(() => zoneDrawing.value || detectionZones.value
 const analysisTaskLabel = computed(() => taskTypeLabel(analysisTask.value))
 const selectedModelReady = computed(() => Boolean(modelStatus.value.models?.[analysisTask.value]?.loaded))
 const canToggleDetection = computed(() => Boolean(currentCamera.value?.connected && selectedModelReady.value))
+const canRenderCurrentStream = computed(() => Boolean(currentCamera.value?.configured || currentCamera.value?.connected))
+const isMultiCameraMode = computed(() => cameraViewMode.value !== 'single')
+const gridCameraLimit = computed(() => cameraViewMode.value === 'nine' ? 9 : 4)
+const gridCameras = computed(() => cameras.value.slice(0, gridCameraLimit.value))
 const normalizedSafetyEvents = computed(() => buildRiskEvents())
 const activeRiskEvents = computed(() => normalizedSafetyEvents.value.filter((event) => event.risk_level !== 'NONE' && event.state !== 'RESOLVED'))
 const primaryRiskEvent = computed(() => activeRiskEvents.value[0] || null)
@@ -1239,8 +1302,31 @@ function actionText(event, actionType) {
   const local = eventActionState.value[event.event_id]?.[actionType]
   if (local) return local
   if (actionType === 'broadcast') return event.risk_level === 'LOW' ? '已自动喊话' : '已自动广播'
-  if (actionType === 'disposal') return event.risk_level === 'HIGH' ? '待派员' : '待确认'
+  if (actionType === 'disposal') return disposalStatusText(event.disposal_status || (event.risk_level === 'HIGH' ? 'WAITING_MANUAL' : 'AUTO_HANDLING'))
   return '待处理'
+}
+
+function requiresManual(event) {
+  return event?.risk_level === 'HIGH' || event?.handling_mode === 'MANUAL'
+}
+
+function targetStatusText(status) {
+  return ({
+    IN_DANGER: '仍在风险区',
+    LEFT: '已离开',
+  })[status] || status || '仍在风险区'
+}
+
+function disposalStatusText(status) {
+  return ({
+    MONITORING: '持续监测',
+    AUTO_HANDLING: '系统自动处理中',
+    DEVICE_HANDLING: '无人设备自动处置中',
+    WAITING_MANUAL: '等待工作人员接单',
+    MANUAL_HANDLING: '人工处置中',
+    RESOLVED: '已解除',
+    FAILED: '处置失败',
+  })[status] || status || '待处理'
 }
 
 function buildRiskEvents() {
@@ -1261,9 +1347,11 @@ function buildRiskEvents() {
       duration_seconds: Math.max(0, Math.floor(nowTick.value / 1000 - startedAt)),
       state: event.state || 'DETECTED',
       state_text: stateText(event.state),
-      target_status: event.state === 'RESOLVED' ? '已离开' : '仍在风险区',
+      handling_mode: event.handling_mode,
+      raw_disposal_status: event.disposal_status,
+      target_status: targetStatusText(event.target_status || (event.state === 'RESOLVED' ? 'LEFT' : 'IN_DANGER')),
       broadcast_status: actionText({ event_id: eventId, risk_level: riskLevel }, 'broadcast'),
-      disposal_status: actionText({ event_id: eventId, risk_level: riskLevel }, 'disposal'),
+      disposal_status: actionText({ event_id: eventId, risk_level: riskLevel, disposal_status: event.disposal_status }, 'disposal'),
       snapshot_path: event.snapshot_path,
     }
   })
@@ -1286,9 +1374,15 @@ function buildRiskEvents() {
       duration_seconds: Math.max(0, Math.floor(nowTick.value / 1000 - startedAt)),
       state: `${riskLevel}_RISK`,
       state_text: riskLevelText(riskLevel),
+      handling_mode: riskLevel === 'HIGH' ? 'MANUAL' : riskLevel === 'MEDIUM' ? 'AUTO_DEVICE' : 'AUTO',
+      raw_disposal_status: riskLevel === 'HIGH' ? 'WAITING_MANUAL' : riskLevel === 'MEDIUM' ? 'DEVICE_HANDLING' : 'AUTO_HANDLING',
       target_status: '仍在风险区',
       broadcast_status: actionText({ event_id: eventId, risk_level: riskLevel }, 'broadcast'),
-      disposal_status: actionText({ event_id: eventId, risk_level: riskLevel }, 'disposal'),
+      disposal_status: actionText({
+        event_id: eventId,
+        risk_level: riskLevel,
+        disposal_status: riskLevel === 'HIGH' ? 'WAITING_MANUAL' : riskLevel === 'MEDIUM' ? 'DEVICE_HANDLING' : 'AUTO_HANDLING',
+      }, 'disposal'),
     }
   }).sort((a, b) => riskRank(b.risk_level) - riskRank(a.risk_level))
 }
@@ -1405,24 +1499,24 @@ function viewEvent(event) {
   ElMessage.info(`事件 ${event.event_id} 已进入详情查看`)
 }
 
-async function acknowledgeEvent(event) {
+async function acceptEvent(event) {
   if (!event.event_id) return
   await recordSafetyEventAction(event.event_id, {
-    action_type: 'acknowledge',
-    remark: '实时监控页确认告警',
+    action_type: 'STAFF_ACCEPTED',
+    remark: '实时监控页接受人工处置任务',
   })
-  setEventAction(event, 'disposal', '值班员已确认')
-  ElMessage.success('告警已确认并写入处置日志')
+  setEventAction(event, 'disposal', '人工处置中')
+  ElMessage.success('已接受人工处置任务')
 }
 
-async function dispatchStaff(event) {
+async function completeEvent(event) {
   if (!event.event_id) return
   await recordSafetyEventAction(event.event_id, {
-    action_type: 'dispatch_staff',
-    remark: '实时监控页派出现场人员',
+    action_type: 'STAFF_COMPLETED',
+    remark: '实时监控页记录现场处置完成',
   })
-  setEventAction(event, 'disposal', '已派现场人员')
-  ElMessage.success('已记录派员处置')
+  setEventAction(event, 'disposal', '现场处置完成')
+  ElMessage.success('已记录现场处置完成')
 }
 
 async function closeEvent(event) {
@@ -1505,6 +1599,11 @@ function stopLiveStream() {
   player?.close()
 }
 
+function stopGridStreams() {
+  gridStreamUrls.value = {}
+  gridStreamRefreshAt = 0
+}
+
 async function startMjpegFallback(error = null, notify = true) {
   const player = webRtcPlayer
   webRtcPlayer = null
@@ -1518,7 +1617,7 @@ async function startMjpegFallback(error = null, notify = true) {
 
 async function startLiveStream() {
   const cameraId = currentCameraId.value
-  if (!cameraId || !currentCamera.value?.connected) return
+  if (!cameraId || !canRenderCurrentStream.value) return
   if (currentCamera.value.source_type !== 'rtsp') {
     await startMjpegFallback(null, false)
     return
@@ -1564,13 +1663,17 @@ async function activateCamera(cameraId) {
     detectionZones.value = normalizeZones({ zones: currentCamera.value?.detection_zones || [] })
   })
   if (isMediaAnalysisRoute.value) return
-  if (currentCamera.value?.connected) await startLiveStream()
-  if (detectionEnabled.value) startDetectionSubscription()
+  if (cameraViewMode.value === 'single') {
+    if (canRenderCurrentStream.value) await startLiveStream()
+    if (detectionEnabled.value) startDetectionSubscription()
+  } else {
+    await refreshGridStreams(true)
+  }
 }
 
 async function refreshStreamTicket() {
   const cameraId = currentCameraId.value
-  if (!cameraId || !currentCamera.value?.connected) return
+  if (!cameraId || !canRenderCurrentStream.value) return
   const generation = ++streamRequestGeneration
   streamLoading.value = true
   try {
@@ -1584,6 +1687,53 @@ async function refreshStreamTicket() {
       streamUrl.value = ''
     }
   }
+}
+
+async function refreshGridStreams(force = false) {
+  if (!isMultiCameraMode.value) {
+    stopGridStreams()
+    return
+  }
+  const now = Date.now()
+  if (!force && now - gridStreamRefreshAt < 15000) return
+  gridStreamRefreshAt = now
+  await fetchCameras().catch(() => null)
+  const urls = {}
+  await Promise.allSettled(gridCameras.value.map(async (camera) => {
+    if (!camera.camera_id || !camera.connected) return
+    const response = await createStreamTicket(camera.camera_id, false)
+    urls[camera.camera_id] = response.data.stream_url
+  }))
+  if (isMultiCameraMode.value) gridStreamUrls.value = urls
+}
+
+function handleGridStreamError(cameraId) {
+  gridStreamUrls.value = {
+    ...gridStreamUrls.value,
+    [cameraId]: '',
+  }
+  setTimeout(() => {
+    if (isMultiCameraMode.value) refreshGridStreams(true)
+  }, 1200)
+}
+
+async function setCameraViewMode(mode) {
+  if (cameraViewMode.value === mode) return
+  cameraViewMode.value = mode
+  if (mode === 'single') {
+    stopGridStreams()
+    if (currentCameraId.value) await activateCamera(currentCameraId.value)
+  } else {
+    stopLiveStream()
+    stopDetectionSubscription()
+    await refreshGridStreams(true)
+  }
+}
+
+async function activateGridCamera(cameraId) {
+  currentCameraId.value = cameraId
+  currentCamera.value = cameras.value.find((camera) => camera.camera_id === cameraId) || null
+  if (cameraViewMode.value === 'single') await activateCamera(cameraId)
 }
 
 function handleStreamError() {
@@ -1687,8 +1837,9 @@ async function refreshCameraStatus() {
       detectionZones.value = normalizeZones({ zones: response.data.detection_zones })
     }
     updateCameraInList(response.data)
-    if (!isMediaAnalysisRoute.value && !previousConnected && response.data.connected) await startLiveStream()
-    if (previousConnected && !response.data.connected) stopLiveStream()
+    if (!isMediaAnalysisRoute.value && cameraViewMode.value === 'single' && !previousConnected && canRenderCurrentStream.value) await startLiveStream()
+    if (cameraViewMode.value === 'single' && previousConnected && !response.data.connected && !canRenderCurrentStream.value) stopLiveStream()
+    if (isMultiCameraMode.value) refreshGridStreams()
     if (backendDetectionEnabled !== detectionEnabled.value) {
       detectionEnabled.value = backendDetectionEnabled
       if (!isMediaAnalysisRoute.value && backendDetectionEnabled) startDetectionSubscription()
@@ -2054,6 +2205,7 @@ watch(isMediaAnalysisRoute, async (mediaMode) => {
   resetStatusTimer()
   if (mediaMode) {
     stopLiveStream()
+    stopGridStreams()
     stopDetectionSubscription()
     return
   }
@@ -2064,6 +2216,7 @@ onBeforeUnmount(() => {
   clearInterval(statusTimer)
   clearInterval(clockTimer)
   stopLiveStream()
+  stopGridStreams()
   stopDetectionSubscription()
   clearVideoJob()
 })
@@ -2448,6 +2601,31 @@ h1, h2, h3, p { margin-top: 0; }
   justify-content: flex-end;
   gap: 10px;
 }
+.view-mode-switch {
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  padding: 3px;
+  border: 1px solid rgba(137, 174, 184, 0.22);
+  border-radius: 7px;
+  background: rgba(2, 12, 16, 0.68);
+}
+.view-mode-switch button {
+  height: 28px;
+  min-width: 58px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 5px;
+  color: #91adb2;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.view-mode-switch button.active {
+  color: #041417;
+  background: #48d8ff;
+}
 .ops-ghost-button,
 .action-button {
   color: #c7d8dc;
@@ -2466,6 +2644,103 @@ h1, h2, h3, p { margin-top: 0; }
   grid-template-columns: minmax(0, 1fr) 390px;
   gap: 12px;
   margin-top: 12px;
+}
+.multi-camera-layout {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  height: min(760px, calc(100vh - 132px));
+  min-height: 540px;
+}
+.multi-camera-layout.mode-quad {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+}
+.multi-camera-layout.mode-nine {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+}
+.multi-camera-tile {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid rgba(137, 174, 184, 0.16);
+  border-radius: 8px;
+  background: rgba(7, 20, 25, 0.86);
+  box-shadow: 0 14px 32px rgba(0, 5, 10, 0.2);
+  cursor: pointer;
+}
+.multi-camera-tile.active {
+  border-color: rgba(72, 216, 255, 0.62);
+}
+.multi-camera-tile header {
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 12px;
+  border-bottom: 1px solid rgba(137, 174, 184, 0.12);
+  background: rgba(11, 33, 56, 0.78);
+}
+.multi-camera-tile strong {
+  min-width: 0;
+  color: #e9f7ff;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.multi-camera-tile header span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 800;
+}
+.multi-camera-tile header i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.multi-camera-tile header .online { color: #62d7b1; }
+.multi-camera-tile header .online i {
+  background: #62d7b1;
+  box-shadow: 0 0 8px rgba(98, 215, 177, 0.75);
+}
+.multi-camera-tile header .offline { color: #ff6d7b; }
+.multi-camera-tile header .offline i {
+  background: #ff6d7b;
+  box-shadow: 0 0 8px rgba(255, 109, 123, 0.75);
+}
+.tile-video-box {
+  position: relative;
+  height: calc(100% - 42px);
+  min-height: 0;
+  background: #030b12;
+}
+.tile-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.tile-empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 18px;
+  color: #88a7b4;
+  text-align: center;
+  font-size: 13px;
+}
+.tile-empty .el-icon {
+  color: #48d8ff;
+  font-size: 34px;
 }
 .ops-video-panel,
 .risk-panel {
@@ -2821,6 +3096,19 @@ h1, h2, h3, p { margin-top: 0; }
   margin-top: 10px;
 }
 .event-actions .el-button + .el-button { margin-left: 0; }
+.event-no-manual {
+  grid-column: 1 / -1;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(98, 215, 177, 0.2);
+  border-radius: 6px;
+  color: #b9e7d6;
+  background: rgba(25, 69, 58, 0.38);
+  font-size: 12px;
+  font-weight: 700;
+}
 .action-button {
   height: 32px;
   padding: 0 8px;
@@ -3091,6 +3379,11 @@ h1, h2, h3, p { margin-top: 0; }
   .ops-header { grid-template-columns: 1fr; align-items: stretch; }
   .ops-header-actions { justify-content: space-between; }
   .ops-layout { grid-template-columns: 1fr; }
+  .multi-camera-layout.mode-nine {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(5, minmax(220px, 1fr));
+    height: auto;
+  }
   .risk-panel { min-height: 420px; }
   .live-workspace { grid-template-columns: minmax(0, 1fr) 300px; }
   .image-result.has-result { grid-template-columns: minmax(0, 1fr) 250px; }
@@ -3102,6 +3395,18 @@ h1, h2, h3, p { margin-top: 0; }
   .command-monitor { padding: 8px; }
   .monitor-title-row,
   .ops-header-actions { align-items: stretch; flex-direction: column; }
+  .view-mode-switch { width: 100%; }
+  .view-mode-switch button { flex: 1; }
+  .multi-camera-layout.mode-quad,
+  .multi-camera-layout.mode-nine {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+    height: auto;
+    min-height: 0;
+  }
+  .multi-camera-tile {
+    min-height: 260px;
+  }
   .ops-camera-select { width: 100%; }
   .risk-banner { grid-template-columns: 1fr; align-items: flex-start; }
   .event-actions { grid-template-columns: 1fr; }

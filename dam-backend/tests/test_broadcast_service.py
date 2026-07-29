@@ -12,6 +12,7 @@ from app.models.broadcast import BroadcastDevice, BroadcastTemplate, CameraBroad
 from app.models.event_action import EventAction
 from app.models.event_library import EventLibrary
 from app.models.action_flow import ActionFlow
+from app.core.config import settings
 from app.services.broadcast_service import BroadcastService
 
 
@@ -22,13 +23,17 @@ class BroadcastServiceTests(unittest.TestCase):
         self.Session = sessionmaker(bind=self.engine)
         self.db = self.Session()
         self.service = BroadcastService()
+        self.original_local_device = settings.BROADCAST_ENABLE_LOCAL_TEST_DEVICE
+        settings.BROADCAST_ENABLE_LOCAL_TEST_DEVICE = False
         self.service.ensure_defaults(self.db)
 
     def tearDown(self):
+        settings.BROADCAST_ENABLE_LOCAL_TEST_DEVICE = self.original_local_device
         self.db.close()
 
     def test_manual_play_uses_bound_devices_and_records_event_action(self):
         device = BroadcastDevice(
+            id=1,
             name="Mock speaker",
             vendor_type="MOCK",
             device_code="mock_1",
@@ -37,7 +42,7 @@ class BroadcastServiceTests(unittest.TestCase):
         )
         self.db.add(device)
         self.db.flush()
-        self.db.add(CameraBroadcastDevice(camera_id="cam_1", broadcast_device_id=device.id))
+        self.db.add(CameraBroadcastDevice(id=1, camera_id="cam_1", broadcast_device_id=device.id))
         self.db.commit()
 
         response = self.service.play(
@@ -52,7 +57,7 @@ class BroadcastServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(response["result"], "SUCCESS")
-        action = self.db.query(EventAction).filter(EventAction.action_type == "BROADCAST").one()
+        action = self.db.query(EventAction).filter(EventAction.action_type == "MANUAL_BROADCAST").one()
         self.assertEqual(action.broadcast_event_id, "evt_1")
         self.assertEqual(action.device_id, device.id)
         self.assertEqual(action.template_id, "PERSON_HIGH")
@@ -62,6 +67,7 @@ class BroadcastServiceTests(unittest.TestCase):
 
     def test_failed_device_is_recorded_without_blocking_other_devices(self):
         online = BroadcastDevice(
+            id=1,
             name="Online speaker",
             vendor_type="MOCK",
             device_code="mock_online",
@@ -69,6 +75,7 @@ class BroadcastServiceTests(unittest.TestCase):
             enabled=True,
         )
         offline = BroadcastDevice(
+            id=2,
             name="Offline speaker",
             vendor_type="MOCK",
             device_code="mock_offline",

@@ -36,6 +36,7 @@ from app.services.camera_stream import CameraStream, camera_manager
 from app.services.camera_config import normalize_camera_source
 from app.services.camera_zone_store import get_camera_zone_store
 from app.services.safety_event_engine import get_safety_event_engine
+from app.services.safety_event_engine import DISPOSAL_MANUAL_HANDLING, DISPOSAL_RESOLVED, DISPOSAL_WAITING_MANUAL, HANDLING_MANUAL, RISK_HIGH
 from app.services.safety_event_ws import safety_event_ws_manager
 from app.services.stream_ticket import stream_ticket_store
 from app.services.video_detection import video_detection_service
@@ -169,6 +170,8 @@ class SafetyEventActionRequest(BaseModel):
         "USER_ACK",
         "MANUAL_BROADCAST",
         "TASK_DISPATCH",
+        "STAFF_ACCEPTED",
+        "STAFF_COMPLETED",
         "FALSE_ALARM",
         "MANUAL_RESOLVED",
     ] = "USER_ACK"
@@ -299,6 +302,8 @@ def _safety_action_message(action_type: str) -> str:
         "dispatch_staff": "已派出工作人员现场处置",
         "close": "工作人员手动关闭事件",
         "USER_ACK": "工作人员已确认事件",
+        "STAFF_ACCEPTED": "工作人员已接受任务",
+        "STAFF_COMPLETED": "工作人员已完成现场处置",
         "MANUAL_BROADCAST": "人工一键喊话",
         "TASK_DISPATCH": "已派现场人员处置",
         "FALSE_ALARM": "工作人员判断为误报",
@@ -308,9 +313,10 @@ def _safety_action_message(action_type: str) -> str:
 
 def _canonical_action_type(action_type: str) -> str:
     return {
-        "acknowledge": "USER_ACK",
+        "acknowledge": "STAFF_ACCEPTED",
         "dispatch_staff": "TASK_DISPATCH",
         "close": "MANUAL_RESOLVED",
+        "USER_ACK": "STAFF_ACCEPTED",
     }.get(action_type, action_type)
 
 
@@ -326,12 +332,24 @@ def _timeline_action_type(action: SafetyEventLog) -> str:
             "MEDIUM": "RISK_MEDIUM",
             "HIGH": "RISK_HIGH",
         }.get(action.risk_level, "RISK_LOW"),
+        "RISK_CHANGED": {
+            "LOW": "RISK_LOW",
+            "MEDIUM": "RISK_MEDIUM",
+            "HIGH": "RISK_HIGH",
+        }.get(action.risk_level, "RISK_LOW"),
         "broadcast_requested": "AUTO_BROADCAST",
+        "AUTO_BROADCAST": "AUTO_BROADCAST",
+        "DRONE_DISPATCH": "DRONE_DISPATCH",
+        "STAFF_DISPATCH": "STAFF_DISPATCH",
         "event_acknowledged": "USER_ACK",
+        "staff_accepted": "STAFF_ACCEPTED",
+        "staff_completed": "STAFF_COMPLETED",
         "staff_dispatched": "TASK_DISPATCH",
         "event_manual_closed": "MANUAL_RESOLVED",
         "event_resolved": "MANUAL_RESOLVED" if (action.payload or {}).get("reason") == "manual_close" else "AUTO_RESOLVED",
+        "EVENT_RESOLVED": "MANUAL_RESOLVED" if (action.payload or {}).get("reason") == "manual_close" else "AUTO_RESOLVED",
         "target_left": "TARGET_LEFT",
+        "TARGET_LEFT": "TARGET_LEFT",
     }
     return mapping.get(action.action_type, action.action_type)
 
@@ -374,11 +392,16 @@ def _safety_event_to_dict(event: SafetyEvent) -> dict:
         "status": event.status or ("RESOLVED" if event.state == "RESOLVED" else "PENDING"),
         "event_type": _event_type_label(event),
         "risk_level": event.risk_level,
+        "max_risk_level": event.max_risk_level or event.risk_level,
+        "handling_mode": event.handling_mode,
+        "disposal_status": event.disposal_status,
+        "target_status": event.target_status,
         "started_at": _timestamp(event.started_at),
         "first_seen_at": _timestamp(event.first_seen_at),
         "danger_started_at": _timestamp(event.danger_started_at),
         "last_seen_at": _timestamp(event.last_seen_at),
         "clear_since": _timestamp(event.clear_since),
+        "medium_entered_at": _timestamp(event.medium_entered_at),
         "resolved_at": _timestamp(event.resolved_at),
         "resolve_reason": event.resolve_reason,
         "snapshot_path": event.snapshot_url,
@@ -424,7 +447,7 @@ def _is_closed(event: SafetyEvent) -> bool:
 
 def _transition_status(event: SafetyEvent, action_type: str) -> str:
     current = event.status or ("RESOLVED" if event.state == "RESOLVED" else "PENDING")
-    if action_type in {"USER_ACK", "TASK_DISPATCH"}:
+    if action_type in {"STAFF_ACCEPTED", "STAFF_COMPLETED", "TASK_DISPATCH"}:
         return "PROCESSING"
     if action_type == "FALSE_ALARM":
         return "FALSE_ALARM"
@@ -849,6 +872,7 @@ async def get_safety_events(
     camera_id: Optional[str] = Query(None, max_length=50),
     day: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     status: Optional[str] = Query(None, max_length=32),
+    disposal_status: Optional[str] = Query(None, max_length=32),
     risk_level: Optional[str] = Query(None, max_length=16),
     event_type: Optional[str] = Query(None, max_length=64),
     keyword: Optional[str] = Query(None, max_length=128),
@@ -867,6 +891,8 @@ async def get_safety_events(
         query = query.filter(SafetyEvent.camera_id == camera_id)
     if status:
         query = query.filter(SafetyEvent.status == status)
+    if disposal_status:
+        query = query.filter(SafetyEvent.disposal_status == disposal_status)
     if risk_level:
         query = query.filter(SafetyEvent.risk_level == risk_level)
     if event_type:
@@ -939,6 +965,7 @@ async def get_safety_event_detail(
                 "task_status": task.task_status,
                 "task_note": task.task_note,
                 "dispatched_at": _timestamp(task.dispatched_at),
+                "accepted_at": _timestamp(task.accepted_at),
                 "completed_at": _timestamp(task.completed_at),
             }
             for task in tasks
@@ -1013,6 +1040,8 @@ async def _record_safety_event_action(
     from_status = event.status or "PENDING"
     to_status = _transition_status(event, canonical_action)
     action_name = {
+        "STAFF_ACCEPTED": "staff_accepted",
+        "STAFF_COMPLETED": "staff_completed",
         "USER_ACK": "event_acknowledged",
         "TASK_DISPATCH": "staff_dispatched",
         "MANUAL_RESOLVED": "event_manual_closed",
@@ -1020,8 +1049,11 @@ async def _record_safety_event_action(
         "FALSE_ALARM": "false_alarm",
     }[canonical_action]
 
-    if canonical_action == "USER_ACK" and from_status != "PENDING":
-        raise HTTPException(status_code=409, detail="只有待确认事件可以执行确认")
+    if canonical_action in {"STAFF_ACCEPTED", "STAFF_COMPLETED", "TASK_DISPATCH"} and event.risk_level != RISK_HIGH:
+        raise HTTPException(status_code=409, detail="只有高风险事件需要人工处置")
+
+    if canonical_action == "STAFF_ACCEPTED" and event.disposal_status != DISPOSAL_WAITING_MANUAL:
+        raise HTTPException(status_code=409, detail="只有等待人工接单的事件可以接单")
 
     if canonical_action == "TASK_DISPATCH":
         task = SafetyEventTask(
@@ -1029,11 +1061,40 @@ async def _record_safety_event_action(
             assignee=payload.assignee,
             assignee_phone=payload.assignee_phone,
             dispatch_operator=operator,
-            task_status="DISPATCHED",
+            task_status="WAITING_ACCEPT",
             task_note=payload.remark,
             dispatched_at=now,
         )
         db.add(task)
+    elif canonical_action == "STAFF_ACCEPTED":
+        task = (
+            db.query(SafetyEventTask)
+            .filter(SafetyEventTask.event_id == event.event_id)
+            .order_by(SafetyEventTask.id.desc())
+            .first()
+        )
+        if task is None:
+            task = SafetyEventTask(
+                event_id=event.event_id,
+                dispatch_operator="SYSTEM",
+                task_status="WAITING_ACCEPT",
+                task_note="工作人员接单时自动补建任务",
+                dispatched_at=now,
+            )
+            db.add(task)
+        task.assignee = task.assignee or operator
+        task.task_status = "ACCEPTED"
+        task.accepted_at = now
+    elif canonical_action == "STAFF_COMPLETED":
+        task = (
+            db.query(SafetyEventTask)
+            .filter(SafetyEventTask.event_id == event.event_id)
+            .order_by(SafetyEventTask.id.desc())
+            .first()
+        )
+        if task:
+            task.task_status = "COMPLETED"
+            task.completed_at = now
 
     log = SafetyEventLog(
         action_id=uuid.uuid4().hex,
@@ -1065,26 +1126,34 @@ async def _record_safety_event_action(
     db.add(log)
 
     alarm = db.query(Alarm).filter(Alarm.alarm_code == event.event_id).first()
-    if canonical_action in {"USER_ACK", "MANUAL_RESOLVED", "FALSE_ALARM"} and alarm:
+    if canonical_action in {"MANUAL_RESOLVED", "FALSE_ALARM"} and alarm:
         alarm.handle_status = 1
         alarm.handle_user = operator
         alarm.handle_time = now
         alarm.handle_remark = payload.remark or _safety_action_message(payload.action_type)
 
     event.status = to_status
-    if canonical_action == "USER_ACK":
+    if canonical_action == "STAFF_ACCEPTED":
         event.ack_operator = operator
         event.ack_at = now
+        event.handling_mode = HANDLING_MANUAL
+        event.disposal_status = DISPOSAL_MANUAL_HANDLING
+    if canonical_action == "STAFF_COMPLETED":
+        event.handling_mode = HANDLING_MANUAL
+        event.disposal_status = DISPOSAL_MANUAL_HANDLING
     if canonical_action == "FALSE_ALARM":
         event.false_alarm_operator = operator
         event.false_alarm_reason = payload.reason or payload.remark
         event.resolved_at = now
         event.resolve_reason = "false_alarm"
+        event.disposal_status = DISPOSAL_RESOLVED
     if canonical_action == "MANUAL_RESOLVED":
         event.state = "RESOLVED"
         event.resolved_at = now
         event.resolve_reason = "manual_close"
         event.resolved_operator = operator
+        event.disposal_status = DISPOSAL_RESOLVED
+        event.target_status = "LEFT"
     event.duration_seconds = max(0, int((now - event.started_at).total_seconds())) if event.started_at else 0
     event.version = (event.version or 0) + 1
 
@@ -1101,6 +1170,7 @@ async def _record_safety_event_action(
                     "custom_text": payload.content,
                     "trigger_type": "MANUAL",
                     "operator": operator,
+                    "risk_level": event.risk_level,
                 },
             )
             log.status = "success" if broadcast_result.get("success") else "failed"
@@ -1160,6 +1230,17 @@ async def acknowledge_safety_event(
     return await _record_safety_event_action(event_id, payload, db, user)
 
 
+@router.post("/safety/events/{event_id}/accept", response_model=DetectResponse, summary="接受人工处置任务")
+async def accept_safety_event(
+    event_id: str,
+    payload: SafetyEventActionRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_auth),
+):
+    payload.action_type = "STAFF_ACCEPTED"
+    return await _record_safety_event_action(event_id, payload, db, user)
+
+
 @router.post("/safety/events/{event_id}/broadcast", response_model=DetectResponse, summary="人工一键喊话")
 async def manual_broadcast_safety_event(
     event_id: str,
@@ -1201,6 +1282,17 @@ async def resolve_safety_event(
     user: User = Depends(require_auth),
 ):
     payload.action_type = "MANUAL_RESOLVED"
+    return await _record_safety_event_action(event_id, payload, db, user)
+
+
+@router.post("/safety/events/{event_id}/complete", response_model=DetectResponse, summary="工作人员完成现场处置")
+async def complete_safety_event(
+    event_id: str,
+    payload: SafetyEventActionRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_auth),
+):
+    payload.action_type = "STAFF_COMPLETED"
     return await _record_safety_event_action(event_id, payload, db, user)
 
 

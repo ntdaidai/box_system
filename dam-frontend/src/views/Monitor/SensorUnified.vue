@@ -11,7 +11,10 @@
           @click="selectCard(card)"
         >
           <div class="card-head">
-            <span class="card-title">{{ card.title }}</span>
+            <span class="card-title">
+              <i class="card-accent" :class="card.key"></i>
+              {{ card.title }}
+            </span>
             <span v-if="card.key === 'wind'" class="wind-head-meta">
               <span class="card-state">{{ card.state }}</span>
             </span>
@@ -42,6 +45,11 @@
               <span>{{ metric.label }}</span>
             </div>
           </div>
+          <div class="today-strip">
+            <span v-for="item in card.todayInfo" :key="item.label">
+              {{ item.label }} {{ item.value }}
+            </span>
+          </div>
         </button>
       </div>
     </section>
@@ -51,7 +59,79 @@
         <div class="history-title">
           <h3>历史记录</h3>
         </div>
+      </div>
+
+      <div class="yesterday-summary">
+        <div class="yesterday-head">
+          <div>
+            <h4>昨日摘要</h4>
+            <span>{{ yesterdayLabel }}</span>
+          </div>
+        </div>
+        <div class="yesterday-grid">
+          <div v-for="item in yesterdaySummary" :key="item.key" class="yesterday-card">
+            <div class="yesterday-card-title">
+              <span class="sensor-dot" :class="item.key"></span>
+              <strong>{{ item.title }}</strong>
+            </div>
+            <div class="yesterday-main">{{ item.primary }}</div>
+            <div class="yesterday-meta">
+              <span v-for="meta in item.meta" :key="meta.label">
+                {{ meta.label }} {{ meta.value }}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="history-nav">
+        <div class="history-tabs" role="tablist" aria-label="传感器历史记录">
+          <button
+            v-for="tab in historyTabs"
+            :key="tab.key"
+            type="button"
+            role="tab"
+            :aria-selected="activeHistoryTab === tab.key"
+            :class="{ active: activeHistoryTab === tab.key }"
+            @click="selectHistoryTab(tab.key)"
+          >
+            <span class="sensor-dot" :class="tab.key"></span>{{ tab.label }}
+          </button>
+        </div>
         <div class="history-controls">
+          <el-popover
+            placement="bottom-end"
+            trigger="click"
+            width="360"
+            popper-class="sensor-export-popover"
+          >
+            <template #reference>
+              <button type="button" class="export-button">
+                <el-icon><Download /></el-icon>
+                导出数据
+              </button>
+            </template>
+            <div class="export-panel">
+              <div class="export-title">导出按天统计 CSV</div>
+              <el-date-picker
+                v-model="exportRange"
+                type="daterange"
+                unlink-panels
+                start-placeholder="开始日期"
+                end-placeholder="结束日期"
+                value-format="YYYY-MM-DD"
+                class="export-date-picker"
+              />
+              <button
+                type="button"
+                class="export-confirm"
+                :disabled="exportLoading"
+                @click="exportDailyCsv"
+              >
+                {{ exportLoading ? '导出中...' : '生成 CSV' }}
+              </button>
+            </div>
+          </el-popover>
           <button
             type="button"
             class="period-button"
@@ -90,20 +170,6 @@
         </div>
       </div>
 
-      <div class="history-tabs" role="tablist" aria-label="传感器历史记录">
-        <button
-          v-for="tab in historyTabs"
-          :key="tab.key"
-          type="button"
-          role="tab"
-          :aria-selected="activeHistoryTab === tab.key"
-          :class="{ active: activeHistoryTab === tab.key }"
-          @click="selectHistoryTab(tab.key)"
-        >
-          <span>{{ tab.icon }}</span>{{ tab.label }}
-        </button>
-      </div>
-
       <div class="chart-shell">
         <div ref="chartRef" class="chart"></div>
         <div v-if="historyLoading" class="chart-overlay">
@@ -138,19 +204,22 @@
     <section class="summary-grid">
       <div class="summary-card data-overview-card">
         <div class="summary-title overview">
-          <h3>数据概览</h3>
-          <span>近12月月份</span>
-          <span>近12月数值</span>
-          <span>全部年份月份</span>
-          <span>全部年份数值</span>
+          <h3>周期概览</h3>
+          <span>{{ periodOverviewLabel }}</span>
         </div>
-        <div class="summary-table">
-          <div v-for="item in dataOverviewRows" :key="item.label" class="summary-row overview">
-            <span>{{ item.label }}</span>
-            <strong>{{ item.recentMonth }}</strong>
-            <strong>{{ item.recentValue }}</strong>
-            <strong>{{ item.allMonth }}</strong>
-            <strong>{{ item.allValue }}</strong>
+        <div class="period-overview-grid">
+          <div v-for="item in periodOverviewRows" :key="item.key" class="period-overview-card">
+            <div class="period-overview-head">
+              <span class="sensor-dot" :class="item.key"></span>
+              <strong>{{ item.title }}</strong>
+            </div>
+            <div class="period-stat-list">
+              <div v-for="metric in item.metrics" :key="metric.label">
+                <span>{{ metric.label }}</span>
+                <strong>{{ metric.value }}</strong>
+              </div>
+            </div>
+            <span class="period-change" :class="item.changeClass">{{ item.change }}</span>
           </div>
         </div>
       </div>
@@ -160,6 +229,8 @@
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { Download } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import {
   getAllSensorRealtime,
   getRainTrends,
@@ -191,6 +262,8 @@ const historyLoading = ref(false)
 const historyError = ref('')
 const chartData = ref({ view: 'recent24h', history: [], window: null })
 const thresholdVisibility = reactive({ warning: false, alarm: false })
+const exportRange = ref([])
+const exportLoading = ref(false)
 const summaryData = reactive({
   tempRecent: [],
   rainRecent: [],
@@ -210,6 +283,13 @@ let resizeHandler = null
 let requestSerial = 0
 let isMounted = false
 let lastPointerPixel = null
+
+const dailyRowsCache = {
+  temp: new Map(),
+  rain: new Map(),
+  wind: new Map(),
+  vibration: new Map(),
+}
 
 const historyTabs = [
   { key: 'temperature', label: '气温', icon: '♨', subtitle: '温度变化趋势', unit: '℃', color: '#ff5b6e' },
@@ -253,6 +333,7 @@ const liveCards = computed(() => {
         { label: '温度', value: formatMetric(temp.temperature, 1, '℃') },
         { label: '湿度', value: formatMetric(temp.humidity, 1, '%') },
       ],
+      todayInfo: tempTodayInfo(temp),
       tab: 'temperature',
     },
     {
@@ -266,6 +347,7 @@ const liveCards = computed(() => {
         { label: '瞬时', value: formatMetric(rain.instant_rain, 1, 'mm') },
         { label: '今日', value: formatMetric(rain.today_rain, 1, 'mm') },
       ],
+      todayInfo: rainTodayInfo(rain),
       tab: 'rain',
     },
     {
@@ -281,6 +363,7 @@ const liveCards = computed(() => {
         { label: '风速', value: formatMetric(windSpeedKmh(wind), 1, 'km/h') },
         { label: '风向', value: wind.wind_direction || '--' },
       ],
+      todayInfo: windTodayInfo(wind),
       tab: 'wind',
     },
     {
@@ -295,29 +378,153 @@ const liveCards = computed(() => {
         { label: '主频', value: formatMetric(vibration.dominant_freq, 1, 'Hz') },
         { label: '峰值因子', value: formatMetric(vibration.crest_factor, 1, '') },
       ],
+      todayInfo: vibrationTodayInfo(vibration),
       tab: 'vibration',
     },
   ]
 })
 
-const dataOverviewRows = computed(() => {
-  const recentStats = buildMonthlyStats({
-    temp: summaryData.tempRecent,
-    wind: summaryData.windRecent,
-    vibration: summaryData.vibrationRecent,
-  })
-  const allStats = buildMonthlyStats({
-    temp: summaryData.tempAll,
-    wind: summaryData.windAll,
-    vibration: summaryData.vibrationAll,
-  })
+const todayKey = computed(() => shanghaiDateKey(Date.now()))
+const yesterdayKey = computed(() => offsetDateKey(todayKey.value, -1))
+const priorDayKey = computed(() => offsetDateKey(todayKey.value, -2))
+
+const yesterdayLabel = computed(() => displayDateKey(yesterdayKey.value))
+
+const yesterdaySummary = computed(() => {
+  const yesterday = daySnapshot(yesterdayKey.value)
+  const prior = daySnapshot(priorDayKey.value)
   return [
-    monthlyOverviewRow('最热的月份', recentStats.temperatureMax, allStats.temperatureMax, 'max', 0, '℃'),
-    monthlyOverviewRow('最冷的月份', recentStats.temperatureMin, allStats.temperatureMin, 'min', 0, '℃'),
-    monthlyOverviewRow('最潮湿的月份', recentStats.humidity, allStats.humidity, 'max', 1, '%'),
-    monthlyOverviewRow('风最多的月份', recentStats.wind, allStats.wind, 'max', 1, 'km/h'),
-    monthlyOverviewRow('振动最大的月份', recentStats.vibration, allStats.vibration, 'max', 3, 'g'),
+    {
+      key: 'temperature',
+      title: '温度',
+      icon: '♨',
+      primary: `平均 ${formatMetric(tempAverage(yesterday.temp), 1, '℃')}`,
+      meta: [
+        { label: '高/低', value: formatRange(tempMin(yesterday.temp), tempMax(yesterday.temp), 1, '℃', true) },
+        { label: '较前日', value: formatDelta(tempAverage(yesterday.temp), tempAverage(prior.temp), 1, '℃') },
+      ],
+    },
+    {
+      key: 'humidity',
+      title: '湿度',
+      icon: '♧',
+      primary: `平均 ${formatMetric(humidityAverage(yesterday.temp), 1, '%')}`,
+      meta: [
+        { label: '高/低', value: formatRange(humidityMin(yesterday.temp), humidityMax(yesterday.temp), 1, '%', true) },
+        { label: '较前日', value: formatDelta(humidityAverage(yesterday.temp), humidityAverage(prior.temp), 1, '%') },
+      ],
+    },
+    {
+      key: 'rain',
+      title: '降水',
+      icon: '◇',
+      primary: `累计 ${formatMetric(rainTotal(yesterday.rain), 1, 'mm')}`,
+      meta: [
+        { label: '降雨时长', value: formatRainDuration(yesterday.rain) },
+        { label: '较前日', value: formatDelta(rainTotal(yesterday.rain), rainTotal(prior.rain), 1, 'mm') },
+      ],
+    },
+    {
+      key: 'wind',
+      title: '风速',
+      icon: '≋',
+      primary: `平均 ${formatMetric(windAverage(yesterday.wind), 1, 'km/h')}`,
+      meta: [
+        { label: '最大', value: formatMetric(windMax(yesterday.wind), 1, 'km/h') },
+        { label: '主导风向', value: windDirection(yesterday.wind) },
+      ],
+    },
+    {
+      key: 'vibration',
+      title: '振动',
+      icon: '⌁',
+      primary: `平均RMS ${formatMetric(vibrationAverage(yesterday.vibration), 3, 'g')}`,
+      meta: [
+        { label: '最大', value: formatMetric(vibrationMax(yesterday.vibration), 3, 'g') },
+        { label: '较前日', value: formatDelta(vibrationAverage(yesterday.vibration), vibrationAverage(prior.vibration), 3, 'g') },
+      ],
+    },
   ]
+})
+
+const periodOverviewLabel = computed(() => {
+  const range = currentPeriodRange()
+  if (historyMode.value === 'recent24h') return '今日按天统计'
+  if (historyMode.value === 'overview') return '全部可用数据'
+  return `${displayDateKey(range.startKey)} 至 ${displayDateKey(offsetDateKey(range.endKey, -1))}`
+})
+
+const periodOverviewRows = computed(() => {
+  const current = currentPeriodDailyRows()
+  const previous = previousPeriodDailyRows()
+  const rows = [
+    {
+      key: 'temperature',
+      title: '温度',
+      icon: '♨',
+      metrics: [
+        { label: '平均值', value: formatMetric(average(current.temp.map(tempAverage)), 1, '℃') },
+        { label: '最高', value: formatMetric(maximum(current.temp.map(tempMax)), 1, '℃') },
+        { label: '最低', value: formatMetric(minimum(current.temp.map(tempMin)), 1, '℃') },
+      ],
+      changeValue: valueDelta(average(current.temp.map(tempAverage)), average(previous.temp.map(tempAverage))),
+      decimals: 1,
+      unit: '℃',
+    },
+    {
+      key: 'humidity',
+      title: '湿度',
+      icon: '♧',
+      metrics: [
+        { label: '平均值', value: formatMetric(average(current.temp.map(humidityAverage)), 1, '%') },
+        { label: '最高', value: formatMetric(maximum(current.temp.map(humidityMax)), 1, '%') },
+        { label: '最低', value: formatMetric(minimum(current.temp.map(humidityMin)), 1, '%') },
+      ],
+      changeValue: valueDelta(average(current.temp.map(humidityAverage)), average(previous.temp.map(humidityAverage))),
+      decimals: 1,
+      unit: '%',
+    },
+    {
+      key: 'rain',
+      title: '降水',
+      icon: '◇',
+      metrics: [
+        { label: '累计值', value: formatMetric(sum(current.rain.map(rainTotal)), 1, 'mm') },
+      ],
+      changeValue: valueDelta(sum(current.rain.map(rainTotal)), sum(previous.rain.map(rainTotal))),
+      decimals: 1,
+      unit: 'mm',
+    },
+    {
+      key: 'wind',
+      title: '风速',
+      icon: '≋',
+      metrics: [
+        { label: '平均值', value: formatMetric(average(current.wind.map(windAverage)), 1, 'km/h') },
+        { label: '最大值', value: formatMetric(maximum(current.wind.map(windMax)), 1, 'km/h') },
+      ],
+      changeValue: valueDelta(average(current.wind.map(windAverage)), average(previous.wind.map(windAverage))),
+      decimals: 1,
+      unit: 'km/h',
+    },
+    {
+      key: 'vibration',
+      title: '振动',
+      icon: '⌁',
+      metrics: [
+        { label: '平均RMS', value: formatMetric(average(current.vibration.map(vibrationAverage)), 3, 'g') },
+        { label: '最大值', value: formatMetric(maximum(current.vibration.map(vibrationMax)), 3, 'g') },
+      ],
+      changeValue: valueDelta(average(current.vibration.map(vibrationAverage)), average(previous.vibration.map(vibrationAverage))),
+      decimals: 3,
+      unit: 'g',
+    },
+  ]
+  return rows.map(row => ({
+    ...row,
+    change: formatOverviewDelta(row.changeValue, row.decimals, row.unit),
+    changeClass: row.changeValue === null ? 'neutral' : (row.changeValue > 0 ? 'up' : row.changeValue < 0 ? 'down' : 'neutral'),
+  }))
 })
 
 const toNumber = (value) => {
@@ -346,6 +553,462 @@ const formatCommTime = (timestamp) => {
     second: '2-digit',
     hour12: false,
   }).replace(/\//g, '/')
+}
+
+const offsetDateKey = (dateKey, offsetDays) => {
+  const date = new Date(`${dateKey}T00:00:00+08:00`)
+  if (!Number.isFinite(date.getTime())) return ''
+  date.setDate(date.getDate() + offsetDays)
+  return shanghaiDateKey(date.getTime())
+}
+
+const displayDateKey = (dateKey) => {
+  const date = new Date(`${dateKey}T00:00:00+08:00`)
+  if (!Number.isFinite(date.getTime())) return '--'
+  return date.toLocaleDateString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).replace(/\//g, '-')
+}
+
+const rowDateKey = (row) => {
+  if (!row) return ''
+  if (row.date) return row.date
+  const timestamp = toNumber(row.timestamp)
+  return timestamp === null ? '' : shanghaiDateKey(timestamp * 1000 - 1)
+}
+
+const rowsByDate = (rows = []) => {
+  const map = new Map()
+  rows.forEach(row => {
+    const key = rowDateKey(row)
+    if (key) map.set(key, row)
+  })
+  return map
+}
+
+const allDailyRows = () => ({
+  temp: summaryData.tempAll.length ? summaryData.tempAll : summaryData.tempRecent,
+  rain: summaryData.rainAll.length ? summaryData.rainAll : summaryData.rainRecent,
+  wind: summaryData.windAll.length ? summaryData.windAll : summaryData.windRecent,
+  vibration: summaryData.vibrationAll.length ? summaryData.vibrationAll : summaryData.vibrationRecent,
+})
+
+const daySnapshot = (dateKey) => {
+  const all = allDailyRows()
+  return {
+    temp: rowsByDate(all.temp).get(dateKey) || null,
+    rain: rowsByDate(all.rain).get(dateKey) || null,
+    wind: rowsByDate(all.wind).get(dateKey) || null,
+    vibration: rowsByDate(all.vibration).get(dateKey) || null,
+  }
+}
+
+const dataValue = (row, fields = []) => {
+  const data = row?.data || {}
+  for (const field of fields) {
+    const value = toNumber(data[field])
+    if (value !== null) return value
+  }
+  return null
+}
+
+const firstTextValue = (row, fields = []) => {
+  const data = row?.data || {}
+  for (const field of fields) {
+    const value = data[field]
+    if (value !== null && value !== undefined && String(value).trim()) return String(value)
+  }
+  return '--'
+}
+
+const tempAverage = row => dataValue(row, ['temperature', 'temperature_avg'])
+const tempMin = row => dataValue(row, ['temperature_min', 'temperature'])
+const tempMax = row => dataValue(row, ['temperature_max', 'temperature'])
+const humidityAverage = row => dataValue(row, ['humidity', 'humidity_avg'])
+const humidityMin = row => dataValue(row, ['humidity_min', 'humidity'])
+const humidityMax = row => dataValue(row, ['humidity_max', 'humidity'])
+const rainTotal = row => dataValue(row, ['daily_rain', 'today_rain', 'rain_total'])
+const rainDurationHours = row => dataValue(row, ['rain_duration_hours', 'rain_hours', 'duration_hours', 'rain_duration'])
+const windAverage = row => windSpeedKmh(row?.data || {})
+const windMax = row => dataValue(row, ['wind_speed_kmh_max', 'wind_speed_max_kmh', 'max_wind_speed_kmh', 'max_wind_speed'])
+const windDirection = row => firstTextValue(row, ['dominant_wind_direction', 'wind_direction'])
+const vibrationAverage = row => dataValue(row, ['rms', 'total_rms'])
+const vibrationMax = row => dataValue(row, ['rms_max', 'total_rms_max', 'max_rms', 'peak_accel', 'peak_acceleration'])
+
+const normalizeNumbers = values => values.map(toNumber).filter(value => value !== null)
+const average = values => {
+  const numeric = normalizeNumbers(values)
+  return numeric.length ? numeric.reduce((total, value) => total + value, 0) / numeric.length : null
+}
+const minimum = values => {
+  const numeric = normalizeNumbers(values)
+  return numeric.length ? Math.min(...numeric) : null
+}
+const maximum = values => {
+  const numeric = normalizeNumbers(values)
+  return numeric.length ? Math.max(...numeric) : null
+}
+const sum = values => {
+  const numeric = normalizeNumbers(values)
+  return numeric.length ? numeric.reduce((total, value) => total + value, 0) : null
+}
+
+const formatRange = (low, high, decimals, unit, highFirst = false) => {
+  const first = highFirst ? high : low
+  const second = highFirst ? low : high
+  if (toNumber(first) === null && toNumber(second) === null) return '--'
+  return `${formatMetric(first, decimals, unit)} / ${formatMetric(second, decimals, unit)}`
+}
+
+const valueDelta = (current, previous) => {
+  const currentValue = toNumber(current)
+  const previousValue = toNumber(previous)
+  if (currentValue === null || previousValue === null) return null
+  return currentValue - previousValue
+}
+
+const formatDelta = (current, previous, decimals, unit) => {
+  const delta = valueDelta(current, previous)
+  if (delta === null) return '--'
+  if (Math.abs(delta) < 10 ** (-decimals)) return `持平 0${unit}`
+  return `${delta > 0 ? '+' : ''}${delta.toFixed(decimals)}${unit}`
+}
+
+const formatOverviewDelta = (delta, decimals, unit) => {
+  if (delta === null) return '较上一周期 --'
+  if (Math.abs(delta) < 10 ** (-decimals)) return `较上一周期 持平`
+  return `较上一周期 ${delta > 0 ? '+' : ''}${delta.toFixed(decimals)}${unit}`
+}
+
+const formatHours = (value) => {
+  const numeric = toNumber(value)
+  return numeric === null ? '--' : `${numeric.toFixed(1)}h`
+}
+
+const formatRainDuration = (row) => {
+  const duration = rainDurationHours(row)
+  if (duration !== null) return formatHours(duration)
+  const total = rainTotal(row)
+  return total === 0 ? '0.0h' : '--'
+}
+
+const todayRow = sensorKey => daySnapshot(todayKey.value)[sensorKey]
+
+const tempTodayInfo = (realtime = {}) => {
+  const row = todayRow('temp')
+  const tempNow = toNumber(realtime.temperature)
+  const humidityNow = toNumber(realtime.humidity)
+  return [
+    { label: '温度', value: formatRange(tempMin(row) ?? tempNow, tempMax(row) ?? tempNow, 1, '℃') },
+    { label: '湿度', value: formatRange(humidityMin(row) ?? humidityNow, humidityMax(row) ?? humidityNow, 1, '%') },
+  ]
+}
+
+const rainTodayInfo = () => {
+  const row = todayRow('rain')
+  return [
+    { label: '降雨时长', value: formatRainDuration(row) },
+  ]
+}
+
+const windTodayInfo = (realtime = {}) => {
+  const row = todayRow('wind')
+  return [
+    { label: '最大', value: formatMetric(windMax(row) ?? windSpeedKmh(realtime), 1, 'km/h') },
+    { label: '主导', value: windDirection(row) !== '--' ? windDirection(row) : (realtime.wind_direction || '--') },
+  ]
+}
+
+const vibrationTodayInfo = (realtime = {}) => {
+  const row = todayRow('vibration')
+  return [
+    { label: '最大值', value: formatMetric(vibrationMax(row) ?? toNumber(realtime.peak_accel) ?? toNumber(realtime.total_rms), 3, 'g') },
+  ]
+}
+
+const currentPeriodRange = () => {
+  if (historyMode.value === 'recent24h') {
+    return { startKey: todayKey.value, endKey: offsetDateKey(todayKey.value, 1) }
+  }
+  if (historyMode.value === 'overview') {
+    return { startKey: null, endKey: null }
+  }
+  const year = Number(selectedYear.value)
+  const month = selectedMonth.value === 'all' ? null : Number(selectedMonth.value)
+  const start = new Date(`${year}-${String(month || 1).padStart(2, '0')}-01T00:00:00+08:00`)
+  const end = new Date(start)
+  if (month) end.setMonth(end.getMonth() + 1)
+  else end.setFullYear(end.getFullYear() + 1)
+  return { startKey: shanghaiDateKey(start.getTime()), endKey: shanghaiDateKey(end.getTime()) }
+}
+
+const previousPeriodRange = () => {
+  const current = currentPeriodRange()
+  if (!current.startKey || !current.endKey) return { startKey: null, endKey: null }
+  const start = new Date(`${current.startKey}T00:00:00+08:00`)
+  const end = new Date(`${current.endKey}T00:00:00+08:00`)
+  const duration = end.getTime() - start.getTime()
+  if (!Number.isFinite(duration) || duration <= 0) return { startKey: null, endKey: null }
+  return {
+    startKey: shanghaiDateKey(start.getTime() - duration),
+    endKey: current.startKey,
+  }
+}
+
+const rowsInDateRange = (rows = [], range) => {
+  if (!range?.startKey || !range?.endKey) return rows.filter(row => rowDateKey(row))
+  return rows.filter(row => {
+    const key = rowDateKey(row)
+    return key && key >= range.startKey && key < range.endKey
+  })
+}
+
+const hasMetricRow = (rows = [], getter) => rows.some(row => getter(row) !== null)
+
+const todayFallbackRows = () => {
+  const temp = realtimeData.value.temp_humidity?.data || {}
+  const rain = realtimeData.value.rain?.data || {}
+  const wind = realtimeData.value.wind?.data || {}
+  const vibration = vibrationProcessed.value || {}
+  return {
+    temp: {
+      date: todayKey.value,
+      data: {
+        temperature: toNumber(temp.temperature),
+        temperature_min: toNumber(temp.temperature),
+        temperature_max: toNumber(temp.temperature),
+        humidity: toNumber(temp.humidity),
+        humidity_min: toNumber(temp.humidity),
+        humidity_max: toNumber(temp.humidity),
+      },
+    },
+    rain: {
+      date: todayKey.value,
+      data: { daily_rain: toNumber(rain.today_rain) },
+    },
+    wind: {
+      date: todayKey.value,
+      data: {
+        wind_speed_kmh: windSpeedKmh(wind),
+        wind_direction: wind.wind_direction,
+      },
+    },
+    vibration: {
+      date: todayKey.value,
+      data: {
+        rms: toNumber(vibration.total_rms),
+        rms_max: toNumber(vibration.peak_accel) ?? toNumber(vibration.total_rms),
+      },
+    },
+  }
+}
+
+const dailyRowsForRange = (range) => {
+  const all = allDailyRows()
+  const result = {
+    temp: rowsInDateRange(all.temp, range),
+    rain: rowsInDateRange(all.rain, range),
+    wind: rowsInDateRange(all.wind, range),
+    vibration: rowsInDateRange(all.vibration, range),
+  }
+  if (range?.startKey === todayKey.value && range?.endKey === offsetDateKey(todayKey.value, 1)) {
+    const fallback = todayFallbackRows()
+    if (!hasMetricRow(result.temp, tempAverage)) result.temp = [fallback.temp]
+    if (!hasMetricRow(result.rain, rainTotal)) result.rain = [fallback.rain]
+    if (!hasMetricRow(result.wind, windAverage)) result.wind = [fallback.wind]
+    if (!hasMetricRow(result.vibration, vibrationAverage)) result.vibration = [fallback.vibration]
+  }
+  return result
+}
+
+const currentPeriodDailyRows = () => dailyRowsForRange(currentPeriodRange())
+const previousPeriodDailyRows = () => dailyRowsForRange(previousPeriodRange())
+
+const availableDateBounds = () => {
+  const keys = Object.values(allDailyRows())
+    .flat()
+    .map(rowDateKey)
+    .filter(Boolean)
+    .sort()
+  if (!keys.length) return null
+  return { startKey: keys[0], endKey: keys.at(-1) }
+}
+
+const syncExportRange = () => {
+  const range = currentPeriodRange()
+  if (range.startKey && range.endKey) {
+    exportRange.value = [range.startKey, offsetDateKey(range.endKey, -1)]
+    return
+  }
+  const bounds = availableDateBounds()
+  exportRange.value = bounds
+    ? [bounds.startKey, bounds.endKey]
+    : [yesterdayKey.value, todayKey.value]
+}
+
+const cacheDailyRows = (kind, year, rows = []) => {
+  if (!dailyRowsCache[kind]) return
+  dailyRowsCache[kind].set(Number(year), rows)
+}
+
+const cacheDailyRowsByYear = (kind, rows = []) => {
+  const grouped = new Map()
+  rows.forEach(row => {
+    const year = Number(rowDateKey(row).slice(0, 4))
+    if (!Number.isInteger(year)) return
+    if (!grouped.has(year)) grouped.set(year, [])
+    grouped.get(year).push(row)
+  })
+  grouped.forEach((yearRows, year) => {
+    if (!dailyRowsCache[kind]?.has(year)) cacheDailyRows(kind, year, yearRows)
+  })
+}
+
+const fetchDailyRowsForYear = async (kind, year) => {
+  if (dailyRowsCache[kind]?.has(Number(year))) return dailyRowsCache[kind].get(Number(year))
+  const params = { view: 'calendar', year: Number(year), month: null }
+  const request = kind === 'temp'
+    ? getTempHumidityTrends(params)
+    : kind === 'rain'
+      ? getRainTrends(params)
+      : kind === 'wind'
+        ? getWindTrends(params)
+        : fetchVibrationHistory(params)
+  const res = await request
+  const rows = res?.code === 200 ? (res.data?.history || []) : []
+  cacheDailyRows(kind, year, rows)
+  return rows
+}
+
+const yearsForInclusiveRange = (startKey, endKey) => {
+  const startYear = Number(String(startKey).slice(0, 4))
+  const endYear = Number(String(endKey).slice(0, 4))
+  if (!Number.isInteger(startYear) || !Number.isInteger(endYear)) return []
+  const years = []
+  for (let year = startYear; year <= endYear; year += 1) years.push(year)
+  return years
+}
+
+const exportRowsForRange = async (startKey, endKey) => {
+  const years = yearsForInclusiveRange(startKey, endKey)
+  const kinds = ['temp', 'rain', 'wind', 'vibration']
+  const responses = await Promise.all(kinds.map(async kind => {
+    const rows = (await Promise.all(years.map(year => fetchDailyRowsForYear(kind, year)))).flat()
+    return [kind, rowsInDateRange(rows, { startKey, endKey: offsetDateKey(endKey, 1) })]
+  }))
+  return Object.fromEntries(responses)
+}
+
+const dateKeysBetween = (startKey, endKey) => {
+  const keys = []
+  let cursor = startKey
+  while (cursor && cursor <= endKey && keys.length < 3700) {
+    keys.push(cursor)
+    cursor = offsetDateKey(cursor, 1)
+  }
+  return keys
+}
+
+const csvValue = (value) => {
+  const text = value === null || value === undefined ? '' : String(value)
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+}
+
+const csvMetric = (value, decimals) => {
+  const numeric = toNumber(value)
+  return numeric === null ? '' : numeric.toFixed(decimals)
+}
+
+const buildDailyCsv = (rowsByKind, startKey, endKey) => {
+  const maps = {
+    temp: rowsByDate(rowsByKind.temp),
+    rain: rowsByDate(rowsByKind.rain),
+    wind: rowsByDate(rowsByKind.wind),
+    vibration: rowsByDate(rowsByKind.vibration),
+  }
+  const header = [
+    '日期',
+    '温度平均(℃)',
+    '温度最高(℃)',
+    '温度最低(℃)',
+    '湿度平均(%)',
+    '湿度最高(%)',
+    '湿度最低(%)',
+    '降水累计(mm)',
+    '降雨时长(h)',
+    '风速平均(km/h)',
+    '风速最大(km/h)',
+    '主导风向',
+    '振动平均RMS(g)',
+    '振动最大值(g)',
+    '数据完整率',
+  ]
+  const body = dateKeysBetween(startKey, endKey).map(dateKey => {
+    const temp = maps.temp.get(dateKey)
+    const rain = maps.rain.get(dateKey)
+    const wind = maps.wind.get(dateKey)
+    const vibration = maps.vibration.get(dateKey)
+    const coverage = [
+      tempAverage(temp),
+      humidityAverage(temp),
+      rainTotal(rain),
+      windAverage(wind),
+      vibrationAverage(vibration),
+    ].filter(value => value !== null).length / 5
+    return [
+      dateKey,
+      csvMetric(tempAverage(temp), 2),
+      csvMetric(tempMax(temp), 2),
+      csvMetric(tempMin(temp), 2),
+      csvMetric(humidityAverage(temp), 2),
+      csvMetric(humidityMax(temp), 2),
+      csvMetric(humidityMin(temp), 2),
+      csvMetric(rainTotal(rain), 2),
+      csvMetric(rainDurationHours(rain), 2),
+      csvMetric(windAverage(wind), 2),
+      csvMetric(windMax(wind), 2),
+      windDirection(wind) === '--' ? '' : windDirection(wind),
+      csvMetric(vibrationAverage(vibration), 4),
+      csvMetric(vibrationMax(vibration), 4),
+      `${Math.round(coverage * 100)}%`,
+    ].map(csvValue).join(',')
+  })
+  return `\uFEFF${[header.map(csvValue).join(','), ...body].join('\n')}`
+}
+
+const exportDailyCsv = async () => {
+  const [startKey, endKey] = exportRange.value || []
+  if (!startKey || !endKey) {
+    ElMessage.warning('请选择导出日期范围')
+    return
+  }
+  if (startKey > endKey) {
+    ElMessage.warning('开始日期不能晚于结束日期')
+    return
+  }
+  exportLoading.value = true
+  try {
+    const rowsByKind = await exportRowsForRange(startKey, endKey)
+    const csv = buildDailyCsv(rowsByKind, startKey, endKey)
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `综合传感器_按天统计_${startKey}_${endKey}.csv`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+    ElMessage.success('已导出按天统计 CSV')
+  } catch (error) {
+    console.warn('导出综合传感器日统计失败:', error)
+    ElMessage.error('导出失败，请稍后重试')
+  } finally {
+    exportLoading.value = false
+  }
 }
 
 const tempHumidityState = (data) => {
@@ -609,6 +1272,7 @@ const selectHistoryTab = (tab) => {
 const selectRecent24h = () => {
   if (historyMode.value === 'recent24h' && !historyError.value) return
   historyMode.value = 'recent24h'
+  syncExportRange()
   loadHistory(currentQuery(), Boolean(historyError.value))
 }
 
@@ -616,12 +1280,14 @@ const selectOverview = () => {
   if (historyMode.value === 'overview' && !historyError.value) return
   historyMode.value = 'overview'
   selectedMonth.value = 'all'
+  syncExportRange()
   loadHistory(currentQuery(), Boolean(historyError.value))
 }
 
 const activateCalendarMode = () => {
   if (historyMode.value === 'calendar' && !historyError.value) return
   historyMode.value = 'calendar'
+  syncExportRange()
   loadHistory(currentQuery(), Boolean(historyError.value))
 }
 
@@ -630,11 +1296,13 @@ const onYearChange = () => {
   if (selectedMonth.value !== 'all' && !monthOptions.value.includes(Number(selectedMonth.value))) {
     selectedMonth.value = 'all'
   }
+  syncExportRange()
   loadHistory(currentQuery())
 }
 
 const onMonthChange = () => {
   historyMode.value = 'calendar'
+  syncExportRange()
   loadHistory(currentQuery())
 }
 
@@ -783,8 +1451,9 @@ const yAxisFallback = (values) => {
   if (activeHistoryTab.value === 'vibration') return { min: 0, max: 0.2, ticks: 5 }
   if (activeHistoryTab.value === 'humidity') return { min: 0, max: 100, ticks: 5 }
   if (activeHistoryTab.value === 'temperature') return { min: 0, max: 35, ticks: 7 }
+  if (activeHistoryTab.value === 'rain') return { min: 0, max: 15, ticks: 5 }
+  if (activeHistoryTab.value === 'wind') return { min: 0, max: 20, ticks: 4 }
   const max = values.length ? Math.max(...values) : 0
-  if (activeHistoryTab.value === 'rain') return { min: 0, max: max <= 5 ? 5 : Math.ceil(max / 5) * 5, ticks: 5 }
   return { min: 0, max: max <= 35 ? 35 : Math.ceil(max / 5) * 5, ticks: 7 }
 }
 
@@ -813,62 +1482,6 @@ const restorePointerTooltip = () => {
   chart.dispatchAction({ type: 'showTip', seriesIndex: 0, dataIndex: nearestIndex })
 }
 
-const handleChartWheel = (event) => {
-  if (historyMode.value !== 'overview' || !chart || chart.isDisposed()) return
-  const pixel = [event.offsetX, event.offsetY]
-  if (!chart.containPixel('grid', pixel)) return
-  event.event?.preventDefault?.()
-  event.event?.stopPropagation?.()
-  lastPointerPixel = pixel
-
-  const points = chartSeriesData()
-  const dataStart = points[0]?.[0]
-  const dataEnd = points.at(-1)?.[0]
-  if (!Number.isFinite(dataStart) || !Number.isFinite(dataEnd) || dataEnd <= dataStart) return
-
-  const option = chart.getOption()
-  const zoom = option?.dataZoom?.[0] || {}
-  const currentStart = Number.isFinite(Number(zoom.startValue)) ? Number(zoom.startValue) : dataStart
-  const currentEnd = Number.isFinite(Number(zoom.endValue)) ? Number(zoom.endValue) : dataEnd
-  const center = Number(chart.convertFromPixel({ seriesIndex: 0 }, pixel)?.[0])
-  if (!Number.isFinite(center) || currentEnd <= currentStart) return
-
-  const zoomIn = Number(event.wheelDelta) > 0
-  const currentSpan = currentEnd - currentStart
-  const minSpan = DAY
-  const maxSpan = dataEnd - dataStart
-  if ((zoomIn && currentSpan <= minSpan + MINUTE) || (!zoomIn && currentSpan >= maxSpan - HOUR)) return
-
-  const factor = zoomIn ? 0.78 : 1.24
-  let nextSpan = Math.min(maxSpan, Math.max(minSpan, currentSpan * factor))
-  const leftRatio = (center - currentStart) / currentSpan
-  let nextStart = center - nextSpan * leftRatio
-  let nextEnd = nextStart + nextSpan
-
-  if (nextStart < dataStart) {
-    nextStart = dataStart
-    nextEnd = dataStart + nextSpan
-  }
-  if (nextEnd > dataEnd) {
-    nextEnd = dataEnd
-    nextStart = dataEnd - nextSpan
-  }
-  if (Math.abs(nextStart - currentStart) < MINUTE && Math.abs(nextEnd - currentEnd) < MINUTE) return
-
-  chart.dispatchAction({
-    type: 'dataZoom',
-    dataZoomIndex: 0,
-    startValue: nextStart,
-    endValue: nextEnd,
-  })
-  chart.dispatchAction({
-    type: 'dataZoom',
-    dataZoomIndex: 1,
-    startValue: nextStart,
-    endValue: nextEnd,
-  })
-}
-
 const thresholdMarkLines = () => {
   if (activeHistoryTab.value !== 'vibration') return []
   const data = []
@@ -894,6 +1507,13 @@ const fullChartOption = () => {
   const rainLegend = activeHistoryTab.value === 'rain'
     ? (recent ? '逐半小时新增雨量' : '逐日雨量')
     : meta.label
+  const overviewZoom = overview
+  const overviewZoomWindow = {
+    startValue: dataStart,
+    endValue: dataEnd,
+    minValueSpan: 30 * DAY,
+    filterMode: 'none',
+  }
   return {
     animation: true,
     animationDuration: 850,
@@ -911,40 +1531,58 @@ const fullChartOption = () => {
     },
     legend: activeHistoryTab.value === 'rain' ? {
       show: true,
-      bottom: overview ? 34 : 4,
+      bottom: overview ? 58 : 4,
       left: 12,
       itemWidth: 18,
       itemHeight: 8,
       textStyle: { color: '#b7cae4', fontSize: 12 },
       data: [rainLegend],
     } : undefined,
-    grid: { left: 46, right: 54, bottom: overview ? 78 : 48, top: 44, containLabel: true },
-    dataZoom: overview
+    toolbox: { show: false },
+    grid: { left: 46, right: 54, bottom: overview ? 104 : 48, top: 44, containLabel: true },
+    dataZoom: overviewZoom
       ? [{
           type: 'inside',
           zoomOnMouseWheel: false,
           moveOnMouseWheel: true,
           moveOnMouseMove: true,
-          filterMode: 'none',
-          minValueSpan: DAY,
-          startValue: dataStart,
-          endValue: dataEnd,
+          preventDefaultMouseMove: true,
+          ...overviewZoomWindow,
         }, {
           type: 'slider',
-          height: 24,
-          bottom: 10,
-          borderColor: 'rgba(89, 155, 255, 0.32)',
-          backgroundColor: 'rgba(7, 19, 38, 0.82)',
-          fillerColor: 'rgba(47, 151, 255, 0.18)',
-          handleStyle: { color: '#8fbfff', borderColor: '#d8e8ff' },
-          moveHandleStyle: { color: '#5aa7ff' },
-          textStyle: { color: '#9fb6d3' },
+          height: 44,
+          bottom: 14,
+          borderColor: 'rgba(89, 155, 255, 0.42)',
+          backgroundColor: 'rgba(4, 14, 30, 0.88)',
+          fillerColor: 'rgba(47, 151, 255, 0.22)',
+          showDataShadow: true,
+          dataBackground: {
+            lineStyle: { color: 'rgba(84, 163, 255, 0.5)', width: 1 },
+            areaStyle: { color: 'rgba(84, 163, 255, 0.08)' },
+          },
+          selectedDataBackground: {
+            lineStyle: { color: 'rgba(32, 215, 255, 0.72)', width: 1 },
+            areaStyle: { color: 'rgba(32, 215, 255, 0.14)' },
+          },
+          handleSize: '90%',
+          handleStyle: {
+            color: '#b8dcff',
+            borderColor: '#e6f4ff',
+            borderWidth: 1,
+            shadowBlur: 8,
+            shadowColor: 'rgba(32, 215, 255, 0.36)',
+          },
+          moveHandleSize: 7,
+          moveHandleStyle: { color: 'rgba(32, 215, 255, 0.72)' },
+          emphasis: {
+            handleStyle: { color: '#e6f4ff', borderColor: '#20d7ff' },
+            moveHandleStyle: { color: '#20d7ff' },
+          },
+          textStyle: { color: '#9fb6d3', fontSize: 11 },
           labelFormatter: value => formatZoomDateLabel(value),
-          brushSelect: false,
-          filterMode: 'none',
-          minValueSpan: DAY,
-          startValue: dataStart,
-          endValue: dataEnd,
+          brushSelect: true,
+          realtime: true,
+          ...overviewZoomWindow,
         }]
       : [],
     xAxis: {
@@ -1050,7 +1688,6 @@ const initChart = () => {
   chart.getZr().on('mousemove', event => {
     lastPointerPixel = [event.offsetX, event.offsetY]
   })
-  chart.getZr().on('mousewheel', handleChartWheel)
   chart.on('datazoom', () => {
     window.requestAnimationFrame(restorePointerTooltip)
   })
@@ -1083,15 +1720,25 @@ const loadSummary = async () => {
       ...(tempPreviousRes?.data?.history || []),
       ...(tempCurrentRes?.data?.history || []),
     ]
+    if (tempCurrentRes?.code === 200) cacheDailyRows('temp', year, tempCurrentRes.data?.history || [])
+    if (tempPreviousRes?.code === 200) cacheDailyRows('temp', previousYear, tempPreviousRes.data?.history || [])
     if (tempCurrentRes?.code === 200 || tempPreviousRes?.code === 200) {
       summaryData.tempRecent = filterLast12Months(tempRecentSource)
     }
-    if (rainRecentRes?.code === 200) summaryData.rainRecent = rainRecentRes.data?.history || []
-    if (windRecentRes?.code === 200) summaryData.windRecent = windRecentRes.data?.history || []
+    if (rainRecentRes?.code === 200) {
+      summaryData.rainRecent = rainRecentRes.data?.history || []
+      cacheDailyRowsByYear('rain', summaryData.rainRecent)
+    }
+    if (windRecentRes?.code === 200) {
+      summaryData.windRecent = windRecentRes.data?.history || []
+      cacheDailyRowsByYear('wind', summaryData.windRecent)
+    }
     const vibrationRecentSource = [
       ...(vibrationPreviousRes?.data?.history || []),
       ...(vibrationCurrentRes?.data?.history || []),
     ]
+    if (vibrationCurrentRes?.code === 200) cacheDailyRows('vibration', year, vibrationCurrentRes.data?.history || [])
+    if (vibrationPreviousRes?.code === 200) cacheDailyRows('vibration', previousYear, vibrationPreviousRes.data?.history || [])
     if (vibrationCurrentRes?.code === 200 || vibrationPreviousRes?.code === 200) {
       summaryData.vibrationRecent = filterLast12Months(vibrationRecentSource)
     }
@@ -1130,6 +1777,11 @@ const loadSummary = async () => {
     summaryData.rainAll = fulfilledValue(rainAll) || summaryData.rainRecent
     summaryData.windAll = fulfilledValue(windAll) || summaryData.windRecent
     summaryData.vibrationAll = fulfilledValue(vibrationAll) || summaryData.vibrationRecent
+    cacheDailyRowsByYear('temp', summaryData.tempAll)
+    cacheDailyRowsByYear('rain', summaryData.rainAll)
+    cacheDailyRowsByYear('wind', summaryData.windAll)
+    cacheDailyRowsByYear('vibration', summaryData.vibrationAll)
+    syncExportRange()
   } catch (error) {
     console.warn('加载统计摘要失败:', error)
   }
@@ -1170,79 +1822,10 @@ const loadAllCalendarRows = async (periods = [], loader) => {
   ))
 }
 
-const buildMonthlyStats = ({ temp = [], wind = [], vibration = [] } = {}) => {
-  const result = {
-    temperatureMax: new Map(),
-    temperatureMin: new Map(),
-    humidity: new Map(),
-    wind: new Map(),
-    vibration: new Map(),
-  }
-  temp.forEach(row => {
-    const month = monthFromRow(row)
-    pushMonthValue(result.temperatureMax, month, toNumber(row.data?.temperature_max ?? row.data?.temperature))
-    pushMonthValue(result.temperatureMin, month, toNumber(row.data?.temperature_min ?? row.data?.temperature))
-    pushMonthValue(result.humidity, month, toNumber(row.data?.humidity))
-  })
-  wind.forEach(row => {
-    pushMonthValue(result.wind, monthFromRow(row), windSpeedKmh(row.data))
-  })
-  vibration.forEach(row => {
-    pushMonthValue(result.vibration, monthFromRow(row), toNumber(row.data?.rms))
-  })
-  return result
-}
-
-const monthFromRow = (row) => {
-  const date = row?.date ? new Date(`${row.date}T00:00:00+08:00`) : new Date(Number(row?.timestamp || 0) * 1000)
-  const month = date.getMonth() + 1
-  return Number.isFinite(month) ? month : null
-}
-
-const pushMonthValue = (target, month, value) => {
-  if (!month || value === null) return
-  if (!target.has(month)) target.set(month, [])
-  target.get(month).push(value)
-}
-
-const bestMonth = (source, mode) => {
-  let winner = null
-  let winnerValue = null
-  source.forEach((values, month) => {
-    if (!values.length) return
-    const value = values.reduce((sum, current) => sum + current, 0) / values.length
-    if (winnerValue === null || (mode === 'max' ? value > winnerValue : value < winnerValue)) {
-      winner = month
-      winnerValue = value
-    }
-  })
-  return winner === null ? null : { month: winner, value: winnerValue }
-}
-
-const monthSummary = (source, mode, decimals, unit) => {
-  const result = bestMonth(source, mode)
-  if (!result) return { month: '--', value: '--' }
-  return {
-    month: `${result.month}月`,
-    value: `${result.value.toFixed(decimals)}${unit}`,
-  }
-}
-
-const monthlyOverviewRow = (label, recentSource, allSource, mode, decimals, unit) => {
-  const recent = monthSummary(recentSource, mode, decimals, unit)
-  const all = monthSummary(allSource, mode, decimals, unit)
-  return {
-    label,
-    recentMonth: recent.month,
-    recentValue: recent.value,
-    allMonth: all.month,
-    allValue: all.value,
-  }
-}
-
 onMounted(async () => {
   isMounted = true
   initChart()
+  syncExportRange()
   fetchRealtime()
   loadHistory(currentQuery())
   summaryTimer = window.setTimeout(() => {
@@ -1288,12 +1871,12 @@ onUnmounted(() => {
 .live-card {
   position: relative;
   min-width: 0;
-  min-height: 166px;
-  padding: 18px 22px;
+  min-height: 172px;
+  padding: 16px 20px;
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
-  gap: 22px;
+  gap: 14px;
   border: 1px solid rgba(88, 137, 205, 0.24);
   border-radius: 10px;
   background:
@@ -1324,11 +1907,43 @@ onUnmounted(() => {
 }
 
 .card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
   font-size: 18px;
   font-weight: 700;
   color: #f4f8ff;
   line-height: 1.2;
 }
+
+.card-accent,
+.sensor-dot {
+  flex: 0 0 auto;
+  display: inline-block;
+  border-radius: 999px;
+  background: #20a8ff;
+  box-shadow: 0 0 12px rgba(32, 168, 255, 0.34);
+}
+
+.card-accent {
+  width: 8px;
+  height: 8px;
+}
+
+.sensor-dot {
+  width: 7px;
+  height: 7px;
+}
+
+.card-accent.temp_humidity,
+.sensor-dot.temperature { background: #ff6b7a; box-shadow: 0 0 12px rgba(255, 107, 122, 0.34); }
+.sensor-dot.humidity { background: #20a8ff; box-shadow: 0 0 12px rgba(32, 168, 255, 0.34); }
+.card-accent.rain,
+.sensor-dot.rain { background: #2dc8ff; box-shadow: 0 0 12px rgba(45, 200, 255, 0.34); }
+.card-accent.wind,
+.sensor-dot.wind { background: #72cdf9; box-shadow: 0 0 12px rgba(114, 205, 249, 0.34); }
+.card-accent.vibration,
+.sensor-dot.vibration { background: #8da2ff; box-shadow: 0 0 12px rgba(141, 162, 255, 0.34); }
 
 .card-state {
   min-width: 44px;
@@ -1356,7 +1971,7 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 28px;
-  margin: 6px 0 0;
+  margin: 2px 0 0;
   align-items: start;
 }
 
@@ -1387,15 +2002,15 @@ onUnmounted(() => {
 
 .metric-cell span {
   display: block;
-  margin-top: 12px;
+  margin-top: 9px;
   color: #8ea8c9;
   font-size: 15px;
   line-height: 1.2;
 }
 
 .wind-card-body {
-  min-height: 78px;
-  margin: 6px 0 0;
+  min-height: 72px;
+  margin: 2px 0 0;
   display: grid;
   grid-template-columns: 0.9fr 1.1fr;
   align-items: start;
@@ -1468,6 +2083,29 @@ onUnmounted(() => {
   font-size: 12px;
 }
 
+.today-strip {
+  min-height: 26px;
+  margin-top: auto;
+  padding-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  border-top: 1px solid rgba(174, 202, 245, 0.11);
+  color: #9fb6d3;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.today-strip span {
+  white-space: nowrap;
+}
+
+.today-strip .today-label {
+  color: #ffd84a;
+  font-weight: 700;
+}
+
 .history-panel,
 .summary-card {
   border: 1px solid rgba(84, 130, 202, 0.25);
@@ -1510,9 +2148,9 @@ onUnmounted(() => {
   gap: 9px;
 }
 
+.export-button,
 .period-button {
   height: 34px;
-  width: 92px;
   padding: 0 12px;
   border: 1px solid rgba(120, 155, 211, 0.24);
   border-radius: 8px;
@@ -1521,6 +2159,26 @@ onUnmounted(() => {
   font: inherit;
   font-size: 13px;
   cursor: pointer;
+}
+
+.period-button {
+  width: 92px;
+}
+
+.export-button {
+  min-width: 102px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #dce9fa;
+  border-color: rgba(32, 215, 255, 0.34);
+  background: rgba(32, 95, 148, 0.38);
+}
+
+.export-button:hover {
+  border-color: rgba(32, 215, 255, 0.68);
+  color: #ffffff;
 }
 
 .period-button.active {
@@ -1556,10 +2214,138 @@ onUnmounted(() => {
 .history-select :deep(.el-select__selected-item) { color: #dce9fa; font-size: 13px; }
 .history-select :deep(.el-select__caret) { color: #91a8c9; }
 
+.export-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.export-title {
+  color: #f4f8ff;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.export-date-picker {
+  width: 100%;
+}
+
+.export-confirm {
+  height: 34px;
+  border: 1px solid rgba(32, 215, 255, 0.42);
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(29, 112, 232, 0.95), rgba(36, 90, 196, 0.95));
+  color: #ffffff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.export-confirm:disabled {
+  opacity: 0.62;
+  cursor: wait;
+}
+
+:global(.sensor-export-popover.el-popper) {
+  border-color: rgba(84, 130, 202, 0.35);
+  background: rgba(10, 23, 43, 0.98);
+  box-shadow: 0 14px 36px rgba(0, 8, 24, 0.32);
+}
+
+:global(.sensor-export-popover .el-popper__arrow::before) {
+  border-color: rgba(84, 130, 202, 0.35);
+  background: rgba(10, 23, 43, 0.98);
+}
+
+.yesterday-summary {
+  padding: 13px 18px 4px;
+  border-bottom: 1px solid rgba(124, 157, 207, 0.1);
+}
+
+.yesterday-head {
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.yesterday-head h4 {
+  margin: 0;
+  color: #f4f8ff;
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.yesterday-head span {
+  color: #8ea8c9;
+  font-size: 12px;
+}
+
+.yesterday-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.yesterday-card {
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid rgba(84, 130, 202, 0.18);
+  border-radius: 8px;
+  background: rgba(12, 30, 55, 0.62);
+}
+
+.yesterday-card-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #9fb6d3;
+  font-size: 12px;
+}
+
+.yesterday-card-title strong {
+  color: #dce9fa;
+  font-size: 13px;
+}
+
+.yesterday-main {
+  margin-top: 8px;
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 750;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.yesterday-meta {
+  margin-top: 9px;
+  display: grid;
+  gap: 5px;
+  color: #8ea8c9;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.yesterday-meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-nav {
+  padding: 14px 18px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
 .history-tabs {
   display: flex;
   gap: 8px;
-  padding: 12px 18px 0;
+  padding: 0;
   flex-wrap: wrap;
 }
 
@@ -1714,8 +2500,76 @@ onUnmounted(() => {
 }
 
 .summary-title.overview {
-  grid-template-columns: minmax(150px, 1.25fr) repeat(4, minmax(96px, 1fr));
+  grid-template-columns: minmax(120px, 1fr) auto;
 }
+
+.summary-title.overview span {
+  color: #8ea8c9;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.period-overview-grid {
+  padding: 14px 16px 12px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.period-overview-card {
+  min-width: 0;
+  padding: 13px 14px;
+  border: 1px solid rgba(84, 130, 202, 0.2);
+  border-radius: 8px;
+  background: rgba(12, 30, 55, 0.58);
+}
+
+.period-overview-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #9fb6d3;
+  font-size: 12px;
+}
+
+.period-overview-head strong {
+  color: #f4f8ff;
+  font-size: 14px;
+}
+
+.period-stat-list {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.period-stat-list div {
+  min-height: 22px;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: #8ea8c9;
+  font-size: 12px;
+}
+
+.period-stat-list strong {
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 750;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.period-change {
+  margin-top: 12px;
+  display: inline-flex;
+  color: #9fb6d3;
+  font-size: 12px;
+}
+
+.period-change.up { color: #e6a23c; }
+.period-change.down { color: #67c23a; }
+.period-change.neutral { color: #9fb6d3; }
 
 .summary-table {
   padding: 0 16px;
@@ -1751,6 +2605,11 @@ onUnmounted(() => {
   .live-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .yesterday-grid,
+  .period-overview-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 900px) {
@@ -1759,9 +2618,23 @@ onUnmounted(() => {
     flex-direction: column;
   }
 
+  .history-nav {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .history-tabs {
+    width: 100%;
+  }
+
   .history-controls {
     width: 100%;
     flex-wrap: wrap;
+  }
+
+  .yesterday-grid,
+  .period-overview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .summary-grid {
@@ -1791,10 +2664,25 @@ onUnmounted(() => {
     width: 100%;
   }
 
+  .export-button,
+  .period-button {
+    flex: 1 1 auto;
+  }
+
   .history-select.year-select,
   .history-select.month-select {
     flex: 1;
     width: auto;
+  }
+
+  .yesterday-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .yesterday-grid,
+  .period-overview-grid {
+    grid-template-columns: 1fr;
   }
 
   .chart-shell {

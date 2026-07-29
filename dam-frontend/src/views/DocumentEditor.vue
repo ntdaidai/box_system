@@ -12,34 +12,11 @@
       </div>
       <div class="header-right">
         <span class="save-state" :class="saveStateClass">{{ saveStateLabel }}</span>
-        <el-button type="primary" @click="handleSave" :loading="saving">
+        <el-button type="primary" class="save-button" @click="handleSave" :loading="saving">
           <el-icon><Check /></el-icon>
-          保存到文档库
-        </el-button>
-        <el-button @click="handleReload">
-          <el-icon><Refresh /></el-icon>
-          重新加载
+          保存
         </el-button>
       </div>
-    </div>
-
-    <div class="document-meta-bar">
-      <span class="meta-pill">
-        <span>类型</span>
-        <strong>{{ getFileTypeLabel(documentInfo.file_type) }}</strong>
-      </span>
-      <span class="meta-pill">
-        <span>大小</span>
-        <strong>{{ formatFileSize(documentInfo.file_size) }}</strong>
-      </span>
-      <span class="meta-pill">
-        <span>最后修改</span>
-        <strong>{{ formatDateTime(documentInfo.updated_at) }}</strong>
-      </span>
-      <span v-if="lastSavedAt" class="meta-pill">
-        <span>本次保存</span>
-        <strong>{{ lastSavedAt }}</strong>
-      </span>
     </div>
 
     <div class="editor-container">
@@ -78,7 +55,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, Check, Refresh } from '@element-plus/icons-vue'
+import { ArrowLeft, Check } from '@element-plus/icons-vue'
 import OnlyOfficeEditor from '@/components/OnlyOfficeEditor.vue'
 import axios from 'axios'
 
@@ -130,41 +107,6 @@ const saveStateClass = computed(() => {
   if (isDocumentModified.value) return 'is-dirty'
   return 'is-saved'
 })
-
-// 获取文档类型显示名称
-const getFileTypeLabel = (type) => {
-  const ext = String(type || '').toLowerCase()
-  const labelMap = {
-    'docx': 'Word 文档',
-    'doc': 'Word 文档',
-    'xlsx': 'Excel 表格',
-    'xls': 'Excel 表格',
-    'pptx': 'PPT 演示',
-    'ppt': 'PPT 演示',
-    'pdf': 'PDF 文档'
-  }
-  return labelMap[ext] || ext.toUpperCase() || '-'
-}
-
-// 格式化文件大小
-const formatFileSize = (bytes) => {
-  if (!bytes) return '-'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let size = bytes
-  let unitIndex = 0
-  while (size >= 1024 && unitIndex < units.length - 1) {
-    size /= 1024
-    unitIndex++
-  }
-  return `${size.toFixed(2)} ${units[unitIndex]}`
-}
-
-const formatDateTime = (value) => {
-  if (!value) return '-'
-  const raw = String(value).replace('T', ' ')
-  const [date = '-', time = ''] = raw.split(' ')
-  return time ? `${date} ${time.slice(0, 5)}` : date
-}
 
 const formatNowTime = () => {
   const now = new Date()
@@ -276,32 +218,6 @@ const handleSave = async () => {
   }
 }
 
-// 刷新文档
-const handleReload = async () => {
-  try {
-    if (isDocumentModified.value) {
-      await ElMessageBox.confirm(
-        '重新加载会丢弃当前未保存的修改。是否继续？',
-        '确认重新加载',
-        {
-          confirmButtonText: '重新加载',
-          cancelButtonText: '取消',
-          type: 'warning'
-        }
-      )
-    }
-
-    if (editorRef.value) {
-      editorRef.value.reload()
-      isDocumentModified.value = false
-      editorReady.value = false
-    }
-
-  } catch {
-    // 用户取消
-  }
-}
-
 // 返回上一页
 const goBack = () => {
   if (isDocumentModified.value) {
@@ -339,12 +255,16 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .document-editor-page {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 92px);
-  min-height: 640px;
-  padding: 12px 20px 16px;
-  background: transparent;
+  width: 100vw;
+  height: 100vh;
+  min-height: 0;
+  padding: 0;
+  background: #071625;
   overflow: hidden;
 }
 
@@ -353,12 +273,11 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
-  padding: 12px 14px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  box-shadow: inset 0 0 18px rgba(0, 200, 255, 0.025);
+  min-height: 60px;
+  padding: 0 18px;
+  background: #0b2138;
+  border-bottom: 1px solid rgba(0, 200, 255, 0.2);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
 }
 
 .header-left {
@@ -370,6 +289,10 @@ onBeforeUnmount(() => {
 
 .back-button {
   flex: 0 0 auto;
+  height: 36px;
+  color: #dce9fa;
+  background: rgba(10, 30, 48, 0.68);
+  border-color: rgba(88, 156, 222, 0.42);
 }
 
 .title-stack {
@@ -385,7 +308,7 @@ onBeforeUnmount(() => {
 
 .page-title {
   margin: 0;
-  max-width: min(46vw, 720px);
+  max-width: min(52vw, 860px);
   font-size: 17px;
   font-weight: 700;
   color: var(--text-primary);
@@ -399,6 +322,12 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 12px;
   flex: 0 0 auto;
+}
+
+.save-button {
+  min-width: 96px;
+  height: 36px;
+  font-weight: 700;
 }
 
 .save-state {
@@ -428,48 +357,13 @@ onBeforeUnmount(() => {
   color: var(--accent-color);
 }
 
-.document-meta-bar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
-  padding: 10px 12px;
-  background: rgba(16, 38, 72, 0.42);
-  border: 1px solid var(--border-light);
-  border-radius: 8px;
-  overflow-x: auto;
-}
-
-.meta-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  height: 30px;
-  padding: 0 10px;
-  white-space: nowrap;
-  border-radius: 4px;
-  background: rgba(10, 30, 48, 0.58);
-  border: 1px solid rgba(0, 200, 255, 0.12);
-}
-
-.meta-pill span {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.meta-pill strong {
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
 .editor-container {
   flex: 1 1 auto;
   min-height: 0;
-  background: var(--bg-panel);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
+  background: #eef2f6;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
   overflow: hidden;
 }
 
@@ -511,15 +405,16 @@ onBeforeUnmount(() => {
 /* 响应式布局 */
 @media (max-width: 768px) {
   .document-editor-page {
-    height: calc(100vh - 72px);
-    min-height: 0;
-    padding: 12px;
+    height: 100vh;
+    padding: 0;
   }
 
   .page-header {
     flex-direction: column;
     gap: 12px;
     align-items: stretch;
+    min-height: 110px;
+    padding: 12px;
   }
 
   .header-left,

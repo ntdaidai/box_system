@@ -10,12 +10,12 @@
               :class="{ active: currentNav === item.path }"
               :key="item.path"
               @click="handleNavClick(item)">
-            <el-icon :size="20"><component :is="item.icon" /></el-icon>
+            <el-icon :size="16"><component :is="item.icon" /></el-icon>
             <span class="txt">{{ item.name }}</span>
           </li>
         </ul>
         <div class="avatar flexBox">
-          <el-icon :size="20"><UserOperatorIcon /></el-icon>
+          <el-icon :size="20"><UserFilled /></el-icon>
           <span class="txt">{{ userStore.userInfo.username || 'admin' }}</span>
           <el-icon :size="12"><ArrowDown /></el-icon>
         </div>
@@ -33,7 +33,7 @@
           <template v-for="item in currentMenu" :key="item.path || item.name">
             <el-sub-menu v-if="item.children && item.children.length > 0" :index="item.name">
               <template #title>
-                <el-icon :size="20"><component :is="item.icon" /></el-icon>
+                <el-icon :size="16"><component :is="item.icon" /></el-icon>
                 <span class="menu-text">{{ item.name }}</span>
               </template>
               <el-menu-item
@@ -41,15 +41,13 @@
                 :key="child.path"
                 :index="child.path"
               >
-                <el-icon :size="18"><component :is="child.icon" /></el-icon>
+                <el-icon :size="14"><component :is="child.icon" /></el-icon>
                 {{ child.name }}
               </el-menu-item>
             </el-sub-menu>
             <el-menu-item v-else :index="item.path">
-              <el-icon v-if="typeof item.icon !== 'string'" :size="20"><component :is="item.icon" /></el-icon>
-              <el-icon v-else :size="20" class="custom-menu-icon-wrap">
-                <img :src="getCustomIcon(item.icon)" class="custom-menu-icon" />
-              </el-icon>
+              <el-icon v-if="typeof item.icon !== 'string'" :size="16"><component :is="item.icon" /></el-icon>
+              <img v-else :src="getCustomIcon(item.icon)" class="custom-menu-icon" />
               <span class="menu-text">{{ item.name }}</span>
             </el-menu-item>
           </template>
@@ -59,7 +57,7 @@
       <!-- 内容区 -->
       <main class="contentBox flexBox">
         <div class="routerBox flexBox">
-          <el-icon :size="18"><SystemOverviewIcon /></el-icon>
+          <el-icon :size="14"><HomeFilled /></el-icon>
           <span>
             <span v-for="(item, index) in breadcrumbs" :key="index">
               {{ item }}
@@ -79,16 +77,7 @@
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores'
-import { ArrowDown, DataAnalysis, Setting, Sunny, WindPower, Cloudy, Odometer, Bell } from '@element-plus/icons-vue'
-import {
-  AlarmTriangleIcon,
-  DocumentSheetIcon,
-  RealtimeMonitorIcon,
-  SensorChipIcon,
-  SystemOverviewIcon,
-  UserOperatorIcon,
-  VideoMonitorIcon,
-} from '@/components/SystemIcons'
+import { HomeFilled, UserFilled, ArrowDown, Monitor, DataAnalysis, Warning, Setting, VideoCamera, Cpu, Sunny, WindPower, Cloudy, Odometer, Bell, Document, Upload, Picture, VideoPlay } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -106,28 +95,28 @@ function getCustomIcon(iconKey) {
 
 // 顶部导航配置
 const navList = [
-  { name: '系统概览', path: '/dashboard', icon: SystemOverviewIcon },
-  { name: '实时监控', path: '/monitor', icon: RealtimeMonitorIcon },
-  { name: '告警管理', path: '/alarm', icon: AlarmTriangleIcon },
-  { name: '文档管理', path: '/document', icon: DocumentSheetIcon },
+  { name: '系统概览', path: '/dashboard', icon: HomeFilled },
+  { name: '实时监控', path: '/monitor', icon: Monitor },
+  { name: '告警管理', path: '/alarm', icon: Warning },
+  { name: '文档管理', path: '/document', icon: Document },
 ]
 
 // 各模块对应的菜单
 const menuMap = {
   '/dashboard': [
-    { name: '首页', path: '/dashboard', icon: SystemOverviewIcon },
+    { name: '首页', path: '/dashboard', icon: HomeFilled },
   ],
   '/monitor': [
     {
       name: '监控总览',
       path: '/monitor/overview',
-      icon: RealtimeMonitorIcon,
+      icon: Monitor,
     },
     {
       name: '传感器监测',
-      icon: SensorChipIcon,
+      icon: Cpu,
       children: [
-        { name: '综合传感器页', path: '/monitor/sensors', icon: SensorChipIcon },
+        { name: '综合传感器页', path: '/monitor/sensors', icon: Cpu },
         { name: '温湿度传感器', path: '/monitor/temp', icon: Sunny },
         { name: '风速风向传感器', path: '/monitor/wind', icon: WindPower },
         { name: '雨量传感器', path: '/monitor/rain', icon: Cloudy },
@@ -136,9 +125,9 @@ const menuMap = {
     },
     {
       name: '视频监测',
-      icon: VideoMonitorIcon,
+      icon: VideoCamera,
       children: [
-        { name: '视频监控', path: '/monitor/camera', icon: VideoMonitorIcon },
+        { name: '视频监控', path: '/monitor/camera', icon: VideoCamera },
         { name: '设备管理', path: '/monitor/camera/devices', icon: Setting },
         { name: '区域配置', path: '/monitor/camera/zones', icon: Setting },
         { name: '安全闭环', path: '/monitor/camera/safety', icon: Bell },
@@ -154,9 +143,9 @@ const menuMap = {
   '/alarm': [
     {
       name: '告警管理',
-      icon: AlarmTriangleIcon,
+      icon: Bell,
       children: [
-        { name: '告警列表', path: '/alarm/list', icon: AlarmTriangleIcon },
+        { name: '告警列表', path: '/alarm/list', icon: Bell },
         { name: '告警配置', path: '/alarm/config', icon: Setting },
       ],
     },
@@ -164,9 +153,9 @@ const menuMap = {
   '/document': [
     {
       name: '文档管理',
-      icon: DocumentSheetIcon,
+      icon: Document,
       children: [
-        { name: '文档中心', path: '/document/hub', icon: DocumentSheetIcon },
+        { name: '文档中心', path: '/document/hub', icon: Document },
       ],
     },
   ],
@@ -218,14 +207,11 @@ const handleNavClick = (item) => {
 @import url("../styles/layout.css");
 
 /* 自定义菜单图标 */
-.custom-menu-icon-wrap {
-  line-height: 1;
-}
-
 .custom-menu-icon {
   width: 16px;
   height: 16px;
+  margin-right: 8px;
   object-fit: contain;
-  display: block;
+  vertical-align: middle;
 }
 </style>

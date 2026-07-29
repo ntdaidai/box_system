@@ -60,7 +60,7 @@
           <div class="health-top-row">
             <div class="health-item health-item-medium">
               <div class="health-icon" style="background: rgba(100,200,255,0.15);">
-                <el-icon :size="30" color="#64c8ff"><PlatformUptimeIcon /></el-icon>
+                <el-icon :size="22" color="#64c8ff"><Timer /></el-icon>
               </div>
               <div class="health-body">
                 <div class="health-label">平台服务运行时间</div>
@@ -69,7 +69,7 @@
             </div>
             <div class="health-item health-item-medium">
               <div class="health-icon" style="background: rgba(0,229,255,0.15);">
-                <el-icon :size="30" color="#00e5ff"><HostUptimeIcon /></el-icon>
+                <el-icon :size="22" color="#00e5ff"><Clock /></el-icon>
               </div>
               <div class="health-body">
                 <div class="health-label">主机连续运行时间</div>
@@ -82,7 +82,7 @@
             <!-- CPU 使用率 -->
             <div class="health-item">
               <div class="health-icon" style="background: rgba(103,194,58,0.15);">
-                <el-icon :size="26" color="#67c23a"><CpuLoadIcon /></el-icon>
+                <el-icon :size="20" color="#67c23a"><Cpu /></el-icon>
               </div>
               <div class="health-body">
                 <div class="health-label">CPU 计算负载</div>
@@ -96,7 +96,7 @@
             <!-- 内存使用率 -->
             <div class="health-item">
               <div class="health-icon" style="background: rgba(230,162,60,0.15);">
-                <el-icon :size="26" color="#e6a23c"><MemoryModuleIcon /></el-icon>
+                <el-icon :size="20" color="#e6a23c"><Menu /></el-icon>
               </div>
               <div class="health-body">
                 <div class="health-label">内存资源占用</div>
@@ -110,7 +110,7 @@
             <!-- GPU 状态 -->
             <div class="health-item">
               <div class="health-icon" style="background: rgba(118,185,0,0.15);">
-                <el-icon :size="26" color="#76b900"><GpuBoardIcon /></el-icon>
+                <el-icon :size="20" color="#76b900"><Odometer /></el-icon>
               </div>
               <div class="health-body">
                 <div class="health-label">
@@ -133,7 +133,7 @@
             <!-- 磁盘使用率 -->
             <div class="health-item">
               <div class="health-icon" style="background: rgba(245,108,108,0.15);">
-                <el-icon :size="26" color="#f56c6c"><StorageStackIcon /></el-icon>
+                <el-icon :size="20" color="#f56c6c"><FolderOpened /></el-icon>
               </div>
               <div class="health-body">
                 <div class="health-label">存储空间占用</div>
@@ -147,7 +147,7 @@
             <!-- 边缘采集服务 -->
             <div class="health-item">
               <div class="health-icon" :style="{ background: systemInfo.sensor_collector_running ? 'rgba(103,194,58,0.15)' : 'rgba(245,108,108,0.15)' }">
-                <el-icon :size="26" :color="systemInfo.sensor_collector_running ? '#67c23a' : '#f56c6c'"><EdgeCollectorIcon /></el-icon>
+                <el-icon :size="20" :color="systemInfo.sensor_collector_running ? '#67c23a' : '#f56c6c'"><Connection /></el-icon>
               </div>
               <div class="health-body">
                 <div class="health-label">边缘采集服务</div>
@@ -159,7 +159,7 @@
             <!-- AI 模型服务 -->
             <div class="health-item">
               <div class="health-icon" :style="{ background: aiModelHealthy ? 'rgba(103,194,58,0.15)' : 'rgba(245,108,108,0.15)' }">
-                <el-icon :size="26" :color="aiModelHealthy ? '#67c23a' : '#f56c6c'"><AiInferenceIcon /></el-icon>
+                <el-icon :size="20" :color="aiModelHealthy ? '#67c23a' : '#f56c6c'"><Aim /></el-icon>
               </div>
               <div class="health-body">
                 <div class="health-label">AI模型推理服务</div>
@@ -289,21 +289,10 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-  Monitor, CircleCheck, Warning, WarningFilled
+  Monitor, CircleCheck, Warning, WarningFilled,
+  Cpu, Clock, Timer, Connection, FolderOpened, Menu, Odometer, Aim
 } from '@element-plus/icons-vue'
-import {
-  AiInferenceIcon,
-  CpuLoadIcon,
-  EdgeCollectorIcon,
-  GpuBoardIcon,
-  HostUptimeIcon,
-  MemoryModuleIcon,
-  PlatformUptimeIcon,
-  StorageStackIcon,
-} from '@/components/SystemIcons'
 import { getSystemInfo, getAllSensorRealtime, getDeviceStatus, getAlarmStatistics, getAlarmList } from '@/api/dashboard'
-import { getCameraList } from '@/api/camera'
-import { dijLogin, getBoundDevices, getCurrentWorkspace, getDroneDevices } from '@/api/drone'
 import { getVibrationProcessed } from '@/api/sensor'
 import SensorSSE from '@/utils/sensorSSE'
 import { readCachedResponse } from '@/utils/localResponseCache'
@@ -318,8 +307,6 @@ import cameraIcon from '@/assets/images/sensors/camera.png'
 import uavIcon from '/drone.png'
 
 const router = useRouter()
-const DIJ_USERNAME = 'adminPC'
-const DIJ_PASSWORD = 'adminPC'
 
 // ==================== 响应式状态 ====================
 
@@ -576,18 +563,6 @@ const applyVibrationProcessed = (payload) => {
   vibrationProcessedData.value = payload.data || payload
 }
 
-const setDeviceOnlineState = (key, online, extra = {}) => {
-  deviceStatus.value = {
-    ...deviceStatus.value,
-    [key]: {
-      ...(deviceStatus.value[key] || {}),
-      ...extra,
-      status: online ? 'online' : 'offline',
-    },
-  }
-  syncDeviceCounts()
-}
-
 const readDashboardCache = (url, params) => readCachedResponse(apiCacheConfig(url, params))?.data
 
 const hydrateDashboardFromCache = () => {
@@ -635,73 +610,6 @@ const fetchSensorData = async () => {
       applyDeviceStatus(statusRes.data)
     }
   } catch (e) { /* 使用默认值 */ }
-}
-
-const fetchCameraSummaryStatus = async () => {
-  try {
-    const res = await getCameraList()
-    const cameras = res.data?.cameras || []
-    const onlineCount = cameras.filter(camera => camera.connected).length
-    setDeviceOnlineState('camera', onlineCount > 0, {
-      total: cameras.length,
-      online_count: onlineCount,
-      channel_status: onlineCount > 0 ? `${onlineCount}/${cameras.length || onlineCount}` : '--',
-    })
-  } catch {
-    setDeviceOnlineState('camera', false, { channel_status: '--' })
-  }
-}
-
-const ensureDijToken = async () => {
-  const token = localStorage.getItem('dij_token')
-  if (token) return token
-  const res = await dijLogin(DIJ_USERNAME, DIJ_PASSWORD)
-  const nextToken = res.data?.access_token
-  if (nextToken) localStorage.setItem('dij_token', nextToken)
-  return nextToken
-}
-
-const isDroneDeviceOnline = (device) => {
-  const status = device?.status
-  return status === true || status === 'online' || status === 1 || status === '1'
-}
-
-const flattenDroneTopology = (nodes = []) => {
-  const result = []
-  nodes.forEach((node) => {
-    if (!node || typeof node !== 'object') return
-    result.push(node)
-    const children = node.children
-    if (Array.isArray(children)) result.push(...flattenDroneTopology(children))
-    else if (children && typeof children === 'object') result.push(...flattenDroneTopology(Object.values(children)))
-  })
-  return result
-}
-
-const fetchDroneSummaryStatus = async () => {
-  try {
-    await ensureDijToken()
-    const workspaceRes = await getCurrentWorkspace()
-    const workspaceId = workspaceRes.data?.workspace_id || workspaceRes.data?.id || ''
-    if (!workspaceId) throw new Error('缺少 DJI 工作空间')
-
-    let devices = []
-    try {
-      const topologyRes = await getDroneDevices(workspaceId)
-      devices = flattenDroneTopology(topologyRes.data || [])
-    } catch {
-      const boundRes = await getBoundDevices(workspaceId, { page: 1, page_size: 50 })
-      devices = boundRes.data?.list || []
-    }
-
-    const online = devices.some(isDroneDeviceOnline)
-    setDeviceOnlineState('uav', online, {
-      total: devices.length,
-      position_status: online ? '已接入' : '--',
-    })
-  } catch {
-    setDeviceOnlineState('uav', false, { position_status: '--' })
-  }
 }
 
 /** 获取振动处理后指标：RMS / 主频 / 峰值因子 */
@@ -760,8 +668,6 @@ const initData = async () => {
     fetchSensorData(),
     fetchSystemInfo(),
     fetchVibrationProcessed(),
-    fetchCameraSummaryStatus(),
-    fetchDroneSummaryStatus(),
   ])
 
   // 阶段二：异步加载告警数据，不阻塞 UI
@@ -811,8 +717,8 @@ const getSensorOnline = (key) => {
 
 const formatSensorValue = (key, field) => {
   if (field === 'device_status') return getSensorOnline(key) ? '在线' : '离线'
-  if (field === 'channel_status') return deviceStatus.value[key]?.channel_status || (getSensorOnline(key) ? '待检测' : '--')
-  if (field === 'position_status') return deviceStatus.value[key]?.position_status || (getSensorOnline(key) ? '已接入' : '--')
+  if (field === 'channel_status') return getSensorOnline(key) ? '待检测' : '--'
+  if (field === 'position_status') return getSensorOnline(key) ? '已接入' : '--'
   const d = key === 'vibration' ? vibrationProcessedData.value : sensorData.value[key]?.data
   if (!d || d[field] == null) return '--'
   const v = d[field]
@@ -911,8 +817,6 @@ onMounted(async () => {
       fetchSystemInfo(),
       fetchAlarmStats(),
       fetchRecentAlarms(),
-      fetchCameraSummaryStatus(),
-      fetchDroneSummaryStatus(),
     ])
   }, 30000)
 
@@ -984,9 +888,9 @@ onUnmounted(() => {
   gap: 12px;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 0 18px 12px;
-  scroll-padding-inline: 18px;
+  padding: 0 2px 10px;
   scroll-snap-type: x mandatory;
+  mask-image: linear-gradient(90deg, transparent 0, #000 28px, #000 calc(100% - 28px), transparent 100%);
   scrollbar-color: rgba(0, 200, 255, 0.42) rgba(6, 24, 45, 0.75);
   scrollbar-width: thin;
 }

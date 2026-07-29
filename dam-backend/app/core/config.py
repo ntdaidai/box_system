@@ -157,6 +157,9 @@ class Settings:
     SAFETY_EVENT_MEDIUM_AFTER_LOW_SECONDS: float = float(
         _get_env("SAFETY_EVENT_MEDIUM_AFTER_LOW_SECONDS", "30")
     )
+    SAFETY_EVENT_HIGH_AFTER_MEDIUM_SECONDS: float = float(
+        _get_env("SAFETY_EVENT_HIGH_AFTER_MEDIUM_SECONDS", "60")
+    )
     SAFETY_EVENT_LOST_GRACE_SECONDS: float = float(
         _get_env("SAFETY_EVENT_LOST_GRACE_SECONDS", "3")
     )
@@ -184,6 +187,8 @@ class Settings:
     BROADCAST_AUTO_COOLDOWN_SECONDS: int = int(
         _get_env("BROADCAST_AUTO_COOLDOWN_SECONDS", "60")
     )
+    DRONE_DEFAULT_STRATEGY_ID: str = _get_env("DRONE_DEFAULT_STRATEGY_ID", "AUTO_PATROL")
+    DRONE_DEFAULT_ID: str = _get_env("DRONE_DEFAULT_ID", "mock-drone-1")
 
     # WebRTC Streamer 的 HTTP API 不直接暴露给浏览器，由 camera API 代理信令。
     WEBRTC_STREAMER_URL: str = _get_env(
