@@ -318,6 +318,10 @@ class SqlSafetyEventStore:
             "snapshot_path": row.snapshot_url,
             "snapshot_url": row.snapshot_url,
             "video_url": row.video_url,
+            "video_status": row.video_status or "PENDING",
+            "video_error": row.video_error,
+            "video_created_at": _to_timestamp(row.video_created_at),
+            "video_expires_at": _to_timestamp(row.video_expires_at),
             "duration_seconds": row.duration_seconds or 0,
             "ack_operator": row.ack_operator,
             "ack_at": _to_timestamp(row.ack_at),
@@ -378,6 +382,10 @@ class SqlSafetyEventStore:
         row.resolve_reason = event.get("resolve_reason")
         row.snapshot_url = event.get("snapshot_path")
         row.video_url = event.get("video_url") or row.video_url
+        row.video_status = event.get("video_status") or row.video_status or "PENDING"
+        row.video_error = event.get("video_error")
+        row.video_created_at = _to_datetime(event.get("video_created_at"))
+        row.video_expires_at = _to_datetime(event.get("video_expires_at"))
         if row.started_at:
             end_at = row.resolved_at or row.last_seen_at or dt.datetime.now()
             row.duration_seconds = max(0, int((end_at - row.started_at).total_seconds()))

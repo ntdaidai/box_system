@@ -237,7 +237,8 @@ const initEditor = async () => {
           name: props.user.name
         },
         customization: {
-          forcesave: true, // 强制保存
+          autosave: true,
+          forcesave: true, // 保留 Ctrl+S 和工具栏保存能力
           compactHeader: !props.showTitleBar,
           toolbarNoTabs: false,
           hideRightMenu: false,

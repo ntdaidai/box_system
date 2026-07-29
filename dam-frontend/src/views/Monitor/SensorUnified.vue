@@ -112,23 +112,33 @@
               </button>
             </template>
             <div class="export-panel">
-              <div class="export-title">导出按天统计 CSV</div>
-              <el-date-picker
-                v-model="exportRange"
-                type="daterange"
-                unlink-panels
-                start-placeholder="开始日期"
-                end-placeholder="结束日期"
-                value-format="YYYY-MM-DD"
-                class="export-date-picker"
-              />
+              <div class="export-title">导出按天统计表</div>
+              <div class="export-date-row">
+                <label class="export-date-field">
+                  <span>开始日期</span>
+                  <input
+                    type="date"
+                    :value="exportRange?.[0] || ''"
+                    @input="setExportRangeDate(0, $event.target.value)"
+                  />
+                </label>
+                <span class="export-date-separator">-</span>
+                <label class="export-date-field">
+                  <span>结束日期</span>
+                  <input
+                    type="date"
+                    :value="exportRange?.[1] || ''"
+                    @input="setExportRangeDate(1, $event.target.value)"
+                  />
+                </label>
+              </div>
               <button
                 type="button"
                 class="export-confirm"
                 :disabled="exportLoading"
                 @click="exportDailyCsv"
               >
-                {{ exportLoading ? '导出中...' : '生成 CSV' }}
+                {{ exportLoading ? '导出中...' : '生成表格' }}
               </button>
             </div>
           </el-popover>
@@ -849,6 +859,12 @@ const syncExportRange = () => {
     : [yesterdayKey.value, todayKey.value]
 }
 
+const setExportRangeDate = (index, value) => {
+  const next = [...(exportRange.value || [])]
+  next[index] = value || ''
+  exportRange.value = next
+}
+
 const cacheDailyRows = (kind, year, rows = []) => {
   if (!dailyRowsCache[kind]) return
   dailyRowsCache[kind].set(Number(year), rows)
@@ -912,40 +928,52 @@ const dateKeysBetween = (startKey, endKey) => {
   return keys
 }
 
-const csvValue = (value) => {
-  const text = value === null || value === undefined ? '' : String(value)
-  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
-}
-
 const csvMetric = (value, decimals) => {
   const numeric = toNumber(value)
   return numeric === null ? '' : numeric.toFixed(decimals)
 }
 
-const buildDailyCsv = (rowsByKind, startKey, endKey) => {
+const excelValue = (value) => {
+  const text = value === null || value === undefined ? '' : String(value)
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+const excelCell = (value, styleId = 'text') => {
+  const numeric = toNumber(value)
+  const type = styleId === 'number' && numeric !== null ? 'Number' : 'String'
+  const content = type === 'Number' ? numeric : excelValue(value)
+  return `<Cell ss:StyleID="${styleId}"><Data ss:Type="${type}">${content}</Data></Cell>`
+}
+
+const buildDailyWorkbook = (rowsByKind, startKey, endKey) => {
   const maps = {
     temp: rowsByDate(rowsByKind.temp),
     rain: rowsByDate(rowsByKind.rain),
     wind: rowsByDate(rowsByKind.wind),
     vibration: rowsByDate(rowsByKind.vibration),
   }
-  const header = [
-    '日期',
-    '温度平均(℃)',
-    '温度最高(℃)',
-    '温度最低(℃)',
-    '湿度平均(%)',
-    '湿度最高(%)',
-    '湿度最低(%)',
-    '降水累计(mm)',
-    '降雨时长(h)',
-    '风速平均(km/h)',
-    '风速最大(km/h)',
-    '主导风向',
-    '振动平均RMS(g)',
-    '振动最大值(g)',
-    '数据完整率',
+  const columns = [
+    { label: '日期', width: 92, style: 'text' },
+    { label: '温度平均(℃)', width: 92, style: 'number' },
+    { label: '温度最高(℃)', width: 92, style: 'number' },
+    { label: '温度最低(℃)', width: 92, style: 'number' },
+    { label: '湿度平均(%)', width: 92, style: 'number' },
+    { label: '湿度最高(%)', width: 92, style: 'number' },
+    { label: '湿度最低(%)', width: 92, style: 'number' },
+    { label: '降水累计(mm)', width: 92, style: 'number' },
+    { label: '降雨时长(h)', width: 92, style: 'number' },
+    { label: '风速平均(km/h)', width: 98, style: 'number' },
+    { label: '风速最大(km/h)', width: 98, style: 'number' },
+    { label: '主导风向', width: 88, style: 'text' },
+    { label: '振动平均RMS(g)', width: 110, style: 'number' },
+    { label: '振动最大值(g)', width: 100, style: 'number' },
+    { label: '数据完整率', width: 88, style: 'text' },
   ]
+  const header = `<Row>${columns.map(column => excelCell(column.label, 'header')).join('')}</Row>`
   const body = dateKeysBetween(startKey, endKey).map(dateKey => {
     const temp = maps.temp.get(dateKey)
     const rain = maps.rain.get(dateKey)
@@ -958,7 +986,7 @@ const buildDailyCsv = (rowsByKind, startKey, endKey) => {
       windAverage(wind),
       vibrationAverage(vibration),
     ].filter(value => value !== null).length / 5
-    return [
+    const row = [
       dateKey,
       csvMetric(tempAverage(temp), 2),
       csvMetric(tempMax(temp), 2),
@@ -974,9 +1002,41 @@ const buildDailyCsv = (rowsByKind, startKey, endKey) => {
       csvMetric(vibrationAverage(vibration), 4),
       csvMetric(vibrationMax(vibration), 4),
       `${Math.round(coverage * 100)}%`,
-    ].map(csvValue).join(',')
-  })
-  return `\uFEFF${[header.map(csvValue).join(','), ...body].join('\n')}`
+    ]
+    return `<Row>${row.map((value, index) => excelCell(value, columns[index].style)).join('')}</Row>`
+  }).join('')
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+  xmlns:o="urn:schemas-microsoft-com:office:office"
+  xmlns:x="urn:schemas-microsoft-com:office:excel"
+  xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+  <Styles>
+    <Style ss:ID="header">
+      <Font ss:Bold="1"/>
+      <Interior ss:Color="#DDEBFF" ss:Pattern="Solid"/>
+      <Alignment ss:Horizontal="Center" ss:Vertical="Center"/>
+      <Borders>
+        <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/>
+      </Borders>
+    </Style>
+    <Style ss:ID="text">
+      <NumberFormat ss:Format="@"/>
+      <Alignment ss:Horizontal="Left" ss:Vertical="Center"/>
+    </Style>
+    <Style ss:ID="number">
+      <Alignment ss:Horizontal="Right" ss:Vertical="Center"/>
+    </Style>
+  </Styles>
+  <Worksheet ss:Name="按天统计">
+    <Table>
+      ${columns.map(column => `<Column ss:Width="${column.width}"/>`).join('')}
+      ${header}
+      ${body}
+    </Table>
+  </Worksheet>
+</Workbook>`
 }
 
 const exportDailyCsv = async () => {
@@ -992,17 +1052,17 @@ const exportDailyCsv = async () => {
   exportLoading.value = true
   try {
     const rowsByKind = await exportRowsForRange(startKey, endKey)
-    const csv = buildDailyCsv(rowsByKind, startKey, endKey)
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const workbook = buildDailyWorkbook(rowsByKind, startKey, endKey)
+    const blob = new Blob([workbook], { type: 'application/vnd.ms-excel;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `综合传感器_按天统计_${startKey}_${endKey}.csv`
+    link.download = `综合传感器_按天统计_${startKey}_${endKey}.xls`
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
     URL.revokeObjectURL(url)
-    ElMessage.success('已导出按天统计 CSV')
+    ElMessage.success('已导出按天统计表')
   } catch (error) {
     console.warn('导出综合传感器日统计失败:', error)
     ElMessage.error('导出失败，请稍后重试')
@@ -2225,8 +2285,49 @@ onUnmounted(() => {
   font-weight: 750;
 }
 
-.export-date-picker {
+.export-date-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: end;
+  gap: 10px;
+}
+
+.export-date-field {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.export-date-field span {
+  color: #9fb3d1;
+  font-size: 12px;
+}
+
+.export-date-field input {
   width: 100%;
+  min-width: 0;
+  height: 34px;
+  box-sizing: border-box;
+  border: 1px solid rgba(120, 155, 211, 0.26);
+  border-radius: 8px;
+  background: rgba(31, 53, 88, 0.82);
+  color: #f4f8ff;
+  color-scheme: dark;
+  font: inherit;
+  font-size: 13px;
+  padding: 0 10px;
+  outline: none;
+}
+
+.export-date-field input:focus {
+  border-color: rgba(32, 215, 255, 0.7);
+  box-shadow: 0 0 0 2px rgba(32, 215, 255, 0.14);
+}
+
+.export-date-separator {
+  padding-bottom: 8px;
+  color: #7991b4;
+  font-weight: 700;
 }
 
 .export-confirm {
@@ -2513,12 +2614,16 @@ onUnmounted(() => {
   padding: 14px 16px 12px;
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
+  align-items: stretch;
   gap: 12px;
 }
 
 .period-overview-card {
   min-width: 0;
+  min-height: 190px;
   padding: 13px 14px;
+  display: flex;
+  flex-direction: column;
   border: 1px solid rgba(84, 130, 202, 0.2);
   border-radius: 8px;
   background: rgba(12, 30, 55, 0.58);
@@ -2539,7 +2644,9 @@ onUnmounted(() => {
 
 .period-stat-list {
   margin-top: 12px;
+  flex: 1;
   display: grid;
+  align-content: start;
   gap: 8px;
 }
 
@@ -2561,10 +2668,16 @@ onUnmounted(() => {
 }
 
 .period-change {
-  margin-top: 12px;
+  min-height: 22px;
+  margin-top: auto;
+  padding-top: 12px;
   display: inline-flex;
+  align-items: flex-end;
   color: #9fb6d3;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .period-change.up { color: #e6a23c; }

@@ -79,7 +79,9 @@
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores'
-import { ArrowDown, DataAnalysis, Setting, Sunny, WindPower, Cloudy, Odometer, Bell } from '@element-plus/icons-vue'
+import {
+  ArrowDown, Bell, Cloudy, Crop, DataAnalysis, Odometer, Setting, Sunny, WindPower,
+} from '@element-plus/icons-vue'
 import {
   AlarmTriangleIcon,
   DocumentSheetIcon,
@@ -140,7 +142,7 @@ const menuMap = {
       children: [
         { name: '视频监控', path: '/monitor/camera', icon: VideoMonitorIcon },
         { name: '设备管理', path: '/monitor/camera/devices', icon: Setting },
-        { name: '区域配置', path: '/monitor/camera/zones', icon: Setting },
+        { name: '区域配置', path: '/monitor/camera/zones', icon: Crop },
         { name: '安全闭环', path: '/monitor/camera/safety', icon: Bell },
         { name: '图片/视频分析', path: '/monitor/camera/image', icon: DataAnalysis },
       ],

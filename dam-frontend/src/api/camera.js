@@ -23,6 +23,39 @@ export function addCamera(data) {
   return request.post('/v1/camera/add', data)
 }
 
+export function updateCamera(cameraId, data) {
+  return request.put(`/v1/camera/${encodeURIComponent(cameraId)}`, data)
+}
+
+export function getCameraDevices() {
+  return request.get('/v1/camera/devices', { localCache: false })
+}
+
+export function createCameraDevice(data) {
+  return request.post('/v1/camera/devices', data)
+}
+
+export function updateCameraDevice(cameraId, data) {
+  return request.put(`/v1/camera/devices/${encodeURIComponent(cameraId)}`, data)
+}
+
+export function deleteCameraDevice(cameraId) {
+  return request.delete(`/v1/camera/devices/${encodeURIComponent(cameraId)}`)
+}
+
+export function testCameraDeviceConnection(data) {
+  return request.post('/v1/camera/devices/test-connection', data, {
+    timeout: 15000,
+    silentError: true,
+  })
+}
+
+export function getCameraDevicePassword(cameraId) {
+  return request.get(`/v1/camera/devices/${encodeURIComponent(cameraId)}/password`, {
+    localCache: false,
+  })
+}
+
 // 删除摄像头
 export function removeCamera(cameraId) {
   return request.delete(`/v1/camera/${cameraId}`)

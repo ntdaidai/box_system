@@ -10,7 +10,7 @@ import io
 import os
 import time
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote, unquote
@@ -139,14 +139,24 @@ def make_editor_token(config: dict) -> str:
 
 
 def get_original_title(stat, fallback: str) -> str:
+    return get_metadata_value(stat, "original-name", fallback)
+
+
+def get_metadata_value(stat, key: str, fallback: str = "") -> str:
     metadata = getattr(stat, "metadata", None) or {}
+    header_key = f"X-Amz-Meta-{key.title()}"
     value = (
-        metadata.get("X-Amz-Meta-Original-Name")
-        or metadata.get("x-amz-meta-original-name")
-        or metadata.get("original-name")
+        metadata.get(header_key)
+        or metadata.get(header_key.lower())
+        or metadata.get(key)
+        or metadata.get(key.lower())
         or fallback
     )
     return unquote(value)
+
+
+def get_document_created_at(stat, fallback: str = "") -> str:
+    return get_metadata_value(stat, "created-at", fallback)
 
 
 def encode_metadata_value(value: str) -> str:
@@ -179,6 +189,7 @@ async def upload_document(
     content = await file.read()
     document_id = f"doc_{user_id}_{int(time.time() * 1000)}"
     object_name = build_object_name(user_id, document_id, ext)
+    now = datetime.now(timezone.utc).isoformat()
 
     try:
         get_minio_client().put_object(
@@ -191,6 +202,7 @@ async def upload_document(
                 "original-name": encode_metadata_value(file.filename or f"{document_id}.{ext}"),
                 "owner-id": encode_metadata_value(user_id),
                 "owner-name": encode_metadata_value(user_name),
+                "created-at": encode_metadata_value(now),
             },
         )
     except S3Error as exc:
@@ -208,7 +220,8 @@ async def upload_document(
             "file_type": ext,
             "file_size": len(content),
             "document_type": get_document_type(ext),
-            "created_at": datetime.now().isoformat(),
+            "created_at": now,
+            "updated_at": now,
             "owner_id": user_id,
             "owner_name": user_name,
         },
@@ -269,7 +282,7 @@ async def handle_callback(document_id: str, callback_data: CallbackData):
             f"[OnlyOffice callback] document_id={document_id} "
             f"status={callback_data.status} has_url={bool(callback_data.url)}"
         )
-        if callback_data.status in (2, 6) and callback_data.url:
+        if callback_data.status == 6 and callback_data.url:
             saved = await save_updated_document(document_id, callback_data.url)
             if not saved:
                 print(f"[OnlyOffice callback] save failed document_id={document_id}")
@@ -294,7 +307,17 @@ async def save_updated_document(document_id: str, url: str) -> bool:
         try:
             stat = client.stat_object(BUCKET_NAME, object_name)
             original_title = get_original_title(stat, object_name.rsplit("/", 1)[-1])
-            original_metadata = {"original-name": encode_metadata_value(original_title)}
+            previous_updated_at = stat.last_modified.isoformat() if stat.last_modified else ""
+            original_metadata = {
+                "original-name": encode_metadata_value(original_title),
+                "created-at": encode_metadata_value(get_document_created_at(stat, previous_updated_at)),
+            }
+            owner_id = get_metadata_value(stat, "owner-id")
+            owner_name = get_metadata_value(stat, "owner-name")
+            if owner_id:
+                original_metadata["owner-id"] = encode_metadata_value(owner_id)
+            if owner_name:
+                original_metadata["owner-name"] = encode_metadata_value(owner_name)
             current = client.get_object(BUCKET_NAME, object_name).read()
             client.put_object(
                 BUCKET_NAME,
@@ -404,6 +427,7 @@ async def get_editor_config(
                 "mode": mode,
                 "user": {"id": user_id, "name": user_name},
                 "customization": {
+                    "autosave": True,
                     "forcesave": True,
                     "compactHeader": False,
                     "toolbarNoTabs": False,
@@ -468,16 +492,20 @@ async def list_documents(
         try:
             stat = client.stat_object(BUCKET_NAME, obj.object_name)
             title = get_original_title(stat, filename)
+            updated_at = obj.last_modified.isoformat() if obj.last_modified else ""
+            created_at = get_document_created_at(stat, updated_at)
         except Exception:
             title = filename
+            updated_at = obj.last_modified.isoformat() if obj.last_modified else ""
+            created_at = updated_at
         docs.append({
             "document_id": document_id,
             "title": title,
             "file_type": ext,
             "file_size": obj.size or 0,
             "document_type": get_document_type(ext),
-            "created_at": obj.last_modified.isoformat() if obj.last_modified else "",
-            "updated_at": obj.last_modified.isoformat() if obj.last_modified else "",
+            "created_at": created_at,
+            "updated_at": updated_at,
         })
 
     docs.sort(key=lambda item: item["updated_at"], reverse=True)

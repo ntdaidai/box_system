@@ -360,7 +360,7 @@ def store_generated_document(
     ext: str,
 ) -> dict[str, Any]:
     object_name = build_object_name(user_id, document_id, ext)
-    now = dt.datetime.now().isoformat()
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
     try:
         get_minio_client().put_object(
             BUCKET_NAME,
@@ -373,6 +373,7 @@ def store_generated_document(
                 "owner-id": encode_metadata_value(user_id),
                 "owner-name": encode_metadata_value(user_name),
                 "source": "patrol-daily-report",
+                "created-at": encode_metadata_value(now),
             },
         )
     except S3Error as exc:

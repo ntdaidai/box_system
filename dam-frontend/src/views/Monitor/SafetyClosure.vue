@@ -66,6 +66,13 @@
       </el-table-column>
       <el-table-column prop="camera_name" label="摄像头" min-width="150" show-overflow-tooltip />
       <el-table-column prop="event_type" label="事件类型" min-width="150" show-overflow-tooltip />
+      <el-table-column label="留证" width="92">
+        <template #default="{ row }">
+          <el-tag :type="videoStatusTagType(row.video_status, row.video_url)">
+            {{ videoStatusText(row.video_status, row.video_url) }}
+          </el-tag>
+        </template>
+      </el-table-column>
       <el-table-column label="开始时间" width="170">
         <template #default="{ row }">{{ formatTime(row.started_at) }}</template>
       </el-table-column>
@@ -99,9 +106,20 @@
             <el-empty v-else description="暂无截图" />
           </div>
           <div class="media-box">
-            <header>事件录像</header>
+            <header>
+              <span>事件录像</span>
+              <el-button
+                v-if="currentEvent.video_url"
+                link
+                type="primary"
+                :icon="Download"
+                @click="downloadVideo"
+              >
+                下载
+              </el-button>
+            </header>
             <video v-if="currentEvent.video_url" :src="assetUrl(currentEvent.video_url)" controls />
-            <el-empty v-else description="暂无录像" />
+            <el-empty v-else :description="videoEmptyText(currentEvent)" />
           </div>
         </section>
 
@@ -156,7 +174,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Check, CircleCheck, Document, Microphone, Refresh, Search, User, Warning } from '@element-plus/icons-vue'
+import { Check, CircleCheck, Document, Download, Microphone, Refresh, Search, User, Warning } from '@element-plus/icons-vue'
 import axios from 'axios'
 import {
   acceptSafetyEvent,
@@ -416,6 +434,17 @@ function assetUrl(url) {
   return `/${url}`
 }
 
+function downloadVideo() {
+  if (!currentEvent.value?.video_url) return
+  const link = document.createElement('a')
+  link.href = assetUrl(currentEvent.value.video_url)
+  link.download = `${currentEvent.value.event_id || 'safety-event'}.mp4`
+  link.target = '_blank'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+}
+
 function riskText(level) {
   return ({ LOW: '低风险', MEDIUM: '中风险', HIGH: '高风险', NONE: '安全' })[level] || level || '-'
 }
@@ -454,6 +483,29 @@ function targetStatusText(status) {
     IN_DANGER: '仍在风险区',
     LEFT: '已离开',
   })[status] || status || '-'
+}
+
+function videoStatusText(status, url = '') {
+  if (url) return '已留证'
+  return ({
+    PENDING: '待生成',
+    GENERATING: '生成中',
+    READY: '已留证',
+    FAILED: '生成失败',
+  })[status] || '待生成'
+}
+
+function videoStatusTagType(status, url = '') {
+  if (url || status === 'READY') return 'success'
+  if (status === 'FAILED') return 'danger'
+  if (status === 'GENERATING') return 'warning'
+  return 'info'
+}
+
+function videoEmptyText(event) {
+  if (event?.video_status === 'FAILED') return event.video_error || '留证视频生成失败'
+  if (event?.video_status === 'GENERATING') return '留证视频生成中'
+  return '暂无录像'
 }
 
 function actionText(type) {
@@ -734,6 +786,10 @@ function formatDuration(seconds) {
 }
 
 .media-box header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 24px;
   margin-bottom: 10px;
   color: #dce9fa;
   font-weight: 700;

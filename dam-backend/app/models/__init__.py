@@ -16,6 +16,7 @@ from app.models.camera_detection_zone import CameraDetectionZone
 from app.models.safety_event import SafetyEvent, SafetyEventLog, SafetyEventTask
 from app.models.analysis_report import AnalysisReport
 from app.models.broadcast import BroadcastDevice, CameraBroadcastDevice, BroadcastTemplate
+from app.models.camera import Camera
 
 __all__ = [
     "User",
@@ -39,4 +40,5 @@ __all__ = [
     "BroadcastDevice",
     "CameraBroadcastDevice",
     "BroadcastTemplate",
+    "Camera",
 ]

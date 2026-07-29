@@ -7,6 +7,9 @@ import threading
 import time
 import re
 import os
+from collections import deque
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import cv2
@@ -382,6 +385,44 @@ class CameraStream:
         self._detection_version = 0
         self._detected_jpeg: Optional[bytes] = None
         self._latest_detection: Dict[str, Any] = self._empty_detection(False)
+        self._evidence_frames = deque()
+        self._evidence_video_event_ids = set()
+        try:
+            from app.core.config import settings
+
+            self._evidence_video_dir = settings.SAFETY_EVENT_VIDEO_DIR
+            self._evidence_pre_seconds = max(
+                0.0,
+                float(settings.SAFETY_EVENT_VIDEO_PRE_SECONDS),
+            )
+            self._evidence_post_seconds = max(
+                0.0,
+                float(settings.SAFETY_EVENT_VIDEO_POST_SECONDS),
+            )
+            self._evidence_video_fps = max(
+                1.0,
+                min(float(settings.SAFETY_EVENT_VIDEO_FPS), 30.0),
+            )
+            self._evidence_retention_days = max(
+                1,
+                int(settings.SAFETY_EVENT_VIDEO_RETENTION_DAYS),
+            )
+            self._evidence_max_per_camera_per_day = max(
+                1,
+                int(settings.SAFETY_EVENT_VIDEO_MAX_PER_CAMERA_PER_DAY),
+            )
+            self._evidence_max_local_bytes = max(
+                1,
+                int(float(settings.SAFETY_EVENT_VIDEO_MAX_LOCAL_GB) * 1024 * 1024 * 1024),
+            )
+        except Exception:
+            self._evidence_video_dir = "data/safety_event_videos"
+            self._evidence_pre_seconds = 5.0
+            self._evidence_post_seconds = 5.0
+            self._evidence_video_fps = 5.0
+            self._evidence_retention_days = 90
+            self._evidence_max_per_camera_per_day = 200
+            self._evidence_max_local_bytes = 20 * 1024 * 1024 * 1024
 
     def _empty_detection(self, enabled: bool) -> Dict[str, Any]:
         return {
@@ -510,12 +551,14 @@ class CameraStream:
                 now_wall = time.time()
                 now_mono = time.monotonic()
                 with self._frame_condition:
-                    self.current_frame = frame.copy()
+                    cached_frame = frame.copy()
+                    self.current_frame = cached_frame
                     self.frame_timestamp = now_wall
                     self.frame_sequence += 1
                     self._connected = True
                     self.last_error = None
                     self._raw_jpeg = None
+                    self._append_evidence_frame_locked(now_wall, cached_frame)
                     self._frame_count += 1
                     elapsed = now_mono - self._last_fps_time
                     if elapsed >= 1.0:
@@ -714,6 +757,10 @@ class CameraStream:
                         snapshot_bytes=jpeg,
                         now=completed_at,
                     )
+                    self._schedule_evidence_videos(
+                        payload["safety_events"],
+                        event_time=completed_at,
+                    )
             except Exception as exc:
                 logger.exception(f"摄像头 {self.camera_id} 实时分析异常: {exc}")
                 jpeg = None
@@ -782,6 +829,8 @@ class CameraStream:
                 "camera_id": self.camera_id,
                 "name": self.name,
                 "configured": bool(self.source),
+                "source": self.source,
+                "data_path": self.source,
                 "source_type": (
                     "usb" if LOCAL_VIDEO_PATTERN.fullmatch(self.source)
                     else "rtsp"
@@ -801,6 +850,235 @@ class CameraStream:
                 "detection_zones": self.get_detection_zones(),
                 "last_error": self.last_error,
             }
+
+    def _append_evidence_frame_locked(self, timestamp: float, frame: np.ndarray) -> None:
+        self._evidence_frames.append((timestamp, frame.copy()))
+        retention_seconds = max(
+            self._evidence_pre_seconds + 1.0,
+            self._evidence_pre_seconds + self._evidence_post_seconds + 1.0,
+        )
+        cutoff = timestamp - retention_seconds
+        while self._evidence_frames and self._evidence_frames[0][0] < cutoff:
+            self._evidence_frames.popleft()
+
+    def _schedule_evidence_videos(
+        self,
+        events: List[Dict[str, Any]],
+        *,
+        event_time: float,
+    ) -> None:
+        for event in events:
+            event_id = event.get("event_id")
+            if not event_id:
+                continue
+            if event.get("video_url") or event_id in self._evidence_video_event_ids:
+                continue
+            persisted = safety_event_engine.get_event(event_id) or {}
+            if persisted.get("video_url"):
+                self._evidence_video_event_ids.add(event_id)
+                continue
+            self._evidence_video_event_ids.add(event_id)
+            thread = threading.Thread(
+                target=self._record_evidence_video,
+                args=(event_id, event_time),
+                daemon=True,
+                name=f"safety-evidence-video-{self.camera_id}-{event_id[:8]}",
+            )
+            thread.start()
+
+    def _record_evidence_video(self, event_id: str, event_time: float) -> None:
+        safety_event_engine.update_event_video_status(event_id, "GENERATING")
+        try:
+            self._assert_evidence_storage_available(event_time)
+        except Exception as exc:
+            message = str(exc)
+            safety_event_engine.update_event_video_status(
+                event_id,
+                "FAILED",
+                error=message,
+            )
+            logger.warning(f"安全事件 {event_id} 留证视频生成失败: {message}")
+            return
+
+        target_end = event_time + self._evidence_post_seconds
+        last_sequence = self.frame_sequence
+        while time.time() < target_end and self.running:
+            last_sequence = self.wait_for_frame(last_sequence, timeout=0.25)
+
+        frames = self._collect_evidence_frames(event_time)
+        if not frames:
+            safety_event_engine.update_event_video_status(
+                event_id,
+                "FAILED",
+                error="无可用帧",
+            )
+            logger.warning(f"安全事件 {event_id} 留证视频生成失败: 无可用帧")
+            return
+        try:
+            local_path = self._write_evidence_video(event_id, event_time, frames)
+            self._enforce_evidence_retention_and_quota(exclude_path=local_path)
+            video_url = (
+                self._upload_evidence_video(local_path, event_id, event_time)
+                or str(local_path)
+            )
+            if safety_event_engine.attach_event_video(event_id, video_url, now=time.time()):
+                logger.info(f"安全事件 {event_id} 已绑定留证视频: {video_url}")
+        except Exception as exc:
+            message = str(exc)
+            safety_event_engine.update_event_video_status(
+                event_id,
+                "FAILED",
+                error=message,
+            )
+            logger.warning(f"安全事件 {event_id} 留证视频生成失败: {message}")
+
+    def _collect_evidence_frames(self, event_time: float) -> List[Tuple[float, np.ndarray]]:
+        start_at = event_time - self._evidence_pre_seconds
+        end_at = event_time + self._evidence_post_seconds
+        with self.lock:
+            frames = [
+                (timestamp, frame.copy())
+                for timestamp, frame in self._evidence_frames
+                if start_at <= timestamp <= end_at
+            ]
+        return self._sample_evidence_frames(frames, start_at, end_at)
+
+    def _sample_evidence_frames(
+        self,
+        frames: List[Tuple[float, np.ndarray]],
+        start_at: float,
+        end_at: float,
+    ) -> List[Tuple[float, np.ndarray]]:
+        if not frames:
+            return []
+        interval = 1.0 / self._evidence_video_fps
+        ordered = sorted(frames, key=lambda item: item[0])
+        selected: List[Tuple[float, np.ndarray]] = []
+        source_index = 0
+        current = ordered[0]
+        target_at = start_at
+        while target_at <= end_at + 1e-6:
+            while (
+                source_index + 1 < len(ordered)
+                and ordered[source_index + 1][0] <= target_at
+            ):
+                source_index += 1
+                current = ordered[source_index]
+            if target_at < ordered[0][0]:
+                current = ordered[0]
+            selected.append((target_at, current[1].copy()))
+            target_at += interval
+        return selected
+
+    def _write_evidence_video(
+        self,
+        event_id: str,
+        event_time: float,
+        frames: List[Tuple[float, np.ndarray]],
+    ) -> Path:
+        captured_day = datetime.fromtimestamp(event_time).strftime("%Y-%m-%d")
+        directory = Path(self._evidence_video_dir) / captured_day / self.camera_id
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{event_id}.mp4"
+
+        first_frame = frames[0][1]
+        height, width = first_frame.shape[:2]
+        writer = cv2.VideoWriter(
+            str(path),
+            cv2.VideoWriter_fourcc(*"mp4v"),
+            self._evidence_video_fps,
+            (width, height),
+        )
+        if not writer.isOpened():
+            raise RuntimeError("视频编码器初始化失败")
+        try:
+            for _timestamp, frame in frames:
+                if frame.shape[:2] != (height, width):
+                    frame = cv2.resize(frame, (width, height))
+                writer.write(frame)
+        finally:
+            writer.release()
+        if not path.exists() or path.stat().st_size <= 0:
+            raise RuntimeError("视频文件写入失败")
+        return path
+
+    def _assert_evidence_storage_available(self, event_time: float) -> None:
+        self._enforce_evidence_retention_and_quota()
+        captured_day = datetime.fromtimestamp(event_time).strftime("%Y-%m-%d")
+        directory = Path(self._evidence_video_dir) / captured_day / self.camera_id
+        existing_count = len(list(directory.glob("*.mp4"))) if directory.exists() else 0
+        if existing_count >= self._evidence_max_per_camera_per_day:
+            raise RuntimeError("当前摄像头今日留证视频数量已达到上限")
+
+    def _enforce_evidence_retention_and_quota(
+        self,
+        *,
+        exclude_path: Optional[Path] = None,
+    ) -> None:
+        root = Path(self._evidence_video_dir)
+        if not root.exists():
+            return
+        excluded = exclude_path.resolve() if exclude_path else None
+        now = time.time()
+        expires_before = now - self._evidence_retention_days * 86400
+        files = self._list_evidence_files(root)
+        for _mtime, _size, path in list(files):
+            try:
+                if excluded and path.resolve() == excluded:
+                    continue
+                if path.stat().st_mtime < expires_before:
+                    path.unlink(missing_ok=True)
+            except OSError:
+                continue
+
+        files = self._list_evidence_files(root)
+        total_bytes = sum(size for _mtime, size, _path in files)
+        if total_bytes <= self._evidence_max_local_bytes:
+            return
+        for _mtime, size, path in files:
+            try:
+                if excluded and path.resolve() == excluded:
+                    continue
+                path.unlink(missing_ok=True)
+                total_bytes -= size
+                if total_bytes <= self._evidence_max_local_bytes:
+                    return
+            except OSError:
+                continue
+        if total_bytes > self._evidence_max_local_bytes:
+            raise RuntimeError("本地留证视频存储空间已达到上限")
+
+    @staticmethod
+    def _list_evidence_files(root: Path) -> List[Tuple[float, int, Path]]:
+        files: List[Tuple[float, int, Path]] = []
+        for path in root.rglob("*.mp4"):
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            files.append((stat.st_mtime, stat.st_size, path))
+        return sorted(files, key=lambda item: item[0])
+
+    @staticmethod
+    def _upload_evidence_video(
+        local_path: Path,
+        event_id: str,
+        event_time: float,
+    ) -> Optional[str]:
+        try:
+            from app.services.minio_service import minio_service
+
+            captured_day = datetime.fromtimestamp(event_time).strftime("%Y-%m-%d")
+            return minio_service.upload_file(
+                str(local_path),
+                object_name=f"safety-events/videos/{captured_day}/{event_id}.mp4",
+                content_type="video/mp4",
+            )
+        except ImportError:
+            return None
+        except Exception as exc:
+            logger.warning(f"安全事件视频上传 MinIO 失败: {exc}")
+            return None
 
 
 class CameraManager:
@@ -846,6 +1124,49 @@ class CameraManager:
     def get_camera(self, camera_id: str) -> Optional[CameraStream]:
         with self.lock:
             return self.cameras.get(camera_id)
+
+    def update_camera(
+        self,
+        camera_id: str,
+        *,
+        source: Optional[str] = None,
+        name: Optional[str] = None,
+        auto_start: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        with self.lock:
+            camera = self.cameras.get(camera_id)
+        if not camera:
+            return None
+
+        normalized_source = source if source is not None else camera.source
+        normalized_name = name if name is not None else camera.name
+        should_restart = normalized_source != camera.source
+        was_running = camera.running
+
+        if not should_restart:
+            with camera.lock:
+                camera.name = normalized_name or camera.camera_id
+            if auto_start and not was_running:
+                camera.start()
+            return camera.get_status()
+
+        if was_running:
+            camera.stop()
+
+        with camera.lock:
+            camera.source = normalized_source
+            camera.name = normalized_name or camera.camera_id
+            camera.current_frame = None
+            camera.frame_timestamp = 0.0
+            camera.frame_sequence = 0
+            camera.fps = 0.0
+            camera.last_error = None
+            camera._raw_jpeg = None
+            camera._connected = False
+
+        if auto_start:
+            camera.start()
+        return camera.get_status()
 
     def list_cameras(self) -> List[Dict[str, Any]]:
         with self.lock:

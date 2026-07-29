@@ -69,6 +69,11 @@ ACTION_STAFF_DISPATCH = "STAFF_DISPATCH"
 ACTION_TARGET_LEFT = "TARGET_LEFT"
 ACTION_EVENT_RESOLVED = "EVENT_RESOLVED"
 
+VIDEO_PENDING = "PENDING"
+VIDEO_GENERATING = "GENERATING"
+VIDEO_READY = "READY"
+VIDEO_FAILED = "FAILED"
+
 
 @dataclass(frozen=True)
 class SafetyEventConfig:
@@ -80,6 +85,13 @@ class SafetyEventConfig:
     track_iou_threshold: float = 0.2
     track_memory_seconds: float = 20.0
     snapshot_dir: str = "data/safety_snapshots"
+    video_dir: str = "data/safety_event_videos"
+    video_pre_seconds: float = 5.0
+    video_post_seconds: float = 5.0
+    video_fps: float = 5.0
+    video_retention_days: int = 90
+    video_max_per_camera_per_day: int = 200
+    video_max_local_gb: float = 20.0
     state_store_path: str = "data/safety_events_state.json"
 
 
@@ -374,6 +386,79 @@ class SafetyEventEngine:
             self.store.save()
             return matched
 
+    def get_event(self, event_id: str) -> Optional[Dict[str, Any]]:
+        snapshot = self.store.snapshot()
+        event = snapshot["events"].get(event_id)
+        return dict(event) if event else None
+
+    def attach_event_video(
+        self,
+        event_id: str,
+        video_url: str,
+        *,
+        now: Optional[float] = None,
+    ) -> bool:
+        if not event_id or not video_url:
+            return False
+        now = float(now if now is not None else time.time())
+        with self._lock:
+            event = dict(self.store.events.get(event_id) or {})
+            if not event:
+                snapshot = self.store.snapshot()
+                event = dict(snapshot["events"].get(event_id) or {})
+            if not event:
+                return False
+            if event.get("video_url"):
+                return True
+            expires_at = now + max(1, int(self.config.video_retention_days)) * 86400
+            event.update(
+                {
+                    "video_url": video_url,
+                    "video_status": VIDEO_READY,
+                    "video_error": None,
+                    "video_created_at": now,
+                    "video_expires_at": expires_at,
+                    "updated_at": now,
+                }
+            )
+            self.store.create_or_update_event(event)
+            self.store.save()
+            self._publish_video_attached(event_id, video_url)
+            return True
+
+    def update_event_video_status(
+        self,
+        event_id: str,
+        status: str,
+        *,
+        error: Optional[str] = None,
+        now: Optional[float] = None,
+    ) -> bool:
+        if not event_id:
+            return False
+        normalized = str(status or "").upper()
+        if normalized not in {VIDEO_PENDING, VIDEO_GENERATING, VIDEO_READY, VIDEO_FAILED}:
+            return False
+        now = float(now if now is not None else time.time())
+        with self._lock:
+            event = dict(self.store.events.get(event_id) or {})
+            if not event:
+                snapshot = self.store.snapshot()
+                event = dict(snapshot["events"].get(event_id) or {})
+            if not event:
+                return False
+            event.update(
+                {
+                    "video_status": normalized,
+                    "video_error": (error or "")[:500] if error else None,
+                    "updated_at": now,
+                }
+            )
+            self.store.create_or_update_event(event)
+            self.store.save()
+            self._publish_video_status_changed(event_id, normalized, error)
+            return True
+
     def _observations(
         self,
         camera_id: str,
@@ -636,6 +721,10 @@ class SafetyEventEngine:
                 "clear_since": track.clear_since,
                 "resolved_at": None,
                 "snapshot_path": track.snapshot_path,
+                "video_status": VIDEO_PENDING,
+                "video_error": None,
+                "video_created_at": None,
+                "video_expires_at": None,
                 "zone_ids": track.current_zone_ids,
                 "zone_type": (observation.get("zone_types") or [None])[0],
                 "zone_name": (observation.get("zone_names") or [None])[0],
@@ -972,8 +1061,8 @@ class SafetyEventEngine:
         denom = area_left + area_right - inter
         return inter / denom if denom > 0 else 0.0
 
-    @staticmethod
-    def _track_summary(track: TrackContext) -> Dict[str, Any]:
+    def _track_summary(self, track: TrackContext) -> Dict[str, Any]:
+        event = self.store.events.get(track.event_id or "") or {}
         return {
             "event_id": track.event_id,
             "camera_id": track.camera_id,
@@ -991,7 +1080,45 @@ class SafetyEventEngine:
             "zone_roles": track.current_zone_roles,
             "zone_ids": track.current_zone_ids,
             "snapshot_path": track.snapshot_path,
+            "video_url": event.get("video_url"),
+            "video_status": event.get("video_status") or VIDEO_PENDING,
+            "video_error": event.get("video_error"),
         }
+
+    @staticmethod
+    def _publish_video_attached(event_id: str, video_url: str) -> None:
+        try:
+            from app.services.safety_event_ws import safety_event_ws_manager
+
+            safety_event_ws_manager.publish({
+                "type": "EVENT_VIDEO_ATTACHED",
+                "data": {
+                    "event_id": event_id,
+                    "video_url": video_url,
+                },
+            })
+        except Exception:
+            pass
+
+    @staticmethod
+    def _publish_video_status_changed(
+        event_id: str,
+        status: str,
+        error: Optional[str],
+    ) -> None:
+        try:
+            from app.services.safety_event_ws import safety_event_ws_manager
+
+            safety_event_ws_manager.publish({
+                "type": "EVENT_VIDEO_STATUS_CHANGED",
+                "data": {
+                    "event_id": event_id,
+                    "video_status": status,
+                    "video_error": error,
+                },
+            })
+        except Exception:
+            pass
 
 
 def _config_from_settings() -> SafetyEventConfig:
@@ -1006,6 +1133,13 @@ def _config_from_settings() -> SafetyEventConfig:
         track_iou_threshold=settings.SAFETY_EVENT_TRACK_IOU_THRESHOLD,
         track_memory_seconds=settings.SAFETY_EVENT_TRACK_MEMORY_SECONDS,
         snapshot_dir=settings.SAFETY_EVENT_SNAPSHOT_DIR,
+        video_dir=settings.SAFETY_EVENT_VIDEO_DIR,
+        video_pre_seconds=settings.SAFETY_EVENT_VIDEO_PRE_SECONDS,
+        video_post_seconds=settings.SAFETY_EVENT_VIDEO_POST_SECONDS,
+        video_fps=settings.SAFETY_EVENT_VIDEO_FPS,
+        video_retention_days=settings.SAFETY_EVENT_VIDEO_RETENTION_DAYS,
+        video_max_per_camera_per_day=settings.SAFETY_EVENT_VIDEO_MAX_PER_CAMERA_PER_DAY,
+        video_max_local_gb=settings.SAFETY_EVENT_VIDEO_MAX_LOCAL_GB,
         state_store_path=settings.SAFETY_EVENT_STATE_STORE_PATH,
     )
 
@@ -1040,6 +1174,15 @@ class _SafetyEventEngineProxy:
 
     def resolve_event(self, *args: Any, **kwargs: Any) -> bool:
         return get_safety_event_engine().resolve_event(*args, **kwargs)
+
+    def get_event(self, *args: Any, **kwargs: Any) -> Optional[Dict[str, Any]]:
+        return get_safety_event_engine().get_event(*args, **kwargs)
+
+    def attach_event_video(self, *args: Any, **kwargs: Any) -> bool:
+        return get_safety_event_engine().attach_event_video(*args, **kwargs)
+
+    def update_event_video_status(self, *args: Any, **kwargs: Any) -> bool:
+        return get_safety_event_engine().update_event_video_status(*args, **kwargs)
 
 
 safety_event_engine = _SafetyEventEngineProxy()

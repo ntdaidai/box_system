@@ -22,6 +22,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { getCameraList } from '@/api/camera'
 import { getDeviceStatus } from '@/api/sensor'
 import tempIcon from '@/assets/images/sensors/temp_humidity.png'
 import windIcon from '@/assets/images/sensors/wind.png'
@@ -75,6 +76,21 @@ const fetchStatus = async () => {
     }
   } catch (error) {
     deviceStatus.value = { ...defaultStatus }
+  }
+
+  try {
+    const res = await getCameraList()
+    const cameras = res.data?.cameras || []
+    const onlineCount = cameras.filter(camera => camera.connected).length
+    deviceStatus.value = {
+      ...deviceStatus.value,
+      camera: { status: onlineCount > 0 ? 'online' : 'offline' },
+    }
+  } catch (error) {
+    deviceStatus.value = {
+      ...deviceStatus.value,
+      camera: { status: 'offline' },
+    }
   }
 }
 

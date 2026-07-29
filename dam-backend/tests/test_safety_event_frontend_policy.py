@@ -29,6 +29,16 @@ class SafetyEventFrontendPolicyTests(unittest.TestCase):
         self.assertIn("接受任务", closure_view)
         self.assertIn("现场处置", closure_view)
 
+    def test_closure_page_surfaces_event_evidence_video_state(self):
+        closure_view = read_frontend("src/views/Monitor/SafetyClosure.vue")
+
+        self.assertIn("事件录像", closure_view)
+        self.assertIn("video_url", closure_view)
+        self.assertIn("video_status", closure_view)
+        self.assertIn("已留证", closure_view)
+        self.assertIn("生成失败", closure_view)
+        self.assertIn("下载", closure_view)
+
 
 if __name__ == "__main__":
     unittest.main()

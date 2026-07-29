@@ -179,6 +179,22 @@ class SafetyEventEngineTests(unittest.TestCase):
         self.assertNotIn(ACTION_AUTO_BROADCAST, self.action_types(store))
         self.assertNotIn(ACTION_DRONE_DISPATCH, self.action_types(store))
 
+    def test_evidence_video_is_attached_to_the_same_event_once(self):
+        engine, store, _bus_actions = self.make_engine()
+        event_id = engine.process_detection_payload("cam", person_payload(zone_type="WATER_ZONE"), now=450)[0]["event_id"]
+
+        self.assertTrue(engine.update_event_video_status(event_id, "GENERATING", now=450.5))
+        self.assertEqual(store.events[event_id]["video_status"], "GENERATING")
+
+        self.assertTrue(engine.attach_event_video(event_id, "data/safety_event_videos/evt.mp4", now=451))
+        self.assertEqual(store.events[event_id]["video_url"], "data/safety_event_videos/evt.mp4")
+        self.assertEqual(store.events[event_id]["video_status"], "READY")
+        self.assertEqual(store.events[event_id]["video_created_at"], 451)
+        self.assertEqual(store.events[event_id]["video_expires_at"], 451 + 90 * 86400)
+
+        self.assertTrue(engine.attach_event_video(event_id, "data/safety_event_videos/replaced.mp4", now=452))
+        self.assertEqual(store.events[event_id]["video_url"], "data/safety_event_videos/evt.mp4")
+
     def test_high_staff_actions_and_resolution_keep_same_event_id(self):
         engine, store, _bus_actions = self.make_engine()
         event_id = engine.process_detection_payload("cam", person_payload(zone_type="WATER_ZONE"), now=500)[0]["event_id"]

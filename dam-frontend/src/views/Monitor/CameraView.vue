@@ -106,50 +106,25 @@
     <section v-if="!isMediaAnalysisRoute" class="command-monitor">
       <header class="ops-header">
         <div class="monitor-identity">
-          <span class="section-kicker">坝区安全 AI 值守</span>
           <div class="monitor-title-row">
-            <h1>{{ currentCamera?.name || '实时视频监控' }}</h1>
+            <span class="mode-control-icon">
+              <el-icon><Monitor /></el-icon>
+            </span>
             <el-select
-              v-model="currentCameraId"
-              class="ops-camera-select"
-              placeholder="选择监控点"
+              :model-value="cameraViewMode"
+              class="ops-mode-select"
+              placeholder="选择画面布局"
               popper-class="vision-select-popper"
-              @change="activateCamera"
+              @change="setCameraViewMode"
             >
-              <el-option
-                v-for="camera in cameras"
-                :key="camera.camera_id"
-                :label="camera.name || camera.camera_id"
-                :value="camera.camera_id"
-              />
+              <el-option label="单画面" value="single" />
+              <el-option label="四宫格" value="quad" />
+              <el-option label="九宫格" value="nine" />
             </el-select>
           </div>
         </div>
 
         <div class="ops-header-actions">
-          <div class="view-mode-switch" aria-label="视频画面布局">
-            <button
-              type="button"
-              :class="{ active: cameraViewMode === 'single' }"
-              @click="setCameraViewMode('single')"
-            >
-              单画面
-            </button>
-            <button
-              type="button"
-              :class="{ active: cameraViewMode === 'quad' }"
-              @click="setCameraViewMode('quad')"
-            >
-              四宫格
-            </button>
-            <button
-              type="button"
-              :class="{ active: cameraViewMode === 'nine' }"
-              @click="setCameraViewMode('nine')"
-            >
-              九宫格
-            </button>
-          </div>
           <el-button
             class="ops-ghost-button"
             :disabled="!currentCameraId"
@@ -164,37 +139,83 @@
           >
             <el-icon><Files /></el-icon>今日报告
           </el-button>
-          <el-button class="ops-ghost-button" @click="goZoneConfig">
-            <el-icon><Crop /></el-icon>AI规则配置
+          <el-button
+            class="ops-ghost-button"
+            :class="{ active: assistOverlayVisible }"
+            @click="toggleAssistOverlay"
+          >
+            <el-icon><component :is="assistOverlayVisible ? View : Hide" /></el-icon>{{ assistOverlayLabel }}
           </el-button>
         </div>
       </header>
 
       <main v-if="isMultiCameraMode" class="multi-camera-layout" :class="`mode-${cameraViewMode}`">
         <article
-          v-for="camera in gridCameras"
-          :key="camera.camera_id"
+          v-for="slot in gridSlots"
+          :key="slot.slotKey"
           class="multi-camera-tile"
-          :class="{ online: camera.connected, active: camera.camera_id === currentCameraId }"
-          @click="activateGridCamera(camera.camera_id)"
+          :class="{
+            online: slot.camera?.connected,
+            empty: !slot.camera,
+            active: slot.camera?.camera_id === currentCameraId,
+          }"
         >
           <header>
-            <strong>{{ camera.name || camera.camera_id }}</strong>
-            <span :class="camera.connected ? 'online' : 'offline'">
-              <i></i>{{ camera.connected ? '在线' : '离线' }}
+            <el-select
+              :model-value="slot.camera?.camera_id || ''"
+              class="slot-camera-select"
+              placeholder="不展示摄像头"
+              popper-class="vision-select-popper"
+              @change="setGridSlotCamera(slot.index, $event)"
+            >
+              <el-option label="不展示摄像头" value="" />
+              <el-option
+                v-for="camera in cameras"
+                :key="camera.camera_id"
+                :label="camera.name || camera.camera_id"
+                :value="camera.camera_id"
+              />
+            </el-select>
+            <span :class="slot.camera?.connected ? 'online' : 'offline'">
+              <i></i>{{ slot.camera ? (slot.camera.connected ? '在线' : '离线') : '不展示' }}
             </span>
           </header>
           <div class="tile-video-box">
             <img
-              v-if="gridStreamUrls[camera.camera_id]"
-              :src="gridStreamUrls[camera.camera_id]"
-              :alt="`${camera.name || camera.camera_id}实时画面`"
+              v-if="slot.camera && gridStreamUrls[slot.camera.camera_id]"
+              :src="gridStreamUrls[slot.camera.camera_id]"
+              :alt="`${slot.camera.name || slot.camera.camera_id}实时画面`"
               class="tile-video"
-              @error="handleGridStreamError(camera.camera_id)"
+              @load="handleGridImageLoad(slot.camera.camera_id, $event)"
+              @error="handleGridStreamError(slot.camera.camera_id)"
             />
-            <div v-else class="tile-empty">
+            <svg
+              v-if="gridZoneOverlayVisible(slot.camera)"
+              class="tile-zone-overlay"
+              :viewBox="`0 0 ${gridOverlaySize(slot.camera.camera_id).width} ${gridOverlaySize(slot.camera.camera_id).height}`"
+              preserveAspectRatio="xMidYMid meet"
+            >
+              <g v-for="zone in gridZonesForCamera(slot.camera.camera_id)" :key="zone.id">
+                <polygon
+                  class="ops-zone-polygon"
+                  :points="zonePolygonPointsForSize(zone, gridOverlaySize(slot.camera.camera_id).width, gridOverlaySize(slot.camera.camera_id).height)"
+                  :stroke="zoneStroke(zone)"
+                  :fill="zoneFill(zone)"
+                  :stroke-width="Math.max(2, gridOverlaySize(slot.camera.camera_id).width / 520)"
+                />
+                <text
+                  class="ops-zone-label"
+                  :x="zoneLabelPointForSize(zone, gridOverlaySize(slot.camera.camera_id).width, gridOverlaySize(slot.camera.camera_id).height).x"
+                  :y="zoneLabelPointForSize(zone, gridOverlaySize(slot.camera.camera_id).width, gridOverlaySize(slot.camera.camera_id).height).y"
+                  :fill="zoneStroke(zone)"
+                >
+                  {{ zone.name || zoneTypeLabel(zone.type) }}
+                </text>
+              </g>
+            </svg>
+            <div v-if="!(slot.camera && gridStreamUrls[slot.camera.camera_id])" class="tile-empty">
               <el-icon><VideoCamera /></el-icon>
-              <span>{{ camera.connected ? '正在建立视频链路' : (camera.last_error || '暂未连接') }}</span>
+              <span>{{ gridSlotEmptyText(slot) }}</span>
             </div>
           </div>
         </article>
@@ -202,6 +223,23 @@
 
       <main v-else class="ops-layout">
         <article class="ops-video-panel">
+          <div class="single-camera-select-wrap">
+            <el-select
+              :model-value="singleCameraSelectValue"
+              class="single-camera-select"
+              placeholder="不展示摄像头"
+              popper-class="vision-select-popper"
+              @change="handleSingleCameraSelection"
+            >
+              <el-option label="不展示摄像头" value="" />
+              <el-option
+                v-for="camera in cameras"
+                :key="camera.camera_id"
+                :label="camera.name || camera.camera_id"
+                :value="camera.camera_id"
+              />
+            </el-select>
+          </div>
           <div v-if="canRenderCurrentStream" class="video-stage ops-video-stage" :class="riskThemeClass(overallRiskLevel)">
             <video
               v-show="streamMode === 'webrtc'"
@@ -262,7 +300,7 @@
             </svg>
 
             <svg
-              v-if="analysisTask === 'detect'"
+              v-if="analysisTask === 'detect' && streamZoneOverlayVisible"
               class="zone-overlay ops-zone-overlay visible"
               :viewBox="`0 0 ${overlayWidth} ${overlayHeight}`"
               preserveAspectRatio="xMidYMid meet"
@@ -286,13 +324,13 @@
               </g>
             </svg>
 
-            <div class="video-topline">
+            <div v-if="false" class="video-topline">
               <span>{{ currentCamera.camera_id }}</span>
               <strong>{{ currentCamera.name || '未命名监控点' }}</strong>
               <em>{{ sourceTypeLabel(currentCamera.source_type) }}</em>
             </div>
 
-            <div class="risk-banner" :class="riskThemeClass(overallRiskLevel)">
+            <div v-if="false" class="risk-banner" :class="riskThemeClass(overallRiskLevel)">
               <span>{{ overallRiskText }}</span>
               <strong>{{ primaryRiskEvent ? primaryRiskEvent.event_type : '坝区巡查正常' }}</strong>
               <em>{{ primaryRiskEvent ? `已持续 ${formatDuration(primaryRiskEvent.duration_seconds)}` : '系统自动值守中' }}</em>
@@ -1007,7 +1045,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   Aim, Camera, Connection, Crop, DataAnalysis, Delete, Files, Loading, Monitor,
-  Picture, Plus, UploadFilled, VideoCamera, VideoPlay,
+  Hide, Picture, Plus, UploadFilled, VideoCamera, VideoPlay, View,
 } from '@element-plus/icons-vue'
 import {
   addCamera, createStreamTicket, createVideoDetection, deleteVideoDetectionJob,
@@ -1023,6 +1061,7 @@ import {
   normalizeClassifications, normalizeDetections, normalizeZones, primaryClassification,
   zoneTypeLabel,
 } from '@/utils/cameraDetectionView'
+import { camerasFromPayload, readCameraListSnapshot, writeCameraListSnapshot } from '@/utils/cameraSnapshots'
 import { CameraWebRtcPlayer } from '@/utils/cameraWebRtc'
 import { subscribeDetectionEvents } from '@/utils/detectionEvents'
 import BroadcastDialog from '@/components/BroadcastDialog.vue'
@@ -1068,6 +1107,11 @@ const addingCamera = ref(false)
 const addForm = ref({ camera_id: '', name: '', source_type: 'rtsp', source: '' })
 const cameraViewMode = ref('single')
 const gridStreamUrls = ref({})
+const gridSlotCameraIds = ref([])
+const gridCameraZones = ref({})
+const gridImageMetrics = ref({})
+const assistOverlayVisible = ref(true)
+const singleCameraHidden = ref(false)
 
 const imageUploading = ref(false)
 const uploadResult = ref(null)
@@ -1089,6 +1133,7 @@ let cameraMutationRevision = 0
 let statusRefreshing = false
 let webRtcPlayer = null
 let gridStreamRefreshAt = 0
+let cameraFallbackNoticeAt = 0
 
 const imageWidth = computed(() => Number(latestDetection.value.image_width) || 0)
 const imageHeight = computed(() => Number(latestDetection.value.image_height) || 0)
@@ -1114,13 +1159,25 @@ const liveAlerts = computed(() => Array.isArray(latestDetection.value.alerts) ? 
 const liveAlertZoneIds = computed(() => new Set(liveAlerts.value.map((alert) => alert.zone_id)))
 const zonesForOverlay = computed(() => [...detectionZones.value, ...(draftZone.value ? [draftZone.value] : [])])
 const showZoneOverlay = computed(() => zoneDrawing.value || detectionZones.value.length > 0)
+const streamZoneOverlayVisible = computed(() => assistOverlayVisible.value && zonesForOverlay.value.length > 0)
+const assistOverlayLabel = computed(() => assistOverlayVisible.value ? '已显示辅助框' : '未显示辅助框')
+const singleCameraSelectValue = computed(() => (singleCameraHidden.value ? '' : currentCameraId.value))
 const analysisTaskLabel = computed(() => taskTypeLabel(analysisTask.value))
 const selectedModelReady = computed(() => Boolean(modelStatus.value.models?.[analysisTask.value]?.loaded))
 const canToggleDetection = computed(() => Boolean(currentCamera.value?.connected && selectedModelReady.value))
 const canRenderCurrentStream = computed(() => Boolean(currentCamera.value?.configured || currentCamera.value?.connected))
 const isMultiCameraMode = computed(() => cameraViewMode.value !== 'single')
 const gridCameraLimit = computed(() => cameraViewMode.value === 'nine' ? 9 : 4)
-const gridCameras = computed(() => cameras.value.slice(0, gridCameraLimit.value))
+const cameraById = computed(() => new Map(cameras.value.map((camera) => [camera.camera_id, camera])))
+const gridSlots = computed(() => Array.from({ length: gridCameraLimit.value }, (_, index) => {
+  const cameraId = gridSlotCameraIds.value[index]
+  const camera = cameraId ? cameraById.value.get(cameraId) : null
+  return {
+    index,
+    camera: camera || null,
+    slotKey: `slot-${index}-${camera?.camera_id || 'empty'}`,
+  }
+}))
 const normalizedSafetyEvents = computed(() => buildRiskEvents())
 const activeRiskEvents = computed(() => normalizedSafetyEvents.value.filter((event) => event.risk_level !== 'NONE' && event.state !== 'RESOLVED'))
 const primaryRiskEvent = computed(() => activeRiskEvents.value[0] || null)
@@ -1466,6 +1523,10 @@ function openEmergencyBroadcast() {
   broadcastDialogVisible.value = true
 }
 
+function toggleAssistOverlay() {
+  assistOverlayVisible.value = !assistOverlayVisible.value
+}
+
 async function openPatrolReport(persist = false) {
   if (persist) reportSaving.value = true
   else reportLoading.value = true
@@ -1542,11 +1603,70 @@ async function fetchModelStatus() {
   modelStatus.value = response.data || { loaded: false, models: {} }
 }
 
-async function fetchCameras() {
-  const response = await getCameraList()
-  cameras.value = response.data?.cameras || []
-  if (!currentCameraId.value && cameras.value.length) currentCameraId.value = cameras.value[0].camera_id
+function applyCameraList(nextCameras) {
+  cameras.value = nextCameras
+  if (!currentCameraId.value && cameras.value.length && !singleCameraHidden.value) {
+    currentCameraId.value = cameras.value[0].camera_id
+  }
   currentCamera.value = cameras.value.find((item) => item.camera_id === currentCameraId.value) || null
+  syncGridSlots()
+}
+
+function notifyCameraListFallback(message) {
+  const now = Date.now()
+  if (now - cameraFallbackNoticeAt < 10000) return
+  cameraFallbackNoticeAt = now
+  ElMessage.warning(message)
+}
+
+async function fetchCameras(options = {}) {
+  try {
+    const response = await getCameraList()
+    const nextCameras = camerasFromPayload(response.data)
+    applyCameraList(nextCameras)
+    writeCameraListSnapshot(nextCameras)
+    return true
+  } catch (error) {
+    const fallback = cameras.value.length ? cameras.value : readCameraListSnapshot()
+    if (fallback.length) {
+      applyCameraList(fallback)
+      if (!options.silent) notifyCameraListFallback('后端暂时不可达，已保留上次摄像头列表')
+      return false
+    }
+    if (!options.silent) ElMessage.error(error.response?.data?.detail || error.message || '摄像头列表加载失败')
+    return false
+  }
+}
+
+function syncGridSlots() {
+  const limit = gridCameraLimit.value
+  const validIds = new Set(cameras.value.map((camera) => camera.camera_id))
+  const nextSlots = gridSlotCameraIds.value
+    .slice(0, limit)
+    .map((cameraId) => {
+      if (cameraId === '') return ''
+      return validIds.has(cameraId) ? cameraId : null
+    })
+  const usedIds = new Set(nextSlots.filter(Boolean))
+  let cameraIndex = 0
+
+  for (let index = 0; index < limit; index += 1) {
+    if (nextSlots[index] !== null && nextSlots[index] !== undefined) continue
+    while (cameraIndex < cameras.value.length && usedIds.has(cameras.value[cameraIndex].camera_id)) {
+      cameraIndex += 1
+    }
+    const cameraId = cameras.value[cameraIndex]?.camera_id || ''
+    nextSlots[index] = cameraId
+    if (cameraId) usedIds.add(cameraId)
+  }
+
+  while (nextSlots.length < limit) {
+    const camera = cameras.value.find((item) => !usedIds.has(item.camera_id))
+    nextSlots.push(camera?.camera_id || '')
+    if (camera) usedIds.add(camera.camera_id)
+  }
+
+  gridSlotCameraIds.value = nextSlots
 }
 
 async function fetchCameraZones(cameraId = currentCameraId.value) {
@@ -1555,7 +1675,12 @@ async function fetchCameraZones(cameraId = currentCameraId.value) {
     return
   }
   const response = await getCameraZones(cameraId)
-  if (cameraId === currentCameraId.value) detectionZones.value = normalizeZones(response.data)
+  const zones = normalizeZones(response.data)
+  gridCameraZones.value = {
+    ...gridCameraZones.value,
+    [cameraId]: zones,
+  }
+  if (cameraId === currentCameraId.value) detectionZones.value = zones
 }
 
 function buildZoneAlert(zone, detection, index) {
@@ -1602,6 +1727,51 @@ function stopLiveStream() {
 function stopGridStreams() {
   gridStreamUrls.value = {}
   gridStreamRefreshAt = 0
+}
+
+function handleGridImageLoad(cameraId, event) {
+  const image = event.target
+  gridImageMetrics.value = {
+    ...gridImageMetrics.value,
+    [cameraId]: {
+      width: Number(image?.naturalWidth) || 1920,
+      height: Number(image?.naturalHeight) || 1080,
+    },
+  }
+}
+
+function gridOverlaySize(cameraId) {
+  return gridImageMetrics.value[cameraId] || { width: 1920, height: 1080 }
+}
+
+function gridZonesForCamera(cameraId) {
+  const zones = gridCameraZones.value[cameraId]
+  return Array.isArray(zones) ? zones : []
+}
+
+function gridZoneOverlayVisible(camera) {
+  return Boolean(
+    assistOverlayVisible.value
+    && camera?.camera_id
+    && gridStreamUrls.value[camera.camera_id]
+    && gridZonesForCamera(camera.camera_id).length,
+  )
+}
+
+async function ensureGridCameraZones(cameraId) {
+  if (!cameraId || Object.prototype.hasOwnProperty.call(gridCameraZones.value, cameraId)) return
+  try {
+    const response = await getCameraZones(cameraId)
+    gridCameraZones.value = {
+      ...gridCameraZones.value,
+      [cameraId]: normalizeZones(response.data),
+    }
+  } catch {
+    gridCameraZones.value = {
+      ...gridCameraZones.value,
+      [cameraId]: [],
+    }
+  }
 }
 
 async function startMjpegFallback(error = null, notify = true) {
@@ -1660,7 +1830,14 @@ async function activateCamera(cameraId) {
     analysisTask.value = currentCamera.value.analysis_task
   }
   await fetchCameraZones(cameraId).catch(() => {
-    detectionZones.value = normalizeZones({ zones: currentCamera.value?.detection_zones || [] })
+    const zones = normalizeZones({ zones: currentCamera.value?.detection_zones || [] })
+    detectionZones.value = zones
+    if (cameraId) {
+      gridCameraZones.value = {
+        ...gridCameraZones.value,
+        [cameraId]: zones,
+      }
+    }
   })
   if (isMediaAnalysisRoute.value) return
   if (cameraViewMode.value === 'single') {
@@ -1684,7 +1861,8 @@ async function refreshStreamTicket() {
   } catch {
     if (generation === streamRequestGeneration) {
       streamLoading.value = false
-      streamUrl.value = ''
+      clearTimeout(streamRetryTimer)
+      streamRetryTimer = setTimeout(refreshStreamTicket, 2000)
     }
   }
 }
@@ -1697,9 +1875,16 @@ async function refreshGridStreams(force = false) {
   const now = Date.now()
   if (!force && now - gridStreamRefreshAt < 15000) return
   gridStreamRefreshAt = now
-  await fetchCameras().catch(() => null)
-  const urls = {}
-  await Promise.allSettled(gridCameras.value.map(async (camera) => {
+  await fetchCameras({ silent: true }).catch(() => null)
+  const gridCameras = gridSlots.value
+    .map((slot) => slot.camera)
+    .filter((camera, index, list) => camera && list.findIndex((item) => item?.camera_id === camera.camera_id) === index)
+  const visibleCameraIds = new Set(gridCameras.map((camera) => camera.camera_id))
+  const urls = Object.fromEntries(
+    Object.entries(gridStreamUrls.value).filter(([cameraId]) => visibleCameraIds.has(cameraId)),
+  )
+  await Promise.allSettled(gridCameras.map(async (camera) => {
+    await ensureGridCameraZones(camera.camera_id)
     if (!camera.camera_id || !camera.connected) return
     const response = await createStreamTicket(camera.camera_id, false)
     urls[camera.camera_id] = response.data.stream_url
@@ -1720,14 +1905,47 @@ function handleGridStreamError(cameraId) {
 async function setCameraViewMode(mode) {
   if (cameraViewMode.value === mode) return
   cameraViewMode.value = mode
+  syncGridSlots()
   if (mode === 'single') {
     stopGridStreams()
+    if (!currentCameraId.value && cameras.value.length && !singleCameraHidden.value) {
+      currentCameraId.value = cameras.value[0].camera_id
+    }
     if (currentCameraId.value) await activateCamera(currentCameraId.value)
   } else {
     stopLiveStream()
     stopDetectionSubscription()
     await refreshGridStreams(true)
   }
+}
+
+async function handleSingleCameraSelection(cameraId) {
+  singleCameraHidden.value = !cameraId
+  await activateCamera(cameraId || '')
+}
+
+function gridSlotEmptyText(slot) {
+  if (!slot.camera) return '不展示摄像头'
+  if (slot.camera.connected) return '正在建立视频链路'
+  return slot.camera.last_error || '无视频接入'
+}
+
+async function setGridSlotCamera(slotIndex, cameraId) {
+  const previousCameraId = gridSlotCameraIds.value[slotIndex] || ''
+  gridSlotCameraIds.value = Array.from({ length: gridCameraLimit.value }, (_, index) => {
+    if (index === slotIndex) return cameraId || ''
+    return gridSlotCameraIds.value[index] || ''
+  })
+  if (cameraId) {
+    await activateGridCamera(cameraId)
+  } else if (previousCameraId && previousCameraId === currentCameraId.value) {
+    const nextActiveSlot = gridSlots.value.find((slot) => slot.camera)
+    currentCameraId.value = nextActiveSlot?.camera?.camera_id || ''
+    currentCamera.value = currentCameraId.value
+      ? cameras.value.find((camera) => camera.camera_id === currentCameraId.value) || null
+      : null
+  }
+  await refreshGridStreams(true)
 }
 
 async function activateGridCamera(cameraId) {
@@ -1835,6 +2053,10 @@ async function refreshCameraStatus() {
     currentCamera.value = response.data
     if (!detectionZones.value.length && response.data.detection_zones?.length) {
       detectionZones.value = normalizeZones({ zones: response.data.detection_zones })
+      gridCameraZones.value = {
+        ...gridCameraZones.value,
+        [response.data.camera_id]: detectionZones.value,
+      }
     }
     updateCameraInList(response.data)
     if (!isMediaAnalysisRoute.value && cameraViewMode.value === 'single' && !previousConnected && canRenderCurrentStream.value) await startLiveStream()
@@ -2021,18 +2243,26 @@ async function handleAddCamera() {
 }
 
 function zonePolygonPoints(zone) {
+  return zonePolygonPointsForSize(zone, overlayWidth.value, overlayHeight.value)
+}
+
+function zonePolygonPointsForSize(zone, width, height) {
   const points = Array.isArray(zone?.polygon_points) ? zone.polygon_points : []
   return points
-    .map((point) => `${point.x * overlayWidth.value},${point.y * overlayHeight.value}`)
+    .map((point) => `${point.x * width},${point.y * height}`)
     .join(' ')
 }
 
 function zoneLabelPoint(zone) {
+  return zoneLabelPointForSize(zone, overlayWidth.value, overlayHeight.value)
+}
+
+function zoneLabelPointForSize(zone, width, height) {
   const points = Array.isArray(zone?.polygon_points) ? zone.polygon_points : []
   const first = points[0] || { x: 0, y: 0 }
   return {
-    x: Math.max(10, first.x * overlayWidth.value + 8),
-    y: Math.max(20, first.y * overlayHeight.value + 18),
+    x: Math.max(10, first.x * width + 8),
+    y: Math.max(20, first.y * height + 18),
   }
 }
 
@@ -2134,6 +2364,10 @@ async function finishZoneDraw() {
 async function persistZones(zones) {
   const response = await saveCameraZones(currentCameraId.value, zones)
   detectionZones.value = normalizeZones(response.data)
+  gridCameraZones.value = {
+    ...gridCameraZones.value,
+    [currentCameraId.value]: detectionZones.value,
+  }
   currentCamera.value = { ...currentCamera.value, detection_zones: detectionZones.value }
   updateCameraInList(currentCamera.value)
   latestDetection.value = enrichDetectionPayload(latestDetection.value)
@@ -2193,7 +2427,7 @@ onMounted(async () => {
     nowTick.value = Date.now()
   }, 1000)
   try {
-    await Promise.all([fetchModelStatus(), fetchCameras()])
+    await Promise.allSettled([fetchModelStatus(), fetchCameras()])
     if (currentCameraId.value) await activateCamera(currentCameraId.value)
   } catch {
     // Authentication interceptor handles an expired login and redirects once.
@@ -2554,9 +2788,9 @@ h1, h2, h3, p { margin-top: 0; }
     #07131a;
 }
 .ops-header {
-  min-height: 82px;
+  min-height: 66px;
   display: grid;
-  grid-template-columns: minmax(320px, 1fr) auto;
+  grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
   align-items: center;
   gap: 14px;
   padding: 12px 14px;
@@ -2574,8 +2808,7 @@ h1, h2, h3, p { margin-top: 0; }
 .monitor-title-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-top: 5px;
+  gap: 8px;
 }
 .monitor-title-row h1 {
   margin: 0;
@@ -2583,12 +2816,60 @@ h1, h2, h3, p { margin-top: 0; }
   font-size: 22px;
   font-weight: 800;
 }
-.ops-camera-select { width: 240px; }
+.ops-mode-select,
+.ops-camera-select {
+  width: 240px;
+}
+.ops-mode-select {
+  width: 152px;
+}
+.mode-control-icon {
+  width: 34px;
+  height: 34px;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 34px;
+  color: #62d7b1;
+  border: 1px solid rgba(98, 215, 177, 0.28);
+  border-radius: 7px;
+  background: rgba(98, 215, 177, 0.08);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.04);
+}
+.ops-mode-select :deep(.el-select__wrapper),
 .ops-camera-select :deep(.el-select__wrapper) {
   min-height: 34px;
   border-radius: 7px;
   background: rgba(2, 12, 16, 0.72);
   box-shadow: 0 0 0 1px rgba(137, 174, 184, 0.22) inset;
+}
+.ops-mode-select :deep(.el-select__selected-item),
+.ops-mode-select :deep(.el-select__caret) {
+  color: #e9f7ff;
+  font-weight: 800;
+}
+.ops-camera-option {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+.ops-camera-option span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ops-camera-option b {
+  flex: 0 0 auto;
+  color: #7895a0;
+  font-size: 11px;
+}
+.ops-camera-option.active span,
+.ops-camera-option.active b {
+  color: #50e1d0;
+  font-weight: 900;
 }
 .event-state-grid small,
 .debug-panel small {
@@ -2633,6 +2914,11 @@ h1, h2, h3, p { margin-top: 0; }
   border-radius: 7px;
   background: rgba(16, 45, 49, 0.62);
 }
+.ops-ghost-button.active {
+  color: #061412;
+  border-color: rgba(98, 215, 177, 0.62);
+  background: #62d7b1;
+}
 .ops-primary-button {
   color: #041417;
   border: 0;
@@ -2641,16 +2927,46 @@ h1, h2, h3, p { margin-top: 0; }
 }
 .ops-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 390px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   margin-top: 12px;
 }
 .multi-camera-layout {
+  position: relative;
   display: grid;
   gap: 12px;
   margin-top: 12px;
   height: min(760px, calc(100vh - 132px));
   min-height: 540px;
+}
+.view-mode-select-wrap {
+  position: absolute;
+  z-index: 12;
+  top: 14px;
+  right: 14px;
+  width: 112px;
+}
+.multi-camera-layout > .view-mode-select-wrap {
+  top: 10px;
+  right: 10px;
+}
+.view-mode-select {
+  width: 112px;
+}
+.view-mode-select :deep(.el-select__wrapper) {
+  min-height: 32px;
+  border-radius: 7px;
+  background: rgba(2, 12, 16, 0.82);
+  box-shadow: 0 0 0 1px rgba(72, 216, 255, 0.32) inset;
+  backdrop-filter: blur(6px);
+}
+.view-mode-select :deep(.el-select__selected-item) {
+  color: #e9f7ff;
+  font-size: 12px;
+  font-weight: 800;
+}
+.view-mode-select :deep(.el-select__caret) {
+  color: #8ddcf0;
 }
 .multi-camera-layout.mode-quad {
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2668,20 +2984,32 @@ h1, h2, h3, p { margin-top: 0; }
   border-radius: 8px;
   background: rgba(7, 20, 25, 0.86);
   box-shadow: 0 14px 32px rgba(0, 5, 10, 0.2);
-  cursor: pointer;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+.multi-camera-tile:hover {
+  border-color: rgba(72, 216, 255, 0.42);
+  box-shadow: 0 16px 34px rgba(0, 5, 10, 0.24), inset 0 0 0 1px rgba(72, 216, 255, 0.08);
 }
 .multi-camera-tile.active {
   border-color: rgba(72, 216, 255, 0.62);
+  box-shadow: 0 18px 38px rgba(0, 5, 10, 0.28), inset 0 0 0 2px rgba(72, 216, 255, 0.34);
+}
+.multi-camera-tile.active header {
+  background: linear-gradient(90deg, rgba(31, 119, 150, 0.82), rgba(17, 55, 73, 0.82));
+}
+.multi-camera-tile.empty {
+  border-style: dashed;
+  background: rgba(7, 20, 25, 0.68);
 }
 .multi-camera-tile header {
-  height: 42px;
+  height: 48px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 0 12px;
+  padding: 0 12px 0 14px;
   border-bottom: 1px solid rgba(137, 174, 184, 0.12);
-  background: rgba(11, 33, 56, 0.78);
+  background: linear-gradient(90deg, rgba(29, 96, 116, 0.92), rgba(18, 74, 91, 0.86));
 }
 .multi-camera-tile strong {
   min-width: 0;
@@ -2714,17 +3042,62 @@ h1, h2, h3, p { margin-top: 0; }
   background: #ff6d7b;
   box-shadow: 0 0 8px rgba(255, 109, 123, 0.75);
 }
+.multi-camera-tile.empty header .offline { color: #7f9bb0; }
+.multi-camera-tile.empty header .offline i {
+  background: #4b6475;
+  box-shadow: none;
+}
+.slot-camera-select {
+  min-width: 0;
+  width: min(250px, 64%);
+}
+.slot-camera-select :deep(.el-select__wrapper) {
+  min-height: 34px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: rgba(2, 12, 16, 0.34);
+  box-shadow: none;
+}
+.slot-camera-select :deep(.el-select__wrapper.is-focused),
+.slot-camera-select :deep(.el-select__wrapper:hover) {
+  box-shadow: 0 0 0 1px rgba(72, 216, 255, 0.34) inset;
+}
+.slot-camera-select :deep(.el-select__selected-item) {
+  color: #f1fbff;
+  font-size: 15px;
+  font-weight: 900;
+}
+.slot-camera-select :deep(.el-select__placeholder) {
+  color: #9bb4bb;
+  font-size: 14px;
+  font-weight: 800;
+}
+.slot-camera-select :deep(.el-select__caret) {
+  color: #8ddcf0;
+}
 .tile-video-box {
   position: relative;
-  height: calc(100% - 42px);
+  height: calc(100% - 48px);
   min-height: 0;
-  background: #030b12;
+  background:
+    linear-gradient(90deg, rgba(72, 216, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(72, 216, 255, 0.035) 1px, transparent 1px),
+    #030b12;
+  background-size: 28px 28px;
 }
 .tile-video {
   width: 100%;
   height: 100%;
   object-fit: contain;
   display: block;
+}
+.tile-zone-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 .tile-empty {
   height: 100%;
@@ -2738,9 +3111,16 @@ h1, h2, h3, p { margin-top: 0; }
   text-align: center;
   font-size: 13px;
 }
+.tile-empty span {
+  max-width: 86%;
+  line-height: 1.5;
+}
 .tile-empty .el-icon {
   color: #48d8ff;
   font-size: 34px;
+}
+.multi-camera-tile.empty .tile-empty .el-icon {
+  color: #5f7e91;
 }
 .ops-video-panel,
 .risk-panel {
@@ -2750,7 +3130,35 @@ h1, h2, h3, p { margin-top: 0; }
   background: rgba(7, 20, 25, 0.86);
   box-shadow: 0 16px 40px rgba(0, 5, 10, 0.24);
 }
-.ops-video-panel { overflow: hidden; }
+.ops-video-panel {
+  position: relative;
+  overflow: hidden;
+}
+.single-camera-select-wrap {
+  position: absolute;
+  z-index: 12;
+  top: 14px;
+  left: 14px;
+  width: min(260px, calc(100% - 28px));
+}
+.single-camera-select {
+  width: 100%;
+}
+.single-camera-select :deep(.el-select__wrapper) {
+  min-height: 36px;
+  border-radius: 7px;
+  background: rgba(2, 12, 16, 0.78);
+  box-shadow: 0 0 0 1px rgba(72, 216, 255, 0.32) inset;
+  backdrop-filter: blur(6px);
+}
+.single-camera-select :deep(.el-select__selected-item),
+.single-camera-select :deep(.el-select__placeholder) {
+  color: #e9f7ff;
+  font-weight: 900;
+}
+.single-camera-select :deep(.el-select__caret) {
+  color: #8ddcf0;
+}
 .ops-video-stage,
 .ops-video-empty {
   height: min(760px, calc(100vh - 132px));
@@ -2901,23 +3309,29 @@ h1, h2, h3, p { margin-top: 0; }
   font-size: 11px;
 }
 .risk-panel {
-  min-height: min(760px, calc(100vh - 132px));
-  display: flex;
-  flex-direction: column;
-  padding: 12px;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-rows: auto minmax(180px, auto);
+  align-items: stretch;
+  gap: 12px;
+  padding: 14px;
 }
 .risk-panel-heading {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid rgba(137, 174, 184, 0.14);
+  min-height: 92px;
+  padding: 14px;
+  border: 1px solid rgba(98, 215, 177, 0.14);
+  border-radius: 8px;
+  background: rgba(25, 69, 58, 0.18);
 }
 .risk-panel-heading h2 {
   margin: 4px 0 0;
   color: #f1fbff;
-  font-size: 19px;
+  font-size: 22px;
 }
 .risk-panel-heading b {
   padding: 5px 9px;
@@ -2929,8 +3343,8 @@ h1, h2, h3, p { margin-top: 0; }
 .risk-panel-heading b.risk-medium { background: #f08a3c; }
 .risk-panel-heading b.risk-high { color: #fff; background: #ff4d5e; }
 .risk-diagnostics {
-  margin-top: 10px;
-  padding: 10px;
+  margin-top: 0;
+  padding: 14px;
   border: 1px solid rgba(137, 174, 184, 0.14);
   border-radius: 8px;
   background: rgba(4, 16, 20, 0.74);
@@ -2954,13 +3368,13 @@ h1, h2, h3, p { margin-top: 0; }
 }
 .diagnostic-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 7px;
-  margin-top: 9px;
+  grid-template-columns: repeat(5, minmax(116px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
 }
 .diagnostic-item {
   min-width: 0;
-  padding: 8px;
+  padding: 10px;
   border: 1px solid rgba(137, 174, 184, 0.1);
   border-radius: 7px;
   background: rgba(9, 28, 33, 0.68);
@@ -2970,7 +3384,7 @@ h1, h2, h3, p { margin-top: 0; }
   display: block;
   overflow: hidden;
   color: #809ba1;
-  font-size: 10px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3002,15 +3416,19 @@ h1, h2, h3, p { margin-top: 0; }
   white-space: nowrap;
 }
 .risk-event-list {
+  grid-column: 1 / -1;
   min-height: 0;
-  overflow-y: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
   display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding-top: 10px;
+  flex-direction: row;
+  gap: 12px;
+  padding: 2px 2px 4px;
 }
 .risk-event-card {
-  padding: 11px;
+  width: 390px;
+  flex: 0 0 390px;
+  padding: 13px;
   border: 1px solid rgba(137, 174, 184, 0.16);
   border-left-width: 4px;
   border-radius: 8px;
@@ -3126,18 +3544,22 @@ h1, h2, h3, p { margin-top: 0; }
   background: rgba(95, 23, 29, 0.72);
 }
 .risk-empty-state {
-  flex: 1;
+  grid-column: 1 / -1;
   display: grid;
-  place-items: center;
-  align-content: center;
-  gap: 10px;
-  min-height: 420px;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+  min-height: 156px;
+  padding: 18px 22px;
+  border: 1px solid rgba(137, 174, 184, 0.14);
+  border-radius: 8px;
   color: #8fa8ad;
-  text-align: center;
+  text-align: left;
+  background: rgba(4, 16, 20, 0.62);
 }
 .safe-mark {
-  width: 82px;
-  height: 82px;
+  width: 72px;
+  height: 72px;
   display: grid;
   place-items: center;
   color: #62d7b1;
@@ -3148,10 +3570,10 @@ h1, h2, h3, p { margin-top: 0; }
 .risk-empty-state h3 {
   margin: 0;
   color: #dcebed;
-  font-size: 17px;
+  font-size: 18px;
 }
 .risk-empty-state p {
-  max-width: 270px;
+  grid-column: 2;
   margin: 0;
   font-size: 12px;
   line-height: 1.7;
@@ -3379,12 +3801,23 @@ h1, h2, h3, p { margin-top: 0; }
   .ops-header { grid-template-columns: 1fr; align-items: stretch; }
   .ops-header-actions { justify-content: space-between; }
   .ops-layout { grid-template-columns: 1fr; }
+  .risk-panel {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+    min-height: 0;
+  }
+  .risk-panel-heading {
+    padding-right: 0;
+    padding-bottom: 14px;
+  }
+  .diagnostic-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
   .multi-camera-layout.mode-nine {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     grid-template-rows: repeat(5, minmax(220px, 1fr));
     height: auto;
   }
-  .risk-panel { min-height: 420px; }
   .live-workspace { grid-template-columns: minmax(0, 1fr) 300px; }
   .image-result.has-result { grid-template-columns: minmax(0, 1fr) 250px; }
   .source-toolbar,
@@ -3395,8 +3828,34 @@ h1, h2, h3, p { margin-top: 0; }
   .command-monitor { padding: 8px; }
   .monitor-title-row,
   .ops-header-actions { align-items: stretch; flex-direction: column; }
+  .ops-mode-select,
+  .ops-camera-select {
+    width: 100%;
+  }
   .view-mode-switch { width: 100%; }
   .view-mode-switch button { flex: 1; }
+  .view-mode-select-wrap {
+    top: 10px;
+    right: 10px;
+  }
+  .risk-panel {
+    gap: 8px;
+    padding: 10px;
+  }
+  .risk-panel-heading {
+    min-height: 0;
+  }
+  .diagnostic-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .risk-empty-state {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    text-align: center;
+  }
+  .risk-empty-state p {
+    grid-column: 1;
+  }
   .multi-camera-layout.mode-quad,
   .multi-camera-layout.mode-nine {
     grid-template-columns: 1fr;
@@ -3407,7 +3866,6 @@ h1, h2, h3, p { margin-top: 0; }
   .multi-camera-tile {
     min-height: 260px;
   }
-  .ops-camera-select { width: 100%; }
   .risk-banner { grid-template-columns: 1fr; align-items: flex-start; }
   .event-actions { grid-template-columns: 1fr; }
   .debug-panel { grid-template-columns: 1fr 1fr; }

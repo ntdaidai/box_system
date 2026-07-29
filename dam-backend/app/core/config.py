@@ -146,6 +146,13 @@ class Settings:
     CAMERA_AUTO_START: bool = _get_env("CAMERA_AUTO_START", "true").lower() == "true"
     CAMERA_DETECTION_FPS: float = float(_get_env("CAMERA_DETECTION_FPS", "5"))
     CAMERA_JPEG_QUALITY: int = int(_get_env("CAMERA_JPEG_QUALITY", "80"))
+    CAMERA_WEB_PROXY_BIND_HOST: str = _get_env("CAMERA_WEB_PROXY_BIND_HOST", "0.0.0.0")
+    CAMERA_WEB_PROXY_PUBLIC_HOST: str = _get_env("CAMERA_WEB_PROXY_PUBLIC_HOST", PUBLIC_HOST)
+    CAMERA_WEB_PROXY_PORT_START: int = int(_get_env("CAMERA_WEB_PROXY_PORT_START", "12345"))
+    CAMERA_WEB_PROXY_PORT_END: int = int(_get_env("CAMERA_WEB_PROXY_PORT_END", "12444"))
+    CAMERA_WEB_PROXY_TIMEOUT_SECONDS: float = float(
+        _get_env("CAMERA_WEB_PROXY_TIMEOUT_SECONDS", "15")
+    )
     CAMERA_ZONE_STORE_PATH: str = _get_env(
         "CAMERA_ZONE_STORE_PATH",
         os.path.join(BASE_DIR, "data", "camera_zones.json"),
@@ -180,6 +187,26 @@ class Settings:
     SAFETY_EVENT_SNAPSHOT_DIR: str = _get_env(
         "SAFETY_EVENT_SNAPSHOT_DIR",
         os.path.join(BASE_DIR, "data", "safety_snapshots"),
+    )
+    SAFETY_EVENT_VIDEO_DIR: str = _get_env(
+        "SAFETY_EVENT_VIDEO_DIR",
+        os.path.join(BASE_DIR, "data", "safety_event_videos"),
+    )
+    SAFETY_EVENT_VIDEO_PRE_SECONDS: float = float(
+        _get_env("SAFETY_EVENT_VIDEO_PRE_SECONDS", "5")
+    )
+    SAFETY_EVENT_VIDEO_POST_SECONDS: float = float(
+        _get_env("SAFETY_EVENT_VIDEO_POST_SECONDS", "5")
+    )
+    SAFETY_EVENT_VIDEO_FPS: float = float(_get_env("SAFETY_EVENT_VIDEO_FPS", "5"))
+    SAFETY_EVENT_VIDEO_RETENTION_DAYS: int = int(
+        _get_env("SAFETY_EVENT_VIDEO_RETENTION_DAYS", "90")
+    )
+    SAFETY_EVENT_VIDEO_MAX_PER_CAMERA_PER_DAY: int = int(
+        _get_env("SAFETY_EVENT_VIDEO_MAX_PER_CAMERA_PER_DAY", "200")
+    )
+    SAFETY_EVENT_VIDEO_MAX_LOCAL_GB: float = float(
+        _get_env("SAFETY_EVENT_VIDEO_MAX_LOCAL_GB", "20")
     )
     BROADCAST_ENABLE_LOCAL_TEST_DEVICE: bool = (
         _get_env("BROADCAST_ENABLE_LOCAL_TEST_DEVICE", "true").lower() == "true"

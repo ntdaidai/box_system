@@ -74,7 +74,7 @@ const editorMode = ref('edit')
 const collaborators = ref([])
 const isDocumentModified = ref(false)
 const editorReady = ref(false)
-const lastSavedAt = ref('')
+let syncingUpdatedAt = false
 
 // 文档信息
 const documentInfo = ref({
@@ -98,7 +98,7 @@ const saveStateLabel = computed(() => {
   if (saving.value) return '正在保存'
   if (!editorReady.value) return '编辑器加载中'
   if (isDocumentModified.value) return '有未保存修改'
-  return '已同步'
+  return '已保存'
 })
 
 const saveStateClass = computed(() => {
@@ -108,10 +108,7 @@ const saveStateClass = computed(() => {
   return 'is-saved'
 })
 
-const formatNowTime = () => {
-  const now = new Date()
-  return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
-}
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 // 加载文档信息
 const loadDocumentInfo = async () => {
@@ -173,13 +170,70 @@ const onEditorReady = () => {
 // 文档状态变化
 const onDocumentStateChange = (event) => {
   console.log('文档状态变化:', event)
-  isDocumentModified.value = Boolean(event?.data)
+  const wasModified = isDocumentModified.value
+  const modified = Boolean(event?.data)
+  if (modified) {
+    isDocumentModified.value = true
+    return
+  }
+  if (wasModified && !modified) {
+    syncUpdatedAtAfterSave(documentInfo.value.updated_at)
+  }
 }
 
 // 编辑器错误
 const onEditorError = (error) => {
   console.error('编辑器错误:', error)
   ElMessage.error(error)
+}
+
+const fetchLatestDocumentInfo = async () => {
+  if (!documentInfo.value.document_id) return null
+  const response = await axios.get(`/api/onlyoffice/editor-config/${documentInfo.value.document_id}`, {
+    params: {
+      user_id: currentUser.value.id,
+      user_name: currentUser.value.name,
+      mode: editorMode.value
+    }
+  })
+  return response.data?.success ? response.data.data : null
+}
+
+const applyLatestDocumentInfo = (data) => {
+  if (!data) return
+  documentInfo.value = {
+    ...documentInfo.value,
+    title: data.document?.title || documentInfo.value.title,
+    file_type: data.document?.fileType || documentInfo.value.file_type,
+    file_size: data.file_size || documentInfo.value.file_size,
+    updated_at: data.updated_at || documentInfo.value.updated_at
+  }
+}
+
+const waitForUpdatedAt = async (previousUpdatedAt, attempts = 12) => {
+  for (let index = 0; index < attempts; index += 1) {
+    await sleep(800)
+    const data = await fetchLatestDocumentInfo()
+    const latestUpdatedAt = data?.updated_at || ''
+    if (latestUpdatedAt && latestUpdatedAt !== previousUpdatedAt) {
+      applyLatestDocumentInfo(data)
+      return true
+    }
+  }
+  return false
+}
+
+const syncUpdatedAtAfterSave = async (previousUpdatedAt) => {
+  if (syncingUpdatedAt || !documentInfo.value.document_id) return
+  try {
+    syncingUpdatedAt = true
+    const updated = await waitForUpdatedAt(previousUpdatedAt, 5)
+    if (updated) isDocumentModified.value = false
+  } catch (error) {
+    console.warn('刷新文档更新时间失败:', error)
+  } finally {
+    syncingUpdatedAt = false
+  }
 }
 
 // 保存文档
@@ -191,11 +245,13 @@ const handleSave = async () => {
     }
 
     if (!isDocumentModified.value) {
-      lastSavedAt.value = formatNowTime()
+      const data = await fetchLatestDocumentInfo()
+      applyLatestDocumentInfo(data)
       ElMessage.success('当前没有新的修改')
       return
     }
 
+    const previousUpdatedAt = documentInfo.value.updated_at
     saving.value = true
 
     const response = await axios.post(`/api/onlyoffice/force-save/${documentInfo.value.document_id}`, {
@@ -204,11 +260,18 @@ const handleSave = async () => {
 
     if (response.data?.already_saved) {
       ElMessage.success('文档已是最新')
+      const data = await fetchLatestDocumentInfo()
+      applyLatestDocumentInfo(data)
+      isDocumentModified.value = false
     } else {
-      ElMessage.success('保存请求已提交')
+      const updated = await waitForUpdatedAt(previousUpdatedAt)
+      if (updated) {
+        ElMessage.success('保存成功')
+        isDocumentModified.value = false
+      } else {
+        ElMessage.warning('保存已提交，但尚未确认更新时间刷新')
+      }
     }
-    lastSavedAt.value = formatNowTime()
-    isDocumentModified.value = false
 
   } catch (error) {
     console.error('保存失败:', error)

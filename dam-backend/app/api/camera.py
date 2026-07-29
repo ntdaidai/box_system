@@ -13,12 +13,13 @@ import time
 import uuid
 from pathlib import Path
 from typing import List, Literal, Optional
+from urllib.parse import quote, urljoin, urlparse
 
 import cv2
 import httpx
 import numpy as np
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from loguru import logger
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -30,9 +31,11 @@ from app.core.database import get_db
 from app.core.security import require_auth
 from app.models.alarm import Alarm
 from app.models.analysis_report import AnalysisReport
+from app.models.camera import Camera
 from app.models.safety_event import SafetyEvent, SafetyEventLog, SafetyEventTask
 from app.models.user import User
 from app.services.camera_stream import CameraStream, camera_manager
+from app.services.camera_web_proxy import camera_web_proxy_manager
 from app.services.camera_config import normalize_camera_source
 from app.services.camera_zone_store import get_camera_zone_store
 from app.services.safety_event_engine import get_safety_event_engine
@@ -46,6 +49,7 @@ from app.services.broadcast_service import BroadcastException, broadcast_service
 
 router = APIRouter()
 AnalysisTask = Literal["detect", "classify"]
+CameraBrand = Literal["dahua", "hikvision"]
 
 
 class CameraAddRequest(BaseModel):
@@ -60,6 +64,48 @@ class CameraAddRequest(BaseModel):
     def validate_source(self):
         self.source = normalize_camera_source(self.source or self.rtsp_url)
         return self
+
+
+class CameraUpdateRequest(BaseModel):
+    source: Optional[str] = Field(None, min_length=7, max_length=2048)
+    rtsp_url: Optional[str] = Field(None, min_length=8, max_length=2048)
+    name: Optional[str] = Field(None, max_length=100)
+    auto_start: bool = True
+
+    @model_validator(mode="after")
+    def validate_source(self):
+        if self.source is not None or self.rtsp_url is not None:
+            self.source = normalize_camera_source(self.source or self.rtsp_url)
+        return self
+
+
+class CameraDevicePayload(BaseModel):
+    camera_id: Optional[str] = Field(
+        None, min_length=1, max_length=50, pattern=r"^[A-Za-z0-9_-]+$"
+    )
+    camera_name: str = Field(..., min_length=1, max_length=128)
+    brand: CameraBrand = "dahua"
+    ip_address: str = Field(..., min_length=3, max_length=128)
+    rtsp_port: int = Field(554, ge=1, le=65535)
+    web_port: int = Field(80, ge=1, le=65535)
+    username: str = Field("", max_length=128)
+    password: str = Field("", max_length=256)
+    description: Optional[str] = Field(None, max_length=1000)
+    enabled: bool = True
+
+
+class CameraDeviceUpdatePayload(BaseModel):
+    camera_name: Optional[str] = Field(None, min_length=1, max_length=128)
+    description: Optional[str] = Field(None, max_length=1000)
+    enabled: Optional[bool] = None
+
+
+class CameraConnectionTestPayload(BaseModel):
+    brand: CameraBrand = "dahua"
+    ip_address: str = Field(..., min_length=3, max_length=128)
+    rtsp_port: int = Field(554, ge=1, le=65535)
+    username: str = Field("", max_length=128)
+    password: str = Field("", max_length=256)
 
 
 class DetectionToggleRequest(BaseModel):
@@ -251,6 +297,186 @@ def _validate_webrtc_camera(camera_id: str) -> CameraStream:
     return camera
 
 
+def _camera_web_origin(camera: CameraStream) -> str:
+    parsed = urlparse(camera.source)
+    if parsed.scheme not in {"rtsp", "rtsps"} or not parsed.hostname:
+        raise HTTPException(status_code=409, detail="该视频源没有可打开的 Web 控制台")
+    host = parsed.hostname
+    return f"http://{host}"
+
+
+def _camera_rtsp_path(brand: str) -> str:
+    if brand == "hikvision":
+        return "Streaming/Channels/101"
+    return "cam/realmonitor?channel=1&subtype=0"
+
+
+def _camera_source_from_parts(
+    *,
+    brand: str,
+    ip_address: str,
+    rtsp_port: int,
+    username: str = "",
+    password: str = "",
+) -> str:
+    path = _camera_rtsp_path(brand)
+    auth = ""
+    if username:
+        auth = quote(username, safe="")
+        if password:
+            auth = f"{auth}:{quote(password, safe='')}"
+        auth = f"{auth}@"
+    return f"rtsp://{auth}{ip_address}:{rtsp_port}/{path}"
+
+
+def _camera_source_from_row(row: Camera) -> str:
+    path = row.rtsp_path or _camera_rtsp_path(row.brand)
+    auth = ""
+    if row.username:
+        auth = quote(row.username, safe="")
+        if row.password:
+            auth = f"{auth}:{quote(row.password, safe='')}"
+        auth = f"{auth}@"
+    return f"rtsp://{auth}{row.ip_address}:{row.rtsp_port}/{path}"
+
+
+def _camera_web_console_url(row: Camera) -> str:
+    port = int(row.web_port or 80)
+    suffix = "" if port == 80 else f":{port}"
+    return f"http://{row.ip_address}{suffix}/"
+
+
+def _camera_web_proxy_url(row: Camera) -> str:
+    if not row.web_proxy_port:
+        return ""
+    return camera_web_proxy_manager.public_url(int(row.web_proxy_port))
+
+
+def _camera_reserved_proxy_ports(db: Session, camera_id: Optional[str] = None) -> set[int]:
+    query = db.query(Camera.web_proxy_port).filter(Camera.web_proxy_port.isnot(None))
+    if camera_id:
+        query = query.filter(Camera.camera_id != camera_id)
+    return {int(port) for (port,) in query.all() if port}
+
+
+def _generate_camera_id(db: Session) -> str:
+    for _ in range(10):
+        camera_id = f"cam_{uuid.uuid4().hex[:10]}"
+        exists = db.query(Camera.id).filter(Camera.camera_id == camera_id).first()
+        if not exists:
+            return camera_id
+    return f"cam_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+
+
+def _camera_status_by_id() -> dict:
+    return {
+        item["camera_id"]: item
+        for item in camera_manager.list_cameras()
+        if item.get("camera_id")
+    }
+
+
+def _camera_row_response(
+    row: Camera,
+    status: Optional[dict] = None,
+    *,
+    reveal_password: bool = False,
+) -> dict:
+    status = status or {}
+    last_frame_time = status.get("last_frame_time")
+    if status.get("connected") and last_frame_time:
+        row.last_online_at = dt.datetime.fromtimestamp(float(last_frame_time))
+    if status.get("last_error"):
+        row.last_error = status.get("last_error")
+    return {
+        **row.to_dict(reveal_password=reveal_password),
+        "source": "",
+        "data_path": "",
+        "source_type": "rtsp",
+        "rtsp_path": _camera_rtsp_path(row.brand),
+        "web_console_url": _camera_web_proxy_url(row) or _camera_web_console_url(row),
+        "web_console_direct_url": _camera_web_console_url(row),
+        "web_proxy_url": _camera_web_proxy_url(row),
+        "web_proxy_running": bool(camera_web_proxy_manager.status(row.camera_id)),
+        "configured": True,
+        "running": bool(status.get("running")),
+        "connected": bool(status.get("connected")),
+        "fps": status.get("fps", 0),
+        "detection_enabled": bool(status.get("detection_enabled")),
+        "detection_running": bool(status.get("detection_running")),
+        "last_frame_time": last_frame_time or 0,
+        "last_error": status.get("last_error") or row.last_error,
+    }
+
+
+def _sync_camera_runtime(row: Camera) -> Optional[dict]:
+    source = _camera_source_from_row(row)
+    existing = camera_manager.get_camera(row.camera_id)
+    if not row.enabled:
+        if existing:
+            camera_manager.remove_camera(row.camera_id)
+        return None
+    if existing:
+        return camera_manager.update_camera(
+            row.camera_id,
+            source=source,
+            name=row.camera_name,
+            auto_start=True,
+        )
+    if camera_manager.add_camera(
+        camera_id=row.camera_id,
+        source=source,
+        name=row.camera_name,
+        auto_start=True,
+    ):
+        camera = camera_manager.get_camera(row.camera_id)
+        if camera:
+            stored_zones = get_camera_zone_store().get(row.camera_id)
+            if stored_zones:
+                camera.set_detection_zones(stored_zones)
+            return camera.get_status()
+    return camera_manager.get_camera(row.camera_id).get_status() if camera_manager.get_camera(row.camera_id) else None
+
+
+def _sync_camera_web_proxy(row: Camera, db: Session) -> Optional[dict]:
+    if not row.enabled:
+        camera_web_proxy_manager.stop_proxy(row.camera_id)
+        return None
+    try:
+        proxy = camera_web_proxy_manager.start_proxy(
+            camera_id=row.camera_id,
+            target_host=row.ip_address,
+            target_port=row.web_port or 80,
+            preferred_port=row.web_proxy_port,
+            reserved_ports=_camera_reserved_proxy_ports(db, row.camera_id),
+        )
+        row.web_proxy_port = int(proxy["listen_port"])
+        return proxy
+    except Exception as exc:
+        logger.warning(f"摄像头 Web 控制台监听启动失败: camera={row.camera_id}, error={exc}")
+        row.last_error = f"Web控制台监听失败: {exc}"
+        return None
+
+
+def _test_camera_source(source: str, timeout_seconds: float = 6.0) -> tuple[bool, str]:
+    cap = None
+    try:
+        cap = cv2.VideoCapture(source)
+        start = time.time()
+        while time.time() - start < timeout_seconds:
+            if cap.isOpened():
+                ok, frame = cap.read()
+                if ok and frame is not None:
+                    return True, "连接成功，已获取到视频帧"
+            time.sleep(0.2)
+        return False, "连接失败，未能在限定时间内获取视频帧"
+    except Exception as exc:
+        return False, f"连接异常: {exc}"
+    finally:
+        if cap is not None:
+            cap.release()
+
+
 def _day_bounds(day: Optional[str] = None) -> tuple[str, float, float]:
     if day:
         try:
@@ -407,6 +633,10 @@ def _safety_event_to_dict(event: SafetyEvent) -> dict:
         "snapshot_path": event.snapshot_url,
         "snapshot_url": event.snapshot_url,
         "video_url": event.video_url,
+        "video_status": event.video_status or "PENDING",
+        "video_error": event.video_error,
+        "video_created_at": _timestamp(event.video_created_at),
+        "video_expires_at": _timestamp(event.video_expires_at),
         "duration_seconds": duration or 0,
         "zone_type": event.zone_type,
         "zone_name": event.zone_name,
@@ -570,9 +800,173 @@ async def _mjpeg_response(
 # dai: Static routes stay ahead of dynamic camera-id routes so Starlette never
 # mistakes "model" or "detect" for a camera identifier.
 @router.get("/list", response_model=DetectResponse, summary="获取摄像头列表")
-async def list_cameras(_user: User = Depends(require_auth)):
-    cameras = camera_manager.list_cameras()
+async def list_cameras(
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_auth),
+):
+    statuses = _camera_status_by_id()
+    rows = db.query(Camera).order_by(Camera.id.asc()).all()
+    cameras = [_camera_row_response(row, statuses.get(row.camera_id)) for row in rows]
+    known_ids = {row.camera_id for row in rows}
+    cameras.extend(
+        status
+        for camera_id, status in statuses.items()
+        if camera_id not in known_ids
+    )
+    db.commit()
     return DetectResponse(code=200, data={"cameras": cameras, "total": len(cameras)})
+
+
+@router.get("/devices", response_model=DetectResponse, summary="获取摄像头设备台账")
+async def list_camera_devices(
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_auth),
+):
+    statuses = _camera_status_by_id()
+    rows = db.query(Camera).order_by(Camera.id.asc()).all()
+    cameras = [_camera_row_response(row, statuses.get(row.camera_id)) for row in rows]
+    db.commit()
+    return DetectResponse(code=200, data={"cameras": cameras, "total": len(cameras)})
+
+
+@router.post("/devices/test-connection", response_model=DetectResponse, summary="测试摄像头连接")
+async def test_camera_device_connection(
+    payload: CameraConnectionTestPayload,
+    _user: User = Depends(require_auth),
+):
+    source = _camera_source_from_parts(
+        brand=payload.brand,
+        ip_address=payload.ip_address,
+        rtsp_port=payload.rtsp_port,
+        username=payload.username,
+        password=payload.password,
+    )
+    ok, message = await asyncio.to_thread(_test_camera_source, source)
+    return DetectResponse(
+        code=200,
+        data={
+            "connected": ok,
+            "message": message,
+        },
+        message=message,
+    )
+
+
+@router.post("/devices", response_model=DetectResponse, summary="新增摄像头设备")
+async def create_camera_device(
+    payload: CameraDevicePayload,
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_auth),
+):
+    camera_id = payload.camera_id or _generate_camera_id(db)
+    existing = db.query(Camera).filter(Camera.camera_id == camera_id).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="设备ID已存在")
+    source = _camera_source_from_parts(
+        brand=payload.brand,
+        ip_address=payload.ip_address,
+        rtsp_port=payload.rtsp_port,
+        username=payload.username,
+        password=payload.password,
+    )
+    ok, message = await asyncio.to_thread(_test_camera_source, source)
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"测试连接失败，未保存设备: {message}")
+    row = Camera(
+        camera_id=camera_id,
+        camera_name=payload.camera_name,
+        brand=payload.brand,
+        ip_address=payload.ip_address,
+        rtsp_port=payload.rtsp_port,
+        web_port=payload.web_port,
+        username=payload.username,
+        password=payload.password,
+        rtsp_path=_camera_rtsp_path(payload.brand),
+        description=payload.description,
+        enabled=payload.enabled,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    status = _sync_camera_runtime(row)
+    proxy = _sync_camera_web_proxy(row, db)
+    db.commit()
+    return DetectResponse(
+        code=200,
+        data={
+            **_camera_row_response(row, status),
+            "web_proxy_url": proxy["url"] if proxy else _camera_web_proxy_url(row),
+            "message": "摄像头设备已添加",
+        },
+    )
+
+
+@router.put("/devices/{camera_id}", response_model=DetectResponse, summary="更新摄像头设备")
+async def update_camera_device(
+    camera_id: str,
+    payload: CameraDeviceUpdatePayload,
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_auth),
+):
+    row = db.query(Camera).filter(Camera.camera_id == camera_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="摄像头设备不存在")
+    data = payload.model_dump(exclude_unset=True)
+    enabling_device = data.get("enabled") is True and not row.enabled
+    if enabling_device:
+        source = _camera_source_from_row(row)
+        ok, message = await asyncio.to_thread(_test_camera_source, source)
+        if not ok:
+            raise HTTPException(status_code=400, detail=f"测试连接失败，未保存设备: {message}")
+    field_map = {
+        "camera_name": "camera_name",
+        "description": "description",
+        "enabled": "enabled",
+    }
+    for payload_key, attr in field_map.items():
+        if payload_key in data:
+            setattr(row, attr, data[payload_key])
+    db.commit()
+    db.refresh(row)
+    status = _sync_camera_runtime(row)
+    proxy = _sync_camera_web_proxy(row, db)
+    db.commit()
+    return DetectResponse(
+        code=200,
+        data={
+            **_camera_row_response(row, status),
+            "web_proxy_url": proxy["url"] if proxy else _camera_web_proxy_url(row),
+            "message": "摄像头设备已更新",
+        },
+    )
+
+
+@router.get("/devices/{camera_id}/password", response_model=DetectResponse, summary="查看摄像头密码")
+async def get_camera_device_password(
+    camera_id: str,
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_auth),
+):
+    row = db.query(Camera).filter(Camera.camera_id == camera_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="摄像头设备不存在")
+    return DetectResponse(code=200, data={"camera_id": camera_id, "password": row.password or ""})
+
+
+@router.delete("/devices/{camera_id}", response_model=DetectResponse, summary="删除摄像头设备")
+async def delete_camera_device(
+    camera_id: str,
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_auth),
+):
+    row = db.query(Camera).filter(Camera.camera_id == camera_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="摄像头设备不存在")
+    camera_manager.remove_camera(camera_id)
+    camera_web_proxy_manager.stop_proxy(camera_id)
+    db.delete(row)
+    db.commit()
+    return DetectResponse(code=200, data={"camera_id": camera_id, "message": "摄像头设备已删除"})
 
 
 @router.get("/model/status", response_model=DetectResponse, summary="获取模型状态")
@@ -810,6 +1204,27 @@ async def add_camera(
     return DetectResponse(
         code=200,
         data={"camera_id": payload.camera_id, "message": "摄像头添加成功"},
+    )
+
+
+@router.put("/{camera_id}", response_model=DetectResponse, summary="更新摄像头信息")
+async def update_camera(
+    camera_id: str,
+    payload: CameraUpdateRequest,
+    _user: User = Depends(require_auth),
+):
+    camera = _get_camera_or_404(camera_id)
+    status = camera_manager.update_camera(
+        camera_id,
+        source=payload.source if payload.source is not None else camera.source,
+        name=payload.name if payload.name is not None else camera.name,
+        auto_start=payload.auto_start,
+    )
+    if status is None:
+        raise HTTPException(status_code=404, detail="摄像头不存在")
+    return DetectResponse(
+        code=200,
+        data={**status, "message": "摄像头信息已更新"},
     )
 
 
@@ -1316,9 +1731,12 @@ async def get_detection_zones(
     _user: User = Depends(require_auth),
 ):
     camera = _get_camera_or_404(camera_id)
+    stored_zones = get_camera_zone_store().get(camera_id)
+    if stored_zones:
+        camera.set_detection_zones(stored_zones)
     return DetectResponse(
         code=200,
-        data={"camera_id": camera_id, "zones": camera.get_detection_zones()},
+        data={"camera_id": camera_id, "zones": stored_zones or camera.get_detection_zones()},
     )
 
 
@@ -1344,6 +1762,9 @@ async def save_detection_zones(
             ]
         )
         get_camera_zone_store().save(camera_id, zones)
+        zones = get_camera_zone_store().get(camera_id)
+        if zones:
+            camera.set_detection_zones(zones)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return DetectResponse(
@@ -1531,6 +1952,78 @@ async def get_camera_status(
     _user: User = Depends(require_auth),
 ):
     return DetectResponse(code=200, data=_get_camera_or_404(camera_id).get_status())
+
+
+@router.api_route(
+    "/{camera_id}/web-console/{path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    summary="代理访问摄像头 Web 控制台",
+)
+async def proxy_camera_web_console(
+    camera_id: str,
+    path: str = "",
+    request: Request = None,
+    _user: User = Depends(require_auth),
+):
+    camera = _get_camera_or_404(camera_id)
+    origin = _camera_web_origin(camera)
+    target_url = urljoin(f"{origin}/", path or "")
+    if request.url.query:
+        target_url = f"{target_url}?{request.url.query}"
+
+    excluded_headers = {
+        "host",
+        "content-length",
+        "transfer-encoding",
+        "connection",
+        "content-encoding",
+    }
+    headers = {
+        key: value
+        for key, value in request.headers.items()
+        if key.lower() not in excluded_headers
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
+            upstream = await client.request(
+                request.method,
+                target_url,
+                headers=headers,
+                content=await request.body(),
+            )
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"摄像头控制台不可达: {exc}") from exc
+
+    response_headers = {
+        key: value
+        for key, value in upstream.headers.items()
+        if key.lower() not in excluded_headers
+        and key.lower() not in {"x-frame-options", "content-security-policy"}
+    }
+    location = response_headers.get("location") or response_headers.get("Location")
+    if location:
+        proxied_base = f"/api/v1/camera/{camera_id}/web-console/"
+        response_headers["location"] = proxied_base + location.lstrip("/")
+
+    content = upstream.content
+    content_type = upstream.headers.get("content-type", "")
+    if "text/html" in content_type.lower():
+        try:
+            html = content.decode(upstream.encoding or "utf-8", errors="replace")
+            base_href = f"/api/v1/camera/{camera_id}/web-console/"
+            if "<head>" in html:
+                html = html.replace("<head>", f'<head><base href="{base_href}">', 1)
+            content = html.encode("utf-8")
+            response_headers["content-type"] = "text/html; charset=utf-8"
+        except Exception:
+            pass
+
+    return Response(
+        content=content,
+        status_code=upstream.status_code,
+        headers=response_headers,
+        media_type=None,
+    )
 
 
 @router.post(

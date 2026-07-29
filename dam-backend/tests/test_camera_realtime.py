@@ -3,7 +3,9 @@
 
 import threading
 import time
+import tempfile
 import unittest
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -180,6 +182,31 @@ class CameraRealtimeTests(unittest.TestCase):
             self.assertTrue(camera.get_status()["connected"])
         finally:
             camera.stop()
+
+    def test_evidence_frame_buffer_collects_event_window(self):
+        self.camera._evidence_pre_seconds = 1.0
+        self.camera._evidence_post_seconds = 1.0
+        self.camera._evidence_video_fps = 2.0
+        with self.camera.lock:
+            for index in range(7):
+                frame = np.full((24, 32, 3), index, dtype=np.uint8)
+                self.camera._append_evidence_frame_locked(float(index) * 0.5, frame)
+
+        frames = self.camera._collect_evidence_frames(event_time=1.5)
+
+        self.assertEqual([round(item[0], 1) for item in frames], [0.5, 1.0, 1.5, 2.0, 2.5])
+        self.assertEqual(int(frames[0][1][0, 0, 0]), 1)
+
+    def test_evidence_storage_rejects_camera_daily_limit(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.camera._evidence_video_dir = temp_dir
+            self.camera._evidence_max_per_camera_per_day = 1
+            day_dir = Path(temp_dir) / "1970-01-01" / self.camera.camera_id
+            day_dir.mkdir(parents=True)
+            (day_dir / "existing.mp4").write_bytes(b"video")
+
+            with self.assertRaisesRegex(RuntimeError, "今日留证视频数量已达到上限"):
+                self.camera._assert_evidence_storage_available(event_time=0)
 
     def test_running_worker_switches_tasks_without_publishing_stale_boxes(self):
         self.camera.start()

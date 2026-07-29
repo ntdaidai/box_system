@@ -23,6 +23,17 @@
         </el-select>
       </div>
       <div class="filter-field">
+        <span class="filter-label">业务类型</span>
+        <el-select v-model="selectedBusinessType" placeholder="全部业务类型" clearable class="business-type-select">
+          <el-option
+            v-for="type in businessTypes"
+            :key="type.value"
+            :label="type.label"
+            :value="type.value"
+          />
+        </el-select>
+      </div>
+      <div class="filter-field">
         <span class="filter-label">排序方式</span>
         <el-select v-model="sortBy" placeholder="排序方式" class="sort-select">
           <el-option label="最近修改" value="updated" />
@@ -61,8 +72,8 @@
         <div class="stat-content">
           <el-icon class="stat-icon" style="color: #e6a23c"><Clock /></el-icon>
           <div class="stat-info">
-            <span class="stat-value">{{ recentCount }}</span>
-            <span class="stat-label">最近修改</span>
+            <span class="stat-value">{{ currentMonthCount }}</span>
+            <span class="stat-label">本月文档</span>
           </div>
         </div>
       </el-card>
@@ -82,7 +93,6 @@
         导出勾选文档
       </el-button>
       <div class="month-export">
-        <span class="filter-label">按最后更新时间月份导出</span>
         <el-date-picker
           v-model="exportMonth"
           type="month"
@@ -207,12 +217,21 @@
 
     <el-dialog
       v-model="previewDialogVisible"
-      :title="previewTitle"
       class="document-preview-dialog"
       fullscreen
+      :show-close="false"
       destroy-on-close
       @closed="previewConfig = null"
     >
+      <template #header>
+        <div class="preview-header">
+          <el-button class="preview-back-button" :icon="ArrowLeft" @click="closePreview">返回</el-button>
+          <div class="preview-title-stack">
+            <span class="preview-kicker">文档预览</span>
+            <h2 class="preview-title" :title="previewTitle">{{ previewTitle }}</h2>
+          </div>
+        </div>
+      </template>
       <div class="preview-editor-shell">
         <OnlyOfficeEditor
           v-if="previewConfig"
@@ -232,7 +251,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Upload, UploadFilled, Search, Document, FolderOpened,
-  Clock, Download
+  Clock, Download, ArrowLeft
 } from '@element-plus/icons-vue'
 import axios from 'axios'
 import OnlyOfficeEditor from '@/components/OnlyOfficeEditor.vue'
@@ -248,6 +267,7 @@ const deletingDocumentIds = ref([])
 const documents = ref([])
 const searchQuery = ref('')
 const selectedCategory = ref('')
+const selectedBusinessType = ref('')
 const sortBy = ref('updated')
 const currentPage = ref(1)
 const pageSize = 10
@@ -266,15 +286,21 @@ const currentUser = ref({
   name: '管理员'
 })
 
+const businessTypes = [
+  { label: '全部文档', value: '' },
+  { label: '巡查文档', value: 'inspection' },
+  { label: '监测文档', value: 'monitoring' }
+]
+
 const categories = computed(() => {
   const cats = new Set(documents.value.map((doc) => doc.category))
   return Array.from(cats)
 })
 
-const recentCount = computed(() => {
+const currentMonthCount = computed(() => {
   const now = new Date()
-  const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
-  return documents.value.filter((doc) => new Date(doc.updatedAt) >= weekAgo).length
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  return documents.value.filter((doc) => getDocumentMonth(doc.updatedAt) === currentMonth).length
 })
 
 const filteredDocuments = computed(() => {
@@ -287,6 +313,10 @@ const filteredDocuments = computed(() => {
 
   if (selectedCategory.value) {
     result = result.filter((doc) => doc.category === selectedCategory.value)
+  }
+
+  if (selectedBusinessType.value) {
+    result = result.filter((doc) => doc.businessType === selectedBusinessType.value)
   }
 
   if (exportMonth.value) {
@@ -320,7 +350,7 @@ const isCurrentPageIndeterminate = computed(() => {
   return selectedCount > 0 && selectedCount < currentPageIds.value.length
 })
 
-watch([searchQuery, selectedCategory, sortBy, exportMonth], () => {
+watch([searchQuery, selectedCategory, selectedBusinessType, sortBy, exportMonth], () => {
   currentPage.value = 1
 })
 
@@ -355,6 +385,15 @@ const getCategory = (extension) => {
     pdf: 'PDF 文档'
   }
   return categoryMap[getDisplayType(extension)] || '其他文档'
+}
+
+const detectBusinessType = (filename) => {
+  const name = String(filename || '').toLowerCase()
+  const inspectionKeywords = ['巡查', '巡检', 'patrol', 'inspection']
+  const monitoringKeywords = ['监测', '监控', '传感器', 'sensor', 'monitor']
+  if (inspectionKeywords.some((keyword) => name.includes(keyword))) return 'inspection'
+  if (monitoringKeywords.some((keyword) => name.includes(keyword))) return 'monitoring'
+  return 'other'
 }
 
 const getIconClass = (type) => {
@@ -404,29 +443,36 @@ const downloadBlob = (blob, filename) => {
   window.URL.revokeObjectURL(url)
 }
 
+const parseDocumentDate = (value) => {
+  if (!value) return null
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
 const formatDateTime = (value) => {
-  if (!value) return '-'
-  const raw = String(value).replace('T', ' ')
-  const [date = '-', time = ''] = raw.split(' ')
-  return time ? `${date} ${time.slice(0, 5)}` : date
+  const date = parseDocumentDate(value)
+  if (!date) return '-'
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hour = String(date.getHours()).padStart(2, '0')
+  const minute = String(date.getMinutes()).padStart(2, '0')
+  return `${year}-${month}-${day} ${hour}:${minute}`
 }
 
 const getDocumentMonth = (value) => {
-  if (!value) return ''
-  const raw = String(value).replace('T', ' ')
-  const datePart = raw.split(' ')[0]
-  if (/^\d{4}-\d{2}/.test(datePart)) return datePart.slice(0, 7)
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return ''
+  const date = parseDocumentDate(value)
+  if (!date) return ''
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
 }
 
 const normalizeDocument = (doc) => ({
   ...doc,
   id: doc.document_id,
-  name: doc.title,
+  name: doc.title || doc.document_id || '未命名文档',
   type: getDisplayType(doc.file_type),
   category: getCategory(doc.file_type),
+  businessType: detectBusinessType(doc.title || doc.document_id),
   size: doc.file_size,
   updatedAt: doc.updated_at
 })
@@ -515,9 +561,18 @@ const exportMonthDocuments = async () => {
     ElMessage.warning('请选择要导出的月份')
     return
   }
+  const documentIds = filteredDocuments.value.map((doc) => doc.document_id)
+  if (documentIds.length === 0) {
+    ElMessage.warning('当前筛选条件下没有可导出的文档')
+    return
+  }
+  const suffix = selectedBusinessType.value
+    ? `${exportMonth.value}_${selectedBusinessType.value}`
+    : exportMonth.value
   await exportDocuments({
+    documentIds,
     month: exportMonth.value,
-    filename: buildExportFileName(exportMonth.value),
+    filename: buildExportFileName(suffix),
     loadingRef: exportingMonth
   })
 }
@@ -598,6 +653,10 @@ const previewDoc = async (doc) => {
     console.error('打开预览失败:', error)
     ElMessage.error('打开预览失败')
   }
+}
+
+const closePreview = () => {
+  previewDialogVisible.value = false
 }
 
 const editDoc = (doc) => {
@@ -760,6 +819,7 @@ onMounted(() => {
 }
 
 .category-select,
+.business-type-select,
 .sort-select {
   width: 260px;
 }
@@ -1181,12 +1241,12 @@ onMounted(() => {
 
 .preview-editor-shell {
   width: 100%;
-  height: calc(100vh - 76px);
+  height: calc(100vh - 60px);
   min-height: 520px;
   overflow: hidden;
-  background: var(--bg-color);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
+  background: #eef2f6;
+  border: 0;
+  border-radius: 0;
 }
 
 .preview-editor-shell :deep(.onlyoffice-editor),
@@ -1210,21 +1270,58 @@ onMounted(() => {
 }
 
 :global(.document-preview-dialog .el-dialog__header) {
-  flex: 0 0 56px;
-  display: flex;
-  align-items: center;
+  flex: 0 0 auto;
+  min-height: 60px;
   margin: 0;
-  padding: 0 20px;
-  background: var(--bg-panel);
-  border-bottom: 1px solid var(--border-color);
+  padding: 0 18px;
+  background: #0b2138;
+  border-bottom: 1px solid rgba(0, 200, 255, 0.2);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
 }
 
 :global(.document-preview-dialog .el-dialog__body) {
   flex: 1;
   min-height: 0;
-  padding: 16px 20px 20px;
+  padding: 0;
   overflow: hidden;
-  background: var(--bg-color);
+  background: #071625;
+}
+
+.preview-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 60px;
+}
+
+.preview-back-button {
+  flex: 0 0 auto;
+  height: 36px;
+  color: #dce9fa;
+  background: rgba(10, 30, 48, 0.68);
+  border-color: rgba(88, 156, 222, 0.42);
+}
+
+.preview-title-stack {
+  min-width: 0;
+}
+
+.preview-kicker {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.preview-title {
+  max-width: min(62vw, 980px);
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 17px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 768px) {

@@ -31,6 +31,7 @@ def init_db():
 
     Base.metadata.create_all(bind=engine)
     _ensure_camera_zone_schema()
+    _ensure_camera_device_schema()
     _ensure_broadcast_schema()
     _ensure_safety_event_schema()
     logger.info("数据库表已初始化")
@@ -165,6 +166,99 @@ def _ensure_camera_zone_schema():
                     )
             except Exception as exc:
                 logger.warning(f"camera_detection_zone zone_id backfill skipped: {exc}")
+
+
+def _ensure_camera_device_schema():
+    """Best-effort compatibility migration for the camera device registry."""
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+    if "camera_device" not in table_names:
+        return
+    existing = {column["name"] for column in inspector.get_columns("camera_device")}
+    dialect = engine.dialect.name
+    if dialect == "mysql":
+        column_defs = {
+            "camera_id": "VARCHAR(64) NULL COMMENT '设备ID'",
+            "camera_name": "VARCHAR(128) NULL COMMENT '设备名称'",
+            "brand": "VARCHAR(32) NOT NULL DEFAULT 'dahua' COMMENT '品牌'",
+            "ip_address": "VARCHAR(128) NULL COMMENT '摄像头IP地址'",
+            "rtsp_port": "INT NOT NULL DEFAULT 554 COMMENT 'RTSP端口'",
+            "web_port": "INT NOT NULL DEFAULT 80 COMMENT 'Web控制台端口'",
+            "web_proxy_port": "INT NULL COMMENT 'Web控制台本机监听端口'",
+            "username": "VARCHAR(128) NULL COMMENT '登录账号'",
+            "password": "VARCHAR(256) NULL COMMENT '登录密码'",
+            "rtsp_path": "VARCHAR(256) NULL COMMENT 'RTSP通道路径'",
+            "description": "TEXT NULL COMMENT '描述'",
+            "enabled": "BOOL NOT NULL DEFAULT TRUE COMMENT '是否启用'",
+            "last_online_at": "DATETIME NULL COMMENT '最后在线时间'",
+            "last_error": "TEXT NULL COMMENT '最后连接错误'",
+            "create_time": "DATETIME NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'",
+            "update_time": "DATETIME NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'",
+        }
+    else:
+        column_defs = {
+            "camera_id": "VARCHAR(64)",
+            "camera_name": "VARCHAR(128)",
+            "brand": "VARCHAR(32) DEFAULT 'dahua'",
+            "ip_address": "VARCHAR(128)",
+            "rtsp_port": "INT DEFAULT 554",
+            "web_port": "INT DEFAULT 80",
+            "web_proxy_port": "INT",
+            "username": "VARCHAR(128)",
+            "password": "VARCHAR(256)",
+            "rtsp_path": "VARCHAR(256)",
+            "description": "TEXT",
+            "enabled": "BOOL DEFAULT TRUE",
+            "last_online_at": "DATETIME",
+            "last_error": "TEXT",
+            "create_time": "DATETIME",
+            "update_time": "DATETIME",
+        }
+    with engine.begin() as conn:
+        for name, definition in column_defs.items():
+            if name in existing:
+                continue
+            try:
+                conn.execute(text(f"ALTER TABLE camera_device ADD COLUMN {name} {definition}"))
+            except Exception as exc:
+                logger.warning(f"camera_device add column {name} skipped: {exc}")
+
+        if "camera" not in table_names:
+            return
+        legacy_columns = {column["name"] for column in inspector.get_columns("camera")}
+        required_columns = {
+            "camera_id",
+            "camera_name",
+            "brand",
+            "ip_address",
+            "rtsp_port",
+            "web_port",
+            "web_proxy_port",
+            "username",
+            "password",
+            "rtsp_path",
+            "description",
+            "enabled",
+            "last_online_at",
+            "last_error",
+            "create_time",
+            "update_time",
+        }
+        if not required_columns.issubset(legacy_columns):
+            return
+        try:
+            count = conn.execute(text("SELECT COUNT(*) FROM camera_device")).scalar() or 0
+            if count:
+                return
+            columns = ", ".join(required_columns)
+            conn.execute(
+                text(
+                    f"INSERT INTO camera_device ({columns}) "
+                    f"SELECT {columns} FROM camera WHERE camera_id IS NOT NULL"
+                )
+            )
+        except Exception as exc:
+            logger.warning(f"camera legacy rows copy skipped: {exc}")
 
 
 def _ensure_safety_event_schema():

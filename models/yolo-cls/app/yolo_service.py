@@ -1,0 +1,136 @@
+"""YOLO 推理服务模块。"""
+
+import cv2
+import numpy as np
+from pathlib import Path
+from ultralytics import YOLO
+
+from config import ModelConfig
+
+
+class YOLOService:
+    """YOLO 分类服务封装。"""
+
+    def __init__(self, config: ModelConfig):
+        self.config = config
+        self.model = None
+        self._load_model()
+
+    def _load_model(self) -> None:
+        """加载 YOLO 模型。"""
+        weights_path = Path(self.config.weights_path)
+        if not weights_path.exists():
+            raise FileNotFoundError(f"模型权重文件不存在: {weights_path}")
+
+        self.model = YOLO(str(weights_path), task="classify")
+        print(f"模型加载成功: {weights_path}")
+        print(f"类别: {self.model.names}")
+
+    def classify_image(self, image_path: Path) -> dict:
+        """对单张图片进行分类。
+
+        Args:
+            image_path: 图片文件路径
+
+        Returns:
+            分类结果字典
+        """
+        # 执行推理
+        results = self.model.predict(
+            source=str(image_path),
+            imgsz=self.config.img_size,
+            device=self.config.device,
+            verbose=False,
+        )
+
+        # 获取结果
+        result = results[0]
+        probs = result.probs.data.detach().float().cpu().tolist()
+
+        # 格式化 top-k 结果
+        indexed = sorted(enumerate(probs), key=lambda item: item[1], reverse=True)
+        topk_result = [
+            {
+                "class_id": int(class_id),
+                "class_name": self.config.class_names[class_id],
+                "confidence": float(confidence),
+            }
+            for class_id, confidence in indexed[:self.config.top_k]
+        ]
+
+        top1 = topk_result[0]
+
+        return {
+            "class": top1["class_name"],
+            "confidence": top1["confidence"],
+            "top_k": topk_result,
+        }
+
+    def classify_video(self, video_path: Path, frame_interval: int = 30) -> dict:
+        """对视频进行分类（抽帧分类）。
+
+        Args:
+            video_path: 视频文件路径
+            frame_interval: 抽帧间隔（每 N 帧抽取一帧）
+
+        Returns:
+            分类结果字典
+        """
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            raise RuntimeError(f"无法打开视频文件: {video_path}")
+
+        frames_results = []
+        frame_id = 0
+
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            # 按间隔抽帧
+            if frame_id % frame_interval == 0:
+                # 保存临时图片
+                temp_frame_path = Path(f"/tmp/frame_{frame_id}.jpg")
+                cv2.imwrite(str(temp_frame_path), frame)
+
+                # 分类
+                result = self.classify_image(temp_frame_path)
+                result["frame_id"] = frame_id
+                frames_results.append(result)
+
+                # 清理临时文件
+                temp_frame_path.unlink(missing_ok=True)
+
+            frame_id += 1
+
+        cap.release()
+
+        # 统计主要分类
+        class_counts = {}
+        for frame_result in frames_results:
+            cls = frame_result["class"]
+            class_counts[cls] = class_counts.get(cls, 0) + 1
+
+        main_class = max(class_counts.items(), key=lambda x: x[1])[0] if class_counts else "unknown"
+
+        return {
+            "main_class": main_class,
+            "total_frames": frame_id,
+            "sampled_frames": len(frames_results),
+            "frame_interval": frame_interval,
+            "frames": frames_results,
+        }
+
+    def get_model_info(self) -> dict:
+        """获取模型信息。
+
+        Returns:
+            模型信息字典
+        """
+        return {
+            "classes": self.config.class_names,
+            "input_size": self.config.img_size,
+            "device": self.config.device,
+            "weights_path": self.config.weights_path,
+        }

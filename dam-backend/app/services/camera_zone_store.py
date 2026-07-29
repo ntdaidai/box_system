@@ -226,6 +226,8 @@ class SqlCameraZoneStore:
             ],
             "risk_level": getattr(row, "risk_level", None) or "LOW",
             "trigger_seconds": float(getattr(row, "trigger_seconds", None) or 10),
+            "create_time": row.create_time.isoformat() if getattr(row, "create_time", None) else None,
+            "update_time": row.update_time.isoformat() if getattr(row, "update_time", None) else None,
         }
 
 
