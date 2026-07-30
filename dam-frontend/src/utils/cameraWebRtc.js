@@ -131,9 +131,11 @@ export class CameraWebRtcPlayer {
 
   _attachStream(stream) {
     this.videoElement.srcObject = stream
+    this.videoElement.controls = false
     const playPromise = this.videoElement.play()
     playPromise?.catch(() => {
-      this.videoElement.controls = true
+      this.videoElement.controls = false
+      this._fail(new Error('浏览器阻止了实时视频自动播放'))
     })
   }
 
@@ -203,4 +205,3 @@ export class CameraWebRtcPlayer {
     this.handlers.onState?.('closed')
   }
 }
-

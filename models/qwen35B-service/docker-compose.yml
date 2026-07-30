@@ -1,0 +1,11 @@
+services:
+  qwen35b-proxy:
+    build: .
+    container_name: qwen35b-proxy
+    network_mode: bridge
+    ports:
+      - "9900:9457"
+    environment:
+      - CLOUD_URL=http://10.196.85.11:9457
+      - INFERENCE_PATH=/api/v1/cloud-inference
+    restart: unless-stopped

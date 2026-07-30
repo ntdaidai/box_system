@@ -12,7 +12,7 @@ from src.dam_workflow.state import DamState
 from src.dam_workflow.tools.rule_io_matcher import (
     rule_based_io_match,
     START_OUTPUTS,
-    EVALUATION_IO,
+    LLM_ACTION_IO,
     build_end_data_flow,
 )
 from src.core.models import ModelIOTemplate
@@ -150,7 +150,7 @@ def match_io_for_edge(source_node: Dict, target_node: Dict, event_type: str, db:
     source_class = source_node.get("node_class")
     target_class = target_node.get("node_class")
     source_category = source_node.get("model_category", "start" if source_class == "START" else "unknown")
-    target_category = target_node.get("model_category", "evaluation" if target_class == "EVALUATION" else "unknown")
+    target_category = target_node.get("model_category", "unknown")
 
     # Layer 1: 模板匹配
     if db:
@@ -165,14 +165,18 @@ def match_io_for_edge(source_node: Dict, target_node: Dict, event_type: str, db:
     # 构建 source_io
     if source_class == "START":
         source_io = {"outputs": START_OUTPUTS}
+    elif source_node.get("physical_io_schema"):
+        source_io = source_node["physical_io_schema"]
     elif source_node.get("io_schema"):
         source_io = source_node["io_schema"]
 
     # 构建 target_io
-    if target_class == "EVALUATION":
-        target_io = EVALUATION_IO
+    if target_node.get("physical_io_schema"):
+        target_io = target_node["physical_io_schema"]
     elif target_node.get("io_schema"):
         target_io = target_node["io_schema"]
+    elif target_category in ["local_llm", "cloud_llm"]:
+        target_io = LLM_ACTION_IO
 
     if source_io and target_io:
         mapping = rule_based_io_match(source_io, target_io)

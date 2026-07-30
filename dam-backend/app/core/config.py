@@ -211,6 +211,21 @@ class Settings:
     BROADCAST_ENABLE_LOCAL_TEST_DEVICE: bool = (
         _get_env("BROADCAST_ENABLE_LOCAL_TEST_DEVICE", "true").lower() == "true"
     )
+    BROADCAST_ENABLE_USB_AUDIO_DEVICE: bool = (
+        _get_env("BROADCAST_ENABLE_USB_AUDIO_DEVICE", "true").lower() == "true"
+    )
+    BROADCAST_USB_ALSA_DEVICE: str = _get_env("BROADCAST_USB_ALSA_DEVICE", "default")
+    BROADCAST_AUDIO_DIR: str = _get_env(
+        "BROADCAST_AUDIO_DIR",
+        os.path.join(BASE_DIR, "data", "broadcast_audio"),
+    )
+    BROADCAST_AUDIO_MAX_MB: int = int(_get_env("BROADCAST_AUDIO_MAX_MB", "20"))
+    BROADCAST_AUDIO_CONVERT_TIMEOUT_SECONDS: int = int(
+        _get_env("BROADCAST_AUDIO_CONVERT_TIMEOUT_SECONDS", "30")
+    )
+    BROADCAST_AUDIO_PLAY_TIMEOUT_SECONDS: int = int(
+        _get_env("BROADCAST_AUDIO_PLAY_TIMEOUT_SECONDS", "90")
+    )
     BROADCAST_AUTO_COOLDOWN_SECONDS: int = int(
         _get_env("BROADCAST_AUTO_COOLDOWN_SECONDS", "60")
     )

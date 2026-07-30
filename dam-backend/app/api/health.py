@@ -9,6 +9,8 @@ import os
 import time
 import threading
 
+from app.core.cache import cached
+
 # 记录服务启动时间
 _SERVICE_START_TIME = time.time()
 
@@ -326,6 +328,7 @@ def _get_gpu_info() -> dict:
 
 
 @router.get("/system/info", response_model=SystemInfoResponse)
+@cached(ttl=5, prefix="system:info")
 async def get_system_info(req: Request):
     """获取系统运行状态信息"""
     # 检查 AI 模型状态

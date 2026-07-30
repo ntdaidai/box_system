@@ -246,7 +246,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onActivated, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -736,6 +736,10 @@ onMounted(() => {
     const date = String(route.query.reportDate)
     searchQuery.value = `坝区安全智能巡查日报_${date}`
   }
+  loadDocuments()
+})
+
+onActivated(() => {
   loadDocuments()
 })
 </script>

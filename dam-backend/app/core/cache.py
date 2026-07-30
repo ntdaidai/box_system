@@ -4,10 +4,12 @@
 """
 
 import functools
+import inspect
 import random
 from collections.abc import Mapping
 from typing import Callable, Optional, Any
 from loguru import logger
+from starlette.concurrency import run_in_threadpool
 
 from app.core.redis import redis_manager
 
@@ -103,12 +105,18 @@ def cached(ttl: int = 300, prefix: str = "", jitter: bool = True):
     def decorator(func: Callable):
         # 确定缓存前缀
         cache_prefix = prefix or func.__name__
+        is_async = inspect.iscoroutinefunction(func)
+
+        async def _call_func(*args, **kwargs):
+            if is_async:
+                return await func(*args, **kwargs)
+            return await run_in_threadpool(func, *args, **kwargs)
 
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
             # 如果 Redis 未连接，直接执行函数
             if not redis_manager.is_connected:
-                return await func(*args, **kwargs)
+                return await _call_func(*args, **kwargs)
 
             # 构建缓存键
             cache_key = _build_cache_key(cache_prefix, *args, **kwargs)
@@ -123,7 +131,7 @@ def cached(ttl: int = 300, prefix: str = "", jitter: bool = True):
                 logger.warning(f"缓存读取失败: {cache_key}, {e}")
 
             # 缓存未命中，执行函数
-            result = await func(*args, **kwargs)
+            result = await _call_func(*args, **kwargs)
 
             # 写入缓存
             try:

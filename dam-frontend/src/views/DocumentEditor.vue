@@ -10,13 +10,6 @@
           </h2>
         </div>
       </div>
-      <div class="header-right">
-        <span class="save-state" :class="saveStateClass">{{ saveStateLabel }}</span>
-        <el-button type="primary" class="save-button" @click="handleSave" :loading="saving">
-          <el-icon><Check /></el-icon>
-          保存
-        </el-button>
-      </div>
     </div>
 
     <div class="editor-container">
@@ -30,10 +23,17 @@
         editor-height="100%"
         :user="currentUser"
         :callback-url="callbackUrl"
-        @ready="onEditorReady"
         @document-state-change="onDocumentStateChange"
         @error="onEditorError"
       />
+    </div>
+
+    <div v-if="closingAndSaving" class="saving-overlay">
+      <div class="saving-panel">
+        <div class="saving-spinner"></div>
+        <div class="saving-title">正在退出并保存文档</div>
+        <div class="saving-text">OnlyOffice 正在生成最终文件，请稍候...</div>
+      </div>
     </div>
 
     <!-- 协同编辑用户列表（可选） -->
@@ -54,8 +54,8 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, Check } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { ArrowLeft } from '@element-plus/icons-vue'
 import OnlyOfficeEditor from '@/components/OnlyOfficeEditor.vue'
 import axios from 'axios'
 
@@ -66,15 +66,14 @@ const route = useRoute()
 const editorRef = ref(null)
 
 // 状态
-const saving = ref(false)
 const documentUrl = ref('')
 const documentType = ref('word')
 const editorConfig = ref(null)
 const editorMode = ref('edit')
 const collaborators = ref([])
-const isDocumentModified = ref(false)
-const editorReady = ref(false)
-let syncingUpdatedAt = false
+const returning = ref(false)
+const hasDocumentChanges = ref(false)
+const closingAndSaving = ref(false)
 
 // 文档信息
 const documentInfo = ref({
@@ -93,22 +92,6 @@ const currentUser = ref({
 
 // 回调 URL 由后端完整 OnlyOffice config 提供，这里仅保留兼容兜底。
 const callbackUrl = computed(() => editorConfig.value?.editorConfig?.callbackUrl || '')
-
-const saveStateLabel = computed(() => {
-  if (saving.value) return '正在保存'
-  if (!editorReady.value) return '编辑器加载中'
-  if (isDocumentModified.value) return '有未保存修改'
-  return '已保存'
-})
-
-const saveStateClass = computed(() => {
-  if (saving.value) return 'is-saving'
-  if (!editorReady.value) return 'is-loading'
-  if (isDocumentModified.value) return 'is-dirty'
-  return 'is-saved'
-})
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 // 加载文档信息
 const loadDocumentInfo = async () => {
@@ -161,34 +144,23 @@ const loadDocumentInfo = async () => {
   }
 }
 
-// 编辑器准备就绪
-const onEditorReady = () => {
-  console.log('OnlyOffice 编辑器已准备就绪')
-  editorReady.value = true
-}
-
-// 文档状态变化
-const onDocumentStateChange = (event) => {
-  console.log('文档状态变化:', event)
-  const wasModified = isDocumentModified.value
-  const modified = Boolean(event?.data)
-  if (modified) {
-    isDocumentModified.value = true
-    return
-  }
-  if (wasModified && !modified) {
-    syncUpdatedAtAfterSave(documentInfo.value.updated_at)
-  }
-}
-
 // 编辑器错误
 const onEditorError = (error) => {
   console.error('编辑器错误:', error)
   ElMessage.error(error)
 }
 
-const fetchLatestDocumentInfo = async () => {
-  if (!documentInfo.value.document_id) return null
+// 这里只记录是否编辑过，用于返回时展示保存中状态，不做自动保存。
+const onDocumentStateChange = (event) => {
+  if (event?.data) {
+    hasDocumentChanges.value = true
+  }
+}
+
+const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms))
+
+const fetchLatestUpdatedAt = async () => {
+  if (!documentInfo.value.document_id) return ''
   const response = await axios.get(`/api/onlyoffice/editor-config/${documentInfo.value.document_id}`, {
     params: {
       user_id: currentUser.value.id,
@@ -196,110 +168,44 @@ const fetchLatestDocumentInfo = async () => {
       mode: editorMode.value
     }
   })
-  return response.data?.success ? response.data.data : null
+  return response.data?.success ? response.data.data?.updated_at || '' : ''
 }
 
-const applyLatestDocumentInfo = (data) => {
-  if (!data) return
-  documentInfo.value = {
-    ...documentInfo.value,
-    title: data.document?.title || documentInfo.value.title,
-    file_type: data.document?.fileType || documentInfo.value.file_type,
-    file_size: data.file_size || documentInfo.value.file_size,
-    updated_at: data.updated_at || documentInfo.value.updated_at
-  }
-}
-
-const waitForUpdatedAt = async (previousUpdatedAt, attempts = 12) => {
-  for (let index = 0; index < attempts; index += 1) {
-    await sleep(800)
-    const data = await fetchLatestDocumentInfo()
-    const latestUpdatedAt = data?.updated_at || ''
+const waitForSaveCallback = async (previousUpdatedAt) => {
+  for (let index = 0; index < 18; index += 1) {
+    await sleep(1000)
+    const latestUpdatedAt = await fetchLatestUpdatedAt()
     if (latestUpdatedAt && latestUpdatedAt !== previousUpdatedAt) {
-      applyLatestDocumentInfo(data)
       return true
     }
   }
   return false
 }
 
-const syncUpdatedAtAfterSave = async (previousUpdatedAt) => {
-  if (syncingUpdatedAt || !documentInfo.value.document_id) return
-  try {
-    syncingUpdatedAt = true
-    const updated = await waitForUpdatedAt(previousUpdatedAt, 5)
-    if (updated) isDocumentModified.value = false
-  } catch (error) {
-    console.warn('刷新文档更新时间失败:', error)
-  } finally {
-    syncingUpdatedAt = false
-  }
-}
-
-// 保存文档
-const handleSave = async () => {
-  try {
-    if (!documentInfo.value.document_id) {
-      ElMessage.warning('文档信息还未加载完成')
-      return
-    }
-
-    if (!isDocumentModified.value) {
-      const data = await fetchLatestDocumentInfo()
-      applyLatestDocumentInfo(data)
-      ElMessage.success('当前没有新的修改')
-      return
-    }
-
-    const previousUpdatedAt = documentInfo.value.updated_at
-    saving.value = true
-
-    const response = await axios.post(`/api/onlyoffice/force-save/${documentInfo.value.document_id}`, {
-      user_id: currentUser.value.id
-    })
-
-    if (response.data?.already_saved) {
-      ElMessage.success('文档已是最新')
-      const data = await fetchLatestDocumentInfo()
-      applyLatestDocumentInfo(data)
-      isDocumentModified.value = false
-    } else {
-      const updated = await waitForUpdatedAt(previousUpdatedAt)
-      if (updated) {
-        ElMessage.success('保存成功')
-        isDocumentModified.value = false
-      } else {
-        ElMessage.warning('保存已提交，但尚未确认更新时间刷新')
-      }
-    }
-
-  } catch (error) {
-    console.error('保存失败:', error)
-    ElMessage.error(error.response?.data?.detail || '保存失败')
-  } finally {
-    saving.value = false
-  }
-}
-
 // 返回上一页
-const goBack = () => {
-  if (isDocumentModified.value) {
-    ElMessageBox.confirm(
-      '文档尚未保存，是否确定离开？',
-      '确认离开',
-      {
-        confirmButtonText: '确定离开',
-        cancelButtonText: '取消',
-        type: 'warning'
-      }
-    ).then(() => {
-      router.back()
-    }).catch(() => {
-      // 用户取消
-    })
-  } else {
-    router.back()
+const goBack = async () => {
+  if (returning.value) return
+  returning.value = true
+  closingAndSaving.value = hasDocumentChanges.value
+  const previousUpdatedAt = documentInfo.value.updated_at
+
+  if (editorRef.value) {
+    editorRef.value.destroy()
   }
+
+  if (!hasDocumentChanges.value) {
+    router.back()
+    return
+  }
+
+  const saved = await waitForSaveCallback(previousUpdatedAt)
+  closingAndSaving.value = false
+  if (saved) {
+    ElMessage.success('文档已保存')
+  } else {
+    ElMessage.warning('已退出编辑，OnlyOffice 仍在后台保存，可稍后刷新列表')
+  }
+  router.back()
 }
 
 // 页面加载时获取文档信息
@@ -380,46 +286,6 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex: 0 0 auto;
-}
-
-.save-button {
-  min-width: 96px;
-  height: 36px;
-  font-weight: 700;
-}
-
-.save-state {
-  display: inline-flex;
-  align-items: center;
-  height: 30px;
-  padding: 0 10px;
-  border-radius: 4px;
-  border: 1px solid var(--border-light);
-  font-size: 13px;
-  color: var(--text-secondary);
-  background: rgba(10, 30, 48, 0.65);
-}
-
-.save-state.is-dirty {
-  color: #ffe5a3;
-  border-color: rgba(230, 162, 60, 0.45);
-}
-
-.save-state.is-saved {
-  color: #9df0bd;
-  border-color: rgba(103, 194, 58, 0.42);
-}
-
-.save-state.is-saving,
-.save-state.is-loading {
-  color: var(--accent-color);
-}
-
 .editor-container {
   flex: 1 1 auto;
   min-height: 0;
@@ -439,6 +305,57 @@ onBeforeUnmount(() => {
 .editor-container :deep(.onlyoffice-editor) {
   border: 0;
   border-radius: 0;
+}
+
+.saving-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 16, 29, 0.72);
+  backdrop-filter: blur(3px);
+}
+
+.saving-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(360px, calc(100vw - 40px));
+  padding: 28px 24px;
+  color: #dce9fa;
+  background: #102640;
+  border: 1px solid rgba(74, 155, 230, 0.42);
+  border-radius: 8px;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.34);
+}
+
+.saving-spinner {
+  width: 34px;
+  height: 34px;
+  margin-bottom: 18px;
+  border: 3px solid rgba(144, 196, 255, 0.28);
+  border-top-color: #46a7ff;
+  border-radius: 50%;
+  animation: saving-rotate 0.9s linear infinite;
+}
+
+.saving-title {
+  margin-bottom: 8px;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.saving-text {
+  font-size: 14px;
+  color: #9eb8d7;
+}
+
+@keyframes saving-rotate {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .collaborators-bar {
@@ -480,8 +397,7 @@ onBeforeUnmount(() => {
     padding: 12px;
   }
 
-  .header-left,
-  .header-right {
+  .header-left {
     width: 100%;
     justify-content: flex-start;
     flex-wrap: wrap;
@@ -489,11 +405,6 @@ onBeforeUnmount(() => {
 
   .page-title {
     max-width: 100%;
-  }
-
-  .save-state {
-    width: 100%;
-    justify-content: center;
   }
 }
 </style>

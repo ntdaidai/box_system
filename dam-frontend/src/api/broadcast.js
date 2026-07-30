@@ -17,3 +17,7 @@ export function previewBroadcast(data) {
 export function playBroadcast(data) {
   return request.post('/broadcast/play', data, { timeout: 30000 })
 }
+
+export function playRecordedBroadcast(data) {
+  return request.post('/broadcast/audio/play', data, { timeout: 120000 })
+}

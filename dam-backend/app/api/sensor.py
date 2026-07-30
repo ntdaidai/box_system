@@ -70,6 +70,17 @@ def _vibration_trends_cache_ttl(
     return 300 if view == "recent24h" else 1800
 
 
+def _sensor_history_cache_ttl(device_name: str | None = None, range: str = "1h") -> int:
+    return {
+        "1h": 60,
+        "6h": 300,
+        "24h": 600,
+        "1d": 600,
+        "7d": 1800,
+        "6mo": 3600,
+    }.get(range, 300)
+
+
 def _with_current_rain_day(
     payload: dict,
     latest: dict,
@@ -406,6 +417,7 @@ async def get_vibration_history_trends(
 
 
 @router.get("/history/{device_name}", response_model=SensorDataResponse)
+@cached(ttl=_sensor_history_cache_ttl, prefix="sensor:history:legacy:v2", jitter=False)
 async def get_sensor_history(device_name: str, range: str = "1h"):
     """获取传感器历史数据
 
@@ -465,6 +477,7 @@ async def get_vibration_processed():
 
 
 @router.get("/vibration/events", response_model=SensorDataResponse)
+@cached(ttl=5, prefix="sensor:vibration:events")
 async def get_vibration_events(limit: int = Query(50, ge=1, le=200)):
     """获取振动事件列表（免鉴权）
 
@@ -476,6 +489,7 @@ async def get_vibration_events(limit: int = Query(50, ge=1, le=200)):
 
 
 @router.get("/vibration/trends", response_model=SensorDataResponse)
+@cached(ttl=_sensor_history_cache_ttl, prefix="sensor:vibration:trends:legacy:v2", jitter=False)
 async def get_vibration_trends(range: str = Query("1h", regex="^(1h|6h|24h|1d|7d|6mo)$")):
     """获取振动趋势数据（免鉴权）
 

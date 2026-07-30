@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.core.config import settings
+from app.core.cache import cached, invalidate_cache
 
 router = APIRouter(prefix="/api/document", tags=["文档管理"])
 
@@ -138,6 +139,7 @@ async def upload_document(
             file_size,
             content_type=get_content_type(extension)
         )
+        await invalidate_cache("document:*")
 
         # 生成访问 URL
         url = f"/api/document/file/{object_name}"
@@ -192,6 +194,7 @@ async def get_file(path: str):
 
 
 @router.get("/list")
+@cached(ttl=60, prefix="document:list")
 async def list_documents(
     category: Optional[str] = Query(None, description="文档分类"),
     file_type: Optional[str] = Query(None, description="文件类型"),
@@ -262,6 +265,7 @@ async def delete_document(object_name: str):
     try:
         client = get_minio_client()
         client.remove_object(BUCKET_NAME, object_name)
+        await invalidate_cache("document:*")
 
         return {"success": True, "message": "文档已删除"}
 
@@ -270,6 +274,7 @@ async def delete_document(object_name: str):
 
 
 @router.get("/categories")
+@cached(ttl=3600, prefix="document:categories")
 async def get_categories():
     """
     获取文档分类列表
@@ -286,6 +291,7 @@ async def get_categories():
 
 
 @router.get("/stats")
+@cached(ttl=60, prefix="document:stats")
 async def get_stats():
     """
     获取文档统计信息

@@ -169,7 +169,6 @@ const historyError = ref('')
 const chartData = ref({ view: 'recent24h', history: [], window: null })
 const recentData = ref(null)
 const seriesVisibility = reactive({ min: true, max: true })
-const historyCache = new Map()
 
 let chart = null
 let timer = null
@@ -316,7 +315,6 @@ const applyTrendPayload = (payload, query, apply = true) => {
   if (!payload) return null
   syncAvailablePeriods(payload.available_periods)
   const normalized = { ...payload, history: payload.history || [] }
-  historyCache.set(queryKey(query), normalized)
   if (query.view === 'recent24h') recentData.value = normalized
   if (apply) {
     chartData.value = normalized
@@ -326,11 +324,6 @@ const applyTrendPayload = (payload, query, apply = true) => {
 }
 
 const loadTrends = async (query = currentQuery(), apply = true, force = false) => {
-  const key = queryKey(query)
-  if (!force && historyCache.has(key)) {
-    return applyTrendPayload(historyCache.get(key), query, apply)
-  }
-
   if (apply) {
     historyLoading.value = true
     historyError.value = ''
@@ -381,7 +374,6 @@ const scheduleHistoryRefresh = () => {
   const delay = historyMode.value === 'recent24h' ? millisecondsToNextHalfHour() + 1000 : 30 * 60 * 1000
   historyRefreshTimer = setTimeout(async () => {
     const query = currentQuery()
-    historyCache.delete(queryKey(query))
     await loadTrends(query, true, true)
     renderChart()
     scheduleHistoryRefresh()

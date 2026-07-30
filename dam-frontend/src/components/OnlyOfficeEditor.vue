@@ -238,7 +238,7 @@ const initEditor = async () => {
         },
         customization: {
           autosave: true,
-          forcesave: true, // 保留 Ctrl+S 和工具栏保存能力
+          forcesave: false,
           compactHeader: !props.showTitleBar,
           toolbarNoTabs: false,
           hideRightMenu: false,

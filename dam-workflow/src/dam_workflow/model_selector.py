@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""模型选择器（阶段 2）"""
+"""模型选择器（阶段 2）
+
+支持三种模型类别：
+- specialized：专用小模型（分类、检测等，可选）
+- local_llm：本地大模型（qwen4B，场景推理，一定存在）
+- cloud_llm：云端大模型（qwen35B，最终报告，一定存在）
+"""
 import logging
 from typing import Dict, Optional, List
 from sqlalchemy.orm import Session
@@ -21,7 +27,7 @@ def query_event_model_mapping(db: Session, event_type: str, task_type: str, mode
         db: SQLAlchemy Session
         event_type: 事件类型
         task_type: 任务类型
-        model_category: 模型类别 (specialized/llm)
+        model_category: 模型类别 (specialized/local_llm/cloud_llm)
 
     Returns:
         候选模型列表
@@ -108,7 +114,7 @@ def fuzzy_match_model(node_type: str, model_category: str, db: Session) -> Optio
     """
     # 提取关键词
     keywords = []
-    for kw in ["检测", "分割", "变化", "推理", "识别", "测量", "分析", "评估"]:
+    for kw in ["检测", "分割", "变化", "推理", "识别", "测量", "分析", "评估", "报告"]:
         if kw in node_type:
             keywords.append(kw)
 
@@ -120,8 +126,15 @@ def fuzzy_match_model(node_type: str, model_category: str, db: Session) -> Optio
     query = db.query(ModelRegistry).filter(ModelRegistry.runtime_status == "running")
 
     if model_category == "specialized":
+        # 专用模型：非 LLM 类型
         query = query.filter(ModelRegistry.model_type.isnot(None))
-    elif model_category == "llm":
+    elif model_category == "local_llm":
+        # 本地大模型：LLM 类型
+        query = query.filter(
+            ModelRegistry.model_type.ilike("%llm%") | ModelRegistry.model_type.ilike("%language%")
+        )
+    elif model_category == "cloud_llm":
+        # 云端大模型：LLM 类型（后续可通过标签区分）
         query = query.filter(
             ModelRegistry.model_type.ilike("%llm%") | ModelRegistry.model_type.ilike("%language%")
         )
@@ -138,12 +151,13 @@ def fuzzy_match_model(node_type: str, model_category: str, db: Session) -> Optio
     return get_model_with_inference_url(model.id, db)
 
 
-def fetch_evaluation_template(db: Session, event_type: str = None) -> Optional[Dict]:
-    """从数据库读取评价 prompt 模板
+def fetch_evaluation_template(db: Session, event_type: str = None, template_type: str = None) -> Optional[Dict]:
+    """从数据库读取 prompt 模板
 
     Args:
         db: SQLAlchemy Session
         event_type: 事件类型（None 表示通用模板）
+        template_type: 模板类型（reasoning/report，可选）
 
     Returns:
         模板字典，未找到返回 None
@@ -176,6 +190,24 @@ def fetch_evaluation_template(db: Session, event_type: str = None) -> Optional[D
     return None
 
 
+def get_model_id_by_category(model_category: str) -> Optional[int]:
+    """根据模型类别获取默认模型 ID
+
+    Args:
+        model_category: 模型类别 (specialized/local_llm/cloud_llm)
+
+    Returns:
+        模型 ID，未配置返回 None
+    """
+    if model_category == "local_llm":
+        return settings.llm_local_model_id
+    elif model_category == "cloud_llm":
+        return settings.llm_cloud_model_id
+    elif model_category == "specialized":
+        return None  # 专用模型需要从映射表查询
+    return None
+
+
 def select_model_for_action(node: Dict, event_type: str, db: Session = None) -> Optional[Dict]:
     """为 ACTION 节点选择模型
 
@@ -189,6 +221,13 @@ def select_model_for_action(node: Dict, event_type: str, db: Session = None) -> 
     """
     node_type = node.get("node_type", "")
     model_category = node.get("model_category", "specialized")
+
+    # 对于 local_llm 和 cloud_llm，优先使用配置的默认模型 ID
+    default_model_id = get_model_id_by_category(model_category)
+    if default_model_id and db:
+        model_info = get_model_with_inference_url(default_model_id, db)
+        if model_info:
+            return model_info
 
     if db:
         # 1. 从映射表查询候选模型
@@ -219,8 +258,8 @@ def select_model_for_action(node: Dict, event_type: str, db: Session = None) -> 
     }
 
 
-def configure_evaluation_node(node: Dict, event_type: str, user_prompt: str, db: Session = None) -> Dict:
-    """为 EVALUATION 节点注入固定配置
+def configure_action_node(node: Dict, event_type: str, user_prompt: str, db: Session = None) -> Dict:
+    """为 ACTION 节点注入配置
 
     Args:
         node: 节点信息
@@ -231,60 +270,48 @@ def configure_evaluation_node(node: Dict, event_type: str, user_prompt: str, db:
     Returns:
         配置后的节点
     """
-    # 1. 从数据库读取 prompt 模板
-    template = None
-    if db:
-        template = fetch_evaluation_template(db, event_type=event_type)
+    model_category = node.get("model_category", "specialized")
 
-    # 2. 注入固定 IO schema
-    node["physical_io_schema"] = {
-        "inputs": {
-            "detection_results": {"type": "object", "required": True, "description": "上游检测结果"},
-            "sensor_data": {"type": "object", "required": False, "description": "传感器数据"},
-            "user_prompt": {"type": "string", "required": True, "description": "用户原始需求"},
-            "event_type": {"type": "string", "required": True, "description": "事件类型"},
-        },
-        "outputs": {
-            "evaluation_report": {"type": "string", "description": "详细分析报告（自然语言）"},
-            "risk_level": {"type": "string", "description": "风险等级（低/中/高/极高）"},
-            "compliance_status": {"type": "string", "description": "安全状态（安全/警告/危险）"},
-            "recommendations": {"type": "array", "description": "处置建议列表"},
-        },
-    }
+    # 为 local_llm 和 cloud_llm 节点注入 prompt 模板
+    if model_category in ["local_llm", "cloud_llm"]:
+        template = None
+        if db:
+            template = fetch_evaluation_template(db, event_type=event_type)
 
-    # 3. 注入 prompt 模板
-    if template:
-        node["evaluation_template"] = template.get("prompt_template")
-    else:
-        node["evaluation_template"] = (
-            "你是库坝应急巡查专家。请根据以下事件的检测结果和分析数据，生成专业的应急巡查分析报告。\n\n"
-            "【事件信息】\n事件类型: {{event_type}}\n{{user_prompt}}\n\n"
-            "【上游检测结果】\n{{detection_results}}\n\n"
-            "【传感器数据】\n{{sensor_data}}\n\n"
-            "【报告要求】\n"
-            "1. 事件概述：简述事件的基本情况\n"
-            "2. 检测结果分析：基于上游专有模型的检测结果进行分析\n"
-            "3. 风险评估：评估当前风险等级和发展趋势\n"
-            "4. 应急处置建议：提出具体的处置措施和监测方案\n"
-            "5. 结论与建议\n\n"
-            "【重要约束】\n"
-            "- 直接利用上游检测结果，不要重复识别目标\n"
-            "- 仅输出分析报告，不要输出模型调用过程、模型名称或工作流步骤\n"
-            "- 报告应专业、完整、可直接用于决策\n\n"
-            "输出格式：\n"
-            "- evaluation_report: 详细分析报告（自然语言）\n"
-            "- risk_level: 风险等级（低/中/高/极高）\n"
-            "- compliance_status: 安全状态（安全/警告/危险）\n"
-            "- recommendations: 处置建议列表"
-        )
+        if template:
+            node["prompt_template"] = template.get("prompt_template")
+        else:
+            # 默认提示词
+            if model_category == "local_llm":
+                node["prompt_template"] = (
+                    "你是库坝应急巡查专家。请根据以下信息进行场景分析，生成初步分析报告。\n\n"
+                    "【事件信息】\n事件类型: {{event_type}}\n{{user_prompt}}\n\n"
+                    "【检测结果】\n{{detection_results}}\n\n"
+                    "【传感器数据】\n{{sensor_data}}\n\n"
+                    "请分析当前情况并生成初步报告。"
+                )
+            else:  # cloud_llm
+                node["prompt_template"] = (
+                    "你是库坝应急巡查高级分析专家。请根据以下信息进行综合分析，生成最终报告。\n\n"
+                    "【事件信息】\n事件类型: {{event_type}}\n{{user_prompt}}\n\n"
+                    "【初步分析报告】\n{{preliminary_report}}\n\n"
+                    "【传感器数据】\n{{sensor_data}}\n\n"
+                    "请生成最终的综合分析报告，包含风险评估和处置建议。"
+                )
 
-    # 4. 标记使用模型库推理接口
-    if not settings.llm_fallback_model_id:
-        logger.warning("llm_fallback_model_id 未配置，EVALUATION 节点将无法调用大模型生成报告")
-
-    node["implementation"] = {"type": "MODEL_API", "model_id": settings.llm_fallback_model_id}
-    node["model_name"] = "大模型（通过模型库推理接口）"
-    node["inference_method"] = "model_registry_api"
+        # 注入 IO schema
+        node["physical_io_schema"] = {
+            "inputs": {
+                "detection_results": {"type": "object", "required": False, "description": "检测结果"},
+                "sensor_data": {"type": "object", "required": False, "description": "传感器数据"},
+                "user_prompt": {"type": "string", "required": True, "description": "用户原始需求"},
+                "event_type": {"type": "string", "required": True, "description": "事件类型"},
+            },
+            "outputs": {
+                "report": {"type": "string", "description": "分析报告"},
+                "risk_level": {"type": "string", "description": "风险等级"},
+            },
+        }
 
     return node
 
@@ -312,14 +339,15 @@ def populate_models(dam_state: DamState, db: Session = None) -> Dict:
         node_class = node.get("node_class")
 
         if node_class == "ACTION":
+            # 先注入配置
+            configure_action_node(node, event_type, user_prompt, db)
+
+            # 再选择模型
             model_info = select_model_for_action(node, event_type, db)
             if model_info:
                 node["model_id"] = model_info.get("model_id")
                 node["model_name"] = model_info.get("model_name")
                 node["inference_url"] = model_info.get("inference_url")
                 node["io_schema"] = model_info.get("io_schema")
-
-        elif node_class == "EVALUATION":
-            configure_evaluation_node(node, event_type, user_prompt, db)
 
     return draft_dag

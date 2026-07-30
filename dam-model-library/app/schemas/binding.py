@@ -25,6 +25,7 @@ class ContainerConfig(BaseModel):
 class BindContainerRequest(BaseModel):
     """绑定已有容器请求"""
     container_id: str = Field(..., min_length=1, max_length=64, description="Docker容器ID或名称")
+    host_ip: Optional[str] = Field(None, max_length=64, description="宿主机IP（默认127.0.0.1，云端服务填写远程IP）")
     host_port: Optional[int] = Field(None, description="宿主机映射端口（0或不传则自动分配）")
     container_port: int = Field(..., description="容器内部端口")
     inference_path: Optional[str] = Field(None, max_length=256, description="推理接口路径")
@@ -37,6 +38,7 @@ class BindContainerRequest(BaseModel):
 class BindImageRequest(BaseModel):
     """绑定镜像请求"""
     image_name: str = Field(..., min_length=1, max_length=256, description="Docker镜像全名")
+    host_ip: Optional[str] = Field(None, max_length=64, description="宿主机IP（默认127.0.0.1，云端服务填写远程IP）")
     host_port: Optional[int] = Field(None, description="宿主机映射端口（0或不传则自动分配）")
     container_port: int = Field(..., description="容器内部端口")
     inference_path: Optional[str] = Field(None, max_length=256, description="推理接口路径")

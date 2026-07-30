@@ -8,6 +8,7 @@ from datetime import datetime
 
 from app.core.database import get_db
 from app.core.security import require_auth
+from app.core.cache import cached, invalidate_cache
 from app.models.user import User
 from app.models.model_library import ModelLibrary
 from app.models.data_source import DataSource
@@ -43,6 +44,7 @@ class DataSourceUpdatePayload(BaseModel):
 # ==================== 数据源管理 ====================
 
 @router.get("/sources", summary="获取数据源列表")
+@cached(ttl=300, prefix="eca:sources")
 def get_sources(
     source_type: Optional[str] = Query(None, description="数据源类型: sensor/camera"),
     is_activate: Optional[bool] = Query(None, description="是否启用"),
@@ -60,6 +62,7 @@ def get_sources(
 
 
 @router.get("/sources/{source_id}", summary="获取数据源详情")
+@cached(ttl=600, prefix="eca:source")
 def get_source(source_id: int, db: Session = Depends(get_db), _user: User = Depends(require_auth)):
     """获取数据源详情"""
     source = db.query(DataSource).filter(DataSource.id == source_id).first()
@@ -69,17 +72,18 @@ def get_source(source_id: int, db: Session = Depends(get_db), _user: User = Depe
 
 
 @router.post("/sources", summary="新增数据源")
-def create_source(payload: DataSourcePayload, db: Session = Depends(get_db), _user: User = Depends(require_auth)):
+async def create_source(payload: DataSourcePayload, db: Session = Depends(get_db), _user: User = Depends(require_auth)):
     """新增传感器、摄像头、北斗或其他数据源。"""
     source = DataSource(**payload.model_dump())
     db.add(source)
     db.commit()
     db.refresh(source)
+    await invalidate_cache("eca:sources*")
     return {"code": 200, "data": source.to_dict(), "message": "数据源已添加"}
 
 
 @router.put("/sources/{source_id}", summary="更新数据源")
-def update_source(
+async def update_source(
     source_id: int,
     payload: DataSourceUpdatePayload,
     db: Session = Depends(get_db),
@@ -93,23 +97,28 @@ def update_source(
         setattr(source, key, value)
     db.commit()
     db.refresh(source)
+    await invalidate_cache("eca:source*")
+    await invalidate_cache("eca:sources*")
     return {"code": 200, "data": source.to_dict(), "message": "数据源已更新"}
 
 
 @router.delete("/sources/{source_id}", summary="删除数据源")
-def delete_source(source_id: int, db: Session = Depends(get_db), _user: User = Depends(require_auth)):
+async def delete_source(source_id: int, db: Session = Depends(get_db), _user: User = Depends(require_auth)):
     """删除数据源。已有规则引用的数据源会由数据库外键约束保护。"""
     source = db.query(DataSource).filter(DataSource.id == source_id).first()
     if not source:
         raise HTTPException(status_code=404, detail="数据源不存在")
     db.delete(source)
     db.commit()
+    await invalidate_cache("eca:source*")
+    await invalidate_cache("eca:sources*")
     return {"code": 200, "data": {"id": source_id}, "message": "数据源已删除"}
 
 
 # ==================== 条件库管理 ====================
 
 @router.get("/conditions", summary="获取条件列表")
+@cached(ttl=300, prefix="eca:conditions")
 def get_conditions(
     source_id: Optional[int] = Query(None, description="数据源ID"),
     is_activate: Optional[bool] = Query(None, description="是否启用"),
@@ -127,6 +136,7 @@ def get_conditions(
 
 
 @router.get("/conditions/{condition_id}", summary="获取条件详情")
+@cached(ttl=600, prefix="eca:condition")
 def get_condition(condition_id: int, db: Session = Depends(get_db), _user: User = Depends(require_auth)):
     """获取条件详情"""
     condition = db.query(ConditionLibrary).filter(ConditionLibrary.id == condition_id).first()
@@ -138,6 +148,7 @@ def get_condition(condition_id: int, db: Session = Depends(get_db), _user: User 
 # ==================== 事件库管理 ====================
 
 @router.get("/events", summary="获取事件列表")
+@cached(ttl=300, prefix="eca:events")
 def get_events(
     event_category: Optional[str] = Query(None, description="事件分类: environment/structure/equipment"),
     risk_level: Optional[int] = Query(None, description="风险等级: 1/2/3"),
@@ -158,6 +169,7 @@ def get_events(
 
 
 @router.get("/events/{event_id}", summary="获取事件详情")
+@cached(ttl=600, prefix="eca:event")
 def get_event(event_id: int, db: Session = Depends(get_db), _user: User = Depends(require_auth)):
     """获取事件详情"""
     event = db.query(EventLibrary).filter(EventLibrary.id == event_id).first()
@@ -167,6 +179,7 @@ def get_event(event_id: int, db: Session = Depends(get_db), _user: User = Depend
 
 
 @router.get("/events/{event_id}/conditions", summary="获取事件关联的条件")
+@cached(ttl=300, prefix="eca:event-conditions")
 def get_event_conditions(event_id: int, db: Session = Depends(get_db), _user: User = Depends(require_auth)):
     """获取事件关联的条件"""
     event = db.query(EventLibrary).filter(EventLibrary.id == event_id).first()
@@ -191,6 +204,7 @@ def get_event_conditions(event_id: int, db: Session = Depends(get_db), _user: Us
 # ==================== 行为流程管理 ====================
 
 @router.get("/flows", summary="获取行为流程列表")
+@cached(ttl=300, prefix="eca:flows")
 def get_flows(
     is_activate: Optional[bool] = Query(None, description="是否启用"),
     db: Session = Depends(get_db),
@@ -205,6 +219,7 @@ def get_flows(
 
 
 @router.get("/flows/{flow_id}", summary="获取行为流程详情")
+@cached(ttl=600, prefix="eca:flow")
 def get_flow(flow_id: int, db: Session = Depends(get_db), _user: User = Depends(require_auth)):
     """获取行为流程详情"""
     flow = db.query(ActionFlow).filter(ActionFlow.id == flow_id).first()
@@ -214,6 +229,7 @@ def get_flow(flow_id: int, db: Session = Depends(get_db), _user: User = Depends(
 
 
 @router.get("/flows/{flow_id}/steps", summary="获取流程步骤")
+@cached(ttl=300, prefix="eca:flow-steps")
 def get_flow_steps(flow_id: int, db: Session = Depends(get_db), _user: User = Depends(require_auth)):
     """获取流程步骤"""
     flow = db.query(ActionFlow).filter(ActionFlow.id == flow_id).first()
@@ -227,6 +243,7 @@ def get_flow_steps(flow_id: int, db: Session = Depends(get_db), _user: User = De
 # ==================== 事件-行为关系管理 ====================
 
 @router.get("/events/{event_id}/actions", summary="获取事件关联的行为")
+@cached(ttl=300, prefix="eca:event-actions")
 def get_event_actions(event_id: int, db: Session = Depends(get_db), _user: User = Depends(require_auth)):
     """获取事件关联的行为"""
     event = db.query(EventLibrary).filter(EventLibrary.id == event_id).first()
@@ -250,6 +267,7 @@ def get_event_actions(event_id: int, db: Session = Depends(get_db), _user: User 
 # ==================== 模型库管理 ====================
 
 @router.get("/models", summary="获取模型列表")
+@cached(ttl=300, prefix="eca:models")
 def get_models(
     model_type: Optional[str] = Query(None, description="模型类型: detection/segmentation/vlm"),
     is_activate: Optional[bool] = Query(None, description="是否启用"),
@@ -267,6 +285,7 @@ def get_models(
 
 
 @router.get("/models/{model_id}", summary="获取模型详情")
+@cached(ttl=600, prefix="eca:model")
 def get_model(model_id: int, db: Session = Depends(get_db), _user: User = Depends(require_auth)):
     """获取模型详情"""
     model = db.query(ModelLibrary).filter(ModelLibrary.id == model_id).first()
@@ -278,6 +297,7 @@ def get_model(model_id: int, db: Session = Depends(get_db), _user: User = Depend
 # ==================== 事件触发记录 ====================
 
 @router.get("/logs", summary="获取事件触发记录")
+@cached(ttl=10, prefix="eca:logs")
 def get_event_logs(
     event_id: Optional[int] = Query(None, description="事件ID"),
     status: Optional[str] = Query(None, description="状态: triggered/processing/completed/failed"),
@@ -296,6 +316,7 @@ def get_event_logs(
 
 
 @router.get("/logs/{log_id}", summary="获取事件触发记录详情")
+@cached(ttl=30, prefix="eca:log")
 def get_event_log(log_id: int, db: Session = Depends(get_db), _user: User = Depends(require_auth)):
     """获取事件触发记录详情"""
     log = db.query(EventLog).filter(EventLog.id == log_id).first()
@@ -307,6 +328,7 @@ def get_event_log(log_id: int, db: Session = Depends(get_db), _user: User = Depe
 # ==================== 调度器控制 ====================
 
 @router.get("/scheduler/status", summary="获取调度器状态")
+@cached(ttl=5, prefix="eca:scheduler:status")
 async def get_scheduler_status(_user: User = Depends(require_auth)):
     """获取 ECA 调度器运行状态"""
     from app.services.eca_engine import eca_scheduler, eca_engine
@@ -329,6 +351,7 @@ async def start_scheduler(_user: User = Depends(require_auth)):
     """启动 ECA 调度器"""
     from app.services.eca_engine import eca_scheduler
     await eca_scheduler.start()
+    await invalidate_cache("eca:scheduler:*")
     return {"code": 200, "message": "调度器已启动"}
 
 
@@ -337,6 +360,7 @@ async def stop_scheduler(_user: User = Depends(require_auth)):
     """停止 ECA 调度器"""
     from app.services.eca_engine import eca_scheduler
     await eca_scheduler.stop()
+    await invalidate_cache("eca:scheduler:*")
     return {"code": 200, "message": "调度器已停止"}
 
 
@@ -348,6 +372,7 @@ async def set_scheduler_interval(
     """设置调度器轮询间隔"""
     from app.services.eca_engine import eca_scheduler
     eca_scheduler.set_interval(seconds)
+    await invalidate_cache("eca:scheduler:*")
     return {"code": 200, "message": f"轮询间隔已设置为 {seconds} 秒"}
 
 

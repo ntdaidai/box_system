@@ -18,12 +18,12 @@ def test_get_model_name():
     print("测试动态获取模型名称")
     print("=" * 50)
 
-    # 测试主模型
+    # 测试本地模型
     try:
-        main_model_name = model_registry_client.get_model_name(settings.llm_main_model_id)
-        print(f"✅ 主模型 ID={settings.llm_main_model_id}，vLLM 名称: {main_model_name}")
+        local_model_name = model_registry_client.get_model_name(settings.llm_local_model_id)
+        print(f"✅ 本地模型 ID={settings.llm_local_model_id}，vLLM 名称: {local_model_name}")
     except Exception as e:
-        print(f"❌ 获取主模型名称失败: {e}")
+        print(f"❌ 获取本地模型名称失败: {e}")
         return False
 
     # 测试兜底模型
@@ -45,7 +45,7 @@ def test_model_registry_infer():
     print("=" * 50)
 
     print(f"模型库 API 地址: {settings.model_registry_api_base}")
-    print(f"主模型 ID: {settings.llm_main_model_id}")
+    print(f"本地模型 ID: {settings.llm_local_model_id}")
     print(f"兜底模型 ID: {settings.llm_fallback_model_id}")
     print()
 
@@ -55,7 +55,7 @@ def test_model_registry_infer():
     try:
         print(f"调用推理接口...")
         result = model_registry_client.infer(
-            model_id=settings.llm_main_model_id,
+            model_id=settings.llm_local_model_id,
             request_data={"prompt": test_prompt},
         )
 

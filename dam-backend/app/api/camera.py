@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field, model_validator
 
 from app.core.config import settings
-from app.core.cache import invalidate_cache
+from app.core.cache import cached, invalidate_cache
 from app.core.database import get_db
 from app.core.security import require_auth
 from app.models.alarm import Alarm
@@ -800,6 +800,7 @@ async def _mjpeg_response(
 # dai: Static routes stay ahead of dynamic camera-id routes so Starlette never
 # mistakes "model" or "detect" for a camera identifier.
 @router.get("/list", response_model=DetectResponse, summary="获取摄像头列表")
+@cached(ttl=2, prefix="camera:list")
 async def list_cameras(
     db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
@@ -818,6 +819,7 @@ async def list_cameras(
 
 
 @router.get("/devices", response_model=DetectResponse, summary="获取摄像头设备台账")
+@cached(ttl=10, prefix="camera:devices")
 async def list_camera_devices(
     db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
@@ -891,6 +893,7 @@ async def create_camera_device(
     status = _sync_camera_runtime(row)
     proxy = _sync_camera_web_proxy(row, db)
     db.commit()
+    await invalidate_cache("camera:*")
     return DetectResponse(
         code=200,
         data={
@@ -931,6 +934,7 @@ async def update_camera_device(
     status = _sync_camera_runtime(row)
     proxy = _sync_camera_web_proxy(row, db)
     db.commit()
+    await invalidate_cache("camera:*")
     return DetectResponse(
         code=200,
         data={
@@ -966,10 +970,12 @@ async def delete_camera_device(
     camera_web_proxy_manager.stop_proxy(camera_id)
     db.delete(row)
     db.commit()
+    await invalidate_cache("camera:*")
     return DetectResponse(code=200, data={"camera_id": camera_id, "message": "摄像头设备已删除"})
 
 
 @router.get("/model/status", response_model=DetectResponse, summary="获取模型状态")
+@cached(ttl=5, prefix="camera:model:status")
 async def get_model_status(_user: User = Depends(require_auth)):
     return DetectResponse(code=200, data=vision_model_registry.get_status())
 
@@ -995,6 +1001,7 @@ async def reload_model(
     if not success:
         raise HTTPException(status_code=500, detail="模型加载失败")
     model = vision_model_registry.get(task_type)
+    await invalidate_cache("camera:model:*")
     return DetectResponse(
         code=200,
         data={**model.get_status(), "message": "模型加载成功"},
@@ -1201,6 +1208,7 @@ async def add_camera(
             camera.set_detection_zones(stored_zones)
     if not success:
         raise HTTPException(status_code=409, detail="摄像头 ID 已存在")
+    await invalidate_cache("camera:*")
     return DetectResponse(
         code=200,
         data={"camera_id": payload.camera_id, "message": "摄像头添加成功"},
@@ -1222,6 +1230,7 @@ async def update_camera(
     )
     if status is None:
         raise HTTPException(status_code=404, detail="摄像头不存在")
+    await invalidate_cache("camera:*")
     return DetectResponse(
         code=200,
         data={**status, "message": "摄像头信息已更新"},
@@ -1726,6 +1735,7 @@ async def safety_event_ws(websocket: WebSocket):
     response_model=DetectResponse,
     summary="获取摄像头虚拟检测区域",
 )
+@cached(ttl=300, prefix="camera:zones")
 async def get_detection_zones(
     camera_id: str,
     _user: User = Depends(require_auth),
@@ -1765,6 +1775,7 @@ async def save_detection_zones(
         zones = get_camera_zone_store().get(camera_id)
         if zones:
             camera.set_detection_zones(zones)
+        await invalidate_cache("camera:zones*")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return DetectResponse(
@@ -1947,6 +1958,7 @@ async def detection_events(
 
 
 @router.get("/{camera_id}/status", response_model=DetectResponse, summary="获取摄像头状态")
+@cached(ttl=2, prefix="camera:status")
 async def get_camera_status(
     camera_id: str,
     _user: User = Depends(require_auth),
@@ -2065,6 +2077,7 @@ async def toggle_detection(
         camera.disable_detection()
         message = "实时 AI 分析已关闭"
 
+    await invalidate_cache("camera:*")
     return DetectResponse(
         code=200,
         data={**camera.get_status(), "message": message},
@@ -2124,6 +2137,7 @@ async def remove_camera(
 ):
     if not camera_manager.remove_camera(camera_id):
         raise HTTPException(status_code=404, detail="摄像头不存在")
+    await invalidate_cache("camera:*")
     return DetectResponse(
         code=200,
         data={"camera_id": camera_id, "message": "摄像头已删除"},

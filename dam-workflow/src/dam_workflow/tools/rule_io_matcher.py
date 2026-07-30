@@ -69,19 +69,17 @@ START_OUTPUTS = {
     "user_prompt": {"type": "string"},
 }
 
-# EVALUATION 节点固定 IO
-EVALUATION_IO = {
+# LLM ACTION 节点固定 IO（local_llm 和 cloud_llm）
+LLM_ACTION_IO = {
     "inputs": {
-        "detection_results": {"type": "object", "required": True, "description": "上游检测结果汇总"},
+        "detection_results": {"type": "object", "required": False, "description": "检测结果"},
         "sensor_data": {"type": "object", "required": False, "description": "传感器数据"},
         "user_prompt": {"type": "string", "required": True, "description": "用户原始需求"},
         "event_type": {"type": "string", "required": True, "description": "事件类型"},
     },
     "outputs": {
-        "evaluation_report": {"type": "string", "description": "详细分析报告（自然语言）"},
-        "risk_level": {"type": "string", "description": "风险等级（低/中/高/极高）"},
-        "compliance_status": {"type": "string", "description": "安全状态（安全/警告/危险）"},
-        "recommendations": {"type": "array", "description": "处置建议列表"},
+        "report": {"type": "string", "description": "分析报告"},
+        "risk_level": {"type": "string", "description": "风险等级"},
     },
 }
 

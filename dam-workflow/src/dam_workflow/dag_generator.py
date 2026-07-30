@@ -10,8 +10,11 @@ from src.dam_workflow.model_registry_client import model_registry_client
 from src.core.config import settings
 
 
-def ensure_evaluation_node(dag: Dict) -> Dict:
-    """确保 DAG 中存在 EVALUATION 节点，位于 END 之前
+def ensure_required_nodes(dag: Dict) -> Dict:
+    """确保 DAG 中存在必需的节点
+
+    新的工作流结构：
+    START → [专用小模型] → 场景推理(local_llm) → 最终报告(cloud_llm) → END
 
     Args:
         dag: 包含 nodes 和 edges 的 DAG 字典
@@ -22,38 +25,71 @@ def ensure_evaluation_node(dag: Dict) -> Dict:
     nodes = dag.get("nodes", [])
     edges = dag.get("edges", [])
 
-    # 检查是否已存在 EVALUATION
-    eval_nodes = [n for n in nodes if n.get("node_class") == "EVALUATION"]
-    if eval_nodes:
-        return dag  # 已存在，不处理
+    # 检查是否已有 local_llm 和 cloud_llm 节点
+    has_local_llm = any(n.get("model_category") == "local_llm" for n in nodes)
+    has_cloud_llm = any(n.get("model_category") == "cloud_llm" for n in nodes)
 
-    # 创建 EVALUATION 节点
-    eval_node = {
-        "node_id": "evaluation_0",
-        "node_class": "EVALUATION",
-        "node_type": "事件分析报告",
-        "expected_implementation_type": "MODEL",
-    }
+    # 如果缺少必需节点，添加它们
+    if not has_local_llm or not has_cloud_llm:
+        # 找到 END 节点
+        end_node = next((n for n in nodes if n.get("node_class") == "END"), None)
+        if not end_node:
+            raise ValueError("DAG 中缺少 END 节点")
 
-    # 找到 END 节点和它的直接前驱
-    end_node = next((n for n in nodes if n.get("node_class") == "END"), None)
-    if not end_node:
-        raise ValueError("DAG 中缺少 END 节点")
+        end_id = end_node["node_id"]
 
-    end_id = end_node["node_id"]
-    # 找到原来指向 END 的边
-    edges_to_end = [e for e in edges if e.get("target") == end_id]
+        # 找到原来指向 END 的边
+        edges_to_end = [e for e in edges if e.get("target") == end_id]
 
-    # 重定向：原来指向 END 的边改为指向 EVALUATION
-    for edge in edges_to_end:
-        edge["target"] = "evaluation_0"
+        # 找到最后一个 ACTION 节点（如果存在）
+        last_action = None
+        for n in reversed(nodes):
+            if n.get("node_class") == "ACTION":
+                last_action = n
+                break
 
-    # 添加 EVALUATION → END 边
-    edges.append({"source": "evaluation_0", "target": end_id})
+        # 如果没有 ACTION 节点，从 START 开始
+        if not last_action:
+            last_action = next((n for n in nodes if n.get("node_class") == "START"), None)
 
-    # 插入 EVALUATION 节点（在 END 之前）
-    end_idx = nodes.index(end_node)
-    nodes.insert(end_idx, eval_node)
+        # 添加缺失的节点
+        if not has_local_llm:
+            local_llm_node = {
+                "node_id": "action_reasoning",
+                "node_class": "ACTION",
+                "node_type": "场景推理与初步报告",
+                "expected_implementation_type": "MODEL",
+                "model_category": "local_llm",
+            }
+            # 插入到 END 之前
+            end_idx = nodes.index(end_node)
+            nodes.insert(end_idx, local_llm_node)
+
+            # 重定向边
+            for edge in edges_to_end:
+                edge["target"] = "action_reasoning"
+            edges.append({"source": "action_reasoning", "target": end_id})
+
+            last_action = local_llm_node
+            edges_to_end = [e for e in edges if e.get("target") == "action_reasoning"]
+
+        if not has_cloud_llm:
+            cloud_llm_node = {
+                "node_id": "action_report",
+                "node_class": "ACTION",
+                "node_type": "综合分析与最终报告",
+                "expected_implementation_type": "MODEL",
+                "model_category": "cloud_llm",
+            }
+            # 插入到 END 之前
+            end_idx = nodes.index(end_node)
+            nodes.insert(end_idx, cloud_llm_node)
+
+            # 重定向边
+            for edge in edges_to_end:
+                if edge["target"] == end_id:
+                    edge["target"] = "action_report"
+            edges.append({"source": "action_report", "target": end_id})
 
     return {"nodes": nodes, "edges": edges}
 
@@ -79,10 +115,14 @@ def validate_dag(dag: Dict) -> tuple[bool, str]:
     if len(end_nodes) != 1:
         return False, f"必须有且仅有一个 END 节点，当前有 {len(end_nodes)} 个"
 
-    # 2. EVALUATION 约束
-    eval_nodes = [n for n in nodes if n.get("node_class") == "EVALUATION"]
-    if len(eval_nodes) != 1:
-        return False, f"必须有且仅有一个 EVALUATION 节点，当前有 {len(eval_nodes)} 个"
+    # 2. 检查必需的 LLM 节点
+    has_local_llm = any(n.get("model_category") == "local_llm" for n in nodes)
+    has_cloud_llm = any(n.get("model_category") == "cloud_llm" for n in nodes)
+
+    if not has_local_llm:
+        return False, "缺少 local_llm（场景推理）节点"
+    if not has_cloud_llm:
+        return False, "缺少 cloud_llm（最终报告）节点"
 
     # 3. 连通性检查（从 START BFS）
     adj = {}
@@ -123,9 +163,9 @@ def generate_dag_via_llm(event_type: str, user_prompt: str) -> Dict:
     Raises:
         RuntimeError: LLM 调用失败
     """
-    if not settings.llm_main_model_id:
+    if not settings.llm_local_model_id:
         raise RuntimeError(
-            f"事件类型 '{event_type}' 未找到预定义模板，且未配置主模型 ID（llm_main_model_id）。"
+            f"事件类型 '{event_type}' 未找到预定义模板，且未配置本地模型 ID（llm_local_model_id）。"
             f"支持的事件类型: {get_supported_event_types()}"
         )
 
@@ -173,7 +213,7 @@ def generate_dag_via_llm(event_type: str, user_prompt: str) -> Dict:
 
     try:
         result = model_registry_client.infer(
-            model_id=settings.llm_main_model_id,
+            model_id=settings.llm_local_model_id,
             request_data={"prompt": prompt},
         )
     except Exception as e:
@@ -227,17 +267,17 @@ def generate_dag(state: DamState, db=None) -> Dict:
     template = get_template(event_type)
     if template:
         dag = {
-            "workflow_complexity": "COMPLEX" if len(template["nodes"]) > 4 else "TRIVIAL",
+            "workflow_complexity": "COMPLEX" if len(template["nodes"]) > 3 else "TRIVIAL",
             "visual_tasks": template["visual_tasks"],
             "nodes": template["nodes"],
             "edges": template["edges"],
         }
     else:
-        # 2. 模板未命中，使用 8B LLM 生成
+        # 2. 模板未命中，使用本地 LLM 生成
         dag = generate_dag_via_llm(event_type, user_prompt)
 
-    # 3. 确保 EVALUATION 节点存在
-    dag = ensure_evaluation_node(dag)
+    # 3. 确保必需节点存在（local_llm 和 cloud_llm）
+    dag = ensure_required_nodes(dag)
 
     # 4. 轻量校验
     is_valid, error_msg = validate_dag(dag)

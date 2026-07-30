@@ -23,12 +23,14 @@ class Settings(BaseSettings):
     port: int = 5002
 
     # LLM 模型 ID（在模型库中的记录 ID）
-    # 主模型：qwen4B，用于 DAG 生成等复杂推理任务
-    llm_main_model_id: Optional[int] = None    # 主模型 ID
+    # 本地模型：qwen4B，用于场景推理和初步报告生成
+    llm_local_model_id: Optional[int] = None     # 本地大模型 ID
+    # 云端模型：qwen35B，用于综合分析和最终报告生成
+    llm_cloud_model_id: Optional[int] = None     # 云端大模型 ID
     # 兜底模型：qwen0.8B，用于 IO 匹配等轻量任务
     llm_fallback_model_id: Optional[int] = None  # 兜底模型 ID
 
-    @field_validator("llm_main_model_id", "llm_fallback_model_id", mode="before")
+    @field_validator("llm_local_model_id", "llm_cloud_model_id", "llm_fallback_model_id", mode="before")
     @classmethod
     def empty_str_to_none(cls, v):
         """将空字符串转为 None，避免 Pydantic v2 解析失败"""

@@ -1,5 +1,14 @@
 services:
+  # Standalone Redis is kept only for isolated Redis debugging.
+  # The normal box_system runtime starts Redis from ../docker-compose.yml.
+  # Do not run this file together with the root compose file: both define
+  # container_name=redis-server and port 6379.
+  #
+  # If you really need this standalone instance, start it explicitly with:
+  #   docker compose --profile standalone-redis up -d
   redis:
+    profiles:
+      - standalone-redis
     image: redis:7-alpine
     container_name: redis-server
     restart: unless-stopped
@@ -14,7 +23,7 @@ services:
       - ./logs:/var/log/redis
     command: redis-server /usr/local/etc/redis/redis.conf
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "redis", "ping"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -22,4 +31,4 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
+          memory: 512M

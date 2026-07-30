@@ -1145,7 +1145,6 @@ const vibrationStatusClass = (data) => {
 }
 
 const queryKey = ({ tab, view, year, month }) => [tab, view, year || '', month || 'all'].join(':')
-const historyCache = new Map()
 
 const currentQuery = () => historyMode.value === 'recent24h'
   ? { tab: activeHistoryTab.value, view: 'recent24h' }
@@ -1157,15 +1156,6 @@ const currentQuery = () => historyMode.value === 'recent24h'
       year: Number(selectedYear.value),
       month: selectedMonth.value === 'all' ? null : Number(selectedMonth.value),
     }
-
-const readHistoryCache = (query) => {
-  const cached = historyCache.get(queryKey(query))
-  if (!cached) return null
-  const maxAge = query.view === 'recent24h' ? 5 * MINUTE : 30 * MINUTE
-  if (Date.now() - cached.updatedAt <= maxAge) return cached.payload
-  historyCache.delete(queryKey(query))
-  return null
-}
 
 const syncAvailablePeriods = (periods = []) => {
   if (!Array.isArray(periods) || !periods.length) return
@@ -1259,10 +1249,9 @@ const loadLegacyVibrationPayload = async ({ view = 'recent24h', year, month } = 
   }
 }
 
-const applyHistoryPayload = (query, payload, cacheResult = true) => {
+const applyHistoryPayload = (query, payload) => {
   const normalized = { ...payload, history: Array.isArray(payload.history) ? payload.history : [] }
   syncAvailablePeriods(normalized.available_periods)
-  if (cacheResult) historyCache.set(queryKey(query), { payload: normalized, updatedAt: Date.now() })
   if (queryKey(query) === queryKey(currentQuery())) {
     chartData.value = normalized
     historyError.value = ''
@@ -1273,13 +1262,6 @@ const applyHistoryPayload = (query, payload, cacheResult = true) => {
 const loadHistory = async (query = currentQuery(), force = false) => {
   const key = queryKey(query)
   const requestId = ++requestSerial
-  const cached = force ? null : readHistoryCache(query)
-  if (cached) {
-    applyHistoryPayload(query, cached, false)
-    await nextTick()
-    renderChart()
-    return
-  }
 
   historyLoading.value = true
   historyError.value = ''

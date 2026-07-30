@@ -15,7 +15,7 @@ def test_config_loads():
     assert settings.host == "0.0.0.0"
     assert settings.port == 5002
     assert settings.model_registry_db_host == "192.168.31.52"
-    assert settings.llm_main_model_id == 10
+    assert settings.llm_local_model_id == 10
     assert settings.llm_fallback_model_id == 9
     print("PASS: config loads")
 
@@ -26,15 +26,17 @@ def test_keyword_extractor():
     assert extract_event_type("发生了滑坡事件") == "滑坡"
     assert extract_event_type("检测到裂缝") == "裂缝"
     assert extract_event_type("渗漏严重") == "渗漏"
+    assert extract_event_type("暴雨来袭") == "降雨"
+    assert extract_event_type("水位异常") == "水位"
     assert extract_event_type("无关文本") is None
     print("PASS: keyword extractor")
 
 
 def test_event_templates():
-    """6 种事件模板都存在"""
+    """8 种事件模板都存在"""
     from src.dam_workflow.tools.event_templates import get_template, get_supported_event_types
     types = get_supported_event_types()
-    assert len(types) == 6
+    assert len(types) == 8
     for t in types:
         tpl = get_template(t)
         assert tpl is not None, f"模板缺失: {t}"
@@ -43,6 +45,10 @@ def test_event_templates():
         classes = {n["node_class"] for n in tpl["nodes"]}
         assert "START" in classes, f"{t} 缺少 START"
         assert "END" in classes, f"{t} 缺少 END"
+        # 检查是否有 local_llm 和 cloud_llm 节点
+        categories = {n.get("model_category") for n in tpl["nodes"]}
+        assert "local_llm" in categories, f"{t} 缺少 local_llm 节点"
+        assert "cloud_llm" in categories, f"{t} 缺少 cloud_llm 节点"
     print("PASS: event templates")
 
 
@@ -60,9 +66,12 @@ def test_dag_generation_template_path():
     assert "nodes" in dag
     assert "edges" in dag
     classes = {n["node_class"] for n in dag["nodes"]}
-    assert "EVALUATION" in classes
     assert "START" in classes
     assert "END" in classes
+    # 检查是否有 local_llm 和 cloud_llm 节点
+    categories = {n.get("model_category") for n in dag["nodes"]}
+    assert "local_llm" in categories, "缺少 local_llm 节点"
+    assert "cloud_llm" in categories, "缺少 cloud_llm 节点"
     print("PASS: DAG generation (template path)")
 
 
@@ -77,8 +86,8 @@ def test_input_parser():
 
 def test_rule_io_matcher():
     """规则 IO 匹配"""
-    from src.dam_workflow.tools.rule_io_matcher import rule_based_io_match, START_OUTPUTS, EVALUATION_IO
-    mapping = rule_based_io_match({"outputs": START_OUTPUTS}, EVALUATION_IO)
+    from src.dam_workflow.tools.rule_io_matcher import rule_based_io_match, START_OUTPUTS, LLM_ACTION_IO
+    mapping = rule_based_io_match({"outputs": START_OUTPUTS}, LLM_ACTION_IO)
     assert "inputs" in mapping
     print("PASS: rule IO matcher")
 

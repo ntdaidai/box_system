@@ -1,0 +1,30 @@
+{
+  "pages": [
+    {
+      "path": "pages/events/index",
+      "style": {
+        "navigationBarTitleText": "风险事件",
+        "enablePullDownRefresh": true
+      }
+    },
+    {
+      "path": "pages/detail/index",
+      "style": {
+        "navigationBarTitleText": "事件详情",
+        "enablePullDownRefresh": true
+      }
+    },
+    {
+      "path": "pages/process/index",
+      "style": {
+        "navigationBarTitleText": "现场处理"
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "white",
+    "navigationBarTitleText": "水利安全监测",
+    "navigationBarBackgroundColor": "#0f4c5c",
+    "backgroundColor": "#f4f7f8"
+  }
+}

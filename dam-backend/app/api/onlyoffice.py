@@ -8,6 +8,7 @@ downloads and saves documents through these FastAPI endpoints.
 import hashlib
 import io
 import os
+import re
 import time
 import zipfile
 from datetime import datetime, timezone
@@ -116,9 +117,13 @@ def parse_object_name(object_name: str) -> tuple[str, str, str]:
     return document_id, filename, ext.lower()
 
 
-def document_key(document_id: str) -> str:
-    key_source = f"{document_id}:{EDITOR_KEY_VERSION}"
+def document_key(document_id: str, version: str = "") -> str:
+    key_source = f"{document_id}:{version}:{EDITOR_KEY_VERSION}"
     return hashlib.sha256(key_source.encode("utf-8")).hexdigest()[:32]
+
+
+def get_document_version(stat) -> str:
+    return stat.last_modified.isoformat() if getattr(stat, "last_modified", None) else ""
 
 
 def find_document_object(document_id: str, user_id: Optional[str] = None) -> Optional[str]:
@@ -157,6 +162,18 @@ def get_metadata_value(stat, key: str, fallback: str = "") -> str:
 
 def get_document_created_at(stat, fallback: str = "") -> str:
     return get_metadata_value(stat, "created-at", fallback)
+
+
+def infer_created_at_from_document_id(document_id: str, fallback: str = "") -> str:
+    for value in reversed(re.findall(r"(?<!\d)(1\d{12})(?!\d)", document_id or "")):
+        try:
+            timestamp = int(value) / 1000
+            created_at = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+            if 2020 <= created_at.year <= 2100:
+                return created_at.isoformat()
+        except (TypeError, ValueError, OSError, OverflowError):
+            continue
+    return fallback
 
 
 def encode_metadata_value(value: str) -> str:
@@ -236,6 +253,7 @@ async def get_document(document_id: str):
 
     try:
         client = get_minio_client()
+        object_name = repair_legacy_ooxml_object(document_id, object_name)
         response = client.get_object(BUCKET_NAME, object_name)
         _, filename, ext = parse_object_name(object_name)
         stat = client.stat_object(BUCKET_NAME, object_name)
@@ -271,9 +289,92 @@ def find_document_object_by_key(key: str) -> Optional[str]:
             document_id, _, _ = parse_object_name(obj.object_name)
         except ValueError:
             continue
-        if document_key(document_id) == key and not obj.object_name.endswith(".bak"):
+        if obj.object_name.endswith(".bak"):
+            continue
+        try:
+            stat = client.stat_object(BUCKET_NAME, obj.object_name)
+            keys = {
+                document_key(document_id, get_document_version(stat)),
+                document_key(document_id),
+            }
+        except Exception:
+            keys = {document_key(document_id)}
+        if key in keys:
             return obj.object_name
     return None
+
+
+def detect_ooxml_extension(content: bytes, current_ext: str) -> str:
+    legacy_map = {"doc": "docx", "xls": "xlsx", "ppt": "pptx"}
+    if current_ext not in legacy_map:
+        return current_ext
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            names = set(archive.namelist())
+    except zipfile.BadZipFile:
+        return current_ext
+
+    if "word/document.xml" in names:
+        return "docx"
+    if "xl/workbook.xml" in names:
+        return "xlsx"
+    if "ppt/presentation.xml" in names:
+        return "pptx"
+    return legacy_map.get(current_ext, current_ext)
+
+
+def title_with_extension(title: str, ext: str) -> str:
+    path = Path(title or "")
+    if path.suffix:
+        return f"{path.with_suffix(f'.{ext}')}"
+    return f"{title}.{ext}" if title else f"document.{ext}"
+
+
+def metadata_for_saved_document(stat, document_id: str, title: str) -> dict[str, str]:
+    previous_updated_at = stat.last_modified.isoformat() if stat.last_modified else ""
+    metadata = {
+        "original-name": encode_metadata_value(title),
+        "created-at": encode_metadata_value(
+            get_document_created_at(
+                stat,
+                infer_created_at_from_document_id(document_id, previous_updated_at),
+            )
+        ),
+    }
+    owner_id = get_metadata_value(stat, "owner-id")
+    owner_name = get_metadata_value(stat, "owner-name")
+    if owner_id:
+        metadata["owner-id"] = encode_metadata_value(owner_id)
+    if owner_name:
+        metadata["owner-name"] = encode_metadata_value(owner_name)
+    return metadata
+
+
+def repair_legacy_ooxml_object(document_id: str, object_name: str) -> str:
+    _, _, ext = parse_object_name(object_name)
+    if ext not in {"doc", "xls", "ppt"}:
+        return object_name
+
+    client = get_minio_client()
+    stat = client.stat_object(BUCKET_NAME, object_name)
+    content = client.get_object(BUCKET_NAME, object_name).read()
+    detected_ext = detect_ooxml_extension(content, ext)
+    if detected_ext == ext:
+        return object_name
+
+    target_object_name = object_name.rsplit(".", 1)[0] + f".{detected_ext}"
+    title = title_with_extension(get_original_title(stat, object_name.rsplit("/", 1)[-1]), detected_ext)
+    metadata = metadata_for_saved_document(stat, document_id, title)
+    client.put_object(
+        BUCKET_NAME,
+        target_object_name,
+        io.BytesIO(content),
+        len(content),
+        content_type=get_content_type(detected_ext),
+        metadata=metadata,
+    )
+    client.remove_object(BUCKET_NAME, object_name)
+    return target_object_name
 
 
 async def handle_callback(document_id: str, callback_data: CallbackData):
@@ -282,7 +383,7 @@ async def handle_callback(document_id: str, callback_data: CallbackData):
             f"[OnlyOffice callback] document_id={document_id} "
             f"status={callback_data.status} has_url={bool(callback_data.url)}"
         )
-        if callback_data.status == 6 and callback_data.url:
+        if callback_data.status in (2, 6) and callback_data.url:
             saved = await save_updated_document(document_id, callback_data.url)
             if not saved:
                 print(f"[OnlyOffice callback] save failed document_id={document_id}")
@@ -307,17 +408,6 @@ async def save_updated_document(document_id: str, url: str) -> bool:
         try:
             stat = client.stat_object(BUCKET_NAME, object_name)
             original_title = get_original_title(stat, object_name.rsplit("/", 1)[-1])
-            previous_updated_at = stat.last_modified.isoformat() if stat.last_modified else ""
-            original_metadata = {
-                "original-name": encode_metadata_value(original_title),
-                "created-at": encode_metadata_value(get_document_created_at(stat, previous_updated_at)),
-            }
-            owner_id = get_metadata_value(stat, "owner-id")
-            owner_name = get_metadata_value(stat, "owner-name")
-            if owner_id:
-                original_metadata["owner-id"] = encode_metadata_value(owner_id)
-            if owner_name:
-                original_metadata["owner-name"] = encode_metadata_value(owner_name)
             current = client.get_object(BUCKET_NAME, object_name).read()
             client.put_object(
                 BUCKET_NAME,
@@ -331,14 +421,35 @@ async def save_updated_document(document_id: str, url: str) -> bool:
             pass
 
         _, _, ext = parse_object_name(object_name)
+        target_ext = detect_ooxml_extension(updated.content, ext)
+        target_object_name = object_name
+        target_title = original_title if "original_title" in locals() else object_name.rsplit("/", 1)[-1]
+        if target_ext != ext:
+            target_object_name = object_name.rsplit(".", 1)[0] + f".{target_ext}"
+            target_title = title_with_extension(target_title, target_ext)
+
+        if not original_metadata:
+            try:
+                stat = client.stat_object(BUCKET_NAME, object_name)
+                original_metadata = metadata_for_saved_document(stat, document_id, target_title)
+            except Exception:
+                original_metadata = {"original-name": encode_metadata_value(target_title)}
+        else:
+            original_metadata["original-name"] = encode_metadata_value(target_title)
+
         client.put_object(
             BUCKET_NAME,
-            object_name,
+            target_object_name,
             io.BytesIO(updated.content),
             len(updated.content),
-            content_type=get_content_type(ext),
+            content_type=get_content_type(target_ext),
             metadata=original_metadata,
         )
+        if target_object_name != object_name:
+            try:
+                client.remove_object(BUCKET_NAME, object_name)
+            except Exception:
+                pass
         return True
 
 
@@ -348,7 +459,8 @@ async def force_save_document(document_id: str, payload: ForceSaveRequest):
     if not object_name:
         raise HTTPException(status_code=404, detail="文档不存在")
 
-    key = document_key(document_id)
+    stat = get_minio_client().stat_object(BUCKET_NAME, object_name)
+    key = document_key(document_id, get_document_version(stat))
     command = {
         "c": "forcesave",
         "key": key,
@@ -395,6 +507,7 @@ async def get_editor_config(
         raise HTTPException(status_code=404, detail="文档不存在")
 
     try:
+        object_name = repair_legacy_ooxml_object(document_id, object_name)
         stat = get_minio_client().stat_object(BUCKET_NAME, object_name)
         _, filename, ext = parse_object_name(object_name)
         title = get_original_title(stat, filename)
@@ -408,7 +521,7 @@ async def get_editor_config(
         config = {
             "document": {
                 "fileType": ext,
-                "key": document_key(document_id),
+                "key": document_key(document_id, get_document_version(stat)),
                 "title": title,
                 "url": doc_url,
                 "permissions": {
@@ -428,7 +541,7 @@ async def get_editor_config(
                 "user": {"id": user_id, "name": user_name},
                 "customization": {
                     "autosave": True,
-                    "forcesave": True,
+                    "forcesave": False,
                     "compactHeader": False,
                     "toolbarNoTabs": False,
                     "hideRightMenu": False,
@@ -493,11 +606,14 @@ async def list_documents(
             stat = client.stat_object(BUCKET_NAME, obj.object_name)
             title = get_original_title(stat, filename)
             updated_at = obj.last_modified.isoformat() if obj.last_modified else ""
-            created_at = get_document_created_at(stat, updated_at)
+            created_at = get_document_created_at(
+                stat,
+                infer_created_at_from_document_id(document_id, updated_at),
+            )
         except Exception:
             title = filename
             updated_at = obj.last_modified.isoformat() if obj.last_modified else ""
-            created_at = updated_at
+            created_at = infer_created_at_from_document_id(document_id, updated_at)
         docs.append({
             "document_id": document_id,
             "title": title,

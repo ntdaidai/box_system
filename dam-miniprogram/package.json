@@ -1,0 +1,22 @@
+{
+  "name": "dam-miniprogram",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "水利安全监测 uniapp 微信小程序 V1",
+  "scripts": {
+    "dev:mp-weixin": "uni -p mp-weixin",
+    "build:mp-weixin": "uni build -p mp-weixin"
+  },
+  "dependencies": {
+    "@dcloudio/uni-app": "3.0.0-alpha-5020220260725001",
+    "@dcloudio/uni-mp-weixin": "3.0.0-alpha-5020220260725001",
+    "vue": "^3.4.0"
+  },
+  "devDependencies": {
+    "@dcloudio/vite-plugin-uni": "3.0.0-alpha-5020220260725001",
+    "vite": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

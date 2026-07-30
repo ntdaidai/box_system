@@ -248,6 +248,9 @@
               autoplay
               muted
               playsinline
+              :controls="false"
+              disablepictureinpicture
+              controlslist="nodownload noplaybackrate noremoteplayback nofullscreen"
               @loadeddata="streamLoading = false"
               @playing="streamLoading = false"
             ></video>
@@ -1110,7 +1113,7 @@ const gridStreamUrls = ref({})
 const gridSlotCameraIds = ref([])
 const gridCameraZones = ref({})
 const gridImageMetrics = ref({})
-const assistOverlayVisible = ref(true)
+const assistOverlayVisible = ref(false)
 const singleCameraHidden = ref(false)
 
 const imageUploading = ref(false)
@@ -2582,6 +2585,15 @@ h1, h2, h3, p { margin-top: 0; }
 .video-stage, .video-empty { position: relative; height: min(760px, calc(100vh - 132px)); min-height: 520px; overflow: hidden; border: 0; border-radius: 8px; background: #030b12; }
 .video-stream, .box-overlay, .zone-overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
 .video-stream { object-fit: contain; background: #030b12; }
+.video-stream::-webkit-media-controls,
+.video-stream::-webkit-media-controls-enclosure,
+.video-stream::-webkit-media-controls-panel,
+.video-stream::-webkit-media-controls-overlay-play-button,
+.video-stream::-webkit-media-controls-start-playback-button {
+  display: none !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
 .box-overlay { z-index: 3; pointer-events: none; }
 .zone-overlay { z-index: 4; pointer-events: none; }
 .zone-overlay.drawing { cursor: crosshair; pointer-events: auto; }
@@ -3678,6 +3690,51 @@ h1, h2, h3, p { margin-top: 0; }
 .source-type-group :deep(.el-radio-button) { flex: 1; }
 .source-type-group :deep(.el-radio-button__inner) { width: 100%; }
 .source-help { margin: -6px 0 0; color: #71899a; font-size: 11px; line-height: 1.6; }
+
+:global(.patrol-report-drawer.el-drawer) {
+  color: #dbeaf1;
+  border-left: 1px solid rgba(72, 216, 255, 0.32);
+  background:
+    radial-gradient(circle at 100% 0%, rgba(72, 216, 255, 0.14), transparent 34%),
+    linear-gradient(180deg, rgba(11, 35, 49, 0.98), rgba(3, 14, 23, 0.98));
+  box-shadow: -18px 0 46px rgba(0, 5, 10, 0.34);
+}
+
+:global(.patrol-report-drawer .el-drawer__header) {
+  margin-bottom: 0;
+  padding: 22px 24px 16px;
+  color: #f1fbff;
+  border-bottom: 1px solid rgba(137, 174, 184, 0.16);
+}
+
+:global(.patrol-report-drawer .el-drawer__title) {
+  color: #f1fbff;
+  font-size: 20px;
+  font-weight: 800;
+}
+
+:global(.patrol-report-drawer .el-drawer__close-btn) {
+  color: #9fc4d2;
+}
+
+:global(.patrol-report-drawer .el-drawer__body) {
+  padding: 20px 24px;
+}
+
+:global(.patrol-report-drawer .el-drawer__footer) {
+  padding: 16px 24px 22px;
+  border-top: 1px solid rgba(137, 174, 184, 0.16);
+}
+
+:global(.patrol-report-drawer .el-empty__description p) {
+  color: #8fa8ad;
+}
+
+:global(.patrol-report-drawer .el-button:not(.el-button--primary)) {
+  color: #dbeaf1;
+  border-color: rgba(137, 174, 184, 0.24);
+  background: rgba(16, 45, 49, 0.62);
+}
 
 .patrol-report {
   display: grid;

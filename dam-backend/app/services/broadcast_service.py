@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import datetime as dt
+import shutil
+import subprocess
 import threading
+import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -33,6 +37,13 @@ class BroadcastAudio:
 
 
 @dataclass
+class BroadcastAudioFile:
+    path: str
+    format: str = "audio/wav"
+    uri: Optional[str] = None
+
+
+@dataclass
 class BroadcastPlayResult:
     success: bool
     message: str = ""
@@ -47,6 +58,9 @@ class BroadcastAdapter:
     vendor_type = ""
 
     def play(self, device: BroadcastDevice, audio: BroadcastAudio) -> BroadcastPlayResult:
+        raise NotImplementedError
+
+    def play_file(self, device: BroadcastDevice, audio: BroadcastAudioFile) -> BroadcastPlayResult:
         raise NotImplementedError
 
     def stop(self, device: BroadcastDevice) -> BroadcastPlayResult:
@@ -76,10 +90,81 @@ class MockBroadcastAdapter(BroadcastAdapter):
     def play(self, device: BroadcastDevice, audio: BroadcastAudio) -> BroadcastPlayResult:
         return BroadcastPlayResult(True, "MOCK accepted", audio.uri)
 
+    def play_file(self, device: BroadcastDevice, audio: BroadcastAudioFile) -> BroadcastPlayResult:
+        return BroadcastPlayResult(True, "MOCK audio accepted", audio.uri)
+
+
+class UsbAudioAdapter(BroadcastAdapter):
+    vendor_type = "USB_AUDIO"
+
+    def play(self, device: BroadcastDevice, audio: BroadcastAudio) -> BroadcastPlayResult:
+        raise BroadcastException("USB_AUDIO only supports recorded audio playback")
+
+    def play_file(self, device: BroadcastDevice, audio: BroadcastAudioFile) -> BroadcastPlayResult:
+        source_path = Path(audio.path)
+        if not source_path.exists():
+            raise BroadcastException("Recorded audio file does not exist")
+
+        config = device.config_json or {}
+        alsa_device = str(config.get("alsa_device") or settings.BROADCAST_USB_ALSA_DEVICE or "default")
+        wav_path = self._ensure_wav(source_path)
+        aplay_bin = shutil.which("aplay")
+        if not aplay_bin:
+            raise BroadcastException("aplay is not installed on this system")
+
+        try:
+            completed = subprocess.run(
+                [aplay_bin, "-D", alsa_device, str(wav_path)],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=max(1, int(settings.BROADCAST_AUDIO_PLAY_TIMEOUT_SECONDS)),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise BroadcastException("USB audio playback timed out") from exc
+
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "").strip()
+            raise BroadcastException(detail or "USB audio playback failed")
+        return BroadcastPlayResult(True, f"USB_AUDIO played via {alsa_device}", audio.uri)
+
+    @staticmethod
+    def _ensure_wav(source_path: Path) -> Path:
+        if source_path.suffix.lower() == ".wav":
+            return source_path
+        ffmpeg_bin = shutil.which("ffmpeg")
+        if not ffmpeg_bin:
+            raise BroadcastException("ffmpeg is required to convert browser recordings")
+        wav_path = source_path.with_suffix(".wav")
+        try:
+            completed = subprocess.run(
+                [
+                    ffmpeg_bin,
+                    "-y",
+                    "-i",
+                    str(source_path),
+                    "-ac",
+                    "1",
+                    "-ar",
+                    "16000",
+                    str(wav_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=max(1, int(settings.BROADCAST_AUDIO_CONVERT_TIMEOUT_SECONDS)),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise BroadcastException("Recorded audio conversion timed out") from exc
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "").strip()
+            raise BroadcastException(detail or "Recorded audio conversion failed")
+        return wav_path
+
 
 class BroadcastAdapterFactory:
     def __init__(self):
-        adapters = [LocalAudioAdapter(), MockBroadcastAdapter()]
+        adapters = [LocalAudioAdapter(), MockBroadcastAdapter(), UsbAudioAdapter()]
         self._adapters = {adapter.vendor_type: adapter for adapter in adapters}
 
     def get(self, vendor_type: str) -> BroadcastAdapter:
@@ -195,6 +280,92 @@ class BroadcastService:
             "items": items,
         }
 
+    def store_recorded_audio(
+        self,
+        content: bytes,
+        *,
+        filename: Optional[str] = None,
+        content_type: Optional[str] = None,
+    ) -> BroadcastAudioFile:
+        max_bytes = max(1, int(settings.BROADCAST_AUDIO_MAX_MB)) * 1024 * 1024
+        if not content:
+            raise BroadcastException("Recorded audio is empty")
+        if len(content) > max_bytes:
+            raise BroadcastException(f"Recorded audio exceeds {settings.BROADCAST_AUDIO_MAX_MB}MB")
+
+        directory = Path(settings.BROADCAST_AUDIO_DIR)
+        directory.mkdir(parents=True, exist_ok=True)
+        suffix = self._audio_suffix(filename, content_type)
+        path = directory / f"{dt.datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex}{suffix}"
+        path.write_bytes(content)
+        return BroadcastAudioFile(
+            path=str(path),
+            format=content_type or "application/octet-stream",
+            uri=str(path),
+        )
+
+    def play_recorded_audio(self, db: Session, command: Dict[str, Any], audio: BroadcastAudioFile) -> Dict[str, Any]:
+        trigger_type = (command.get("trigger_type") or TRIGGER_MANUAL).upper()
+        if trigger_type != TRIGGER_MANUAL:
+            raise BroadcastException("Recorded audio playback only supports MANUAL trigger")
+
+        event_id = command.get("event_id")
+        camera_id = command.get("camera_id")
+        operator = command.get("operator") or "UNKNOWN"
+        devices = self._resolve_devices(db, camera_id, command.get("device_ids"))
+        if not devices:
+            raise BroadcastException("No broadcast devices are bound to this camera")
+
+        content = f"[语音喊话] {Path(audio.path).name}"
+        items = []
+        for device in devices:
+            action = self._start_action(
+                db=db,
+                event_id=event_id,
+                camera_id=camera_id,
+                device=device,
+                template_id=None,
+                trigger_type=TRIGGER_MANUAL,
+                operator=operator,
+                content=content,
+                risk_level=command.get("risk_level"),
+            )
+            try:
+                if not device.enabled:
+                    raise BroadcastException("Device is disabled")
+                if (device.status or "").upper() == "OFFLINE":
+                    raise BroadcastException("Device is offline")
+                adapter = self.adapter_factory.get(device.vendor_type)
+                result = adapter.play_file(device, audio)
+                final_result = "SUCCESS" if result.success else "FAILED"
+                message = result.message
+            except Exception as exc:
+                final_result = "FAILED"
+                message = str(exc)
+                logger.warning(f"Recorded broadcast play failed: device={device.id}, error={exc}")
+            self._finish_action(db, action, final_result, message)
+            items.append({
+                "device_id": device.id,
+                "device_name": device.name,
+                "vendor_type": device.vendor_type,
+                "result": final_result,
+                "message": message,
+            })
+
+        success_count = sum(1 for item in items if item["result"] == "SUCCESS")
+        if success_count == len(items):
+            result = "SUCCESS"
+        elif success_count > 0:
+            result = "PARTIAL_SUCCESS"
+        else:
+            result = "FAILED"
+        return {
+            "success": success_count > 0,
+            "result": result,
+            "audio_uri": audio.uri,
+            "items": items,
+        }
+
     def handle_safety_event_action(self, action: Dict[str, Any]) -> None:
         if action.get("action_type") not in {"AUTO_BROADCAST", "broadcast_requested"}:
             return
@@ -264,6 +435,7 @@ class BroadcastService:
             )
             if not device:
                 device = BroadcastDevice(
+                    **self._sqlite_default_id(db, 900000),
                     name="本机耳机/音响测试",
                     vendor_type="LOCAL_AUDIO",
                     device_code="local_audio_default",
@@ -279,12 +451,53 @@ class BroadcastService:
                 CameraBroadcastDevice.broadcast_device_id == device.id,
             ).first():
                 db.add(CameraBroadcastDevice(
+                    **self._sqlite_default_id(db, 900000),
+                    camera_id=settings.CAMERA_ID,
+                    broadcast_device_id=device.id,
+                ))
+                changed = True
+        if settings.BROADCAST_ENABLE_USB_AUDIO_DEVICE:
+            device = (
+                db.query(BroadcastDevice)
+                .filter(BroadcastDevice.device_code == "jetson_usb_speaker")
+                .first()
+            )
+            if not device:
+                device = BroadcastDevice(
+                    **self._sqlite_default_id(db, 900001),
+                    name="Jetson USB外放",
+                    vendor_type="USB_AUDIO",
+                    device_code="jetson_usb_speaker",
+                    status="ONLINE",
+                    enabled=True,
+                    location="Jetson USB音频输出",
+                    config_json={"alsa_device": settings.BROADCAST_USB_ALSA_DEVICE},
+                )
+                db.add(device)
+                db.flush()
+                changed = True
+            elif not device.config_json:
+                device.config_json = {"alsa_device": settings.BROADCAST_USB_ALSA_DEVICE}
+                changed = True
+            if settings.CAMERA_ID and not db.query(CameraBroadcastDevice).filter(
+                CameraBroadcastDevice.camera_id == settings.CAMERA_ID,
+                CameraBroadcastDevice.broadcast_device_id == device.id,
+            ).first():
+                db.add(CameraBroadcastDevice(
+                    **self._sqlite_default_id(db, 900001),
                     camera_id=settings.CAMERA_ID,
                     broadcast_device_id=device.id,
                 ))
                 changed = True
         if changed:
             db.commit()
+
+    @staticmethod
+    def _sqlite_default_id(db: Session, value: int) -> Dict[str, int]:
+        bind = getattr(db, "bind", None)
+        if bind is not None and getattr(bind.dialect, "name", "") == "sqlite":
+            return {"id": value}
+        return {}
 
     def _allow_auto(self, event_id: str, camera_id: str, risk_level: str) -> bool:
         key = f"{camera_id}:{event_id}:{risk_level}"
@@ -333,6 +546,21 @@ class BroadcastService:
         if camera_id:
             return self._devices_for_camera(db, camera_id)
         return []
+
+    @staticmethod
+    def _audio_suffix(filename: Optional[str], content_type: Optional[str]) -> str:
+        name_suffix = Path(filename or "").suffix.lower()
+        if name_suffix in {".webm", ".ogg", ".mp3", ".m4a", ".mp4", ".wav"}:
+            return name_suffix
+        content = (content_type or "").split(";", 1)[0].lower()
+        return {
+            "audio/webm": ".webm",
+            "audio/ogg": ".ogg",
+            "audio/mpeg": ".mp3",
+            "audio/mp4": ".m4a",
+            "audio/wav": ".wav",
+            "audio/x-wav": ".wav",
+        }.get(content, ".webm")
 
     def _devices_for_camera(self, db: Session, camera_id: str) -> List[BroadcastDevice]:
         self.ensure_defaults(db)

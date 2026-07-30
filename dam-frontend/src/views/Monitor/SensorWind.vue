@@ -191,7 +191,6 @@ const availablePeriods = ref([])
 const historyLoading = ref(false)
 const historyError = ref('')
 const chartData = ref({ view: 'recent24h', history: [], window: null })
-const historyCache = new Map()
 
 let chart = null
 let timer = null
@@ -293,17 +292,6 @@ const fetchData = async () => {
 
 const queryKey = ({ view, year, month }) => [view, year || '', month || 'all'].join(':')
 
-const historyCacheMaxAge = query => query.view === 'recent24h' ? 5 * MINUTE : 30 * MINUTE
-
-const readHistoryCache = (query) => {
-  const key = queryKey(query)
-  const cached = historyCache.get(key)
-  if (!cached) return null
-  if (Date.now() - cached.updatedAt <= historyCacheMaxAge(query)) return cached.payload
-  historyCache.delete(key)
-  return null
-}
-
 const currentQuery = () => historyMode.value === 'recent24h'
   ? { view: 'recent24h' }
   : {
@@ -317,13 +305,10 @@ const syncAvailablePeriods = (periods = []) => {
   availablePeriods.value = periods
 }
 
-const applyTrendPayload = (payload, query, apply = true, cacheResult = true) => {
+const applyTrendPayload = (payload, query, apply = true) => {
   if (!payload) return null
   syncAvailablePeriods(payload.available_periods)
   const normalized = { ...payload, history: Array.isArray(payload.history) ? payload.history : [] }
-  if (cacheResult) {
-    historyCache.set(queryKey(query), { payload: normalized, updatedAt: Date.now() })
-  }
   if (apply && queryKey(query) === queryKey(currentQuery())) {
     chartData.value = normalized
     historyError.value = ''
@@ -346,13 +331,6 @@ const loadTrends = async (query = currentQuery(), apply = true, force = false) =
     && requestId === historyRequestSerial
     && key === queryKey(currentQuery())
   )
-  const cached = force ? null : readHistoryCache(query)
-  if (cached) {
-    const shouldApply = apply && isCurrentRequest()
-    const normalized = applyTrendPayload(cached, query, shouldApply, false)
-    if (shouldApply) historyLoading.value = false
-    return { payload: normalized, applied: shouldApply, error: false }
-  }
 
   if (apply && isMounted) {
     historyLoading.value = true
@@ -448,7 +426,6 @@ const scheduleHistoryRefresh = () => {
   historyRefreshTimer = setTimeout(async () => {
     if (!isMounted) return
     const query = currentQuery()
-    historyCache.delete(queryKey(query))
     const result = await loadTrends(query, true, true)
     finishHistorySelection(query, result)
   }, delay)
@@ -481,7 +458,6 @@ const onMonthChange = async () => {
 
 const retryHistory = async () => {
   const query = currentQuery()
-  historyCache.delete(queryKey(query))
   const result = await loadTrends(query, true, true)
   finishHistorySelection(query, result)
 }

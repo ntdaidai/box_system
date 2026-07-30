@@ -23,7 +23,7 @@ class ModelEventMapping(Base):
     event_type = Column(String(64), nullable=False, comment="事件类型")
     task_type = Column(String(128), nullable=False, comment="任务类型")
     model_category = Column(
-        Enum("specialized", "llm", name="model_category_enum"),
+        Enum("specialized", "local_llm", "cloud_llm", name="model_category_enum"),
         nullable=False, comment="模型类别"
     )
     model_id = Column(BigInteger, nullable=True, comment="模型 ID（关联 model_registry.id）")

@@ -167,6 +167,11 @@
         </section>
       </div>
     </el-drawer>
+    <BroadcastDialog
+      v-model="broadcastDialogVisible"
+      :event="broadcastTargetEvent"
+      @played="handleBroadcastPlayed"
+    />
   </div>
 </template>
 
@@ -176,9 +181,9 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Check, CircleCheck, Document, Download, Microphone, Refresh, Search, User, Warning } from '@element-plus/icons-vue'
 import axios from 'axios'
+import BroadcastDialog from '@/components/BroadcastDialog.vue'
 import {
   acceptSafetyEvent,
-  broadcastSafetyEvent,
   completeSafetyEvent,
   getSafetyEventDetail,
   getSafetyEvents,
@@ -188,6 +193,8 @@ import {
 
 const router = useRouter()
 const loading = ref(false)
+const broadcastDialogVisible = ref(false)
+const broadcastTargetEvent = ref(null)
 const events = ref([])
 const total = ref(0)
 const drawerVisible = ref(false)
@@ -358,18 +365,12 @@ async function ack() {
 }
 
 async function broadcast() {
-  const { value } = await ElMessageBox.prompt('请输入喊话内容', '一键喊话', {
-    inputValue: '您已进入危险区域，请立即离开',
-    confirmButtonText: '喊话',
-    cancelButtonText: '取消',
-  })
-  const res = await broadcastSafetyEvent(currentEvent.value.event_id, payload({ content: value, remark: value }))
-  const item = res.data?.timeline_item
-  if (item?.status === 'failed') {
-    ElMessage.warning(item.message || '喊话未成功，已记录失败原因')
-  } else {
-    ElMessage.success('已执行人工喊话')
-  }
+  broadcastTargetEvent.value = currentEvent.value
+  broadcastDialogVisible.value = true
+}
+
+async function handleBroadcastPlayed() {
+  ElMessage.success('已执行人工语音喊话')
   await refreshCurrent()
 }
 

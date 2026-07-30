@@ -15,6 +15,7 @@ from app.api import (
     eca,
     health,
     image,
+    miniprogram,
     onlyoffice,
     patrol_report,
     rule,
@@ -296,6 +297,7 @@ app.include_router(vision_detect.router, prefix="/api/v1/vision/detect", tags=["
 app.include_router(image.router, prefix="/api/v1/image", tags=["图片管理"])
 app.include_router(camera.router, prefix="/api/v1/camera", tags=["摄像头与检测"])
 app.include_router(broadcast.router, prefix="/api/broadcast", tags=["广播联动"])
+app.include_router(miniprogram.router, prefix="/api/miniprogram/v1", tags=["微信小程序V1"])
 app.include_router(document.router, tags=["文档管理"])
 app.include_router(onlyoffice.router)
 app.include_router(patrol_report.router)
