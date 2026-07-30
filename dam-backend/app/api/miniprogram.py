@@ -26,8 +26,10 @@ from app.core.cache import invalidate_cache
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.security import get_default_user
+from app.models.camera import Camera
 from app.models.event_action import EventAction
 from app.models.safety_event import SafetyEvent, SafetyEventLog, SafetyEventTask
+from app.services.broadcast_service import BroadcastException, broadcast_service
 from app.services.camera_stream import camera_manager
 from app.services.minio_service import minio_service
 from app.services.safety_event_engine import (
@@ -91,6 +93,12 @@ class ManualBroadcastRequest(BaseModel):
 class StartManualRequest(BaseModel):
     operator: Optional[str] = Field(None, max_length=128)
     remark: Optional[str] = Field(None, max_length=500)
+
+
+class CameraBroadcastRequest(BaseModel):
+    content: Optional[str] = Field(None, max_length=500)
+    template_id: Optional[str] = Field("PERSON_HIGH", max_length=64)
+    operator: Optional[str] = Field(None, max_length=128)
 
 
 class MockSubscribeRequest(BaseModel):
@@ -166,6 +174,24 @@ def _mini_event(event: SafetyEvent) -> dict:
         "monitor_point": event.camera_name or event.camera_id,
         "can_start_manual": status == "WAITING_MANUAL" and event.risk_level == RISK_HIGH,
         "can_submit_result": status == "MANUAL_PROCESSING",
+    }
+
+
+def _mini_camera(row: Optional[Camera], camera_id: str, status: Optional[dict] = None) -> dict:
+    status = status or {}
+    camera_name = getattr(row, "camera_name", None) or status.get("name") or camera_id
+    return {
+        "camera_id": camera_id,
+        "camera_name": camera_name,
+        "name": camera_name,
+        "enabled": bool(getattr(row, "enabled", True)),
+        "brand": getattr(row, "brand", None),
+        "online": bool(status.get("running") or status.get("online") or status.get("connected")),
+        "running": bool(status.get("running")),
+        "last_error": getattr(row, "last_error", None) or status.get("last_error"),
+        "description": getattr(row, "description", None),
+        "broadcast_devices": [],
+        "broadcast_device_count": 0,
     }
 
 
@@ -306,6 +332,106 @@ async def _broadcast_updates(event: SafetyEvent, *timeline_items: dict) -> None:
             "type": "EVENT_ACTION_ADDED",
             "data": item,
         })
+
+
+@router.get("/cameras", response_model=MiniResponse, summary="小程序摄像头点位列表")
+async def list_cameras():
+    db = SessionLocal()
+    try:
+        statuses = {
+            item.get("camera_id"): item
+            for item in camera_manager.list_cameras()
+            if item.get("camera_id")
+        }
+        rows = db.query(Camera).filter(Camera.enabled == True).order_by(Camera.id.asc()).all()  # noqa: E712
+        cameras = []
+        known_ids = set()
+        for row in rows:
+            known_ids.add(row.camera_id)
+            item = _mini_camera(row, row.camera_id, statuses.get(row.camera_id))
+            devices = broadcast_service.list_devices_for_camera(db, row.camera_id)
+            item["broadcast_devices"] = devices
+            item["broadcast_device_count"] = len(devices)
+            cameras.append(item)
+        for camera_id, status in statuses.items():
+            if camera_id not in known_ids:
+                item = _mini_camera(None, camera_id, status)
+                devices = broadcast_service.list_devices_for_camera(db, camera_id)
+                item["broadcast_devices"] = devices
+                item["broadcast_device_count"] = len(devices)
+                cameras.append(item)
+        if not cameras and settings.CAMERA_ID:
+            item = _mini_camera(None, settings.CAMERA_ID, None)
+            item["camera_name"] = settings.CAMERA_NAME or settings.CAMERA_ID
+            item["name"] = item["camera_name"]
+            devices = broadcast_service.list_devices_for_camera(db, settings.CAMERA_ID)
+            item["broadcast_devices"] = devices
+            item["broadcast_device_count"] = len(devices)
+            cameras.append(item)
+        return MiniResponse(data={"items": cameras, "total": len(cameras)})
+    finally:
+        db.close()
+
+
+@router.get("/cameras/{camera_id}/snapshot.jpg", summary="小程序摄像头实时快照")
+async def get_camera_snapshot(camera_id: str):
+    camera = camera_manager.get_camera(camera_id)
+    if not camera:
+        raise HTTPException(status_code=404, detail="摄像头不存在")
+    if not camera.running:
+        camera.start()
+    camera.wait_for_frame(-1, timeout=1.0)
+    jpeg = camera.get_jpeg(quality=settings.CAMERA_JPEG_QUALITY)
+    if not jpeg:
+        raise HTTPException(status_code=503, detail="暂无实时画面")
+    return Response(
+        content=jpeg,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/cameras/{camera_id}/video", response_model=MiniResponse, summary="小程序摄像头实时视频适配")
+async def get_camera_video(camera_id: str):
+    ticket, expires_at = stream_ticket_store.issue(camera_id, False)
+    stream_path = f"/api/v1/camera/stream/{camera_id}?ticket={ticket}"
+    return MiniResponse(data={
+        "camera_id": camera_id,
+        "mode": "mjpeg_ticket_adapter",
+        "stream_url": stream_path,
+        "snapshot_url": f"/api/miniprogram/v1/cameras/{camera_id}/snapshot.jpg",
+        "expires_at": expires_at,
+        "compatibility": {
+            "pc_webrtc_available": True,
+            "miniprogram_direct_webrtc": False,
+            "adapter": "小程序V1使用点位实时快照预览与短时 MJPEG 票据作为兼容视频层",
+        },
+        "webrtc_signaling": {
+            "ice": f"/api/v1/camera/{camera_id}/webrtc/ice",
+            "session": f"/api/v1/camera/{camera_id}/webrtc/session",
+        },
+    })
+
+
+@router.post("/cameras/{camera_id}/broadcast", response_model=MiniResponse, summary="小程序按点位一键喊话")
+async def broadcast_camera(camera_id: str, payload: CameraBroadcastRequest):
+    db = SessionLocal()
+    try:
+        operator = _operator_name(db, payload.operator)
+        try:
+            result = broadcast_service.play(db, {
+                "camera_id": camera_id,
+                "template_id": payload.template_id or "PERSON_HIGH",
+                "custom_text": payload.content,
+                "trigger_type": "MANUAL",
+                "operator": operator,
+                "risk_level": "HIGH",
+            })
+        except BroadcastException as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return MiniResponse(data=result, message="喊话已下发")
+    finally:
+        db.close()
 
 
 @router.get("/events", response_model=MiniResponse, summary="小程序事件列表")

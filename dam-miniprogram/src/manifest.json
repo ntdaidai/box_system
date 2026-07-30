@@ -1,10 +1,13 @@
 {
-  "name": "水利安全监测",
+  "name": "大藤峡安全巡查",
   "appid": "__UNI__DAMSAFETY",
-  "description": "工作人员手机端事件处置 V1",
+  "description": "大藤峡工作人员手机端事件处置 V1",
   "versionName": "1.0.0",
   "versionCode": "100",
   "transformPx": false,
+  "uniStatistics": {
+    "enable": false
+  },
   "mp-weixin": {
     "appid": "touristappid",
     "setting": {

@@ -36,9 +36,11 @@ def sync_container_status():
             try:
                 info = docker_service.inspect_container(binding.container_id)
                 actual_status = info["status"]
+                exit_code = info.get("exit_code", 0)
             except Exception:
                 # 容器不存在
                 actual_status = None
+                exit_code = 0
 
             changed = False
 
@@ -52,10 +54,14 @@ def sync_container_status():
                     changed = True
                     logger.info(f"模型 {model.id} 容器已不存在，状态同步为 stopped")
                 elif actual_status != "running":
-                    # 容器停止了
-                    model.runtime_status = "error"
+                    # 容器停止了，根据退出码判断是正常停止还是异常
+                    if exit_code == 0:
+                        model.runtime_status = "stopped"
+                        logger.info(f"模型 {model.id} 容器已正常停止，状态同步为 stopped")
+                    else:
+                        model.runtime_status = "error"
+                        logger.info(f"模型 {model.id} 容器异常退出(退出码:{exit_code})，状态同步为 error")
                     changed = True
-                    logger.info(f"模型 {model.id} 容器已停止，状态同步为 error")
 
             # 情况2: 数据库说停止/错误，但容器在运行（外部手动启动）
             elif model.runtime_status in ("stopped", "error"):
@@ -63,6 +69,11 @@ def sync_container_status():
                     model.runtime_status = "running"
                     changed = True
                     logger.info(f"模型 {model.id} 容器在运行，状态同步为 running")
+                elif model.runtime_status == "error" and actual_status in ("exited", "stopped") and exit_code == 0:
+                    # error 状态但容器正常退出，修正为 stopped
+                    model.runtime_status = "stopped"
+                    changed = True
+                    logger.info(f"模型 {model.id} 容器正常退出，状态从 error 修正为 stopped")
 
             # 情况3: starting/stopping 超时检查
             elif model.runtime_status in ("starting", "stopping"):

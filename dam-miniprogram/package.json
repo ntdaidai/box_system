@@ -2,7 +2,7 @@
   "name": "dam-miniprogram",
   "version": "1.0.0",
   "type": "module",
-  "description": "水利安全监测 uniapp 微信小程序 V1",
+  "description": "大藤峡安全巡查 uniapp 微信小程序 V1",
   "scripts": {
     "dev:mp-weixin": "uni -p mp-weixin",
     "build:mp-weixin": "uni build -p mp-weixin"

@@ -31,6 +31,13 @@ class Settings:
     # ── vLLM 视觉模型 ──────────────────────────────────────────
     VLLM_QWEN3VL_URL: str = _get_env("VLLM_QWEN3VL_URL", "http://localhost:8000")
 
+    # ── 边缘侧本地大模型（Qwen-VL-4B）─────────────────────────
+    LOCAL_LLM_URL: str = _get_env("LOCAL_LLM_URL", "http://localhost:8001")
+    LOCAL_LLM_MODEL_NAME: str = _get_env("LOCAL_LLM_MODEL_NAME", "qwen4B")
+    LOCAL_LLM_TIMEOUT: int = int(_get_env("LOCAL_LLM_TIMEOUT", "60"))
+    LOCAL_LLM_MAX_TOKENS: int = int(_get_env("LOCAL_LLM_MAX_TOKENS", "2048"))
+    LOCAL_LLM_TEMPERATURE: float = float(_get_env("LOCAL_LLM_TEMPERATURE", "0.15"))
+
     # ── CORS ───────────────────────────────────────────────────
     CORS_ORIGINS: List[str] = _get_env("CORS_ORIGINS", "*").split(",")
 
@@ -89,12 +96,19 @@ class Settings:
             return f"redis://:{self.REDIS_PASSWORD}@{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
         return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
 
-    # ── MinIO 对象存储 ──────────────────────────────────────
+    # ── MinIO 对象存储（AGX 本地）────────────────────────────
     MINIO_ENDPOINT: str = _get_env("MINIO_ENDPOINT", "localhost:9000")
     MINIO_ACCESS_KEY: str = _get_env("MINIO_ACCESS_KEY", "minioadmin")
     MINIO_SECRET_KEY: str = _get_env("MINIO_SECRET_KEY", "minioadmin")
     MINIO_SECURE: bool = _get_env("MINIO_SECURE", "false").lower() == "true"
     DOCUMENT_BUCKET: str = _get_env("DOCUMENT_BUCKET", "documents")
+
+    # ── MinIO 对象存储（A100 云端）───────────────────────────
+    A100_MINIO_ENDPOINT: str = _get_env("A100_MINIO_ENDPOINT", "10.196.85.11:9000")
+    A100_MINIO_ACCESS_KEY: str = _get_env("A100_MINIO_ACCESS_KEY", "minioadmin")
+    A100_MINIO_SECRET_KEY: str = _get_env("A100_MINIO_SECRET_KEY", "minioadmin")
+    A100_MINIO_SECURE: bool = _get_env("A100_MINIO_SECURE", "false").lower() == "true"
+    A100_MINIO_BUCKET: str = _get_env("A100_MINIO_BUCKET", "cloud-tasks")
 
     # OnlyOffice integration. BACKEND_PUBLIC_URL must be reachable from the
     # OnlyOffice Document Server container, so do not use localhost here.

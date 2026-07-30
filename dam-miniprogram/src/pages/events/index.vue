@@ -28,8 +28,13 @@
       </view>
     </view>
 
-    <view v-if="loading" class="empty">加载中...</view>
-    <view v-else-if="events.length === 0" class="empty">
+    <view class="section-head">
+      <text>风险事件</text>
+      <text>{{ events.length }} 条</text>
+    </view>
+
+    <view v-if="loading" class="empty compact">加载中...</view>
+    <view v-else-if="events.length === 0" class="empty compact">
       {{ activeTab === 'ongoing' ? '暂无进行中事件' : '暂无已完成事件' }}
     </view>
 
@@ -59,11 +64,112 @@
         <view class="action-text">{{ item.system_action_text }}</view>
       </view>
     </view>
+
+    <view class="video-panel">
+      <view class="section-head inner">
+        <text>点位实时视频</text>
+        <text>{{ selectedCameraStatus }}</text>
+      </view>
+
+      <picker
+        v-if="cameras.length"
+        mode="selector"
+        :range="cameraNames"
+        :value="selectedCameraIndex"
+        @change="selectCamera"
+      >
+        <view class="camera-selector">
+          <view>
+            <text>当前点位</text>
+            <text>{{ selectedCamera.camera_name }}</text>
+          </view>
+          <text>切换</text>
+        </view>
+      </picker>
+      <view v-else class="camera-selector disabled">
+        <view>
+          <text>当前点位</text>
+          <text>暂无可选摄像头</text>
+        </view>
+      </view>
+
+      <view v-if="liveExpanded" class="video-box">
+        <image
+          v-if="snapshotUrl"
+          class="video-frame"
+          :src="snapshotUrl"
+          mode="aspectFit"
+          @error="handleSnapshotError"
+        />
+        <view v-else class="video-empty">{{ videoText }}</view>
+      </view>
+
+      <view class="video-actions">
+        <button
+          class="ghost-btn action-btn"
+          :class="{ single: !liveExpanded }"
+          :disabled="!selectedCamera.camera_id"
+          @tap="toggleLiveVideo"
+        >
+          {{ liveExpanded ? '收起视频' : '进入实时视频' }}
+        </button>
+        <button
+          v-if="liveExpanded"
+          class="ghost-btn action-btn"
+          :loading="videoLoading"
+          :disabled="videoLoading"
+          @tap="refreshCameraSnapshot(true)"
+        >
+          刷新画面
+        </button>
+      </view>
+
+      <button
+        class="primary-btn broadcast-btn"
+        :loading="cameraBroadcasting"
+        :disabled="cameraBroadcasting || !selectedCamera.camera_id"
+        @tap="handleCameraBroadcast"
+      >
+        一键喊话
+      </button>
+      <view class="broadcast-note">
+        {{ broadcastDeviceText }}
+      </view>
+    </view>
+
+    <view class="profile-panel">
+      <view class="profile-top">
+        <view class="avatar">巡</view>
+        <view class="profile-main">
+          <view>微信小程序工作人员</view>
+          <text>大藤峡安全巡查</text>
+        </view>
+      </view>
+      <view class="section-head inner profile-title">
+        <text>我的处理</text>
+        <text>{{ handledEvents.length }} 条</text>
+      </view>
+      <view v-if="handledEvents.length === 0" class="handled-empty">暂无人工处理记录</view>
+      <view v-else class="handled-list">
+        <view
+          v-for="item in handledEvents"
+          :key="item.event_id"
+          class="handled-item"
+          @tap="openDetail(item.event_id)"
+        >
+          <view>
+            <text>{{ item.event_type }}</text>
+            <text>{{ item.monitor_point }}</text>
+          </view>
+          <text>{{ item.mini_status_label }}</text>
+        </view>
+      </view>
+    </view>
   </view>
 </template>
 
 <script>
-import { request } from '../../utils/request'
+import { absoluteUrl, request } from '../../utils/request'
 import { formatDuration, riskClass } from '../../utils/format'
 
 export default {
@@ -71,25 +177,72 @@ export default {
     return {
       activeTab: 'ongoing',
       events: [],
+      handledEvents: [],
+      cameras: [],
+      selectedCameraIndex: 0,
       highCount: 0,
       manualCount: 0,
-      loading: false
+      loading: false,
+      videoLoading: false,
+      liveExpanded: false,
+      snapshotUrl: '',
+      videoText: '选择点位后进入实时视频',
+      cameraBroadcasting: false,
+      liveTimer: null
+    }
+  },
+
+  computed: {
+    cameraNames() {
+      return this.cameras.map((item) => item.camera_name || item.camera_id)
+    },
+
+    selectedCamera() {
+      return this.cameras[this.selectedCameraIndex] || {}
+    },
+
+    selectedCameraStatus() {
+      if (!this.selectedCamera.camera_id) return '未配置'
+      return this.selectedCamera.online ? '在线' : '待连接'
+    },
+
+    broadcastDeviceText() {
+      const count = Number(this.selectedCamera.broadcast_device_count || 0)
+      if (count > 0) return `已绑定 ${count} 个喊话设备`
+      return '当前点位未检测到绑定喊话设备'
     }
   },
 
   onLoad() {
-    this.loadEvents()
+    this.loadHome()
   },
 
   onShow() {
     this.loadEvents()
+    this.loadHandledEvents()
+  },
+
+  onHide() {
+    this.stopLiveRefresh()
+  },
+
+  onUnload() {
+    this.stopLiveRefresh()
   },
 
   onPullDownRefresh() {
-    this.loadEvents().finally(() => uni.stopPullDownRefresh())
+    this.loadHome().finally(() => uni.stopPullDownRefresh())
   },
 
   methods: {
+    loadHome() {
+      return Promise.all([
+        this.loadEvents(),
+        this.loadCameras(),
+        this.loadHandledEvents()
+      ])
+    },
+
     switchTab(tab) {
       if (tab === this.activeTab) return
       this.activeTab = tab
@@ -103,11 +256,7 @@ export default {
         url: `/events?status=${this.activeTab}&page_size=50`
       })
         .then((data) => {
-          const events = (data.items || []).map((item) => ({
-            ...item,
-            riskClass: riskClass(item.risk_level),
-            durationText: formatDuration(item.duration_seconds)
-          }))
+          const events = (data.items || []).map(this.decorateEvent)
           this.events = events
           this.highCount = events.filter((item) => item.risk_level === 'HIGH' && item.mini_status !== 'RESOLVED').length
           this.manualCount = events.filter((item) => item.mini_status === 'MANUAL_PROCESSING').length
@@ -117,6 +266,130 @@ export default {
         })
         .finally(() => {
           this.loading = false
+        })
+    },
+
+    loadHandledEvents() {
+      return request({
+        url: '/events?status=all&page_size=80'
+      })
+        .then((data) => {
+          this.handledEvents = (data.items || [])
+            .filter((item) => item.mini_status === 'MANUAL_PROCESSING' || item.mini_status === 'RESOLVED' || item.ack_operator || item.resolved_operator)
+            .map(this.decorateEvent)
+            .slice(0, 6)
+        })
+        .catch(() => {
+          this.handledEvents = []
+        })
+    },
+
+    loadCameras() {
+      return request({ url: '/cameras' })
+        .then((data) => {
+          this.cameras = data.items || []
+          if (this.selectedCameraIndex >= this.cameras.length) {
+            this.selectedCameraIndex = 0
+          }
+          if (this.liveExpanded) {
+            this.refreshCameraSnapshot(false)
+          }
+        })
+        .catch((error) => {
+          this.cameras = []
+          this.snapshotUrl = ''
+          this.videoText = error.message
+        })
+    },
+
+    decorateEvent(item) {
+      return {
+        ...item,
+        riskClass: riskClass(item.risk_level),
+        durationText: formatDuration(item.duration_seconds)
+      }
+    },
+
+    selectCamera(event) {
+      this.selectedCameraIndex = Number(event.detail.value || 0)
+      this.snapshotUrl = ''
+      this.videoText = '正在切换点位'
+      if (this.liveExpanded) {
+        this.refreshCameraSnapshot(true)
+        this.startLiveRefresh()
+      }
+    },
+
+    toggleLiveVideo() {
+      if (!this.selectedCamera.camera_id) return
+      this.liveExpanded = !this.liveExpanded
+      if (this.liveExpanded) {
+        this.refreshCameraSnapshot(true)
+        this.startLiveRefresh()
+        return
+      }
+      this.stopLiveRefresh()
+    },
+
+    refreshCameraSnapshot(showToast = false) {
+      const cameraId = this.selectedCamera.camera_id
+      if (!cameraId || this.videoLoading) return Promise.resolve()
+      this.videoLoading = true
+      return request({ url: `/cameras/${encodeURIComponent(cameraId)}/video` })
+        .then((data) => {
+          this.snapshotUrl = `${absoluteUrl(data.snapshot_url)}?t=${Date.now()}`
+          this.videoText = '实时画面已连接'
+        })
+        .catch((error) => {
+          this.snapshotUrl = ''
+          this.videoText = error.message || '当前摄像头暂未返回实时画面'
+          if (showToast) {
+            uni.showToast({ title: this.videoText, icon: 'none' })
+          }
+        })
+        .finally(() => {
+          this.videoLoading = false
+        })
+    },
+
+    handleSnapshotError() {
+      this.snapshotUrl = ''
+      this.videoText = '当前摄像头暂未返回实时画面'
+    },
+
+    startLiveRefresh() {
+      this.stopLiveRefresh()
+      this.liveTimer = setInterval(() => {
+        this.refreshCameraSnapshot(false)
+      }, 3500)
+    },
+
+    stopLiveRefresh() {
+      if (this.liveTimer) {
+        clearInterval(this.liveTimer)
+        this.liveTimer = null
+      }
+    },
+
+    handleCameraBroadcast() {
+      const cameraId = this.selectedCamera.camera_id
+      if (!cameraId || this.cameraBroadcasting) return
+      this.cameraBroadcasting = true
+      request({
+        url: `/cameras/${encodeURIComponent(cameraId)}/broadcast`,
+        method: 'POST',
+        data: {
+          operator: '微信小程序工作人员'
+        }
+      })
+        .then(() => {
+          uni.showToast({ title: '喊话已下发', icon: 'success' })
+        })
+        .catch((error) => {
+          uni.showToast({ title: error.message, icon: 'none' })
+        })
+        .finally(() => {
+          this.cameraBroadcasting = false
         })
     },
 
@@ -132,6 +405,7 @@ export default {
 <style>
 .events-page {
   padding-top: 20rpx;
+  padding-bottom: 48rpx;
 }
 
 .tabs {
@@ -187,17 +461,45 @@ export default {
   font-weight: 800;
 }
 
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 12rpx 4rpx 14rpx;
+}
+
+.section-head text:first-child {
+  color: #172026;
+  font-size: 30rpx;
+  font-weight: 800;
+}
+
+.section-head text:last-child {
+  color: #728187;
+  font-size: 24rpx;
+}
+
+.section-head.inner {
+  margin: 0 0 18rpx;
+}
+
 .event-list {
   display: flex;
   flex-direction: column;
   gap: 18rpx;
 }
 
-.event-card {
+.event-card,
+.video-panel,
+.profile-panel {
   border-radius: 8rpx;
   background: #fff;
   padding: 22rpx;
   box-shadow: 0 6rpx 18rpx rgba(20, 45, 52, 0.08);
+}
+
+.event-card {
+  margin-bottom: 0;
 }
 
 .card-top {
@@ -261,8 +563,216 @@ export default {
 }
 
 .empty {
-  padding: 120rpx 20rpx;
   color: #7b8b91;
   text-align: center;
+}
+
+.empty.compact {
+  padding: 54rpx 20rpx 42rpx;
+}
+
+.video-panel {
+  margin-top: 22rpx;
+}
+
+.camera-selector {
+  min-height: 92rpx;
+  padding: 16rpx 18rpx;
+  box-sizing: border-box;
+  border-radius: 8rpx;
+  background: #f2f6f7;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16rpx;
+}
+
+.camera-selector view {
+  min-width: 0;
+}
+
+.camera-selector view text {
+  display: block;
+}
+
+.camera-selector view text:first-child {
+  color: #6c7a80;
+  font-size: 23rpx;
+  margin-bottom: 6rpx;
+}
+
+.camera-selector view text:last-child {
+  color: #172026;
+  font-size: 30rpx;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.camera-selector > text {
+  color: #0f6b7a;
+  font-size: 26rpx;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.camera-selector.disabled > text {
+  display: none;
+}
+
+.video-box {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  margin-top: 18rpx;
+  border-radius: 8rpx;
+  overflow: hidden;
+  background: #172026;
+}
+
+.video-frame {
+  width: 100%;
+  height: 100%;
+  background: #172026;
+}
+
+.video-empty {
+  width: 100%;
+  height: 100%;
+  color: #d8e5e8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26rpx;
+}
+
+.video-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12rpx;
+  margin-top: 18rpx;
+}
+
+.action-btn.single {
+  grid-column: 1 / 3;
+}
+
+.action-btn {
+  height: 74rpx;
+  line-height: 74rpx;
+  font-size: 27rpx;
+}
+
+.broadcast-btn {
+  height: 84rpx;
+  line-height: 84rpx;
+  margin-top: 16rpx;
+  font-size: 30rpx;
+}
+
+.broadcast-note {
+  color: #6c7a80;
+  font-size: 23rpx;
+  line-height: 36rpx;
+  margin-top: 10rpx;
+}
+
+.profile-panel {
+  margin-top: 22rpx;
+}
+
+.profile-top {
+  display: flex;
+  align-items: center;
+  gap: 18rpx;
+  margin-bottom: 18rpx;
+}
+
+.avatar {
+  width: 88rpx;
+  height: 88rpx;
+  border-radius: 50%;
+  background: #0f4c5c;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 34rpx;
+  font-weight: 800;
+}
+
+.profile-main {
+  min-width: 0;
+}
+
+.profile-main view {
+  color: #172026;
+  font-size: 32rpx;
+  font-weight: 800;
+  margin-bottom: 6rpx;
+}
+
+.profile-main text {
+  color: #6c7a80;
+  font-size: 24rpx;
+}
+
+.profile-title {
+  padding-top: 14rpx;
+  border-top: 1rpx solid #e5eef0;
+}
+
+.handled-empty {
+  padding: 28rpx 0 6rpx;
+  color: #7b8b91;
+  text-align: center;
+}
+
+.handled-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12rpx;
+}
+
+.handled-item {
+  min-height: 76rpx;
+  padding: 14rpx 0;
+  border-bottom: 1rpx solid #edf3f4;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16rpx;
+}
+
+.handled-item:last-child {
+  border-bottom: 0;
+}
+
+.handled-item view {
+  min-width: 0;
+}
+
+.handled-item view text {
+  display: block;
+}
+
+.handled-item view text:first-child {
+  color: #172026;
+  font-weight: 700;
+  margin-bottom: 4rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.handled-item view text:last-child {
+  color: #6c7a80;
+  font-size: 23rpx;
+}
+
+.handled-item > text {
+  color: #0f6b7a;
+  font-size: 24rpx;
+  flex-shrink: 0;
 }
 </style>

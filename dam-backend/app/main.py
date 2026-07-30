@@ -15,6 +15,7 @@ from app.api import (
     eca,
     health,
     image,
+    local_inference,
     miniprogram,
     onlyoffice,
     patrol_report,
@@ -42,6 +43,7 @@ from app.services.safety_event_engine import safety_event_bus
 from app.services.safety_event_ws import safety_event_ws_manager
 from app.services.staff_task_service import staff_task_service
 from app.services.patrol_report_scheduler import patrol_report_scheduler
+from app.services.local_inference_service import local_inference_service
 
 import httpx
 import traceback
@@ -142,6 +144,13 @@ async def lifespan(app: FastAPI):
         minio_service.connect()
     except Exception as e:
         logger.warning(f"MinIO 连接失败，图片上传功能将不可用: {e}")
+
+    # 初始化本地推理服务
+    try:
+        await local_inference_service.initialize()
+        logger.info(f"本地推理服务已初始化: {settings.LOCAL_LLM_URL}")
+    except Exception as e:
+        logger.warning(f"本地推理服务初始化失败，边缘侧推理功能将不可用: {e}")
 
     # Detection and classification use independent adapters but one serialized
     # Jetson inference lane. Each task may define an optional fallback artifact.
@@ -297,6 +306,7 @@ app.include_router(vision_detect.router, prefix="/api/v1/vision/detect", tags=["
 app.include_router(image.router, prefix="/api/v1/image", tags=["图片管理"])
 app.include_router(camera.router, prefix="/api/v1/camera", tags=["摄像头与检测"])
 app.include_router(broadcast.router, prefix="/api/broadcast", tags=["广播联动"])
+app.include_router(local_inference.router, prefix="/api/v1/local-inference", tags=["边缘侧本地大模型推理"])
 app.include_router(miniprogram.router, prefix="/api/miniprogram/v1", tags=["微信小程序V1"])
 app.include_router(document.router, tags=["文档管理"])
 app.include_router(onlyoffice.router)

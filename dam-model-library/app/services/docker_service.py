@@ -91,6 +91,7 @@ class DockerService:
                 "id": container.id,
                 "name": container.name,
                 "status": container.status,
+                "exit_code": container.attrs["State"].get("ExitCode", 0),
                 "image": container.image.tags[0] if container.image.tags else str(container.image.id),
                 "started_at": container.attrs["State"].get("StartedAt"),
                 "created_at": container.attrs.get("Created"),

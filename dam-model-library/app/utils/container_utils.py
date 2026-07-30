@@ -32,8 +32,8 @@ def generate_container_name(model_id: int, model_name: str) -> str:
     # 转小写
     name = model_name.lower()
 
-    # 将非字母数字中文字符替换为连字符
-    name = re.sub(r'[^a-z0-9一-鿿]+', '-', name)
+    # 将非字母数字字符替换为连字符（去掉中文，Docker 不允许）
+    name = re.sub(r'[^a-z0-9]+', '-', name)
 
     # 去除首尾连字符
     name = name.strip('-')
