@@ -104,7 +104,7 @@ class Settings:
     DOCUMENT_BUCKET: str = _get_env("DOCUMENT_BUCKET", "documents")
 
     # ── MinIO 对象存储（A100 云端）───────────────────────────
-    A100_MINIO_ENDPOINT: str = _get_env("A100_MINIO_ENDPOINT", "10.196.85.11:9000")
+    A100_MINIO_ENDPOINT: str = _get_env("A100_MINIO_ENDPOINT", "10.196.85.11:9469")
     A100_MINIO_ACCESS_KEY: str = _get_env("A100_MINIO_ACCESS_KEY", "minioadmin")
     A100_MINIO_SECRET_KEY: str = _get_env("A100_MINIO_SECRET_KEY", "minioadmin")
     A100_MINIO_SECURE: bool = _get_env("A100_MINIO_SECURE", "false").lower() == "true"
@@ -222,6 +222,26 @@ class Settings:
     SAFETY_EVENT_VIDEO_MAX_LOCAL_GB: float = float(
         _get_env("SAFETY_EVENT_VIDEO_MAX_LOCAL_GB", "20")
     )
+
+    # ── 微信小程序订阅消息 ─────────────────────────────────────
+    WECHAT_MINIPROGRAM_APP_ID: str = _get_env(
+        "WECHAT_MINIPROGRAM_APP_ID", "wx0915df56d799f471"
+    )
+    WECHAT_MINIPROGRAM_APP_SECRET: str = _get_env("WECHAT_MINIPROGRAM_APP_SECRET", "")
+    WECHAT_RISK_TEMPLATE_ID: str = _get_env(
+        "WECHAT_RISK_TEMPLATE_ID",
+        "5NGdwcxDcjqwTuuCCp-LTbiSEl4Cp8N08wN-0R-WbcA",
+    )
+    WECHAT_RISK_TEMPLATE_FIELDS: str = _get_env(
+        "WECHAT_RISK_TEMPLATE_FIELDS", "thing1,thing2,thing3,time4"
+    )
+    WECHAT_RISK_SUBSCRIPTION_TYPE: str = _get_env(
+        "WECHAT_RISK_SUBSCRIPTION_TYPE", "once"
+    )
+    WECHAT_NOTIFY_ENABLED: bool = (
+        _get_env("WECHAT_NOTIFY_ENABLED", "true").lower() == "true"
+    )
+
     BROADCAST_ENABLE_LOCAL_TEST_DEVICE: bool = (
         _get_env("BROADCAST_ENABLE_LOCAL_TEST_DEVICE", "true").lower() == "true"
     )

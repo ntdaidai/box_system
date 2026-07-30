@@ -77,6 +77,8 @@ services:
       # 挂载 YOLO 模型权重目录
       - /home/jetson/wh_test/roboflow/runs:/models/runs:ro
       - /home/jetson/sep/disaster_idf/yolo26x/models:/models/disaster-classifier:ro
+    env_file:
+      - ./dam-miniprogram/wechat-keys/wechat.env
     environment:
       # vLLM 视觉模型
       VLLM_QWEN3VL_URL: http://localhost:8000
@@ -135,6 +137,11 @@ services:
       MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY:-minioadmin}"
       MINIO_SECRET_KEY: "${MINIO_SECRET_KEY:-minioadmin}"
       MINIO_SECURE: "${MINIO_SECURE:-false}"
+      # 微信小程序订阅消息。AppSecret 不要写入源码，部署时放入 .env。
+      WECHAT_MINIPROGRAM_APP_ID: "${WECHAT_MINIPROGRAM_APP_ID:-wx0915df56d799f471}"
+      WECHAT_RISK_TEMPLATE_ID: "${WECHAT_RISK_TEMPLATE_ID:-5NGdwcxDcjqwTuuCCp-LTbiSEl4Cp8N08wN-0R-WbcA}"
+      WECHAT_RISK_TEMPLATE_FIELDS: "${WECHAT_RISK_TEMPLATE_FIELDS:-thing1,thing2,thing3,time4}"
+      WECHAT_NOTIFY_ENABLED: "${WECHAT_NOTIFY_ENABLED:-true}"
     devices:
       # dai: 海康网络摄像头不需要设备映射；USB/UVC 摄像头接入 Jetson
       # 时，在 .env 同时设置 CAMERA_DEVICE=/dev/video0 和 CAMERA_SOURCE=/dev/video0。

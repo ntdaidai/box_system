@@ -45,6 +45,10 @@ from app.services.safety_event_engine import (
 )
 from app.services.safety_event_ws import safety_event_ws_manager
 from app.services.stream_ticket import stream_ticket_store
+from app.services.wechat_subscription_service import (
+    WeChatSubscriptionError,
+    wechat_subscription_service,
+)
 
 
 router = APIRouter()
@@ -107,6 +111,22 @@ class MockSubscribeRequest(BaseModel):
     template_id: Optional[str] = Field(None, max_length=128)
 
 
+class MiniLoginRequest(BaseModel):
+    code: str = Field(..., min_length=1, max_length=256)
+
+
+class SubscribeMessageRequest(BaseModel):
+    openid: str = Field(..., min_length=1, max_length=128)
+    template_id: Optional[str] = Field(None, max_length=128)
+    event_id: Optional[str] = Field(None, max_length=64)
+    scope: str = Field("risk_alerts", max_length=32)
+
+
+class PublishRiskNotificationRequest(BaseModel):
+    event_id: str = Field(..., min_length=1, max_length=64)
+    openid: Optional[str] = Field(None, max_length=128)
+
+
 def _timestamp(value: Optional[dt.datetime]) -> Optional[float]:
     return value.timestamp() if value else None
 
@@ -161,9 +181,18 @@ def _system_action_text(event: SafetyEvent) -> str:
     return "系统自动处理中"
 
 
-def _mini_event(event: SafetyEvent) -> dict:
+def _mini_event(event: SafetyEvent, camera: Optional[Camera] = None) -> dict:
     base = _safety_event_to_dict(event)
     status = _mini_status(event)
+    camera = camera if camera and camera.camera_id == event.camera_id else None
+    install_address = getattr(camera, "install_address", None)
+    latitude = getattr(camera, "latitude", None)
+    longitude = getattr(camera, "longitude", None)
+    monitor_point = event.camera_name or event.camera_id
+    if (event.camera_id in {"camera_001", "dahua_001"} or "一号" in monitor_point) and not (latitude and longitude):
+        install_address = install_address or "河海大学西康路校区图书馆"
+        latitude = 32.055156
+        longitude = 118.75809
     return {
         **base,
         "risk_level_label": RISK_LABELS.get(event.risk_level, event.risk_level),
@@ -171,7 +200,10 @@ def _mini_event(event: SafetyEvent) -> dict:
         "mini_status_label": _status_text(event),
         "system_action_text": _system_action_text(event),
         "event_type": _event_type_label(event),
-        "monitor_point": event.camera_name or event.camera_id,
+        "monitor_point": monitor_point,
+        "install_address": install_address,
+        "latitude": latitude,
+        "longitude": longitude,
         "can_start_manual": status == "WAITING_MANUAL" and event.risk_level == RISK_HIGH,
         "can_submit_result": status == "MANUAL_PROCESSING",
     }
@@ -180,6 +212,13 @@ def _mini_event(event: SafetyEvent) -> dict:
 def _mini_camera(row: Optional[Camera], camera_id: str, status: Optional[dict] = None) -> dict:
     status = status or {}
     camera_name = getattr(row, "camera_name", None) or status.get("name") or camera_id
+    install_address = getattr(row, "install_address", None)
+    latitude = getattr(row, "latitude", None)
+    longitude = getattr(row, "longitude", None)
+    if (camera_id in {"camera_001", "dahua_001"} or "一号" in camera_name) and not (latitude and longitude):
+        install_address = install_address or "河海大学西康路校区图书馆"
+        latitude = 32.055156
+        longitude = 118.75809
     return {
         "camera_id": camera_id,
         "camera_name": camera_name,
@@ -189,6 +228,9 @@ def _mini_camera(row: Optional[Camera], camera_id: str, status: Optional[dict] =
         "online": bool(status.get("running") or status.get("online") or status.get("connected")),
         "running": bool(status.get("running")),
         "last_error": getattr(row, "last_error", None) or status.get("last_error"),
+        "install_address": install_address,
+        "latitude": latitude,
+        "longitude": longitude,
         "description": getattr(row, "description", None),
         "broadcast_devices": [],
         "broadcast_device_count": 0,
@@ -475,8 +517,13 @@ async def list_events(
             .limit(page_size)
             .all()
         )
+        camera_ids = {row.camera_id for row in rows if row.camera_id}
+        cameras = {
+            row.camera_id: row
+            for row in db.query(Camera).filter(Camera.camera_id.in_(camera_ids)).all()
+        } if camera_ids else {}
         return MiniResponse(data={
-            "items": [_mini_event(row) for row in rows],
+            "items": [_mini_event(row, cameras.get(row.camera_id)) for row in rows],
             "total": total,
             "page": page,
             "page_size": page_size,
@@ -515,8 +562,9 @@ async def get_event_detail(event_id: str):
     db = SessionLocal()
     try:
         event = _get_event_or_404(db, event_id)
+        camera = db.query(Camera).filter(Camera.camera_id == event.camera_id).first()
         return MiniResponse(data={
-            "event": _mini_event(event),
+            "event": _mini_event(event, camera),
             "timeline": _build_timeline(db, event_id),
         })
     finally:
@@ -780,15 +828,71 @@ async def submit_field_result(
         db.close()
 
 
+@router.post("/auth/login", response_model=MiniResponse, summary="小程序微信登录")
+async def miniprogram_login(payload: MiniLoginRequest):
+    try:
+        session = await wechat_subscription_service.code_to_openid(payload.code)
+    except WeChatSubscriptionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return MiniResponse(data={
+        "openid": session["openid"],
+        "configured": wechat_subscription_service.configured(),
+    }, message="微信登录成功")
+
+
+@router.get("/notifications/config", response_model=MiniResponse, summary="小程序订阅消息配置")
+async def notification_config():
+    return MiniResponse(data={
+        "template_id": wechat_subscription_service.template_id,
+        "configured": wechat_subscription_service.configured(),
+        "active_subscriber_count": wechat_subscription_service.active_count(),
+    })
+
+
+@router.post("/notifications/subscribe", response_model=MiniResponse, summary="小程序记录订阅授权")
+async def subscribe_message(payload: SubscribeMessageRequest):
+    template_id = payload.template_id or wechat_subscription_service.template_id
+    if template_id != wechat_subscription_service.template_id:
+        raise HTTPException(status_code=400, detail="订阅模板ID不匹配")
+    data = wechat_subscription_service.record_subscription(
+        openid=payload.openid,
+        template_id=template_id,
+        event_id=payload.event_id,
+        scope=payload.scope or "risk_alerts",
+    )
+    return MiniResponse(data=data, message="风险提醒订阅已记录")
+
+
+@router.post("/notifications/publish-risk", response_model=MiniResponse, summary="小程序发布风险订阅消息")
+async def publish_risk_notification(payload: PublishRiskNotificationRequest):
+    try:
+        result = await wechat_subscription_service.publish_event_by_id(
+            payload.event_id,
+            openid=payload.openid,
+        )
+    except WeChatSubscriptionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return MiniResponse(data=result, message="风险订阅消息已发布")
+
+
 @router.post("/notifications/mock-subscribe", response_model=MiniResponse, summary="小程序订阅消息 Mock")
 async def mock_subscribe(payload: MockSubscribeRequest):
+    if payload.openid:
+        template_id = payload.template_id or wechat_subscription_service.template_id
+        data = wechat_subscription_service.record_subscription(
+            openid=payload.openid,
+            template_id=template_id,
+            event_id=payload.event_id,
+            scope="event" if payload.event_id else "risk_alerts",
+        )
+        return MiniResponse(data=data, message="风险提醒订阅已记录")
     return MiniResponse(data={
         "subscribed": True,
         "mock": True,
         "event_id": payload.event_id,
         "template_id": payload.template_id,
         "notification_path": (
-            f"/pages/detail/detail?event_id={payload.event_id}"
-            if payload.event_id else "/pages/events/events"
+            f"/pages/detail/index?event_id={payload.event_id}"
+            if payload.event_id else "/pages/events/index"
         ),
     }, message="订阅消息 Mock 已记录")

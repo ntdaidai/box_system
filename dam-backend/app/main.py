@@ -44,6 +44,7 @@ from app.services.safety_event_ws import safety_event_ws_manager
 from app.services.staff_task_service import staff_task_service
 from app.services.patrol_report_scheduler import patrol_report_scheduler
 from app.services.local_inference_service import local_inference_service
+from app.services.wechat_subscription_service import wechat_subscription_service
 
 import httpx
 import traceback
@@ -81,6 +82,10 @@ def _import_legacy_camera_configs(db, camera_configs):
             description="",
             enabled=bool(config.get("auto_start", True)),
         )
+        if camera_id in {"camera_001", "dahua_001"} or "一号" in row.camera_name:
+            row.install_address = "河海大学西康路校区图书馆"
+            row.latitude = 32.055156
+            row.longitude = 118.75809
         db.add(row)
         imported_count += 1
     if imported_count:
@@ -127,6 +132,7 @@ async def lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
     set_main_event_loop(loop)
     safety_event_ws_manager.set_loop(loop)
+    wechat_subscription_service.set_loop(loop)
 
     # 连接 Redis
     try:
@@ -247,6 +253,7 @@ async def lifespan(app: FastAPI):
     safety_event_bus.subscribe(broadcast_service.handle_safety_event_action)
     safety_event_bus.subscribe(drone_dispatch_service.handle_safety_event_action)
     safety_event_bus.subscribe(staff_task_service.handle_safety_event_action)
+    safety_event_bus.subscribe(wechat_subscription_service.handle_safety_event_action)
 
     # 启动传感器数据采集
     sensor_collector.start_collection()

@@ -9,7 +9,8 @@
     "enable": false
   },
   "mp-weixin": {
-    "appid": "touristappid",
+    "appid": "wx0915df56d799f471",
+    "libVersion": "widelyUsed",
     "setting": {
       "urlCheck": false,
       "es6": true,

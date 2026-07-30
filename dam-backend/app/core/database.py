@@ -34,6 +34,7 @@ def init_db():
     _ensure_camera_device_schema()
     _ensure_broadcast_schema()
     _ensure_safety_event_schema()
+    _ensure_miniprogram_schema()
     logger.info("数据库表已初始化")
 
     db = SessionLocal()
@@ -188,6 +189,9 @@ def _ensure_camera_device_schema():
             "username": "VARCHAR(128) NULL COMMENT '登录账号'",
             "password": "VARCHAR(256) NULL COMMENT '登录密码'",
             "rtsp_path": "VARCHAR(256) NULL COMMENT 'RTSP通道路径'",
+            "install_address": "VARCHAR(255) NULL COMMENT '安装地址'",
+            "latitude": "DOUBLE NULL COMMENT '纬度'",
+            "longitude": "DOUBLE NULL COMMENT '经度'",
             "description": "TEXT NULL COMMENT '描述'",
             "enabled": "BOOL NOT NULL DEFAULT TRUE COMMENT '是否启用'",
             "last_online_at": "DATETIME NULL COMMENT '最后在线时间'",
@@ -207,6 +211,9 @@ def _ensure_camera_device_schema():
             "username": "VARCHAR(128)",
             "password": "VARCHAR(256)",
             "rtsp_path": "VARCHAR(256)",
+            "install_address": "VARCHAR(255)",
+            "latitude": "DOUBLE",
+            "longitude": "DOUBLE",
             "description": "TEXT",
             "enabled": "BOOL DEFAULT TRUE",
             "last_online_at": "DATETIME",
@@ -222,6 +229,31 @@ def _ensure_camera_device_schema():
                 conn.execute(text(f"ALTER TABLE camera_device ADD COLUMN {name} {definition}"))
             except Exception as exc:
                 logger.warning(f"camera_device add column {name} skipped: {exc}")
+        try:
+            if dialect == "mysql":
+                conn.execute(
+                    text(
+                        "UPDATE camera_device "
+                        "SET install_address = COALESCE(install_address, '河海大学西康路校区图书馆'), "
+                        "latitude = COALESCE(latitude, 32.055156), "
+                        "longitude = COALESCE(longitude, 118.75809) "
+                        "WHERE camera_id IN ('camera_001', 'dahua_001') "
+                        "OR camera_name LIKE '%一号%'"
+                    )
+                )
+            else:
+                conn.execute(
+                    text(
+                        "UPDATE camera_device "
+                        "SET install_address = COALESCE(install_address, '河海大学西康路校区图书馆'), "
+                        "latitude = COALESCE(latitude, 32.055156), "
+                        "longitude = COALESCE(longitude, 118.75809) "
+                        "WHERE camera_id IN ('camera_001', 'dahua_001') "
+                        "OR camera_name LIKE '%一号%'"
+                    )
+                )
+        except Exception as exc:
+            logger.warning(f"camera_device default location backfill skipped: {exc}")
 
         if "camera" not in table_names:
             return
@@ -381,6 +413,35 @@ def _ensure_safety_event_schema():
                 conn.execute(text(f"ALTER TABLE safety_event_task ADD COLUMN {name} {definition}"))
             except Exception as exc:
                 logger.warning(f"safety_event_task add column {name} skipped: {exc}")
+
+
+def _ensure_miniprogram_schema():
+    """Best-effort compatibility migration for mini program subscription records."""
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+    if "mini_program_subscription" not in table_names:
+        return
+    existing = {
+        column["name"]
+        for column in inspector.get_columns("mini_program_subscription")
+    }
+    dialect = engine.dialect.name
+    if dialect == "mysql":
+        column_defs = {
+            "subscription_type": "VARCHAR(32) NOT NULL DEFAULT 'once' COMMENT '订阅类型'",
+        }
+    else:
+        column_defs = {
+            "subscription_type": "VARCHAR(32) DEFAULT 'once'",
+        }
+    with engine.begin() as conn:
+        for name, definition in column_defs.items():
+            if name in existing:
+                continue
+            try:
+                conn.execute(text(f"ALTER TABLE mini_program_subscription ADD COLUMN {name} {definition}"))
+            except Exception as exc:
+                logger.warning(f"mini_program_subscription add column {name} skipped: {exc}")
 
 
 def get_db():

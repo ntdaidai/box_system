@@ -19,6 +19,12 @@
       "style": {
         "navigationBarTitleText": "现场处理"
       }
+    },
+    {
+      "path": "pages/map/index",
+      "style": {
+        "navigationBarTitleText": "点位导航"
+      }
     }
   ],
   "globalStyle": {

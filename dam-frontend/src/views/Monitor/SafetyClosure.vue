@@ -668,6 +668,29 @@ function formatDuration(seconds) {
   color: #dce9fa;
 }
 
+.event-table :deep(.el-loading-mask) {
+  background: rgba(7, 18, 31, 0.86);
+  backdrop-filter: blur(2px);
+}
+
+.event-table :deep(.el-loading-spinner .path) {
+  stroke: #20d7ff;
+}
+
+.event-table :deep(.el-loading-spinner .el-loading-text) {
+  color: #8ea8c9;
+}
+
+.event-table :deep(.el-table__body-wrapper),
+.event-table :deep(.el-scrollbar__view),
+.event-table :deep(.el-table__empty-block) {
+  background: rgba(10, 25, 46, 0.96);
+}
+
+.event-table :deep(.el-table__empty-text) {
+  color: #8ea8c9;
+}
+
 .pager {
   display: flex;
   justify-content: flex-end;

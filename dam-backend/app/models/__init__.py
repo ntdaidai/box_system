@@ -17,6 +17,7 @@ from app.models.safety_event import SafetyEvent, SafetyEventLog, SafetyEventTask
 from app.models.analysis_report import AnalysisReport
 from app.models.broadcast import BroadcastDevice, CameraBroadcastDevice, BroadcastTemplate
 from app.models.camera import Camera
+from app.models.miniprogram import MiniProgramSubscription
 
 __all__ = [
     "User",
@@ -41,4 +42,5 @@ __all__ = [
     "CameraBroadcastDevice",
     "BroadcastTemplate",
     "Camera",
+    "MiniProgramSubscription",
 ]

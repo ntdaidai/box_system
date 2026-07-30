@@ -2,6 +2,8 @@ node_modules/
 dist/
 .hbuilderx/
 unpackage/
+wechat-keys/
+pngs/preview-qrcode.jpg
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

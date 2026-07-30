@@ -55,6 +55,21 @@
     <view v-if="event && event.can_start_manual" class="manual-panel high">
       <view class="manual-title">需要人工现场处理</view>
       <button
+        class="ghost-btn subscribe-btn"
+        :loading="subscribingAlert"
+        :disabled="subscribingAlert"
+        @tap="handleSubscribeEventAlert"
+      >
+        订阅事件提醒
+      </button>
+      <button
+        class="ghost-btn navigate-btn"
+        :disabled="!canNavigate"
+        @tap="openMapNavigation"
+      >
+        导航到点位
+      </button>
+      <button
         class="danger-btn"
         :loading="startingManual"
         :disabled="startingManual"
@@ -100,8 +115,9 @@
 <script>
 import { absoluteUrl, request } from '../../utils/request'
 import { formatDateTime, formatDuration, formatTime, riskClass } from '../../utils/format'
-import { subscribeHighEvent } from '../../utils/subscribe'
+import { subscribeRiskAlert } from '../../utils/subscribe'
 import { WS_BASE_URL } from '../../utils/config'
+import { readCache, writeCache } from '../../utils/cache'
 
 export default {
   data() {
@@ -117,12 +133,20 @@ export default {
       videoText: 'V1兼容预览，PC端WebRTC链路不受影响',
       broadcasting: false,
       startingManual: false,
+      subscribingAlert: false,
       socketTask: null
+    }
+  },
+
+  computed: {
+    canNavigate() {
+      return Boolean(this.event && Number(this.event.latitude) && Number(this.event.longitude))
     }
   },
 
   onLoad(options) {
     this.eventId = options?.event_id || ''
+    this.restoreCachedDetail()
     this.loadDetail()
     this.loadVideo()
     this.connectEventSocket()
@@ -140,23 +164,32 @@ export default {
   },
 
   methods: {
+    restoreCachedDetail() {
+      if (!this.eventId) return
+      const cached = readCache(`event-detail:${this.eventId}`, null)
+      if (!cached) return
+      this.applyDetailData(cached)
+    },
+
+    applyDetailData(data) {
+      const event = data.event
+      const timeline = (data.timeline || []).map((item) => ({
+        ...item,
+        timeText: item.timeText || formatTime(item.created_at)
+      }))
+      this.event = event
+      this.timeline = timeline
+      this.riskClassName = riskClass(event.risk_level)
+      this.startTime = formatDateTime(event.started_at)
+      this.durationText = formatDuration(event.duration_seconds)
+    },
+
     loadDetail() {
       if (!this.eventId) return Promise.resolve()
       return request({ url: `/events/${encodeURIComponent(this.eventId)}` })
         .then((data) => {
-          const event = data.event
-          const timeline = (data.timeline || []).map((item) => ({
-            ...item,
-            timeText: formatTime(item.created_at)
-          }))
-          this.event = event
-          this.timeline = timeline
-          this.riskClassName = riskClass(event.risk_level)
-          this.startTime = formatDateTime(event.started_at)
-          this.durationText = formatDuration(event.duration_seconds)
-          if (event.risk_level === 'HIGH') {
-            subscribeHighEvent(event.event_id).catch(() => null)
-          }
+          this.applyDetailData(data)
+          writeCache(`event-detail:${this.eventId}`, data)
         })
         .catch((error) => {
           uni.showToast({ title: error.message, icon: 'none' })
@@ -247,6 +280,32 @@ export default {
         .finally(() => {
           this.startingManual = false
         })
+    },
+
+    handleSubscribeEventAlert() {
+      if (!this.eventId || this.subscribingAlert) return
+      this.subscribingAlert = true
+      subscribeRiskAlert(this.eventId)
+        .then((data) => {
+          const quota = Number(data.remaining_quota || 1)
+          uni.showToast({
+            title: `已订阅${quota > 1 ? quota + '次' : ''}`,
+            icon: 'success'
+          })
+        })
+        .catch((error) => {
+          uni.showToast({ title: error.message || '订阅失败', icon: 'none' })
+        })
+        .finally(() => {
+          this.subscribingAlert = false
+        })
+    },
+
+    openMapNavigation() {
+      if (!this.event) return
+      uni.navigateTo({
+        url: `/pages/map/index?camera_id=${encodeURIComponent(this.event.camera_id || '')}&event_id=${encodeURIComponent(this.eventId)}`
+      })
     },
 
     openProcess() {
@@ -408,6 +467,14 @@ export default {
   font-size: 30rpx;
   font-weight: 700;
   margin-bottom: 18rpx;
+}
+
+.subscribe-btn {
+  margin-bottom: 14rpx;
+}
+
+.navigate-btn {
+  margin-bottom: 14rpx;
 }
 
 .timeline {

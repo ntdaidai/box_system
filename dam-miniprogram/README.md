@@ -101,6 +101,43 @@ PC 端仍使用现有 WebRTC，不做改动。
 
 小程序 V1 使用后端适配层返回实时快照预览，并保留短时 MJPEG 票据和 WebRTC 信令信息。后续如果部署小程序可直接播放的 HLS/FLV/RTMP 网关，只需要扩展 `/api/miniprogram/v1/events/{event_id}/video` 的返回即可。
 
+## 服务通知
+
+风险提醒使用微信小程序一次性订阅消息。小程序端通过 `uni.requestSubscribeMessage` 拉起授权，用户允许后调用后端记录 openid 和模板授权；后端在安全事件风险等级变化时调用微信 `subscribeMessage.send` 发布服务通知。
+
+当前模板 ID：
+
+```text
+5NGdwcxDcjqwTuuCCp-LTbiSEl4Cp8N08wN-0R-WbcA
+```
+
+后端需要配置：
+
+```bash
+WECHAT_MINIPROGRAM_APP_ID=wx0915df56d799f471
+WECHAT_MINIPROGRAM_APP_SECRET=你的微信AppSecret
+WECHAT_RISK_TEMPLATE_ID=5NGdwcxDcjqwTuuCCp-LTbiSEl4Cp8N08wN-0R-WbcA
+WECHAT_RISK_TEMPLATE_FIELDS=thing1,thing2,thing3,time4
+WECHAT_RISK_SUBSCRIPTION_TYPE=once
+```
+
+模板字段顺序为：风险级别、风险类型、风险标题、发布时间。如果微信后台模板实际 keyword 不是 `thing1/thing2/thing3/time4`，改 `WECHAT_RISK_TEMPLATE_FIELDS` 即可。
+
+`AppSecret` 放在：
+
+```text
+dam-miniprogram/wechat-keys/wechat.env
+```
+
+`docker-compose.yml` 已把这个文件作为后端服务的 `env_file`。如果微信后台模板属于长期订阅模板，可以把 `WECHAT_RISK_SUBSCRIPTION_TYPE` 改为 `permanent`；普通一次性模板保持 `once`，用户允许一次只能发送一条服务通知。
+
+## 现场处置增强
+
+- 现场照片在提交前会用 Canvas 写入左下角水印，包含事件、点位、安装地址和时间。
+- 首页、详情和摄像头列表使用小程序本地缓存做浅兜底；网络失败时优先展示最近一次数据。
+- 高风险事件支持点位导航。后端摄像头台账增加 `install_address`、`latitude`、`longitude`，小程序地图页会拉取摄像头列表并使用 `openLocation` 打开微信导航。
+- 一号点位默认坐标暂设为河海大学西康路校区图书馆：纬度 `32.055156`，经度 `118.75809`。
+
 ## 容器化
 
 小程序本体不是常驻 Web 服务，不能像 FastAPI 后端或 Vue 前端那样在容器里运行并对外提供页面。它最终运行在微信客户端里。

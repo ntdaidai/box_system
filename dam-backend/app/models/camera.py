@@ -1,6 +1,6 @@
 """摄像头设备台账模型。"""
 
-from sqlalchemy import BigInteger, Boolean, Column, DateTime, Integer, String, Text, func
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, Float, Integer, String, Text, func
 
 from app.core.database import Base
 
@@ -19,6 +19,9 @@ class Camera(Base):
     username = Column(String(128), nullable=True, comment="登录账号")
     password = Column(String(256), nullable=True, comment="登录密码")
     rtsp_path = Column(String(256), nullable=True, comment="RTSP通道路径")
+    install_address = Column(String(255), nullable=True, comment="安装地址")
+    latitude = Column(Float, nullable=True, comment="纬度")
+    longitude = Column(Float, nullable=True, comment="经度")
     description = Column(Text, nullable=True, comment="描述")
     enabled = Column(Boolean, nullable=False, default=True, comment="是否启用")
     last_online_at = Column(DateTime, nullable=True, comment="最后在线时间")
@@ -42,6 +45,9 @@ class Camera(Base):
             "password": password if reveal_password else "",
             "has_password": bool(password),
             "rtsp_path": self.rtsp_path,
+            "install_address": self.install_address,
+            "latitude": self.latitude,
+            "longitude": self.longitude,
             "description": self.description,
             "enabled": self.enabled,
             "last_online_at": self.last_online_at.isoformat() if self.last_online_at else None,

@@ -14,7 +14,14 @@
         <image :src="photoPath" mode="aspectFill" />
       </view>
       <view v-else class="photo-empty">到达现场后拍摄处置照片</view>
-      <button class="ghost-btn" @tap="choosePhoto">拍照上传</button>
+      <button
+        class="ghost-btn"
+        :loading="watermarking"
+        :disabled="watermarking || submitting"
+        @tap="choosePhoto"
+      >
+        拍照上传
+      </button>
     </view>
 
     <view class="section">
@@ -46,6 +53,13 @@
     >
       提交处理结果
     </button>
+
+    <canvas
+      canvas-id="watermarkCanvas"
+      id="watermarkCanvas"
+      class="watermark-canvas"
+      :style="{ width: watermarkCanvasWidth + 'px', height: watermarkCanvasHeight + 'px' }"
+    />
   </view>
 </template>
 
@@ -63,6 +77,9 @@ export default {
       result: 'DRIVEN_AWAY',
       remark: '',
       submitting: false,
+      watermarking: false,
+      watermarkCanvasWidth: 320,
+      watermarkCanvasHeight: 240,
       resultOptions: [
         { value: 'DRIVEN_AWAY', label: '已完成驱离' },
         { value: 'LEFT_BY_SELF', label: '人员自行离开' },
@@ -104,10 +121,83 @@ export default {
         success: (res) => {
           const file = res.tempFiles && res.tempFiles[0]
           if (file && file.tempFilePath) {
-            this.photoPath = file.tempFilePath
+            this.watermarking = true
+            this.applyPhotoWatermark(file.tempFilePath)
+              .then((path) => {
+                this.photoPath = path
+              })
+              .catch(() => {
+                this.photoPath = file.tempFilePath
+                uni.showToast({ title: '水印生成失败，已保留原图', icon: 'none' })
+              })
+              .finally(() => {
+                this.watermarking = false
+              })
           }
         }
       })
+    },
+
+    applyPhotoWatermark(filePath) {
+      return new Promise((resolve, reject) => {
+        uni.getImageInfo({
+          src: filePath,
+          success: (info) => {
+            const maxSide = 1600
+            const scale = Math.min(1, maxSide / Math.max(info.width, info.height))
+            const width = Math.max(1, Math.round(info.width * scale))
+            const height = Math.max(1, Math.round(info.height * scale))
+            this.watermarkCanvasWidth = width
+            this.watermarkCanvasHeight = height
+            this.$nextTick(() => {
+              const ctx = uni.createCanvasContext('watermarkCanvas', this)
+              ctx.drawImage(filePath, 0, 0, width, height)
+              const fontSize = Math.max(22, Math.round(width / 32))
+              const padding = Math.max(18, Math.round(width / 45))
+              const lineHeight = Math.round(fontSize * 1.45)
+              const lines = this.watermarkLines()
+              const panelHeight = padding * 2 + lineHeight * lines.length
+              ctx.setFillStyle('rgba(0, 0, 0, 0.48)')
+              ctx.fillRect(0, height - panelHeight, width, panelHeight)
+              ctx.setFillStyle('#ffffff')
+              ctx.setFontSize(fontSize)
+              lines.forEach((line, index) => {
+                ctx.fillText(line, padding, height - panelHeight + padding + lineHeight * (index + 0.72))
+              })
+              ctx.draw(false, () => {
+                setTimeout(() => {
+                  uni.canvasToTempFilePath({
+                    canvasId: 'watermarkCanvas',
+                    destWidth: width,
+                    destHeight: height,
+                    fileType: 'jpg',
+                    quality: 0.9,
+                    success: (res) => resolve(res.tempFilePath),
+                    fail: reject
+                  }, this)
+                }, 80)
+              })
+            })
+          },
+          fail: reject
+        })
+      })
+    },
+
+    watermarkLines() {
+      const event = this.event || {}
+      const now = new Date()
+      const time = `${now.getFullYear()}-${this.pad(now.getMonth() + 1)}-${this.pad(now.getDate())} ${this.pad(now.getHours())}:${this.pad(now.getMinutes())}`
+      return [
+        `事件：${event.event_type || '风险事件'}`,
+        `点位：${event.monitor_point || event.camera_name || event.camera_id || '--'}`,
+        `位置：${event.install_address || '未填写安装地址'}`,
+        `时间：${time}`
+      ]
+    },
+
+    pad(value) {
+      return String(value).padStart(2, '0')
     },
 
     selectResult(event) {
@@ -248,5 +338,13 @@ export default {
 .submit-btn[disabled] {
   background: #b8c8cd;
   color: #fff;
+}
+
+.watermark-canvas {
+  position: fixed;
+  left: -9999px;
+  top: -9999px;
+  opacity: 0;
+  pointer-events: none;
 }
 </style>

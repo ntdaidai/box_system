@@ -116,6 +116,17 @@
         <el-form-item label="设备名称">
           <el-input v-model.trim="form.camera_name" />
         </el-form-item>
+        <el-form-item label="安装地址">
+          <el-input v-model.trim="form.install_address" />
+        </el-form-item>
+        <div class="form-grid two">
+          <el-form-item label="纬度">
+            <el-input-number v-model="form.latitude" :min="-90" :max="90" :precision="6" :controls="false" />
+          </el-form-item>
+          <el-form-item label="经度">
+            <el-input-number v-model="form.longitude" :min="-180" :max="180" :precision="6" :controls="false" />
+          </el-form-item>
+        </div>
         <el-form-item label="描述">
           <el-input v-model.trim="form.description" type="textarea" :rows="3" />
         </el-form-item>
@@ -201,6 +212,9 @@ const mapTransformStyle = computed(() => ({
 const form = reactive({
   camera_id: '',
   camera_name: '',
+  install_address: '',
+  latitude: undefined,
+  longitude: undefined,
   description: '',
   brand: 'dahua',
   ip_address: '',
@@ -214,6 +228,9 @@ const form = reactive({
 function resetForm() {
   form.camera_id = ''
   form.camera_name = ''
+  form.install_address = ''
+  form.latitude = undefined
+  form.longitude = undefined
   form.description = ''
   form.brand = 'dahua'
   form.ip_address = ''
@@ -236,6 +253,9 @@ function openEdit(device) {
   editingDevice.value = device
   form.camera_id = device.camera_id || ''
   form.camera_name = device.camera_name || device.name || ''
+  form.install_address = device.install_address || ''
+  form.latitude = device.latitude ?? undefined
+  form.longitude = device.longitude ?? undefined
   form.description = device.description || ''
   form.brand = device.brand || 'dahua'
   form.ip_address = device.ip_address || ''
@@ -336,12 +356,18 @@ function formPayload(includeEmptyPassword = false) {
   if (editingDevice.value) {
     return {
       camera_name: form.camera_name,
+      install_address: form.install_address,
+      latitude: form.latitude,
+      longitude: form.longitude,
       description: form.description,
       enabled: form.enabled,
     }
   }
   const payload = {
     camera_name: form.camera_name,
+    install_address: form.install_address,
+    latitude: form.latitude,
+    longitude: form.longitude,
     description: form.description,
     brand: form.brand,
     ip_address: form.ip_address,

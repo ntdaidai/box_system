@@ -90,12 +90,18 @@ class CameraDevicePayload(BaseModel):
     web_port: int = Field(80, ge=1, le=65535)
     username: str = Field("", max_length=128)
     password: str = Field("", max_length=256)
+    install_address: Optional[str] = Field(None, max_length=255)
+    latitude: Optional[float] = Field(None, ge=-90, le=90)
+    longitude: Optional[float] = Field(None, ge=-180, le=180)
     description: Optional[str] = Field(None, max_length=1000)
     enabled: bool = True
 
 
 class CameraDeviceUpdatePayload(BaseModel):
     camera_name: Optional[str] = Field(None, min_length=1, max_length=128)
+    install_address: Optional[str] = Field(None, max_length=255)
+    latitude: Optional[float] = Field(None, ge=-90, le=90)
+    longitude: Optional[float] = Field(None, ge=-180, le=180)
     description: Optional[str] = Field(None, max_length=1000)
     enabled: Optional[bool] = None
 
@@ -884,6 +890,9 @@ async def create_camera_device(
         username=payload.username,
         password=payload.password,
         rtsp_path=_camera_rtsp_path(payload.brand),
+        install_address=payload.install_address,
+        latitude=payload.latitude,
+        longitude=payload.longitude,
         description=payload.description,
         enabled=payload.enabled,
     )
@@ -923,6 +932,9 @@ async def update_camera_device(
             raise HTTPException(status_code=400, detail=f"测试连接失败，未保存设备: {message}")
     field_map = {
         "camera_name": "camera_name",
+        "install_address": "install_address",
+        "latitude": "latitude",
+        "longitude": "longitude",
         "description": "description",
         "enabled": "enabled",
     }

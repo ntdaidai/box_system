@@ -5,7 +5,9 @@
   "description": "大藤峡安全巡查 uniapp 微信小程序 V1",
   "scripts": {
     "dev:mp-weixin": "uni -p mp-weixin",
-    "build:mp-weixin": "uni build -p mp-weixin"
+    "build:mp-weixin": "uni build -p mp-weixin",
+    "preview:mp-weixin": "npm run build:mp-weixin && miniprogram-ci preview --pp ./dist/build/mp-weixin --pkp ./wechat-keys/private.wx0915df56d799f471.key --appid wx0915df56d799f471 --uv 1.0.0 -r 1 --enable-es6 true --qrcode-format image --qrcode-output-dest ./pngs/preview-qrcode.jpg",
+    "upload:mp-weixin": "npm run build:mp-weixin && miniprogram-ci upload --pp ./dist/build/mp-weixin --pkp ./wechat-keys/private.wx0915df56d799f471.key --appid wx0915df56d799f471 --uv 1.0.0 -r 1 --enable-es6 true"
   },
   "dependencies": {
     "@dcloudio/uni-app": "3.0.0-alpha-5020220260725001",

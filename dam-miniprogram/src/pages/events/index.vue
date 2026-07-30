@@ -28,12 +28,33 @@
       </view>
     </view>
 
+    <view v-if="activeTab === 'ongoing'" class="notify-panel">
+      <view>
+        <text>服务通知</text>
+        <text>订阅后，有低/中/高风险时会收到微信提醒</text>
+      </view>
+      <button
+        class="ghost-btn notify-btn"
+        :loading="subscribingAlerts"
+        :disabled="subscribingAlerts"
+        @tap="handleSubscribeRiskAlerts"
+      >
+        订阅提醒
+      </button>
+    </view>
+
     <view class="section-head">
       <text>风险事件</text>
       <text>{{ events.length }} 条</text>
     </view>
 
     <view v-if="loading" class="empty compact">加载中...</view>
+    <view v-else-if="loadError" class="error-panel">
+      <view>事件加载失败</view>
+      <text>{{ loadError }}</text>
+      <text>{{ apiBaseText }}</text>
+      <button class="ghost-btn retry-btn" @tap="loadHome">重新加载</button>
+    </view>
     <view v-else-if="events.length === 0" class="empty compact">
       {{ activeTab === 'ongoing' ? '暂无进行中事件' : '暂无已完成事件' }}
     </view>
@@ -53,6 +74,13 @@
         <view v-if="item.risk_level === 'HIGH' && item.can_start_manual" class="urgent-line">
           需要尽快现场处理
         </view>
+        <button
+          v-if="item.risk_level === 'HIGH' && item.can_start_manual && item.latitude && item.longitude"
+          class="ghost-btn card-nav-btn"
+          @tap.stop="openMapNavigation(item)"
+        >
+          导航到点位
+        </button>
         <view class="meta-line">
           <text>监控点</text>
           <text>{{ item.monitor_point }}</text>
@@ -170,7 +198,10 @@
 
 <script>
 import { absoluteUrl, request } from '../../utils/request'
+import { API_BASE_URL } from '../../utils/config'
 import { formatDuration, riskClass } from '../../utils/format'
+import { subscribeRiskAlert } from '../../utils/subscribe'
+import { readCache, writeCache } from '../../utils/cache'
 
 export default {
   data() {
@@ -183,11 +214,13 @@ export default {
       highCount: 0,
       manualCount: 0,
       loading: false,
+      loadError: '',
       videoLoading: false,
       liveExpanded: false,
       snapshotUrl: '',
       videoText: '选择点位后进入实时视频',
       cameraBroadcasting: false,
+      subscribingAlerts: false,
       liveTimer: null
     }
   },
@@ -210,10 +243,15 @@ export default {
       const count = Number(this.selectedCamera.broadcast_device_count || 0)
       if (count > 0) return `已绑定 ${count} 个喊话设备`
       return '当前点位未检测到绑定喊话设备'
+    },
+
+    apiBaseText() {
+      return `接口地址：${API_BASE_URL}`
     }
   },
 
   onLoad() {
+    this.restoreCachedHome()
     this.loadHome()
   },
 
@@ -235,6 +273,19 @@ export default {
   },
 
   methods: {
+    restoreCachedHome() {
+      const cachedEvents = readCache(`events:${this.activeTab}`, [])
+      const cachedHandled = readCache('handled-events', [])
+      const cachedCameras = readCache('cameras', [])
+      if (cachedEvents.length) {
+        this.events = cachedEvents
+        this.highCount = cachedEvents.filter((item) => item.risk_level === 'HIGH' && item.mini_status !== 'RESOLVED').length
+        this.manualCount = cachedEvents.filter((item) => item.mini_status === 'MANUAL_PROCESSING').length
+      }
+      if (cachedHandled.length) this.handledEvents = cachedHandled
+      if (cachedCameras.length) this.cameras = cachedCameras
+    },
+
     loadHome() {
       return Promise.all([
         this.loadEvents(),
@@ -252,16 +303,23 @@ export default {
 
     loadEvents() {
       this.loading = true
+      this.loadError = ''
       return request({
         url: `/events?status=${this.activeTab}&page_size=50`
       })
         .then((data) => {
           const events = (data.items || []).map(this.decorateEvent)
           this.events = events
+          writeCache(`events:${this.activeTab}`, events)
           this.highCount = events.filter((item) => item.risk_level === 'HIGH' && item.mini_status !== 'RESOLVED').length
           this.manualCount = events.filter((item) => item.mini_status === 'MANUAL_PROCESSING').length
         })
         .catch((error) => {
+          const cached = readCache(`events:${this.activeTab}`, [])
+          if (cached.length) {
+            this.events = cached
+          }
+          this.loadError = error.message || '网络错误'
           uni.showToast({ title: error.message, icon: 'none' })
         })
         .finally(() => {
@@ -278,9 +336,10 @@ export default {
             .filter((item) => item.mini_status === 'MANUAL_PROCESSING' || item.mini_status === 'RESOLVED' || item.ack_operator || item.resolved_operator)
             .map(this.decorateEvent)
             .slice(0, 6)
+          writeCache('handled-events', this.handledEvents)
         })
         .catch(() => {
-          this.handledEvents = []
+          this.handledEvents = readCache('handled-events', [])
         })
     },
 
@@ -288,6 +347,7 @@ export default {
       return request({ url: '/cameras' })
         .then((data) => {
           this.cameras = data.items || []
+          writeCache('cameras', this.cameras)
           if (this.selectedCameraIndex >= this.cameras.length) {
             this.selectedCameraIndex = 0
           }
@@ -296,7 +356,7 @@ export default {
           }
         })
         .catch((error) => {
-          this.cameras = []
+          this.cameras = readCache('cameras', [])
           this.snapshotUrl = ''
           this.videoText = error.message
         })
@@ -393,6 +453,31 @@ export default {
         })
     },
 
+    handleSubscribeRiskAlerts() {
+      if (this.subscribingAlerts) return
+      this.subscribingAlerts = true
+      subscribeRiskAlert()
+        .then((data) => {
+          const quota = Number(data.remaining_quota || 1)
+          uni.showToast({
+            title: `已订阅${quota > 1 ? quota + '次' : ''}`,
+            icon: 'success'
+          })
+        })
+        .catch((error) => {
+          uni.showToast({ title: error.message || '订阅失败', icon: 'none' })
+        })
+        .finally(() => {
+          this.subscribingAlerts = false
+        })
+    },
+
+    openMapNavigation(item) {
+      uni.navigateTo({
+        url: `/pages/map/index?camera_id=${encodeURIComponent(item.camera_id || '')}&event_id=${encodeURIComponent(item.event_id || '')}`
+      })
+    },
+
     openDetail(eventId) {
       uni.navigateTo({
         url: `/pages/detail/index?event_id=${encodeURIComponent(eventId)}`
@@ -459,6 +544,47 @@ export default {
   color: #172026;
   font-size: 36rpx;
   font-weight: 800;
+}
+
+.notify-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18rpx;
+  padding: 18rpx 20rpx;
+  margin-bottom: 20rpx;
+  border-radius: 8rpx;
+  background: #fff;
+  box-shadow: 0 6rpx 18rpx rgba(20, 45, 52, 0.07);
+}
+
+.notify-panel view {
+  flex: 1;
+  min-width: 0;
+}
+
+.notify-panel text {
+  display: block;
+}
+
+.notify-panel text:first-child {
+  color: #172026;
+  font-weight: 800;
+  margin-bottom: 6rpx;
+}
+
+.notify-panel text:last-child {
+  color: #6c7a80;
+  font-size: 24rpx;
+  line-height: 34rpx;
+}
+
+.notify-btn {
+  width: 168rpx;
+  height: 64rpx;
+  line-height: 64rpx;
+  padding: 0;
+  font-size: 24rpx;
 }
 
 .section-head {
@@ -540,6 +666,13 @@ export default {
   font-weight: 700;
 }
 
+.card-nav-btn {
+  height: 64rpx;
+  line-height: 64rpx;
+  margin: 0 0 14rpx;
+  font-size: 24rpx;
+}
+
 .meta-line {
   display: flex;
   justify-content: space-between;
@@ -569,6 +702,35 @@ export default {
 
 .empty.compact {
   padding: 54rpx 20rpx 42rpx;
+}
+
+.error-panel {
+  padding: 24rpx;
+  border-radius: 8rpx;
+  background: #fff5f5;
+  color: #9f1d1d;
+  margin-bottom: 18rpx;
+}
+
+.error-panel view {
+  font-size: 30rpx;
+  font-weight: 800;
+  margin-bottom: 10rpx;
+}
+
+.error-panel text {
+  display: block;
+  color: #7f2a2a;
+  font-size: 24rpx;
+  line-height: 38rpx;
+  word-break: break-all;
+}
+
+.retry-btn {
+  height: 68rpx;
+  line-height: 68rpx;
+  margin-top: 16rpx;
+  font-size: 26rpx;
 }
 
 .video-panel {
