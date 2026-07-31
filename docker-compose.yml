@@ -142,10 +142,16 @@ services:
       WECHAT_RISK_TEMPLATE_ID: "${WECHAT_RISK_TEMPLATE_ID:-5NGdwcxDcjqwTuuCCp-LTbiSEl4Cp8N08wN-0R-WbcA}"
       WECHAT_RISK_TEMPLATE_FIELDS: "${WECHAT_RISK_TEMPLATE_FIELDS:-thing1,thing2,thing3,time4}"
       WECHAT_NOTIFY_ENABLED: "${WECHAT_NOTIFY_ENABLED:-true}"
+      BROADCAST_ENABLE_LOCAL_TEST_DEVICE: "${BROADCAST_ENABLE_LOCAL_TEST_DEVICE:-false}"
+      BROADCAST_ENABLE_USB_AUDIO_DEVICE: "${BROADCAST_ENABLE_USB_AUDIO_DEVICE:-true}"
+      BROADCAST_USB_ALSA_DEVICE: "${BROADCAST_USB_ALSA_DEVICE:-plughw:2,0}"
+      BROADCAST_TTS_VOICE: "${BROADCAST_TTS_VOICE:-cmn}"
+      BROADCAST_TTS_SPEED_WPM: "${BROADCAST_TTS_SPEED_WPM:-150}"
     devices:
       # dai: 海康网络摄像头不需要设备映射；USB/UVC 摄像头接入 Jetson
       # 时，在 .env 同时设置 CAMERA_DEVICE=/dev/video0 和 CAMERA_SOURCE=/dev/video0。
       - "${CAMERA_DEVICE:-/dev/null}:${CAMERA_DEVICE:-/dev/null}"
+      - "/dev/snd:/dev/snd"
       - "/dev/ttyCH341USB0:/dev/ttyCH341USB0"
       - "/dev/ttyCH341USB1:/dev/ttyCH341USB1"
       - "/dev/ttyCH341USB2:/dev/ttyCH341USB2"

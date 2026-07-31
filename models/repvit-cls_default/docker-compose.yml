@@ -1,0 +1,26 @@
+services:
+  repvit-cls-default-api:
+    build: .
+    container_name: repvit-classifier-default
+    restart: unless-stopped
+    ports:
+      - "8009:8000"
+    environment:
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MODEL_WEIGHTS=/app/models/repvit_m1_1_cls_default.pt
+      - MODEL_BACKEND=timm
+      - MODEL_NAME=repvit_m1_1.dist_450e_in1k
+      - CLASS_NAMES=
+      - DEVICE=0
+      - IMG_SIZE=224
+      - TOP_K=3
+    volumes:
+      - ./repvit_m1_1_cls_default.pt:/app/models/repvit_m1_1_cls_default.pt:ro
+    networks:
+      - box_system_default
+
+networks:
+  box_system_default:
+    external: true

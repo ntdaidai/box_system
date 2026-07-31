@@ -99,6 +99,12 @@ class CameraDevicePayload(BaseModel):
 
 class CameraDeviceUpdatePayload(BaseModel):
     camera_name: Optional[str] = Field(None, min_length=1, max_length=128)
+    brand: Optional[CameraBrand] = None
+    ip_address: Optional[str] = Field(None, min_length=3, max_length=128)
+    rtsp_port: Optional[int] = Field(None, ge=1, le=65535)
+    web_port: Optional[int] = Field(None, ge=1, le=65535)
+    username: Optional[str] = Field(None, max_length=128)
+    password: Optional[str] = Field(None, max_length=256)
     install_address: Optional[str] = Field(None, max_length=255)
     latitude: Optional[float] = Field(None, ge=-90, le=90)
     longitude: Optional[float] = Field(None, ge=-180, le=180)
@@ -925,13 +931,28 @@ async def update_camera_device(
         raise HTTPException(status_code=404, detail="摄像头设备不存在")
     data = payload.model_dump(exclude_unset=True)
     enabling_device = data.get("enabled") is True and not row.enabled
-    if enabling_device:
-        source = _camera_source_from_row(row)
+    connection_fields = {"brand", "ip_address", "rtsp_port", "username", "password"}
+    connection_changed = any(field in data for field in connection_fields)
+    will_be_enabled = data.get("enabled", row.enabled)
+    if will_be_enabled and (enabling_device or connection_changed):
+        source = _camera_source_from_parts(
+            brand=data.get("brand", row.brand),
+            ip_address=data.get("ip_address", row.ip_address),
+            rtsp_port=data.get("rtsp_port", row.rtsp_port),
+            username=data.get("username", row.username or ""),
+            password=data.get("password", row.password or ""),
+        )
         ok, message = await asyncio.to_thread(_test_camera_source, source)
         if not ok:
             raise HTTPException(status_code=400, detail=f"测试连接失败，未保存设备: {message}")
     field_map = {
         "camera_name": "camera_name",
+        "brand": "brand",
+        "ip_address": "ip_address",
+        "rtsp_port": "rtsp_port",
+        "web_port": "web_port",
+        "username": "username",
+        "password": "password",
         "install_address": "install_address",
         "latitude": "latitude",
         "longitude": "longitude",
@@ -941,6 +962,8 @@ async def update_camera_device(
     for payload_key, attr in field_map.items():
         if payload_key in data:
             setattr(row, attr, data[payload_key])
+    if "brand" in data:
+        row.rtsp_path = _camera_rtsp_path(row.brand)
     db.commit()
     db.refresh(row)
     status = _sync_camera_runtime(row)

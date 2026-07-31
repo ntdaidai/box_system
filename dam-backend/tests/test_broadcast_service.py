@@ -100,6 +100,62 @@ class BroadcastServiceTests(unittest.TestCase):
         actions = self.db.query(EventAction).order_by(EventAction.device_id.asc()).all()
         self.assertEqual([action.result for action in actions], ["SUCCESS", "FAILED"])
 
+    def test_real_device_takes_precedence_over_local_test_device(self):
+        local = BroadcastDevice(
+            id=1,
+            name="Local browser test",
+            vendor_type="LOCAL_AUDIO",
+            device_code="local_1",
+            status="ONLINE",
+            enabled=True,
+        )
+        real = BroadcastDevice(
+            id=2,
+            name="Real speaker",
+            vendor_type="MOCK",
+            device_code="real_1",
+            status="ONLINE",
+            enabled=True,
+        )
+        self.db.add_all([local, real])
+        self.db.flush()
+        self.db.add_all([
+            CameraBroadcastDevice(id=1, camera_id="cam_3", broadcast_device_id=local.id),
+            CameraBroadcastDevice(id=2, camera_id="cam_3", broadcast_device_id=real.id),
+        ])
+        self.db.commit()
+
+        response = self.service.play(
+            self.db,
+            {
+                "event_id": "evt_3",
+                "camera_id": "cam_3",
+                "template_id": "PERSON_HIGH",
+                "trigger_type": "AUTO",
+            },
+        )
+
+        self.assertEqual(response["result"], "SUCCESS")
+        self.assertEqual([item["device_id"] for item in response["items"]], [real.id])
+
+    def test_existing_local_test_device_is_disabled_when_setting_is_off(self):
+        local = BroadcastDevice(
+            id=1,
+            name="Local browser test",
+            vendor_type="LOCAL_AUDIO",
+            device_code="local_audio_default",
+            status="ONLINE",
+            enabled=True,
+        )
+        self.db.add(local)
+        self.db.commit()
+
+        self.service.ensure_defaults(self.db)
+
+        self.db.refresh(local)
+        self.assertFalse(local.enabled)
+        self.assertEqual(local.status, "OFFLINE")
+
 
 if __name__ == "__main__":
     unittest.main()

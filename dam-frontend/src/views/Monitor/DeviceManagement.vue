@@ -105,7 +105,7 @@
     <el-dialog
       v-model="dialogVisible"
       :title="editingDevice ? '编辑摄像头设备' : '添加摄像头设备'"
-      width="560px"
+      width="720px"
       class="camera-device-dialog"
       destroy-on-close
     >
@@ -117,8 +117,26 @@
           <el-input v-model.trim="form.camera_name" />
         </el-form-item>
         <el-form-item label="安装地址">
-          <el-input v-model.trim="form.install_address" />
+          <div class="location-row">
+            <el-input v-model.trim="form.install_address" />
+            <button type="button" class="ghost-action location-action" @click="locationPickerVisible = !locationPickerVisible">
+              <el-icon><Location /></el-icon>
+              地图选点
+            </button>
+          </div>
         </el-form-item>
+        <div v-if="locationPickerVisible" class="location-picker">
+          <div class="location-picker-head">
+            <strong>摄像头点位</strong>
+            <button type="button" class="inline-icon" title="关闭地图" @click="locationPickerVisible = false">
+              <el-icon><Close /></el-icon>
+            </button>
+          </div>
+          <div class="location-map-stage" @click="pickLocationOnMap">
+            <img src="/dam-map.png" alt="大藤峡点位地图" class="location-map-image" draggable="false" />
+            <span v-if="hasLocationPoint" class="location-marker" :style="selectedLocationStyle"></span>
+          </div>
+        </div>
         <div class="form-grid two">
           <el-form-item label="纬度">
             <el-input-number v-model="form.latitude" :min="-90" :max="90" :precision="6" :controls="false" />
@@ -130,7 +148,7 @@
         <el-form-item label="描述">
           <el-input v-model.trim="form.description" type="textarea" :rows="3" />
         </el-form-item>
-        <div v-if="!editingDevice" class="form-grid three">
+        <div class="form-grid three">
           <el-form-item label="品牌">
             <el-select v-model="form.brand">
               <el-option label="大华" value="dahua" />
@@ -144,15 +162,21 @@
             <el-input-number v-model="form.web_port" :min="1" :max="65535" :controls="false" />
           </el-form-item>
         </div>
-        <el-form-item v-if="!editingDevice" label="摄像头IP">
+        <el-form-item label="摄像头IP">
           <el-input v-model.trim="form.ip_address" />
         </el-form-item>
-        <div v-if="!editingDevice" class="form-grid two">
+        <div class="form-grid two">
           <el-form-item label="Web账号">
             <el-input v-model.trim="form.username" autocomplete="off" />
           </el-form-item>
           <el-form-item label="Web密码">
-            <el-input v-model="form.password" type="password" show-password autocomplete="new-password" />
+            <el-input
+              v-model="form.password"
+              type="password"
+              show-password
+              autocomplete="new-password"
+              :placeholder="editingDevice ? '留空则保留原密码' : ''"
+            />
           </el-form-item>
         </div>
         <el-form-item>
@@ -161,7 +185,7 @@
       </el-form>
       <template #footer>
         <button type="button" class="ghost-action" @click="dialogVisible = false">取消</button>
-        <button v-if="!editingDevice" type="button" class="ghost-action" :disabled="testing" @click="testConnection">
+        <button type="button" class="ghost-action" :disabled="testing" @click="testConnection">
           <el-icon><Connection /></el-icon>
           测试连接
         </button>
@@ -177,7 +201,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Check, Connection, Delete, Edit, Hide, Plus, Refresh, View } from '@element-plus/icons-vue'
+import { Check, Close, Connection, Delete, Edit, Hide, Location, Plus, Refresh, View } from '@element-plus/icons-vue'
 import {
   createCameraDevice,
   deleteCameraDevice,
@@ -194,6 +218,7 @@ const saving = ref(false)
 const testing = ref(false)
 const dialogVisible = ref(false)
 const editingDevice = ref(null)
+const locationPickerVisible = ref(false)
 const verifiedConnectionKey = ref('')
 const originalConnectionKey = ref('')
 const visibleDeviceInfo = reactive({})
@@ -205,9 +230,30 @@ const mapDragging = ref(false)
 const mapDragStart = reactive({ x: 0, y: 0, mapX: 0, mapY: 0 })
 let deviceFallbackNoticeAt = 0
 
+const MAP_BOUNDS = {
+  lngMin: 110.72,
+  lngMax: 110.8,
+  latMin: 23.96,
+  latMax: 24.02,
+}
+
 const mapTransformStyle = computed(() => ({
   transform: `translate(${mapX.value}px, ${mapY.value}px) scale(${mapScale.value})`,
 }))
+
+const hasLocationPoint = computed(() => Number.isFinite(Number(form.latitude)) && Number.isFinite(Number(form.longitude)))
+
+const selectedLocationStyle = computed(() => {
+  if (!hasLocationPoint.value) return {}
+  const longitude = Number(form.longitude)
+  const latitude = Number(form.latitude)
+  const left = ((longitude - MAP_BOUNDS.lngMin) / (MAP_BOUNDS.lngMax - MAP_BOUNDS.lngMin)) * 100
+  const top = ((MAP_BOUNDS.latMax - latitude) / (MAP_BOUNDS.latMax - MAP_BOUNDS.latMin)) * 100
+  return {
+    left: `${Math.min(100, Math.max(0, left))}%`,
+    top: `${Math.min(100, Math.max(0, top))}%`,
+  }
+})
 
 const form = reactive({
   camera_id: '',
@@ -241,6 +287,7 @@ function resetForm() {
   form.enabled = true
   verifiedConnectionKey.value = ''
   originalConnectionKey.value = ''
+  locationPickerVisible.value = false
 }
 
 function openCreate() {
@@ -266,6 +313,7 @@ function openEdit(device) {
   form.enabled = Boolean(device.enabled)
   verifiedConnectionKey.value = ''
   originalConnectionKey.value = connectionKey()
+  locationPickerVisible.value = false
   dialogVisible.value = true
 }
 
@@ -342,27 +390,36 @@ function resetMapView() {
   mapY.value = 0
 }
 
+function pickLocationOnMap(event) {
+  const image = event.currentTarget.querySelector('.location-map-image')
+  if (!image) return
+  const rect = image.getBoundingClientRect()
+  const naturalRatio = image.naturalWidth && image.naturalHeight ? image.naturalWidth / image.naturalHeight : rect.width / rect.height
+  const boxRatio = rect.width / rect.height
+  const visible = { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
+  if (boxRatio > naturalRatio) {
+    visible.width = rect.height * naturalRatio
+    visible.left = rect.left + (rect.width - visible.width) / 2
+  } else {
+    visible.height = rect.width / naturalRatio
+    visible.top = rect.top + (rect.height - visible.height) / 2
+  }
+  const xRatio = (event.clientX - visible.left) / visible.width
+  const yRatio = (event.clientY - visible.top) / visible.height
+  if (xRatio < 0 || xRatio > 1 || yRatio < 0 || yRatio > 1) return
+  form.longitude = Number((MAP_BOUNDS.lngMin + xRatio * (MAP_BOUNDS.lngMax - MAP_BOUNDS.lngMin)).toFixed(6))
+  form.latitude = Number((MAP_BOUNDS.latMax - yRatio * (MAP_BOUNDS.latMax - MAP_BOUNDS.latMin)).toFixed(6))
+}
+
 function validateForm() {
   if (!form.camera_name) return '请填写设备名称'
-  if (!editingDevice.value) {
-    if (!form.ip_address) return '请填写摄像头IP'
-    if (!form.username) return '请填写Web账号'
-    if (!form.password) return '请填写Web密码'
-  }
+  if (!form.ip_address) return '请填写摄像头IP'
+  if (!form.username) return '请填写Web账号'
+  if (!editingDevice.value && !form.password) return '请填写Web密码'
   return ''
 }
 
 function formPayload(includeEmptyPassword = false) {
-  if (editingDevice.value) {
-    return {
-      camera_name: form.camera_name,
-      install_address: form.install_address,
-      latitude: form.latitude,
-      longitude: form.longitude,
-      description: form.description,
-      enabled: form.enabled,
-    }
-  }
   const payload = {
     camera_name: form.camera_name,
     install_address: form.install_address,
@@ -376,7 +433,7 @@ function formPayload(includeEmptyPassword = false) {
     username: form.username,
     enabled: form.enabled,
   }
-  if (form.camera_id) payload.camera_id = form.camera_id
+  if (!editingDevice.value && form.camera_id) payload.camera_id = form.camera_id
   if (includeEmptyPassword || form.password) payload.password = form.password
   return payload
 }
@@ -388,13 +445,13 @@ function connectionKey() {
     rtsp_port: Number(form.rtsp_port) || 554,
     web_port: Number(form.web_port) || 80,
     username: form.username,
-    password: form.password || (editingDevice.value?.has_password ? '__stored__' : ''),
+    password: form.password ? `typed:${form.password}` : (editingDevice.value?.has_password ? '__stored__' : ''),
   })
 }
 
 function needsConnectionTest() {
   if (!editingDevice.value) return true
-  return false
+  return connectionKey() !== originalConnectionKey.value
 }
 
 function hasVerifiedConnection() {
@@ -410,7 +467,8 @@ async function testConnection() {
     ElMessage.warning('请填写Web账号')
     return
   }
-  if (!form.password && (!editingDevice.value || editingDevice.value?.has_password)) {
+  const password = form.password || await savedPasswordForCurrentDevice()
+  if (!password && (!editingDevice.value || editingDevice.value?.has_password)) {
     ElMessage.warning('测试连接需要输入密码')
     return
   }
@@ -421,7 +479,7 @@ async function testConnection() {
       ip_address: form.ip_address,
       rtsp_port: Number(form.rtsp_port) || 554,
       username: form.username,
-      password: form.password,
+      password,
     })
     if (res.data?.connected) {
       verifiedConnectionKey.value = connectionKey()
@@ -433,6 +491,20 @@ async function testConnection() {
   } finally {
     testing.value = false
   }
+}
+
+async function savedPasswordForCurrentDevice() {
+  if (!editingDevice.value || !editingDevice.value?.has_password || !form.camera_id) return ''
+  if (Object.prototype.hasOwnProperty.call(passwordCache, form.camera_id)) {
+    return passwordCache[form.camera_id] || ''
+  }
+  try {
+    const res = await getCameraDevicePassword(form.camera_id)
+    passwordCache[form.camera_id] = res.data?.password || ''
+  } catch (error) {
+    passwordCache[form.camera_id] = ''
+  }
+  return passwordCache[form.camera_id] || ''
 }
 
 async function saveDevice() {
@@ -819,6 +891,70 @@ onMounted(fetchDevices)
   gap: 2px;
 }
 
+.location-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.location-action {
+  min-width: 110px;
+}
+
+.location-picker {
+  margin: 0 0 14px;
+  overflow: hidden;
+  border: 1px solid rgba(120, 155, 211, 0.24);
+  border-radius: 8px;
+  background: rgba(4, 14, 26, 0.74);
+}
+
+.location-picker-head {
+  min-height: 38px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #dce9fa;
+  border-bottom: 1px solid rgba(143, 181, 225, 0.12);
+}
+
+.location-map-stage {
+  position: relative;
+  width: 100%;
+  max-height: 360px;
+  aspect-ratio: 865 / 289;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #030b12;
+  cursor: crosshair;
+  user-select: none;
+}
+
+.location-map-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
+
+.location-marker {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border: 3px solid #061425;
+  border-radius: 50%;
+  background: #ffdf45;
+  box-shadow: 0 0 0 3px rgba(255, 223, 69, 0.32), 0 0 18px rgba(255, 223, 69, 0.72);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
 .form-grid {
   display: grid;
   gap: 12px;
@@ -905,8 +1041,13 @@ onMounted(fetchDevices)
   }
 
   .form-grid.two,
-  .form-grid.three {
+  .form-grid.three,
+  .location-row {
     grid-template-columns: 1fr;
+  }
+
+  .location-action {
+    width: 100%;
   }
 }
 </style>

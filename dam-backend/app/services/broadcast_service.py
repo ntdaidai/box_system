@@ -98,7 +98,15 @@ class UsbAudioAdapter(BroadcastAdapter):
     vendor_type = "USB_AUDIO"
 
     def play(self, device: BroadcastDevice, audio: BroadcastAudio) -> BroadcastPlayResult:
-        raise BroadcastException("USB_AUDIO only supports recorded audio playback")
+        wav_path = self._synthesize_text_to_wav(audio.text)
+        return self.play_file(
+            device,
+            BroadcastAudioFile(
+                path=str(wav_path),
+                format="audio/wav",
+                uri=str(wav_path),
+            ),
+        )
 
     def play_file(self, device: BroadcastDevice, audio: BroadcastAudioFile) -> BroadcastPlayResult:
         source_path = Path(audio.path)
@@ -159,6 +167,45 @@ class UsbAudioAdapter(BroadcastAdapter):
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout or "").strip()
             raise BroadcastException(detail or "Recorded audio conversion failed")
+        return wav_path
+
+    @staticmethod
+    def _synthesize_text_to_wav(text: str) -> Path:
+        cleaned = " ".join((text or "").split())
+        if not cleaned:
+            raise BroadcastException("Broadcast text is empty")
+
+        tts_bin = shutil.which("espeak-ng") or shutil.which("espeak")
+        if not tts_bin:
+            raise BroadcastException("espeak-ng is not installed for template broadcast TTS")
+
+        directory = Path(settings.BROADCAST_AUDIO_DIR)
+        directory.mkdir(parents=True, exist_ok=True)
+        wav_path = directory / f"template_{dt.datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex}.wav"
+        command = [
+            tts_bin,
+            "-v",
+            settings.BROADCAST_TTS_VOICE,
+            "-s",
+            str(settings.BROADCAST_TTS_SPEED_WPM),
+            "-w",
+            str(wav_path),
+            cleaned,
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=max(1, int(settings.BROADCAST_AUDIO_CONVERT_TIMEOUT_SECONDS)),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise BroadcastException("Template broadcast TTS timed out") from exc
+
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "").strip()
+            raise BroadcastException(detail or "Template broadcast TTS failed")
         return wav_path
 
 
@@ -427,12 +474,13 @@ class BroadcastService:
                     enabled=True,
                 ))
                 changed = True
+        local_device = (
+            db.query(BroadcastDevice)
+            .filter(BroadcastDevice.device_code == "local_audio_default")
+            .first()
+        )
         if settings.BROADCAST_ENABLE_LOCAL_TEST_DEVICE:
-            device = (
-                db.query(BroadcastDevice)
-                .filter(BroadcastDevice.device_code == "local_audio_default")
-                .first()
-            )
+            device = local_device
             if not device:
                 device = BroadcastDevice(
                     **self._sqlite_default_id(db, 900000),
@@ -456,7 +504,12 @@ class BroadcastService:
                     broadcast_device_id=device.id,
                 ))
                 changed = True
+        elif local_device and local_device.enabled:
+            local_device.enabled = False
+            local_device.status = "OFFLINE"
+            changed = True
         if settings.BROADCAST_ENABLE_USB_AUDIO_DEVICE:
+            usb_config = {"alsa_device": settings.BROADCAST_USB_ALSA_DEVICE}
             device = (
                 db.query(BroadcastDevice)
                 .filter(BroadcastDevice.device_code == "jetson_usb_speaker")
@@ -471,13 +524,13 @@ class BroadcastService:
                     status="ONLINE",
                     enabled=True,
                     location="Jetson USB音频输出",
-                    config_json={"alsa_device": settings.BROADCAST_USB_ALSA_DEVICE},
+                    config_json=usb_config,
                 )
                 db.add(device)
                 db.flush()
                 changed = True
-            elif not device.config_json:
-                device.config_json = {"alsa_device": settings.BROADCAST_USB_ALSA_DEVICE}
+            elif (device.config_json or {}).get("alsa_device") != settings.BROADCAST_USB_ALSA_DEVICE:
+                device.config_json = usb_config
                 changed = True
             if settings.CAMERA_ID and not db.query(CameraBroadcastDevice).filter(
                 CameraBroadcastDevice.camera_id == settings.CAMERA_ID,
@@ -574,6 +627,12 @@ class BroadcastService:
             .order_by(BroadcastDevice.id.asc())
             .all()
         )
+        real_devices = [
+            row for row in rows
+            if (row.vendor_type or "").upper() != "LOCAL_AUDIO"
+        ]
+        if real_devices:
+            return real_devices
         if rows or not settings.BROADCAST_ENABLE_LOCAL_TEST_DEVICE:
             return rows
         return (

@@ -127,7 +127,7 @@
         <div class="ops-header-actions">
           <el-button
             class="ops-ghost-button"
-            :disabled="!currentCameraId"
+            :disabled="!emergencyBroadcastCamera"
             @click="openEmergencyBroadcast"
           >
             <el-icon><Connection /></el-icon>应急喊话
@@ -1169,6 +1169,7 @@ const analysisTaskLabel = computed(() => taskTypeLabel(analysisTask.value))
 const selectedModelReady = computed(() => Boolean(modelStatus.value.models?.[analysisTask.value]?.loaded))
 const canToggleDetection = computed(() => Boolean(currentCamera.value?.connected && selectedModelReady.value))
 const canRenderCurrentStream = computed(() => Boolean(currentCamera.value?.configured || currentCamera.value?.connected))
+const emergencyBroadcastCamera = computed(() => currentCamera.value || cameras.value[0] || null)
 const isMultiCameraMode = computed(() => cameraViewMode.value !== 'single')
 const gridCameraLimit = computed(() => cameraViewMode.value === 'nine' ? 9 : 4)
 const cameraById = computed(() => new Map(cameras.value.map((camera) => [camera.camera_id, camera])))
@@ -1516,11 +1517,13 @@ function handleBroadcastPlayed({ event, result }) {
 }
 
 function openEmergencyBroadcast() {
+  const camera = emergencyBroadcastCamera.value
+  if (!camera) return
   broadcastTargetEvent.value = {
     event_id: null,
-    camera_id: currentCameraId.value,
-    camera_name: currentCamera.value?.name || currentCameraId.value,
-    event_type: '应急人工喊话',
+    camera_id: camera.camera_id,
+    camera_name: camera.name || camera.camera_name || camera.camera_id,
+    event_type: '应急喊话',
     risk_level: overallRiskLevel.value === 'NONE' ? 'LOW' : overallRiskLevel.value,
   }
   broadcastDialogVisible.value = true

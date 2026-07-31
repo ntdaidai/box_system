@@ -1,0 +1,26 @@
+services:
+  yolo-cls-default-api:
+    build: .
+    container_name: yolo-classifier-default
+    restart: unless-stopped
+    ports:
+      - "8005:8000"
+    environment:
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MODEL_WEIGHTS=/app/models/yolo26x_cls_default.pt
+      - MODEL_BACKEND=yolo
+      - MODEL_NAME=
+      - CLASS_NAMES=
+      - DEVICE=0
+      - IMG_SIZE=256
+      - TOP_K=3
+    volumes:
+      - ./yolo26x_cls_default.pt:/app/models/yolo26x_cls_default.pt:ro
+    networks:
+      - box_system_default
+
+networks:
+  box_system_default:
+    external: true

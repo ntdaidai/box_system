@@ -249,6 +249,8 @@ class Settings:
         _get_env("BROADCAST_ENABLE_USB_AUDIO_DEVICE", "true").lower() == "true"
     )
     BROADCAST_USB_ALSA_DEVICE: str = _get_env("BROADCAST_USB_ALSA_DEVICE", "default")
+    BROADCAST_TTS_VOICE: str = _get_env("BROADCAST_TTS_VOICE", "cmn")
+    BROADCAST_TTS_SPEED_WPM: int = int(_get_env("BROADCAST_TTS_SPEED_WPM", "150"))
     BROADCAST_AUDIO_DIR: str = _get_env(
         "BROADCAST_AUDIO_DIR",
         os.path.join(BASE_DIR, "data", "broadcast_audio"),

@@ -1,0 +1,26 @@
+services:
+  mobilenetv4-cls-default-api:
+    build: .
+    container_name: mobilenetv4-classifier-default
+    restart: unless-stopped
+    ports:
+      - "8007:8000"
+    environment:
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MODEL_WEIGHTS=/app/models/mobilenetv4_conv_medium_cls_default.pt
+      - MODEL_BACKEND=timm
+      - MODEL_NAME=mobilenetv4_conv_medium.e500_r256_in1k
+      - CLASS_NAMES=
+      - DEVICE=0
+      - IMG_SIZE=256
+      - TOP_K=3
+    volumes:
+      - ./mobilenetv4_conv_medium_cls_default.pt:/app/models/mobilenetv4_conv_medium_cls_default.pt:ro
+    networks:
+      - box_system_default
+
+networks:
+  box_system_default:
+    external: true

@@ -1,0 +1,26 @@
+services:
+  repvit-cls-api:
+    build: .
+    container_name: repvit-classifier
+    restart: unless-stopped
+    ports:
+      - "8008:8000"
+    environment:
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MODEL_WEIGHTS=/app/models/repvit_m1_1_cls_acc_94_25.pt
+      - MODEL_BACKEND=timm
+      - MODEL_NAME=repvit_m1_1.dist_450e_in1k
+      - CLASS_NAMES=earthquake,flood,landslide,mudslide
+      - DEVICE=0
+      - IMG_SIZE=224
+      - TOP_K=3
+    volumes:
+      - ./repvit_m1_1_cls_acc_94_25.pt:/app/models/repvit_m1_1_cls_acc_94_25.pt:ro
+    networks:
+      - box_system_default
+
+networks:
+  box_system_default:
+    external: true
