@@ -1,7 +1,5 @@
 # 数据模型
 from app.models.user import User
-from app.models.device import Device
-from app.models.trigger_rule import TriggerRule
 from app.models.alarm import Alarm
 from app.models.model_library import ModelLibrary
 from app.models.data_source import DataSource
@@ -29,8 +27,6 @@ from app.models.safety_integration import (
 
 __all__ = [
     "User",
-    "Device",
-    "TriggerRule",
     "Alarm",
     "ModelLibrary",
     "DataSource",

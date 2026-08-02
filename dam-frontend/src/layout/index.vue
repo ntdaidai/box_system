@@ -143,7 +143,6 @@ const menuMap = {
         { name: '视频监控', path: '/monitor/camera', icon: VideoMonitorIcon },
         { name: '设备管理', path: '/monitor/camera/devices', icon: Setting },
         { name: '区域配置', path: '/monitor/camera/zones', icon: Crop },
-        { name: '安全闭环', path: '/monitor/camera/safety', icon: Bell },
         { name: '图片/视频分析', path: '/monitor/camera/image', icon: DataAnalysis },
       ],
     },
@@ -196,7 +195,7 @@ const isDashboard = computed(() => route.path === '/dashboard')
 // 需要显示侧边栏的模块
 const showSiderbar = computed(() => {
   const path = route.path
-  return path.startsWith('/monitor') || path.startsWith('/alarm') || path.startsWith('/rule') || path.startsWith('/document')
+  return path.startsWith('/monitor') || path.startsWith('/alarm') || path.startsWith('/document')
 })
 
 // 当前菜单

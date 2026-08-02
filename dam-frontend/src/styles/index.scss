@@ -119,10 +119,38 @@ body {
   --el-table-border-color: rgba(0, 200, 255, 0.1);
   --el-table-text-color: #E2F0FE;
   --el-table-header-text-color: #AECAF5;
+  background-color: transparent !important;
+}
+
+.el-table__inner-wrapper,
+.el-table__body-wrapper,
+.el-table__header-wrapper,
+.el-table__fixed,
+.el-table__fixed-right,
+.el-table tr,
+.el-table td.el-table__cell {
+  background-color: transparent !important;
+}
+
+.el-table th.el-table__cell {
+  background-color: rgba(30, 58, 95, 0.5) !important;
+}
+
+.el-table__body tr:hover > td.el-table__cell {
+  background-color: rgba(0, 200, 255, 0.08) !important;
 }
 
 // 按钮
 .el-button {
+  &--default {
+    --el-button-bg-color: rgba(18, 49, 75, 0.85);
+    --el-button-border-color: rgba(0, 200, 255, 0.24);
+    --el-button-text-color: #c8dce8;
+    --el-button-hover-bg-color: rgba(24, 66, 96, 0.9);
+    --el-button-hover-border-color: rgba(0, 229, 255, 0.55);
+    --el-button-hover-text-color: #e9f7ff;
+  }
+
   &--primary {
     --el-button-bg-color: rgba(0, 200, 255, 0.25);
     --el-button-border-color: rgba(0, 200, 255, 0.5);
@@ -132,6 +160,19 @@ body {
       --el-button-border-color: #00e5ff;
     }
   }
+}
+
+.el-button.el-button--default {
+  color: #c8dce8 !important;
+  border-color: rgba(0, 200, 255, 0.24) !important;
+  background-color: rgba(18, 49, 75, 0.85) !important;
+}
+
+.el-button.el-button--default:hover,
+.el-button.el-button--default:focus {
+  color: #e9f7ff !important;
+  border-color: rgba(0, 229, 255, 0.55) !important;
+  background-color: rgba(24, 66, 96, 0.9) !important;
 }
 
 // 输入框
@@ -189,6 +230,48 @@ body {
   border: 1px solid rgba(0, 200, 255, 0.3) !important;
   border-radius: 12px !important;
   .el-dialog__title { color: #E2F0FE !important; }
+}
+
+// 弹层和数据组件统一使用监控系统的深色语义。
+.el-drawer,
+.el-message-box {
+  background: #0b1d30 !important;
+  border: 1px solid rgba(0, 200, 255, 0.28) !important;
+  color: var(--text-primary) !important;
+}
+
+.el-drawer__header,
+.el-drawer__title,
+.el-message-box__title,
+.el-message-box__content {
+  color: var(--text-primary) !important;
+}
+
+.el-descriptions {
+  --el-descriptions-table-border: 1px solid rgba(0, 200, 255, 0.16);
+}
+
+.el-descriptions__label.el-descriptions__cell.is-bordered-label,
+.el-descriptions__content.el-descriptions__cell.is-bordered-content {
+  color: var(--text-primary) !important;
+  background: rgba(10, 30, 48, 0.82) !important;
+}
+
+.el-tabs__item { color: var(--text-secondary) !important; }
+.el-tabs__item.is-active { color: var(--accent-color) !important; }
+.el-tabs__nav-wrap::after { background: rgba(0, 200, 255, 0.12) !important; }
+.el-loading-mask { background: rgba(5, 16, 28, 0.72) !important; }
+.el-pagination {
+  --el-pagination-bg-color: transparent;
+  --el-pagination-button-color: var(--text-secondary);
+}
+
+.el-textarea__inner,
+.el-select__wrapper,
+.el-input-number .el-input__wrapper {
+  color: var(--text-primary) !important;
+  background: rgba(10, 30, 48, 0.85) !important;
+  box-shadow: 0 0 0 1px rgba(0, 200, 255, 0.2) inset !important;
 }
 
 // Radio 按钮组

@@ -376,7 +376,20 @@ async function refreshStream() {
 }
 
 function pointerToUnitPoint(event) {
-  const svg = event.currentTarget.closest?.('svg') || event.currentTarget
+  const svg = event.currentTarget?.ownerSVGElement
+    || event.currentTarget?.closest?.('svg')
+    || event.currentTarget
+  const screenMatrix = svg?.getScreenCTM?.()
+  if (svg?.createSVGPoint && screenMatrix) {
+    const screenPoint = svg.createSVGPoint()
+    screenPoint.x = event.clientX
+    screenPoint.y = event.clientY
+    const point = screenPoint.matrixTransform(screenMatrix.inverse())
+    return {
+      x: Math.max(0, Math.min(1, point.x / overlayWidth.value)),
+      y: Math.max(0, Math.min(1, point.y / overlayHeight.value)),
+    }
+  }
   const rect = svg.getBoundingClientRect()
   return {
     x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
@@ -768,6 +781,7 @@ onMounted(async () => {
   gap: 10px;
   color: #8ddcf0;
   background: rgba(3, 14, 23, 0.72);
+  pointer-events: none;
 }
 .draw-tip {
   position: absolute;
@@ -779,6 +793,7 @@ onMounted(async () => {
   border: 1px solid rgba(245, 251, 255, 0.22);
   border-radius: 7px;
   background: rgba(4, 16, 25, 0.82);
+  pointer-events: none;
 }
 .editor-toolbar {
   display: flex;

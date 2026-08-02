@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.core.config import settings
 from app.core.cache import cached, invalidate_cache
-from app.core.database import get_db
+from app.core.database import SessionLocal, get_db
 from app.core.security import require_auth
 from app.models.alarm import Alarm
 from app.models.analysis_report import AnalysisReport
@@ -256,6 +256,14 @@ def _persist_video(upload_file, target: Path, max_bytes: int) -> int:
 
 def _get_camera_or_404(camera_id: str) -> CameraStream:
     camera = camera_manager.get_camera(camera_id)
+    if not camera:
+        db = SessionLocal()
+        try:
+            row = _camera_device_row(db, str(camera_id))
+            if row:
+                camera = camera_manager.get_camera(row.camera_id)
+        finally:
+            db.close()
     if not camera:
         raise HTTPException(status_code=404, detail="摄像头不存在")
     return camera
@@ -1790,12 +1798,13 @@ async def get_detection_zones(
     _user: User = Depends(require_auth),
 ):
     camera = _get_camera_or_404(camera_id)
-    stored_zones = get_camera_zone_store().get(camera_id)
+    runtime_camera_id = camera.camera_id
+    stored_zones = get_camera_zone_store().get(runtime_camera_id)
     if stored_zones:
         camera.set_detection_zones(stored_zones)
     return DetectResponse(
         code=200,
-        data={"camera_id": camera_id, "zones": stored_zones or camera.get_detection_zones()},
+        data={"camera_id": runtime_camera_id, "zones": stored_zones or camera.get_detection_zones()},
     )
 
 
@@ -1810,18 +1819,19 @@ async def save_detection_zones(
     _user: User = Depends(require_auth),
 ):
     camera = _get_camera_or_404(camera_id)
+    runtime_camera_id = camera.camera_id
     try:
         zones = camera.set_detection_zones(
             [
                 {
                     **zone.model_dump(exclude_none=True),
-                    "camera_id": camera_id,
+                    "camera_id": runtime_camera_id,
                 }
                 for zone in payload.zones
             ]
         )
-        get_camera_zone_store().save(camera_id, zones)
-        zones = get_camera_zone_store().get(camera_id)
+        get_camera_zone_store().save(runtime_camera_id, zones)
+        zones = get_camera_zone_store().get(runtime_camera_id)
         if zones:
             camera.set_detection_zones(zones)
         await invalidate_cache("camera:zones*")
@@ -1829,7 +1839,7 @@ async def save_detection_zones(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return DetectResponse(
         code=200,
-        data={"camera_id": camera_id, "zones": zones, "message": "检测区域已保存"},
+        data={"camera_id": runtime_camera_id, "zones": zones, "message": "检测区域已保存"},
     )
 
 

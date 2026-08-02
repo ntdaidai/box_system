@@ -242,9 +242,6 @@ class Settings:
         _get_env("WECHAT_NOTIFY_ENABLED", "true").lower() == "true"
     )
 
-    BROADCAST_ENABLE_LOCAL_TEST_DEVICE: bool = (
-        _get_env("BROADCAST_ENABLE_LOCAL_TEST_DEVICE", "true").lower() == "true"
-    )
     BROADCAST_ENABLE_USB_AUDIO_DEVICE: bool = (
         _get_env("BROADCAST_ENABLE_USB_AUDIO_DEVICE", "true").lower() == "true"
     )

@@ -23,12 +23,9 @@ class BroadcastServiceTests(unittest.TestCase):
         self.Session = sessionmaker(bind=self.engine)
         self.db = self.Session()
         self.service = BroadcastService()
-        self.original_local_device = settings.BROADCAST_ENABLE_LOCAL_TEST_DEVICE
-        settings.BROADCAST_ENABLE_LOCAL_TEST_DEVICE = False
         self.service.ensure_defaults(self.db)
 
     def tearDown(self):
-        settings.BROADCAST_ENABLE_LOCAL_TEST_DEVICE = self.original_local_device
         self.db.close()
 
     def test_manual_play_uses_bound_devices_and_records_event_action(self):
@@ -138,7 +135,7 @@ class BroadcastServiceTests(unittest.TestCase):
         self.assertEqual(response["result"], "SUCCESS")
         self.assertEqual([item["device_id"] for item in response["items"]], [real.id])
 
-    def test_existing_local_test_device_is_disabled_when_setting_is_off(self):
+    def test_existing_local_test_device_is_always_disabled(self):
         local = BroadcastDevice(
             id=1,
             name="Local browser test",

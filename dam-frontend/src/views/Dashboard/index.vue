@@ -406,6 +406,13 @@ const sensorCards = [
       { label: '视频通道', field: 'channel_status' },
     ],
   },
+  {
+    key: 'uav', name: '大疆 Matrice 4E', path: '/monitor/drone', icon: '/drone.png',
+    values: [
+      { label: '接入状态', field: 'device_status' },
+      { label: '定位状态', field: 'position_status' },
+    ],
+  },
 ]
 
 // ==================== 计算属性 ====================
@@ -737,10 +744,6 @@ const fetchRecentAlarms = async () => {
 }
 
 /**
- * 初始化加载数据 — 分两阶段
- *
- * 阶段一（首屏必出，3 个快接口）：实时数据 + 系统状态 + 设备状态
- /**
  * 初始化加载数据 — 分两阶段
  *
  * 阶段一（首屏必出，快接口）：实时数据 + 系统状态

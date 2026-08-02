@@ -480,37 +480,10 @@ class BroadcastService:
                     enabled=True,
                 ))
                 changed = True
-        local_device = (
-            db.query(BroadcastDevice)
-            .filter(BroadcastDevice.device_code == "local_audio_default")
-            .first()
-        )
-        if settings.BROADCAST_ENABLE_LOCAL_TEST_DEVICE:
-            device = local_device
-            if not device:
-                device = BroadcastDevice(
-                    **self._sqlite_default_id(db, 900000),
-                    name="本机耳机/音响测试",
-                    vendor_type="LOCAL_AUDIO",
-                    device_code="local_audio_default",
-                    status="ONLINE",
-                    enabled=True,
-                    location="浏览器本机",
-                )
-                db.add(device)
-                db.flush()
-                changed = True
-            if settings.CAMERA_ID and not db.query(CameraBroadcastDevice).filter(
-                CameraBroadcastDevice.camera_id == settings.CAMERA_ID,
-                CameraBroadcastDevice.broadcast_device_id == device.id,
-            ).first():
-                db.add(CameraBroadcastDevice(
-                    **self._sqlite_default_id(db, 900000),
-                    camera_id=settings.CAMERA_ID,
-                    broadcast_device_id=device.id,
-                ))
-                changed = True
-        elif local_device and local_device.enabled:
+        local_device = db.query(BroadcastDevice).filter(
+            BroadcastDevice.device_code == "local_audio_default"
+        ).first()
+        if local_device and local_device.enabled:
             local_device.enabled = False
             local_device.status = "OFFLINE"
             changed = True
@@ -524,20 +497,25 @@ class BroadcastService:
             if not device:
                 device = BroadcastDevice(
                     **self._sqlite_default_id(db, 900001),
-                    name="Jetson USB外放",
+                    name="一号点广播",
                     vendor_type="USB_AUDIO",
                     device_code="jetson_usb_speaker",
                     status="ONLINE",
                     enabled=True,
                     location="Jetson USB音频输出",
                     config_json=usb_config,
+                    description="一号点 USB 广播设备",
                 )
                 db.add(device)
                 db.flush()
                 changed = True
-            elif (device.config_json or {}).get("alsa_device") != settings.BROADCAST_USB_ALSA_DEVICE:
-                device.config_json = usb_config
-                changed = True
+            else:
+                if device.name != "一号点广播":
+                    device.name = "一号点广播"
+                    changed = True
+                if (device.config_json or {}).get("alsa_device") != settings.BROADCAST_USB_ALSA_DEVICE:
+                    device.config_json = usb_config
+                    changed = True
             if settings.CAMERA_ID and not db.query(CameraBroadcastDevice).filter(
                 CameraBroadcastDevice.camera_id == settings.CAMERA_ID,
                 CameraBroadcastDevice.broadcast_device_id == device.id,
@@ -670,23 +648,10 @@ class BroadcastService:
             .order_by(BroadcastDevice.id.asc())
             .all()
         )
-        real_devices = [
+        return [
             row for row in rows
             if (row.vendor_type or "").upper() != "LOCAL_AUDIO"
         ]
-        if real_devices:
-            return real_devices
-        if rows or not settings.BROADCAST_ENABLE_LOCAL_TEST_DEVICE:
-            return rows
-        return (
-            db.query(BroadcastDevice)
-            .filter(
-                BroadcastDevice.vendor_type == "LOCAL_AUDIO",
-                BroadcastDevice.enabled == True,  # noqa: E712
-            )
-            .order_by(BroadcastDevice.id.asc())
-            .all()
-        )
 
     def _start_action(
         self,

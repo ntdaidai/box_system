@@ -39,6 +39,7 @@ const sensors = [
   { name: '雨量计', key: 'rain', path: '/monitor/rain', icon: rainIcon },
   { name: '振动传感器', key: 'vibration', path: '/monitor/vibration', icon: vibrationIcon },
   { name: '视频监控', key: 'camera', path: '/monitor/camera', icon: cameraIcon },
+  { name: '大疆 Matrice 4E', key: 'uav', path: '/monitor/drone', icon: '/drone.png' },
 ]
 
 const goTo = (path) => router.push(path)
@@ -66,6 +67,7 @@ const defaultStatus = {
   rain: { status: 'online' },
   vibration: { status: 'online' },
   camera: { status: 'offline' },
+  uav: { status: 'offline' },
 }
 
 const fetchStatus = async () => {

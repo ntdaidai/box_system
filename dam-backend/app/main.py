@@ -10,7 +10,6 @@ from app.api import (
     alarm,
     auth,
     camera,
-    device,
     document,
     eca,
     health,
@@ -19,7 +18,6 @@ from app.api import (
     miniprogram,
     onlyoffice,
     patrol_report,
-    rule,
     sensor,
     vision,
     vision_detect,
@@ -306,9 +304,7 @@ app.include_router(sensor.router, prefix="/api/v1/sensor", tags=["传感器数�
 
 # 业务管理接口（替代原 Java 后端）
 app.include_router(auth.router, prefix="/api/auth", tags=["认证与用户管理"])
-app.include_router(device.router, prefix="/api/device", tags=["设备管理"])
 app.include_router(alarm.router, prefix="/api/alarm", tags=["告警管理"])
-app.include_router(rule.router, prefix="/api/rule", tags=["规则管理"])
 app.include_router(eca.router, prefix="/api/v1/eca", tags=["ECA规则引擎"])
 app.include_router(vision_detect.router, prefix="/api/v1/vision/detect", tags=["视觉检测结果"])
 app.include_router(image.router, prefix="/api/v1/image", tags=["图片管理"])

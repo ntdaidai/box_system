@@ -79,12 +79,6 @@ const routes = [
             meta: { title: '区域配置' }
           },
           {
-            path: 'camera/safety',
-            name: 'CameraSafetyClosure',
-            component: () => import('@/views/Monitor/SafetyClosure.vue'),
-            meta: { title: '安全闭环' }
-          },
-          {
             path: 'camera/image',
             name: 'CameraImageAnalysis',
             component: () => import('@/views/Monitor/CameraView.vue'),
@@ -135,13 +129,6 @@ const routes = [
             meta: { title: '告警配置' }
           },
         ],
-      },
-      // ========== 规则配置 ==========
-      {
-        path: 'rule',
-        name: 'RuleConfig',
-        component: () => import('@/views/Rule/RuleConfig.vue'),
-        meta: { title: '规则配置' }
       },
       // ========== 文档管理 ==========
       {

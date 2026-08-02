@@ -11,7 +11,6 @@ const URL_MAX_AGE = [
   [/^\/v1\/sensor\/history\//, 10 * 60 * 1000],
   [/^\/v1\/sensor\/vibration\/trends$/, 10 * 60 * 1000],
   [/^\/device\//, 5 * 60 * 1000],
-  [/^\/rule\//, 5 * 60 * 1000],
   [/^\/analysis\//, 5 * 60 * 1000],
 ]
 const URL_STALE_MAX_AGE = []
