@@ -3,7 +3,21 @@
     {
       "path": "pages/events/index",
       "style": {
-        "navigationBarTitleText": "风险事件",
+        "navigationBarTitleText": "首页",
+        "enablePullDownRefresh": true
+      }
+    },
+    {
+      "path": "pages/monitor/index",
+      "style": {
+        "navigationBarTitleText": "实时监控",
+        "enablePullDownRefresh": true
+      }
+    },
+    {
+      "path": "pages/profile/index",
+      "style": {
+        "navigationBarTitleText": "个人中心",
         "enablePullDownRefresh": true
       }
     },
@@ -32,5 +46,25 @@
     "navigationBarTitleText": "大藤峡安全巡查",
     "navigationBarBackgroundColor": "#0f4c5c",
     "backgroundColor": "#f4f7f8"
+  },
+  "tabBar": {
+    "color": "#8a9499",
+    "selectedColor": "#1677ff",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "white",
+    "list": [
+      {
+        "pagePath": "pages/events/index",
+        "text": "首页"
+      },
+      {
+        "pagePath": "pages/monitor/index",
+        "text": "实时监控"
+      },
+      {
+        "pagePath": "pages/profile/index",
+        "text": "个人"
+      }
+    ]
   }
 }
