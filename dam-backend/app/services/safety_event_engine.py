@@ -398,6 +398,34 @@ class SafetyEventEngine:
         event = snapshot["events"].get(event_id)
         return dict(event) if event else None
 
+    def upgrade_event(
+        self,
+        event_id: str,
+        risk_level: str,
+        *,
+        now: Optional[float] = None,
+    ) -> bool:
+        if risk_level not in {RISK_MEDIUM, RISK_HIGH}:
+            return False
+        now = float(now if now is not None else time.time())
+        with self._lock:
+            for key, track in self.store.tracks.items():
+                if track.event_id != event_id:
+                    continue
+                if RISK_RANK[risk_level] <= RISK_RANK.get(track.risk_level, 0):
+                    return True
+                observation = {
+                    "zone_roles": list(track.current_zone_roles),
+                    "zone_ids": list(track.current_zone_ids),
+                    "trigger_seconds": dict(track.current_trigger_seconds),
+                    "bbox": track.bbox,
+                }
+                self._upgrade(track, risk_level, now, observation, None)
+                self.store.upsert_track(key, track)
+                self.store.save()
+                return True
+        return False
+
     def attach_event_video(
         self,
         event_id: str,
@@ -1298,6 +1326,9 @@ class _SafetyEventEngineProxy:
 
     def get_event(self, *args: Any, **kwargs: Any) -> Optional[Dict[str, Any]]:
         return get_safety_event_engine().get_event(*args, **kwargs)
+
+    def upgrade_event(self, *args: Any, **kwargs: Any) -> bool:
+        return get_safety_event_engine().upgrade_event(*args, **kwargs)
 
     def attach_event_video(self, *args: Any, **kwargs: Any) -> bool:
         return get_safety_event_engine().attach_event_video(*args, **kwargs)

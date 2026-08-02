@@ -8,10 +8,9 @@ from typing import Any, Dict, Optional
 from loguru import logger
 
 from app.core.database import SessionLocal
-from app.models.event_action import EventAction
-from app.models.safety_event import SafetyEvent, SafetyEventLog, SafetyEventTask
+from app.models.safety_event_task import SafetyEventTask
 from app.models.safety_integration import SafetyEventInstance
-from app.services.safety_event_engine import DISPOSAL_WAITING_MANUAL, HANDLING_MANUAL
+from app.services.safety_event_runtime_service import safety_event_runtime_service
 
 
 class StaffTaskService:
@@ -26,48 +25,40 @@ class StaffTaskService:
         now = dt.datetime.now()
         db = SessionLocal()
         try:
-            event = db.query(SafetyEvent).filter(SafetyEvent.event_id == event_id).first()
-            unified_event = db.query(SafetyEventInstance).filter(
-                SafetyEventInstance.instance_no == str(event_id)
-            ).first()
-            if event:
-                event.handling_mode = HANDLING_MANUAL
-                event.disposal_status = DISPOSAL_WAITING_MANUAL
+            unified_event = (
+                db.query(SafetyEventInstance)
+                .filter(SafetyEventInstance.instance_no == str(event_id))
+                .with_for_update()
+                .first()
+            )
+            if not unified_event:
+                logger.warning(f"Staff task skipped because unified event is missing: event={event_id}")
+                return
+            unified_event.status = "PENDING"
 
             task = (
                 db.query(SafetyEventTask)
-                .filter(SafetyEventTask.event_id == event_id)
+                .filter(SafetyEventTask.event_instance_id == unified_event.id)
                 .order_by(SafetyEventTask.id.desc())
                 .first()
             )
             if task is None:
                 task = SafetyEventTask(
-                    event_instance_id=unified_event.id if unified_event else None,
-                    event_id=str(event_id),
+                    event_instance_id=unified_event.id,
                     dispatch_operator="SYSTEM",
                     task_status="WAITING_ACCEPT",
                     task_note="高风险事件自动创建人工处置任务",
                     dispatched_at=now,
                 )
                 db.add(task)
-            elif unified_event and not task.event_instance_id:
-                task.event_instance_id = unified_event.id
-
-            if not self._has_event_action(db, event_id, risk_level):
-                db.add(EventAction(
-                    action_type="STAFF_DISPATCH",
-                    broadcast_event_id=str(event_id),
-                    camera_id=str(camera_id) if camera_id else None,
-                    risk_level=str(risk_level) if risk_level else None,
-                    trigger_type="AUTO",
-                    start_time=now,
-                    end_time=now,
-                    result="SUCCESS",
-                    operator="SYSTEM",
-                    is_activate=True,
-                ))
-
-            self._mark_safety_action(db, action.get("action_id"), "success", "人工处置任务已创建")
+                db.flush()
+            self._mark_safety_action(
+                db,
+                action.get("action_id"),
+                "success",
+                "人工处置任务已创建",
+                {"task_id": task.id, "task_status": task.task_status},
+            )
             db.commit()
 
             try:
@@ -80,8 +71,8 @@ class StaffTaskService:
                         "event_id": event_id,
                         "camera_id": camera_id,
                         "risk_level": risk_level,
-                        "handling_mode": HANDLING_MANUAL,
-                        "disposal_status": DISPOSAL_WAITING_MANUAL,
+                        "handling_mode": "MANUAL",
+                        "disposal_status": "WAITING_MANUAL",
                     },
                 })
             except Exception:
@@ -95,26 +86,22 @@ class StaffTaskService:
             db.close()
 
     @staticmethod
-    def _has_event_action(db, event_id: str, risk_level: Optional[str]) -> bool:
-        return bool(
-            db.query(EventAction)
-            .filter(
-                EventAction.broadcast_event_id == event_id,
-                EventAction.risk_level == risk_level,
-                EventAction.action_type == "STAFF_DISPATCH",
-            )
-            .first()
-        )
-
-    @staticmethod
-    def _mark_safety_action(db, action_id: Optional[str], status: str, message: str) -> None:
+    def _mark_safety_action(
+        db,
+        action_id: Optional[str],
+        status: str,
+        message: str,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> None:
         if not action_id:
             return
-        row = db.query(SafetyEventLog).filter(SafetyEventLog.action_id == action_id).first()
-        if not row:
-            return
-        row.status = status
-        row.message = (message or row.message or "")[:255]
+        safety_event_runtime_service.finish_engine_action(
+            db,
+            action_id,
+            status=status,
+            message=message,
+            payload=payload,
+        )
 
 
 staff_task_service = StaffTaskService()

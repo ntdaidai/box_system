@@ -28,35 +28,7 @@
           <el-empty v-if="!playableDevices.length" description="当前摄像头未绑定USB外放设备" :image-size="72" />
         </el-form-item>
 
-        <el-form-item label="喊话方式">
-          <el-segmented v-model="broadcastMode" :options="modeOptions" class="mode-segment" />
-        </el-form-item>
-
-        <template v-if="broadcastMode === 'template'">
-          <el-form-item label="预设模板">
-            <el-select v-model="selectedTemplateId" placeholder="选择预设模板" filterable>
-              <el-option
-                v-for="template in templates"
-                :key="template.id"
-                :label="template.name"
-                :value="template.id"
-              />
-            </el-select>
-          </el-form-item>
-
-          <el-form-item label="模板文字">
-            <el-input
-              v-model="customText"
-              type="textarea"
-              :rows="4"
-              maxlength="500"
-              show-word-limit
-              placeholder="可以直接修改本次喊话内容"
-            />
-          </el-form-item>
-        </template>
-
-        <el-form-item v-else label="人工录音">
+        <el-form-item label="人工录音">
           <div class="record-panel" :class="{ recording: isRecording }">
             <div class="record-status">
               <span class="record-dot"></span>
@@ -83,16 +55,8 @@
 
     <template #footer>
       <el-button @click="visible = false">取消</el-button>
-      <el-button
-        v-if="broadcastMode === 'template'"
-        :loading="previewing"
-        :disabled="!canPreview"
-        @click="handlePreview"
-      >
-        试听
-      </el-button>
       <el-button type="primary" :loading="playing" :disabled="!canPlay" @click="handlePlay">
-        {{ broadcastMode === 'template' ? '播放模板' : '播放录音' }}
+        播放录音
       </el-button>
     </template>
   </el-dialog>
@@ -102,11 +66,8 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
-  getBroadcastTemplates,
   getCameraBroadcastDevices,
-  playBroadcast,
   playRecordedBroadcast,
-  previewBroadcast,
 } from '@/api/broadcast'
 
 const props = defineProps({
@@ -124,18 +85,8 @@ const visible = computed({
   set: (value) => emit('update:modelValue', value),
 })
 
-const modeOptions = [
-  { label: '模板喊话', value: 'template' },
-  { label: '人工录音', value: 'record' },
-]
-
 const devices = ref([])
-const templates = ref([])
 const selectedDeviceIds = ref([])
-const selectedTemplateId = ref('')
-const customText = ref('')
-const broadcastMode = ref('template')
-const previewing = ref(false)
 const preparingRecorder = ref(false)
 const isRecording = ref(false)
 const playing = ref(false)
@@ -152,11 +103,8 @@ const playableDevices = computed(() => {
   return devices.value.filter((device) => String(device.vendor_type || '').toUpperCase() !== 'LOCAL_AUDIO')
 })
 
-const canPreview = computed(() => Boolean(selectedTemplateId.value || customText.value.trim()))
-
 const canPlay = computed(() => {
   if (!selectedDeviceIds.value.length) return false
-  if (broadcastMode.value === 'template') return canPreview.value
   return Boolean(audioBlob.value && !isRecording.value)
 })
 
@@ -185,19 +133,6 @@ watch(
   },
 )
 
-watch(selectedTemplateId, (id) => {
-  if (!id) return
-  const template = templates.value.find((item) => item.id === id)
-  if (template) customText.value = template.content
-})
-
-watch(broadcastMode, (mode) => {
-  if (mode === 'template') {
-    stopRecording()
-    clearRecording()
-  }
-})
-
 onBeforeUnmount(() => {
   stopRecording()
   clearRecording()
@@ -206,15 +141,8 @@ onBeforeUnmount(() => {
 async function loadOptions() {
   stopRecording()
   clearRecording()
-  broadcastMode.value = 'template'
   selectedDeviceIds.value = []
-  selectedTemplateId.value = ''
-  customText.value = ''
-  const [templateResponse, deviceResponse] = await Promise.all([
-    getBroadcastTemplates(),
-    getCameraBroadcastDevices(props.event.camera_id),
-  ])
-  templates.value = templateResponse.data || []
+  const deviceResponse = await getCameraBroadcastDevices(props.event.camera_id)
   devices.value = deviceResponse.data || []
   selectedDeviceIds.value = playableDevices.value
     .filter((device) => device.status !== 'OFFLINE' && String(device.vendor_type || '').toUpperCase() === 'USB_AUDIO')
@@ -223,41 +151,6 @@ async function loadOptions() {
     selectedDeviceIds.value = playableDevices.value
       .filter((device) => device.status !== 'OFFLINE')
       .map((device) => device.id)
-  }
-  selectedTemplateId.value = defaultTemplateId()
-  const template = templates.value.find((item) => item.id === selectedTemplateId.value)
-  customText.value = template?.content || ''
-}
-
-function defaultTemplateId() {
-  const risk = props.event?.risk_level || 'HIGH'
-  const wanted = `PERSON_${risk}`
-  if (templates.value.some((item) => item.id === wanted)) return wanted
-  return templates.value[0]?.id || ''
-}
-
-function speak(text) {
-  if (!window.speechSynthesis || !text) return false
-  window.speechSynthesis.cancel()
-  const utterance = new SpeechSynthesisUtterance(text)
-  utterance.lang = 'zh-CN'
-  utterance.rate = 1
-  window.speechSynthesis.speak(utterance)
-  return true
-}
-
-async function handlePreview() {
-  if (!canPreview.value) return
-  previewing.value = true
-  try {
-    const response = await previewBroadcast({
-      template_id: selectedTemplateId.value,
-      custom_text: customText.value,
-    })
-    const text = response.data?.text || customText.value
-    if (!speak(text)) ElMessage.info('当前浏览器不支持本机语音试听')
-  } finally {
-    previewing.value = false
   }
 }
 
@@ -347,27 +240,13 @@ async function handlePlay() {
   if (!canPlay.value) return
   playing.value = true
   try {
-    const data = broadcastMode.value === 'template'
-      ? await playTemplate()
-      : await playRecording()
+    const data = await playRecording()
     emit('played', { event: props.event, result: data.result || 'SUCCESS' })
     visible.value = false
     ElMessage.success(data.result === 'PARTIAL_SUCCESS' ? '部分USB外放已播放' : '喊话已播放')
   } finally {
     playing.value = false
   }
-}
-
-async function playTemplate() {
-  const response = await playBroadcast({
-    event_id: props.event.event_id,
-    camera_id: props.event.camera_id,
-    device_ids: selectedDeviceIds.value,
-    template_id: selectedTemplateId.value,
-    custom_text: customText.value,
-    trigger_type: 'MANUAL',
-  })
-  return response.data || {}
 }
 
 async function playRecording() {

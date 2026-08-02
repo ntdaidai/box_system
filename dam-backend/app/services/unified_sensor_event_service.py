@@ -13,7 +13,6 @@ from app.models.data_source import DataSource
 from app.models.event_action import EventAction
 from app.models.event_condition import EventCondition
 from app.models.event_library import EventLibrary
-from app.models.event_log import EventLog
 from app.models.safety_integration import SafetyEventInstance, SafetyEventTimelineLog
 
 
@@ -29,7 +28,6 @@ class UnifiedSensorEventService:
         event: EventLibrary,
         sensor_data: Dict[str, Any],
         conditions_met: bool,
-        event_log: Optional[EventLog] = None,
         source_id: Optional[int] = None,
     ) -> None:
         source = self._source(db, event.id, source_id)
@@ -52,8 +50,6 @@ class UnifiedSensorEventService:
 
         if conditions_met:
             if instance is None:
-                if event_log is None:
-                    return
                 risk = RISK_NAMES.get(int(event.risk_level or 1), "LOW")
                 instance = SafetyEventInstance(
                     instance_no=f"EVT_{now:%Y%m%d}_{uuid.uuid4().hex[:12]}",
@@ -66,7 +62,7 @@ class UnifiedSensorEventService:
                     max_risk_level=risk,
                     state="ACTIVE",
                     status="PROCESSING",
-                    started_at=event_log.trigger_time or now,
+                    started_at=now,
                     last_observed_at=now,
                     summary=f"{source.source_name} - {event.event_name}",
                     latest_observation=observation,
@@ -78,24 +74,24 @@ class UnifiedSensorEventService:
                     event_instance_id=instance.id,
                     event_id=event.id,
                     flow_id=flow_id,
-                    action_key=f"sensor-trigger:{event_log.id}",
+                    action_key=f"sensor-trigger:{instance.instance_no}",
                     log_type="TRIGGER",
                     trigger_type="AUTO",
                     risk_level=risk,
                     status="SUCCESS",
                     message=f"{event.event_name}已触发",
                     operator="SYSTEM",
-                    payload={"event_log_id": event_log.id, "observation": observation},
-                    create_time=event_log.trigger_time or now,
+                    payload={"instance_no": instance.instance_no, "observation": observation},
+                    create_time=now,
                 ))
             else:
                 instance.last_observed_at = now
                 instance.latest_observation = observation
             db.commit()
-            return
+            return instance
 
         if instance is None:
-            return
+            return None
         latest = dict(instance.latest_observation or {})
         recovery_started_at = latest.get("recovery_started_at")
         if not recovery_started_at:
@@ -103,14 +99,14 @@ class UnifiedSensorEventService:
             latest["recovery_observation"] = observation
             instance.latest_observation = latest
             db.commit()
-            return
+            return instance
 
         try:
             recovery_started = dt.datetime.fromisoformat(str(recovery_started_at))
         except ValueError:
             recovery_started = now
         if (now - recovery_started).total_seconds() < max(int(event.recovery_duration or 0), 0):
-            return
+            return instance
 
         instance.state = "RESOLVED"
         instance.status = "COMPLETED"
@@ -132,6 +128,7 @@ class UnifiedSensorEventService:
             create_time=now,
         ))
         db.commit()
+        return instance
 
     @staticmethod
     def _source(db: Session, event_id: int, source_id: Optional[int]) -> Optional[DataSource]:

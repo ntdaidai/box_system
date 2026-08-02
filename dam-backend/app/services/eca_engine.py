@@ -16,11 +16,12 @@ from app.models.event_condition import EventCondition
 from app.models.event_action import EventAction
 from app.models.action_flow import ActionFlow
 from app.models.action_step import ActionStep
-from app.models.event_log import EventLog
 from app.models.data_source import DataSource
 from app.models.model_library import ModelLibrary
+from app.models.safety_integration import SafetyEventInstance
 from app.api.health import _get_gpu_info
 from app.services.unified_sensor_event_service import unified_sensor_event_service
+from app.services.safety_event_runtime_service import safety_event_runtime_service
 
 # 主事件循环引用，用于从同步代码提交异步任务
 _main_event_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -605,7 +606,7 @@ class ECAEngine:
         }
         return type_priority.get(step.action_type, 2)
 
-    def trigger_event(self, event_id: int, sensor_data: Dict[str, Any], db: Session) -> Optional[EventLog]:
+    def trigger_event(self, event_id: int, sensor_data: Dict[str, Any], db: Session) -> Optional[SafetyEventInstance]:
         """
         触发事件（带冷却期检查）
 
@@ -615,7 +616,7 @@ class ECAEngine:
             db: 数据库会话
 
         Returns:
-            EventLog: 事件触发记录，如果在冷却期内返回 None
+            统一安全事件实例；冷却期内返回 None
         """
         event = db.query(EventLibrary).filter(EventLibrary.id == event_id).first()
         if not event or not event.is_activate:
@@ -636,17 +637,14 @@ class ECAEngine:
         # 只记录触发条件相关的数据
         relevant_data = self._extract_relevant_data(event_id, sensor_data, db)
 
-        # 创建事件触发记录
-        event_log = EventLog(
-            event_id=event_id,
-            trigger_time=now,
-            trigger_data=json.dumps(relevant_data, ensure_ascii=False),
-            conditions_met=json.dumps({"event_id": event_id, "event_name": event.event_name}),
-            status="triggered"
+        instance = unified_sensor_event_service.observe(
+            db,
+            event,
+            relevant_data,
+            True,
         )
-        db.add(event_log)
-        db.commit()
-        db.refresh(event_log)
+        if not instance:
+            return None
 
         # 更新冷却期记录
         self.event_last_trigger[event_id] = now
@@ -659,7 +657,7 @@ class ECAEngine:
         if _main_event_loop and _main_event_loop.is_running():
             # 从同步线程提交异步任务到主事件循环
             future = asyncio.run_coroutine_threadsafe(
-                self.execute_event_actions(event_id, event_log.id, sensor_data),
+                self.execute_event_actions(event_id, instance.id, sensor_data),
                 _main_event_loop
             )
             # 添加回调处理异常
@@ -671,7 +669,7 @@ class ECAEngine:
                 f"事件 {event_id} 的行为流程将不会自动执行。"
             )
 
-        return event_log
+        return instance
 
     def _extract_relevant_data(self, event_id: int, sensor_data: Dict[str, Any], db: Session) -> Dict[str, Any]:
         """
@@ -730,7 +728,7 @@ class ECAEngine:
         except Exception as e:
             logger.error(f"处理异步异常时出错: {e}")
 
-    async def execute_event_actions(self, event_id: int, event_log_id: int, sensor_data: Dict[str, Any]):
+    async def execute_event_actions(self, event_id: int, event_instance_id: int, sensor_data: Dict[str, Any]):
         """
         执行事件关联的行为流程
 
@@ -738,17 +736,19 @@ class ECAEngine:
 
         Args:
             event_id: 事件ID
-            event_log_id: 事件触发记录ID
+            event_instance_id: 统一安全事件实例ID
             sensor_data: 传感器数据
         """
         db = SessionLocal()
-        event_log = None
+        instance = None
         try:
-            # 更新状态为处理中
-            event_log = db.query(EventLog).filter(EventLog.id == event_log_id).first()
-            if event_log:
-                event_log.status = "processing"
-                db.commit()
+            instance = db.query(SafetyEventInstance).filter(
+                SafetyEventInstance.id == event_instance_id
+            ).first()
+            if not instance:
+                return
+            instance.status = "PROCESSING"
+            db.commit()
 
             # 获取事件对象（用于判断告警类型）
             event = db.query(EventLibrary).filter(EventLibrary.id == event_id).first()
@@ -766,25 +766,41 @@ class ECAEngine:
                     continue
 
                 # 执行流程（传递 event 对象）
-                flow_result = await self.execute_flow(flow.id, sensor_data, db, event)
+                flow_result = await self.execute_flow(
+                    flow.id, sensor_data, db, event, event_instance=instance
+                )
                 results.append({
                     "flow_id": flow.id,
                     "flow_name": flow.flow_name,
                     "result": flow_result
                 })
 
-            # 更新事件记录状态
-            if event_log:
-                event_log.status = "completed"
-                event_log.result = json.dumps(results, ensure_ascii=False)
-                db.commit()
+            safety_event_runtime_service.append_timeline(
+                db,
+                instance,
+                action_key=f"eca-flow-result:{instance.instance_no}",
+                log_type="ACTION",
+                trigger_type="AUTO",
+                status="SUCCESS",
+                message="ECA行为流程执行完成",
+                payload={"instance_no": instance.instance_no, "flows": results},
+            )
+            db.commit()
 
         except Exception as e:
             logger.error(f"执行事件行为失败: {e}")
-            if event_log:
+            if instance:
                 try:
-                    event_log.status = "failed"
-                    event_log.result = json.dumps({"error": str(e)}, ensure_ascii=False)
+                    safety_event_runtime_service.append_timeline(
+                        db,
+                        instance,
+                        action_key=f"eca-flow-result:{instance.instance_no}",
+                        log_type="ACTION",
+                        trigger_type="AUTO",
+                        status="FAILED",
+                        message="ECA行为流程执行失败",
+                        payload={"instance_no": instance.instance_no, "error": str(e)},
+                    )
                     db.commit()
                 except Exception as commit_error:
                     logger.error(f"更新事件日志状态失败: {commit_error}")
@@ -797,7 +813,8 @@ class ECAEngine:
         flow_id: int,
         sensor_data: Dict[str, Any],
         db: Session,
-        event: EventLibrary = None
+        event: EventLibrary = None,
+        event_instance: SafetyEventInstance = None,
     ) -> Dict[str, Any]:
         """
         执行行为流程（支持资源感知调度）
@@ -854,6 +871,24 @@ class ECAEngine:
                 # 保存步骤结果到上下文（供后续步骤引用）
                 if step_result and isinstance(step_result, dict):
                     step_context[f"step_{step.step_order}"] = step_result
+                if event_instance:
+                    safety_event_runtime_service.append_timeline(
+                        db,
+                        event_instance,
+                        action_key=f"eca-step:{event_instance.instance_no}:{step.id}",
+                        log_type="ACTION",
+                        trigger_type="AUTO",
+                        status="SUCCESS",
+                        message=f"{step.step_name}执行完成",
+                        flow_id=flow.id,
+                        step_id=step.id,
+                        payload={
+                            "instance_no": event_instance.instance_no,
+                            "action_type": step.action_type,
+                            "result": step_result,
+                        },
+                    )
+                    db.commit()
             except Exception as e:
                 logger.error(f"执行步骤失败: {step.step_name}, 错误: {e}")
                 results.append({
@@ -863,6 +898,24 @@ class ECAEngine:
                     "success": False,
                     "error": str(e)
                 })
+                if event_instance:
+                    safety_event_runtime_service.append_timeline(
+                        db,
+                        event_instance,
+                        action_key=f"eca-step:{event_instance.instance_no}:{step.id}",
+                        log_type="ACTION",
+                        trigger_type="AUTO",
+                        status="FAILED",
+                        message=f"{step.step_name}执行失败",
+                        flow_id=flow.id,
+                        step_id=step.id,
+                        payload={
+                            "instance_no": event_instance.instance_no,
+                            "action_type": step.action_type,
+                            "error": str(e),
+                        },
+                    )
+                    db.commit()
 
                 # 根据失败策略决定是否继续
                 if flow.failure_strategy == "abort":
@@ -1341,16 +1394,16 @@ class ECAEngine:
                     conditions_met = self.check_event_conditions(
                         event.id, sensor_data, db
                     )
-                    event_log = None
+                    event_instance = None
                     if conditions_met:
-                        event_log = self.trigger_event(event.id, sensor_data, db)
-                        if event_log:
+                        event_instance = self.trigger_event(event.id, sensor_data, db)
+                        if event_instance:
                             logger.info(
                                 f"[实时触发] 事件: {event.event_name} "
                                 f"(风险等级: {event.risk_level}, 触发传感器: {sensor_name})"
                             )
                     unified_sensor_event_service.observe(
-                        db, event, sensor_data, conditions_met, event_log, source_id
+                        db, event, sensor_data, conditions_met, source_id
                     )
                 except Exception as e:
                     logger.error(f"检查事件 {event.event_name} 失败: {e}")
@@ -1417,17 +1470,17 @@ class ECAEngine:
                     conditions_met = self.check_event_conditions(
                         event.id, sensor_data, db
                     )
-                    event_log = None
+                    event_instance = None
                     if conditions_met:
-                        event_log = self.trigger_event(event.id, sensor_data, db)
-                        if event_log:
+                        event_instance = self.trigger_event(event.id, sensor_data, db)
+                        if event_instance:
                             logger.info(
                                 f"[视觉触发] 事件: {event.event_name} "
                                 f"(风险等级: {event.risk_level}, "
                                 f"检测类型: {detection_type})"
                             )
                     unified_sensor_event_service.observe(
-                        db, event, sensor_data, conditions_met, event_log, vision_source_id
+                        db, event, sensor_data, conditions_met, vision_source_id
                     )
                 except Exception as e:
                     logger.error(f"检查事件 {event.event_name} 失败: {e}")
@@ -1533,16 +1586,17 @@ class ECAEngine:
                         event.id, sensor_data, db
                     )
 
-                    event_log = None
+                    event_instance = None
                     if conditions_met:
                         # 触发事件
-                        event_log = self.trigger_event(event.id, sensor_data, db)
-                        if event_log:
+                        event_instance = self.trigger_event(event.id, sensor_data, db)
+                        if event_instance:
                             triggered_events.append({
                                 "event_id": event.id,
                                 "event_name": event.event_name,
                                 "risk_level": event.risk_level,
-                                "event_log_id": event_log.id,
+                                "event_instance_id": event_instance.id,
+                                "instance_no": event_instance.instance_no,
                                 "sensor_snapshot": sensor_data,
                             })
                             logger.info(
@@ -1550,7 +1604,7 @@ class ECAEngine:
                                 f"(风险等级: {event.risk_level})"
                             )
                     unified_sensor_event_service.observe(
-                        db, event, sensor_data, conditions_met, event_log
+                        db, event, sensor_data, conditions_met
                     )
 
                 except Exception as e:

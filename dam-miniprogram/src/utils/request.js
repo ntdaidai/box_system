@@ -58,4 +58,38 @@ export function uploadFieldResult({ eventId, filePath, result, remark, operator 
   })
 }
 
+export function uploadBroadcastAudio({ filePath, eventId, cameraId, operator }) {
+  const path = eventId
+    ? `/events/${encodeURIComponent(eventId)}/broadcast/audio`
+    : `/cameras/${encodeURIComponent(cameraId)}/broadcast/audio`
+  return new Promise((resolve, reject) => {
+    uni.uploadFile({
+      url: `${MINI_API_BASE}${path}`,
+      filePath,
+      name: 'audio',
+      formData: {
+        device_ids: '[]',
+        operator: operator || '微信小程序工作人员'
+      },
+      success(res) {
+        let body = {}
+        try {
+          body = JSON.parse(res.data || '{}')
+        } catch (error) {
+          reject(new Error('喊话响应无效'))
+          return
+        }
+        if (res.statusCode >= 200 && res.statusCode < 300 && body.code === 200) {
+          resolve(body.data || {})
+          return
+        }
+        reject(new Error(body.detail || body.message || `喊话失败 ${res.statusCode}`))
+      },
+      fail(err) {
+        reject(new Error(err.errMsg || '录音上传失败'))
+      }
+    })
+  })
+}
+
 export const absoluteUrl = withApiOrigin

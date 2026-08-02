@@ -11,7 +11,7 @@ from app.models.action_step import ActionStep
 from app.models.event_action import EventAction
 from app.models.event_log import EventLog
 from app.models.camera_detection_zone import CameraDetectionZone
-from app.models.safety_event import SafetyEvent, SafetyEventLog, SafetyEventTask
+from app.models.safety_event_task import SafetyEventTask
 from app.models.analysis_report import AnalysisReport
 from app.models.broadcast import BroadcastDevice, CameraBroadcastDevice, BroadcastTemplate
 from app.models.camera import Camera
@@ -38,8 +38,6 @@ __all__ = [
     "EventAction",
     "EventLog",
     "CameraDetectionZone",
-    "SafetyEvent",
-    "SafetyEventLog",
     "SafetyEventTask",
     "AnalysisReport",
     "BroadcastDevice",

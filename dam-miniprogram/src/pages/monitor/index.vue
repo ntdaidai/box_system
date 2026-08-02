@@ -63,7 +63,7 @@
         :disabled="cameraBroadcasting || !selectedCamera.camera_id"
         @tap="handleCameraBroadcast"
       >
-        一键喊话
+        {{ recordingBroadcast ? '结束喊话' : '一键喊话' }}
       </button>
       <view class="broadcast-note">
         {{ broadcastDeviceText }}
@@ -97,7 +97,7 @@
 </template>
 
 <script>
-import { absoluteUrl, request } from '../../utils/request'
+import { absoluteUrl, request, uploadBroadcastAudio } from '../../utils/request'
 import { readCache, writeCache } from '../../utils/cache'
 
 export default {
@@ -111,6 +111,8 @@ export default {
       snapshotUrl: '',
       videoText: '正在加载摄像头',
       cameraBroadcasting: false,
+      recordingBroadcast: false,
+      broadcastRecorder: null,
       liveTimer: null
     }
   },
@@ -139,6 +141,7 @@ export default {
   onLoad() {
     this.restoreCachedCameras()
     this.loadCameras(true)
+    this.prepareBroadcastRecorder()
   },
 
   onShow() {
@@ -153,6 +156,7 @@ export default {
 
   onUnload() {
     this.stopLiveRefresh()
+    if (this.recordingBroadcast) this.broadcastRecorder?.stop()
   },
 
   onPullDownRefresh() {
@@ -261,23 +265,32 @@ export default {
     handleCameraBroadcast() {
       const cameraId = this.selectedCamera.camera_id
       if (!cameraId || this.cameraBroadcasting) return
-      this.cameraBroadcasting = true
-      request({
-        url: `/cameras/${encodeURIComponent(cameraId)}/broadcast`,
-        method: 'POST',
-        data: {
-          operator: '微信小程序工作人员'
-        }
+      if (this.recordingBroadcast) {
+        this.broadcastRecorder?.stop()
+        return
+      }
+      this.broadcastRecorder?.start({ duration: 60000, format: 'mp3', sampleRate: 16000, numberOfChannels: 1 })
+    },
+
+    prepareBroadcastRecorder() {
+      this.broadcastRecorder = uni.getRecorderManager()
+      this.broadcastRecorder.onStart(() => {
+        this.recordingBroadcast = true
+        uni.showToast({ title: '请开始喊话，再次点击结束', icon: 'none' })
       })
-        .then(() => {
-          uni.showToast({ title: '喊话已下发', icon: 'success' })
-        })
-        .catch((error) => {
-          uni.showToast({ title: error.message, icon: 'none' })
-        })
-        .finally(() => {
-          this.cameraBroadcasting = false
-        })
+      this.broadcastRecorder.onStop(({ tempFilePath }) => {
+        this.recordingBroadcast = false
+        this.cameraBroadcasting = true
+        uploadBroadcastAudio({ filePath: tempFilePath, cameraId: this.selectedCamera.camera_id })
+          .then(() => uni.showToast({ title: '喊话已播放', icon: 'success' }))
+          .catch((error) => uni.showToast({ title: error.message, icon: 'none' }))
+          .finally(() => { this.cameraBroadcasting = false })
+      })
+      this.broadcastRecorder.onError((error) => {
+        this.recordingBroadcast = false
+        this.cameraBroadcasting = false
+        uni.showToast({ title: error.errMsg || '无法录音', icon: 'none' })
+      })
     },
 
     openMapNavigation() {

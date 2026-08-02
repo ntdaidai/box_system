@@ -13,7 +13,7 @@ from sqlalchemy import or_
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models.miniprogram import MiniProgramSubscription
-from app.models.safety_event import SafetyEvent
+from app.services.safety_event_runtime_service import safety_event_runtime_service
 from app.services.safety_event_engine import (
     ACTION_RISK_CHANGED,
     RISK_HIGH,
@@ -152,9 +152,10 @@ class WeChatSubscriptionService:
             return {"sent": 0, "failed": 0, "skipped": 1}
         db = SessionLocal()
         try:
-            event = db.query(SafetyEvent).filter(SafetyEvent.event_id == event_id).first()
-            if not event:
+            instance = safety_event_runtime_service.get_instance(db, str(event_id))
+            if not instance:
                 return {"sent": 0, "failed": 0, "skipped": 1}
+            event = safety_event_runtime_service.event_dict(db, instance)
             rows = (
                 db.query(MiniProgramSubscription)
                 .filter(
@@ -203,12 +204,13 @@ class WeChatSubscriptionService:
     ) -> Dict[str, Any]:
         db = SessionLocal()
         try:
-            event = db.query(SafetyEvent).filter(SafetyEvent.event_id == event_id).first()
-            if not event:
+            instance = safety_event_runtime_service.get_instance(db, str(event_id))
+            if not instance:
                 raise WeChatSubscriptionError("安全事件不存在")
+            event = safety_event_runtime_service.event_dict(db, instance)
             action = {
                 "event_id": event_id,
-                "risk_level": event.risk_level,
+                "risk_level": event["risk_level"],
                 "action_id": None,
             }
             if openid:
@@ -221,7 +223,7 @@ class WeChatSubscriptionService:
     async def _send_event_message(
         self,
         openid: str,
-        event: SafetyEvent,
+        event: Dict[str, Any],
         action: Dict[str, Any],
     ) -> None:
         if not self.configured():
@@ -230,7 +232,7 @@ class WeChatSubscriptionService:
         payload = {
             "touser": openid,
             "template_id": settings.WECHAT_RISK_TEMPLATE_ID,
-            "page": f"pages/detail/index?event_id={event.event_id}",
+            "page": f"pages/detail/index?event_id={event['event_id']}",
             "lang": "zh_CN",
             "data": self._template_data(event, action),
         }
@@ -276,10 +278,10 @@ class WeChatSubscriptionService:
             self._access_token_expires_at = now + int(payload.get("expires_in") or 7200)
             return token
 
-    def _template_data(self, event: SafetyEvent, action: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
+    def _template_data(self, event: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
         keys = self._field_keys()
         values = [
-            self._short_text(RISK_NOTICE_LABELS.get(action.get("risk_level") or event.risk_level, "风险提醒"), 20),
+            self._short_text(RISK_NOTICE_LABELS.get(action.get("risk_level") or event.get("risk_level"), "风险提醒"), 20),
             self._short_text(self._risk_type(event), 20),
             self._short_text(self._risk_title(event), 20),
             self._send_time(event, action),
@@ -300,16 +302,16 @@ class WeChatSubscriptionService:
         return (keys + ["thing1", "thing2", "thing3", "time4"])[:4]
 
     @staticmethod
-    def _risk_type(event: SafetyEvent) -> str:
-        raw = f"{event.event_type or ''} {event.entity_type or ''}"
+    def _risk_type(event: Dict[str, Any]) -> str:
+        raw = f"{event.get('event_type') or ''} {event.get('entity_type') or ''}"
         if "鱼" in raw or "boat" in raw or "ship" in raw:
             return "夜间捕鱼"
         return "人员入侵"
 
     @classmethod
-    def _risk_title(cls, event: SafetyEvent) -> str:
-        point = event.camera_name or event.camera_id or "监控点位"
-        raw = f"{event.event_type or ''} {event.zone_type or ''}"
+    def _risk_title(cls, event: Dict[str, Any]) -> str:
+        point = event.get("camera_name") or event.get("camera_id") or "监控点位"
+        raw = f"{event.get('event_type') or ''} {event.get('zone_type') or ''}"
         if "涉水" in raw or "WATER_ZONE" in raw:
             suffix = "出现人员涉水"
         elif "亲水" in raw or "WATERFRONT_ZONE" in raw:
@@ -321,7 +323,7 @@ class WeChatSubscriptionService:
         return f"{point}{suffix}"
 
     @staticmethod
-    def _send_time(event: SafetyEvent, action: Dict[str, Any]) -> str:
+    def _send_time(event: Dict[str, Any], action: Dict[str, Any]) -> str:
         created_at = action.get("created_at")
         when: dt.datetime
         if created_at:
@@ -330,7 +332,8 @@ class WeChatSubscriptionService:
             except (TypeError, ValueError, OSError):
                 when = dt.datetime.now()
         else:
-            when = event.started_at or dt.datetime.now()
+            started_at = event.get("started_at")
+            when = dt.datetime.fromtimestamp(float(started_at)) if started_at else dt.datetime.now()
         return when.strftime("%Y-%m-%d %H:%M")
 
     @staticmethod

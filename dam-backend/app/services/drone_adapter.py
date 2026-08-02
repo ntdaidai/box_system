@@ -10,7 +10,7 @@ from loguru import logger
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models.event_action import EventAction
-from app.models.safety_event import SafetyEventLog
+from app.services.safety_event_runtime_service import safety_event_runtime_service
 
 
 class DroneService:
@@ -48,47 +48,44 @@ class DroneDispatchService:
             configured_drone_id, configured_route_id = self._configured_targets(db, str(event_id), str(camera_id))
             if configured_route_id:
                 strategy_id = configured_route_id
-            existing = (
-                db.query(EventAction)
-                .filter(
-                    EventAction.broadcast_event_id == event_id,
-                    EventAction.risk_level == risk_level,
-                    EventAction.action_type == "DRONE_DISPATCH",
-                )
-                .first()
-            )
-            if existing:
-                self._mark_safety_action(db, action.get("action_id"), "success", existing.result or "SUCCESS")
-                db.commit()
-                return
-
             result = self.adapter.dispatch(event_id, camera_id, strategy_id)
             success = bool(result.get("success", True)) and str(result.get("result", "SUCCESS")).upper() != "FAILED"
-            event_action = EventAction(
-                action_type="DRONE_DISPATCH",
-                broadcast_event_id=str(event_id),
-                camera_id=str(camera_id),
-                risk_level=str(risk_level) if risk_level else None,
-                drone_id=str(result.get("drone_id") or settings.DRONE_DEFAULT_ID),
-                strategy_id=str(result.get("strategy_id") or strategy_id),
-                trigger_type="AUTO",
-                dispatch_time=dispatch_time,
-                start_time=dispatch_time,
-                end_time=dt.datetime.now(),
-                result="SUCCESS" if success else "FAILED",
-                error_message=None if success else str(result.get("message") or result)[:1000],
-                operator="SYSTEM",
-                is_activate=True,
-            )
-            db.add(event_action)
-            if configured_drone_id:
-                event_action.drone_id = configured_drone_id
+            instance = safety_event_runtime_service.get_instance(db, str(event_id))
+            execution_payload = {
+                "instance_no": str(event_id),
+                "action_type": "DRONE_DISPATCH",
+                "drone_id": configured_drone_id or str(result.get("drone_id") or settings.DRONE_DEFAULT_ID),
+                "route_id": configured_route_id or str(result.get("strategy_id") or strategy_id),
+                "dispatched_at": dispatch_time.isoformat(),
+                "result": "SUCCESS" if success else "FAILED",
+            }
             self._mark_safety_action(
                 db,
                 action.get("action_id"),
                 "success" if success else "failed",
-                event_action.result,
+                execution_payload["result"],
+                execution_payload,
             )
+            image_url = result.get("image_url") or result.get("snapshot_url")
+            if instance and image_url:
+                timeline = safety_event_runtime_service.finish_engine_action(
+                    db,
+                    action.get("action_id"),
+                    status="SUCCESS" if success else "FAILED",
+                    message="无人机派飞完成" if success else "无人机派飞失败",
+                    payload=execution_payload,
+                )
+                safety_event_runtime_service.add_evidence(
+                    db,
+                    instance,
+                    timeline_log_id=timeline.id if timeline else None,
+                    evidence_type="IMAGE",
+                    source_type="DRONE",
+                    source_id=execution_payload["drone_id"],
+                    file_url=str(image_url),
+                    description="无人机派飞取证",
+                    captured_at=dt.datetime.now(),
+                )
             db.commit()
         except Exception as exc:
             db.rollback()
@@ -125,14 +122,22 @@ class DroneDispatchService:
         return (config.drone_id, config.route_id) if config else (None, None)
 
     @staticmethod
-    def _mark_safety_action(db, action_id: Optional[str], status: str, message: str) -> None:
+    def _mark_safety_action(
+        db,
+        action_id: Optional[str],
+        status: str,
+        message: str,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> None:
         if not action_id:
             return
-        row = db.query(SafetyEventLog).filter(SafetyEventLog.action_id == action_id).first()
-        if not row:
-            return
-        row.status = status
-        row.message = (message or row.message or "")[:255]
+        safety_event_runtime_service.finish_engine_action(
+            db,
+            action_id,
+            status=status,
+            message=message,
+            payload=payload,
+        )
 
 
 drone_dispatch_service = DroneDispatchService()

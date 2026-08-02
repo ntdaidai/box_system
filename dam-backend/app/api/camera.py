@@ -29,22 +29,23 @@ from app.core.config import settings
 from app.core.cache import cached, invalidate_cache
 from app.core.database import SessionLocal, get_db
 from app.core.security import require_auth
-from app.models.alarm import Alarm
-from app.models.analysis_report import AnalysisReport
 from app.models.camera import Camera
-from app.models.safety_event import SafetyEvent, SafetyEventLog, SafetyEventTask
+from app.models.event_library import EventLibrary
+from app.models.safety_event_task import SafetyEventTask
+from app.models.safety_integration import SafetyEventInstance, SafetyEventTimelineLog, VisualEventDetail
 from app.models.user import User
 from app.services.camera_stream import CameraStream, camera_manager
 from app.services.camera_web_proxy import camera_web_proxy_manager
 from app.services.camera_config import normalize_camera_source
 from app.services.camera_zone_store import get_camera_zone_store
 from app.services.safety_event_engine import get_safety_event_engine
-from app.services.safety_event_engine import DISPOSAL_MANUAL_HANDLING, DISPOSAL_RESOLVED, DISPOSAL_WAITING_MANUAL, HANDLING_MANUAL, RISK_HIGH
+from app.services.safety_event_engine import RISK_HIGH
+from app.services.safety_event_runtime_service import safety_event_runtime_service
 from app.services.safety_event_ws import safety_event_ws_manager
 from app.services.stream_ticket import stream_ticket_store
 from app.services.video_detection import video_detection_service
 from app.services.vision_model_registry import vision_model_registry
-from app.services.broadcast_service import BroadcastException, broadcast_service
+from app.services.broadcast_service import broadcast_service
 
 
 router = APIRouter()
@@ -138,13 +139,6 @@ class StreamTicketRequest(BaseModel):
     detected: bool = False
 
 
-class DetectionZoneRect(BaseModel):
-    x: float = Field(..., ge=0.0, le=1.0)
-    y: float = Field(..., ge=0.0, le=1.0)
-    width: float = Field(..., gt=0.0, le=1.0)
-    height: float = Field(..., gt=0.0, le=1.0)
-
-
 class DetectionZonePoint(BaseModel):
     x: float = Field(..., ge=0.0, le=1.0)
     y: float = Field(..., ge=0.0, le=1.0)
@@ -212,7 +206,6 @@ class SafetyEventActionRequest(BaseModel):
         "dispatch_staff",
         "close",
         "USER_ACK",
-        "MANUAL_BROADCAST",
         "TASK_DISPATCH",
         "STAFF_ACCEPTED",
         "STAFF_COMPLETED",
@@ -220,12 +213,8 @@ class SafetyEventActionRequest(BaseModel):
         "MANUAL_RESOLVED",
     ] = "USER_ACK"
     remark: Optional[str] = Field(None, max_length=500)
-    content: Optional[str] = Field(None, max_length=500)
     reason: Optional[str] = Field(None, max_length=500)
     assignee: Optional[str] = Field(None, max_length=128)
-    assignee_phone: Optional[str] = Field(None, max_length=64)
-    template_id: Optional[str] = Field(None, max_length=64)
-    device_ids: List[int] = Field(default_factory=list, max_length=32)
     version: Optional[int] = Field(None, ge=0)
 
 
@@ -564,7 +553,6 @@ def _safety_action_message(action_type: str) -> str:
         "USER_ACK": "工作人员已确认事件",
         "STAFF_ACCEPTED": "工作人员已接受任务",
         "STAFF_COMPLETED": "工作人员已完成现场处置",
-        "MANUAL_BROADCAST": "人工一键喊话",
         "TASK_DISPATCH": "已派现场人员处置",
         "FALSE_ALARM": "工作人员判断为误报",
         "MANUAL_RESOLVED": "工作人员确认事件解除",
@@ -580,7 +568,7 @@ def _canonical_action_type(action_type: str) -> str:
     }.get(action_type, action_type)
 
 
-def _timeline_action_type(action: SafetyEventLog) -> str:
+def _timeline_action_type(action: SafetyEventTimelineLog) -> str:
     payload = action.payload or {}
     canonical = payload.get("canonical_action_type")
     if canonical:
@@ -606,22 +594,20 @@ def _timeline_action_type(action: SafetyEventLog) -> str:
         "staff_completed": "STAFF_COMPLETED",
         "staff_dispatched": "TASK_DISPATCH",
         "event_manual_closed": "MANUAL_RESOLVED",
-        "event_resolved": "MANUAL_RESOLVED" if (action.payload or {}).get("reason") == "manual_close" else "AUTO_RESOLVED",
-        "EVENT_RESOLVED": "MANUAL_RESOLVED" if (action.payload or {}).get("reason") == "manual_close" else "AUTO_RESOLVED",
+        "RESOLVE": "MANUAL_RESOLVED" if (action.payload or {}).get("reason") == "manual_close" else "AUTO_RESOLVED",
         "target_left": "TARGET_LEFT",
         "TARGET_LEFT": "TARGET_LEFT",
     }
-    return mapping.get(action.action_type, action.action_type)
+    raw = payload.get("action_type") or action.log_type
+    return mapping.get(raw, raw)
 
 
 def _timestamp(value: Optional[dt.datetime]) -> Optional[float]:
     return value.timestamp() if value else None
 
 
-def _event_type_label(event: SafetyEvent) -> str:
-    if event.event_type:
-        return event.event_type
-    return eventTypeFromZoneType(event.zone_type)
+def _event_type_label(event: dict) -> str:
+    return event.get("event_type") or eventTypeFromZoneType(event.get("zone_type"))
 
 
 def eventTypeFromZoneType(zone_type: Optional[str]) -> str:
@@ -637,99 +623,36 @@ def eventTypeFromZoneType(zone_type: Optional[str]) -> str:
     }.get(str(zone_type), "区域风险事件")
 
 
-def _safety_event_to_dict(event: SafetyEvent) -> dict:
-    end_at = event.resolved_at or event.last_seen_at or dt.datetime.now()
-    duration = event.duration_seconds
-    if not duration and event.started_at:
-        duration = max(0, int((end_at - event.started_at).total_seconds()))
-    return {
-        "event_id": event.event_id,
-        "camera_id": event.camera_id,
-        "camera_name": event.camera_name or event.camera_id,
-        "entity_type": event.entity_type,
-        "track_id": event.track_id,
-        "state": event.state,
-        "status": event.status or ("RESOLVED" if event.state == "RESOLVED" else "PENDING"),
-        "event_type": _event_type_label(event),
-        "risk_level": event.risk_level,
-        "max_risk_level": event.max_risk_level or event.risk_level,
-        "handling_mode": event.handling_mode,
-        "disposal_status": event.disposal_status,
-        "target_status": event.target_status,
-        "started_at": _timestamp(event.started_at),
-        "first_seen_at": _timestamp(event.first_seen_at),
-        "danger_started_at": _timestamp(event.danger_started_at),
-        "last_seen_at": _timestamp(event.last_seen_at),
-        "clear_since": _timestamp(event.clear_since),
-        "medium_entered_at": _timestamp(event.medium_entered_at),
-        "resolved_at": _timestamp(event.resolved_at),
-        "resolve_reason": event.resolve_reason,
-        "snapshot_path": event.snapshot_url,
-        "snapshot_url": event.snapshot_url,
-        "video_url": event.video_url,
-        "video_status": event.video_status or "PENDING",
-        "video_error": event.video_error,
-        "video_created_at": _timestamp(event.video_created_at),
-        "video_expires_at": _timestamp(event.video_expires_at),
-        "duration_seconds": duration or 0,
-        "zone_type": event.zone_type,
-        "zone_name": event.zone_name,
-        "zone_ids": event.zone_ids or [],
-        "latest_bbox": event.latest_bbox,
-        "latest_observation": event.latest_observation or {},
-        "ack_operator": event.ack_operator,
-        "ack_at": _timestamp(event.ack_at),
-        "resolved_operator": event.resolved_operator,
-        "false_alarm_operator": event.false_alarm_operator,
-        "false_alarm_reason": event.false_alarm_reason,
-        "version": event.version or 0,
-    }
+def _safety_event_to_dict(event: dict) -> dict:
+    return {**event, "event_type": _event_type_label(event)}
 
 
-def _timeline_to_dict(action: SafetyEventLog) -> dict:
+def _timeline_to_dict(action: SafetyEventTimelineLog) -> dict:
     payload = action.payload or {}
-    return {
-        "action_id": action.action_id,
-        "event_id": action.event_id,
+    item = safety_event_runtime_service.timeline_dict(action)
+    item.update({
         "action_type": _timeline_action_type(action),
-        "raw_action_type": action.action_type,
-        "risk_level": action.risk_level,
-        "status": action.status,
-        "from_status": action.from_status or payload.get("from_status"),
-        "to_status": action.to_status or payload.get("to_status"),
-        "operator": action.operator or payload.get("operator") or payload.get("operator_name"),
-        "operator_role": action.operator_role or payload.get("operator_role"),
-        "message": action.message,
-        "payload": payload,
-        "created_at": _timestamp(action.create_time),
-    }
+        "raw_action_type": payload.get("action_type") or action.log_type,
+        "from_status": payload.get("from_status"),
+        "to_status": payload.get("to_status"),
+        "operator_role": payload.get("operator_role"),
+    })
+    return item
 
 
-def _is_closed(event: SafetyEvent) -> bool:
-    return (event.status or "").upper() in {"RESOLVED", "FALSE_ALARM"} or event.state == "RESOLVED"
+def _is_closed(event: SafetyEventInstance) -> bool:
+    return event.status in {"COMPLETED", "FALSE_ALARM"} or event.state == "RESOLVED"
 
 
-def _transition_status(event: SafetyEvent, action_type: str) -> str:
-    current = event.status or ("RESOLVED" if event.state == "RESOLVED" else "PENDING")
+def _transition_status(event: SafetyEventInstance, action_type: str) -> str:
+    current = event.status or ("COMPLETED" if event.state == "RESOLVED" else "PENDING")
     if action_type in {"STAFF_ACCEPTED", "STAFF_COMPLETED", "TASK_DISPATCH"}:
         return "PROCESSING"
     if action_type == "FALSE_ALARM":
         return "FALSE_ALARM"
     if action_type == "MANUAL_RESOLVED":
-        return "RESOLVED"
-    if action_type == "MANUAL_BROADCAST":
-        return current
+        return "COMPLETED"
     return current
-
-
-def _broadcast_template_for_event(event: SafetyEvent) -> str:
-    if str(event.zone_type or "").upper() in {"FISHING", "BOAT", "ILLEGAL_FISHING"}:
-        return "FISHING"
-    return {
-        "LOW": "PERSON_LOW",
-        "MEDIUM": "PERSON_MEDIUM",
-        "HIGH": "PERSON_HIGH",
-    }.get(event.risk_level or "LOW", "PERSON_LOW")
 
 
 def _validate_peer_id(peer_id: str) -> str:
@@ -1367,38 +1290,44 @@ async def get_safety_events(
         _, since, until = _day_bounds(day)
         since_dt = dt.datetime.fromtimestamp(since)
         until_dt = dt.datetime.fromtimestamp(until)
-    query = db.query(SafetyEvent)
+    query = (
+        db.query(SafetyEventInstance)
+        .join(EventLibrary, EventLibrary.id == SafetyEventInstance.current_event_id)
+        .outerjoin(VisualEventDetail, VisualEventDetail.event_instance_id == SafetyEventInstance.id)
+        .outerjoin(Camera, Camera.id == VisualEventDetail.camera_id)
+    )
     if camera_id:
-        query = query.filter(SafetyEvent.camera_id == camera_id)
+        query = query.filter(Camera.camera_id == camera_id)
     if status:
-        query = query.filter(SafetyEvent.status == status)
-    if disposal_status:
-        query = query.filter(SafetyEvent.disposal_status == disposal_status)
+        normalized_status = "COMPLETED" if status.upper() == "RESOLVED" else status.upper()
+        query = query.filter(SafetyEventInstance.status == normalized_status)
     if risk_level:
-        query = query.filter(SafetyEvent.risk_level == risk_level)
+        query = query.filter(SafetyEventInstance.risk_level == risk_level)
     if event_type:
-        query = query.filter(SafetyEvent.event_type == event_type)
+        query = query.filter(EventLibrary.event_name == event_type)
     if since_dt:
-        query = query.filter(SafetyEvent.started_at >= since_dt)
+        query = query.filter(SafetyEventInstance.started_at >= since_dt)
     if until_dt:
-        query = query.filter(SafetyEvent.started_at < until_dt)
+        query = query.filter(SafetyEventInstance.started_at < until_dt)
     if keyword:
         like = f"%{keyword}%"
         query = query.filter(or_(
-            SafetyEvent.event_id.like(like),
-            SafetyEvent.camera_id.like(like),
-            SafetyEvent.camera_name.like(like),
-            SafetyEvent.event_type.like(like),
-            SafetyEvent.zone_name.like(like),
+            SafetyEventInstance.instance_no.like(like),
+            SafetyEventInstance.summary.like(like),
+            Camera.camera_id.like(like),
+            Camera.camera_name.like(like),
+            EventLibrary.event_name.like(like),
+            VisualEventDetail.zone_name.like(like),
         ))
-    total = query.count()
-    rows = (
-        query.order_by(SafetyEvent.started_at.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-        .all()
-    )
-    events = [_safety_event_to_dict(row) for row in rows]
+    rows = query.order_by(SafetyEventInstance.started_at.desc()).all()
+    events = [
+        _safety_event_to_dict(safety_event_runtime_service.event_dict(db, row))
+        for row in rows
+    ]
+    if disposal_status:
+        events = [row for row in events if row.get("disposal_status") == disposal_status]
+    total = len(events)
+    events = events[(page - 1) * page_size:page * page_size]
     return DetectResponse(code=200, data={
         "events": events,
         "items": events,
@@ -1418,30 +1347,29 @@ async def get_safety_event_detail(
     db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    event = db.query(SafetyEvent).filter(SafetyEvent.event_id == event_id).first()
+    event = safety_event_runtime_service.get_instance(db, event_id)
     if not event:
         raise HTTPException(status_code=404, detail="安全事件不存在")
     actions = (
-        db.query(SafetyEventLog)
-        .filter(SafetyEventLog.event_id == event_id)
-        .order_by(SafetyEventLog.create_time.asc(), SafetyEventLog.id.asc())
+        db.query(SafetyEventTimelineLog)
+        .filter(SafetyEventTimelineLog.event_instance_id == event.id)
+        .order_by(SafetyEventTimelineLog.create_time.asc(), SafetyEventTimelineLog.id.asc())
         .all()
     )
     tasks = (
         db.query(SafetyEventTask)
-        .filter(SafetyEventTask.event_id == event_id)
+        .filter(SafetyEventTask.event_instance_id == event.id)
         .order_by(SafetyEventTask.dispatched_at.desc())
         .all()
     )
     return DetectResponse(code=200, data={
-        "event": _safety_event_to_dict(event),
+        "event": _safety_event_to_dict(safety_event_runtime_service.event_dict(db, event)),
         "timeline": [_timeline_to_dict(action) for action in actions],
         "tasks": [
             {
                 "id": task.id,
-                "event_id": task.event_id,
+                "event_id": event.instance_no,
                 "assignee": task.assignee,
-                "assignee_phone": task.assignee_phone,
                 "dispatch_operator": task.dispatch_operator,
                 "task_status": task.task_status,
                 "task_note": task.task_note,
@@ -1465,26 +1393,16 @@ async def get_today_safety_report(
     db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    day, since, until = _day_bounds()
-    report = get_safety_event_engine().build_daily_report(
-        day=day,
-        since=since,
-        until=until,
-        camera_id=camera_id,
+    return DetectResponse(
+        code=200,
+        message="巡查报告模板调整中",
+        data={
+            "available": False,
+            "status": "TEMPLATE_PENDING",
+            "camera_id": camera_id,
+            "persisted": False,
+        },
     )
-    if persist:
-        record = AnalysisReport(
-            report_title=f"{day} 今日巡逻报告",
-            report_type="daily",
-            risk_level=_report_risk_level(report),
-            content=_report_markdown(report),
-            ai_model="safety_event_engine",
-        )
-        db.add(record)
-        db.commit()
-        db.refresh(record)
-        report["report_id"] = record.id
-    return DetectResponse(code=200, data=report)
 
 
 @router.post(
@@ -1507,7 +1425,7 @@ async def _record_safety_event_action(
     db: Session,
     user: User,
 ):
-    event = db.query(SafetyEvent).filter(SafetyEvent.event_id == event_id).first()
+    event = safety_event_runtime_service.get_instance(db, event_id)
     if not event:
         raise HTTPException(status_code=404, detail="安全事件不存在")
     if _is_closed(event):
@@ -1520,43 +1438,35 @@ async def _record_safety_event_action(
     canonical_action = _canonical_action_type(payload.action_type)
     from_status = event.status or "PENDING"
     to_status = _transition_status(event, canonical_action)
-    action_name = {
-        "STAFF_ACCEPTED": "staff_accepted",
-        "STAFF_COMPLETED": "staff_completed",
-        "USER_ACK": "event_acknowledged",
-        "TASK_DISPATCH": "staff_dispatched",
-        "MANUAL_RESOLVED": "event_manual_closed",
-        "MANUAL_BROADCAST": "manual_broadcast",
-        "FALSE_ALARM": "false_alarm",
-    }[canonical_action]
 
     if canonical_action in {"STAFF_ACCEPTED", "STAFF_COMPLETED", "TASK_DISPATCH"} and event.risk_level != RISK_HIGH:
         raise HTTPException(status_code=409, detail="只有高风险事件需要人工处置")
 
-    if canonical_action == "STAFF_ACCEPTED" and event.disposal_status != DISPOSAL_WAITING_MANUAL:
-        raise HTTPException(status_code=409, detail="只有等待人工接单的事件可以接单")
+    task = safety_event_runtime_service.latest_task(db, event.id)
+    if canonical_action == "STAFF_ACCEPTED" and task and task.task_status not in {"WAITING_ACCEPT", "DISPATCHED"}:
+        raise HTTPException(status_code=409, detail="当前任务不能重复接单")
 
     if canonical_action == "TASK_DISPATCH":
-        task = SafetyEventTask(
-            event_id=event.event_id,
-            assignee=payload.assignee,
-            assignee_phone=payload.assignee_phone,
-            dispatch_operator=operator,
-            task_status="WAITING_ACCEPT",
-            task_note=payload.remark,
-            dispatched_at=now,
-        )
-        db.add(task)
-    elif canonical_action == "STAFF_ACCEPTED":
-        task = (
-            db.query(SafetyEventTask)
-            .filter(SafetyEventTask.event_id == event.event_id)
-            .order_by(SafetyEventTask.id.desc())
-            .first()
-        )
         if task is None:
             task = SafetyEventTask(
-                event_id=event.event_id,
+                event_instance_id=event.id,
+                assignee=payload.assignee,
+                dispatch_operator=operator,
+                task_status="WAITING_ACCEPT",
+                task_note=payload.remark,
+                dispatched_at=now,
+            )
+            db.add(task)
+        else:
+            task.assignee = payload.assignee or task.assignee
+            task.dispatch_operator = operator
+            task.task_status = "WAITING_ACCEPT"
+            task.task_note = payload.remark or task.task_note
+            task.dispatched_at = now
+    elif canonical_action == "STAFF_ACCEPTED":
+        if task is None:
+            task = SafetyEventTask(
+                event_instance_id=event.id,
                 dispatch_operator="SYSTEM",
                 task_status="WAITING_ACCEPT",
                 task_note="工作人员接单时自动补建任务",
@@ -1567,118 +1477,54 @@ async def _record_safety_event_action(
         task.task_status = "ACCEPTED"
         task.accepted_at = now
     elif canonical_action == "STAFF_COMPLETED":
-        task = (
-            db.query(SafetyEventTask)
-            .filter(SafetyEventTask.event_id == event.event_id)
-            .order_by(SafetyEventTask.id.desc())
-            .first()
-        )
         if task:
             task.task_status = "COMPLETED"
             task.completed_at = now
 
-    log = SafetyEventLog(
-        action_id=uuid.uuid4().hex,
-        event_id=event.event_id,
-        action_type=action_name,
-        risk_level=event.risk_level,
-        status="success",
-        from_status=from_status,
-        to_status=to_status,
-        operator=operator,
-        operator_role=getattr(user, "role", None),
+    event.status = to_status
+    if canonical_action in {"FALSE_ALARM", "MANUAL_RESOLVED", "STAFF_COMPLETED"}:
+        event.state = "RESOLVED"
+        event.status = "FALSE_ALARM" if canonical_action == "FALSE_ALARM" else "COMPLETED"
+        event.resolved_at = now
+        event.resolve_reason = (
+            "false_alarm" if canonical_action == "FALSE_ALARM"
+            else "staff_completed" if canonical_action == "STAFF_COMPLETED"
+            else "manual_close"
+        )
+    event.version = (event.version or 0) + 1
+    db.flush()
+    log = safety_event_runtime_service.append_timeline(
+        db,
+        event,
+        action_key=safety_event_runtime_service.new_action_key("manual-operation"),
+        log_type="RESOLVE" if event.state == "RESOLVED" else "MANUAL",
+        trigger_type="MANUAL",
+        status="SUCCESS",
         message=_safety_action_message(payload.action_type),
+        operator=operator,
         payload={
-            "operator": operator,
-            "remark": payload.remark,
-            "content": payload.content,
-            "reason": payload.reason,
-            "assignee": payload.assignee,
-            "assignee_phone": payload.assignee_phone,
-            "template_id": payload.template_id,
-            "device_ids": payload.device_ids,
+            "instance_no": event.instance_no,
             "canonical_action_type": canonical_action,
             "from_status": from_status,
-            "to_status": to_status,
+            "to_status": event.status,
             "operator_role": getattr(user, "role", None),
+            "remark": payload.remark,
+            "reason": payload.reason,
+            "assignee": payload.assignee,
+            "task_id": task.id if task else None,
         },
         create_time=now,
     )
-    db.add(log)
-
-    alarm = db.query(Alarm).filter(Alarm.alarm_code == event.event_id).first()
-    if canonical_action in {"MANUAL_RESOLVED", "FALSE_ALARM"} and alarm:
-        alarm.handle_status = 1
-        alarm.handle_user = operator
-        alarm.handle_time = now
-        alarm.handle_remark = payload.remark or _safety_action_message(payload.action_type)
-
-    event.status = to_status
-    if canonical_action == "STAFF_ACCEPTED":
-        event.ack_operator = operator
-        event.ack_at = now
-        event.handling_mode = HANDLING_MANUAL
-        event.disposal_status = DISPOSAL_MANUAL_HANDLING
-    if canonical_action == "STAFF_COMPLETED":
-        event.handling_mode = HANDLING_MANUAL
-        event.disposal_status = DISPOSAL_MANUAL_HANDLING
-    if canonical_action == "FALSE_ALARM":
-        event.false_alarm_operator = operator
-        event.false_alarm_reason = payload.reason or payload.remark
-        event.resolved_at = now
-        event.resolve_reason = "false_alarm"
-        event.disposal_status = DISPOSAL_RESOLVED
-    if canonical_action == "MANUAL_RESOLVED":
-        event.state = "RESOLVED"
-        event.resolved_at = now
-        event.resolve_reason = "manual_close"
-        event.resolved_operator = operator
-        event.disposal_status = DISPOSAL_RESOLVED
-        event.target_status = "LEFT"
-    event.duration_seconds = max(0, int((now - event.started_at).total_seconds())) if event.started_at else 0
-    event.version = (event.version or 0) + 1
-
     db.commit()
-    if canonical_action == "MANUAL_BROADCAST":
-        try:
-            broadcast_result = broadcast_service.play(
-                db,
-                {
-                    "event_id": event.event_id,
-                    "camera_id": event.camera_id,
-                    "device_ids": payload.device_ids,
-                    "template_id": payload.template_id or _broadcast_template_for_event(event),
-                    "custom_text": payload.content,
-                    "trigger_type": "MANUAL",
-                    "operator": operator,
-                    "risk_level": event.risk_level,
-                },
-            )
-            log.status = "success" if broadcast_result.get("success") else "failed"
-            log.message = broadcast_result.get("result") or _safety_action_message(payload.action_type)
-            log.payload = {
-                **(log.payload or {}),
-                "broadcast_result": broadcast_result,
-            }
-        except BroadcastException as exc:
-            log.status = "failed"
-            log.message = str(exc)[:255]
-            log.payload = {
-                **(log.payload or {}),
-                "broadcast_error": str(exc),
-            }
-        db.commit()
-        db.refresh(log)
-        db.refresh(event)
-    if canonical_action == "MANUAL_RESOLVED":
+    if canonical_action in {"MANUAL_RESOLVED", "FALSE_ALARM", "STAFF_COMPLETED"}:
         get_safety_event_engine().resolve_event(
-            event.event_id,
-            reason="manual_close",
+            event.instance_no,
+            reason=event.resolve_reason,
             now=now.timestamp(),
             emit_action=False,
         )
     await invalidate_cache("alarm:*")
-    response_event = _safety_event_to_dict(event)
+    response_event = _safety_event_to_dict(safety_event_runtime_service.event_dict(db, event))
     timeline_item = _timeline_to_dict(log)
     await safety_event_ws_manager.broadcast({
         "type": "EVENT_UPDATED",
@@ -1691,7 +1537,7 @@ async def _record_safety_event_action(
     return DetectResponse(
         code=200,
         data={
-            "event_id": event.event_id,
+            "event_id": event.instance_no,
             "action_type": canonical_action,
             "event": response_event,
             "timeline_item": timeline_item,
@@ -1719,17 +1565,6 @@ async def accept_safety_event(
     user: User = Depends(require_auth),
 ):
     payload.action_type = "STAFF_ACCEPTED"
-    return await _record_safety_event_action(event_id, payload, db, user)
-
-
-@router.post("/safety/events/{event_id}/broadcast", response_model=DetectResponse, summary="人工一键喊话")
-async def manual_broadcast_safety_event(
-    event_id: str,
-    payload: SafetyEventActionRequest,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_auth),
-):
-    payload.action_type = "MANUAL_BROADCAST"
     return await _record_safety_event_action(event_id, payload, db, user)
 
 

@@ -8,7 +8,8 @@ import threading
 from dataclasses import asdict
 from typing import Any, Dict, List, Optional
 
-from app.models.safety_event import SafetyEvent, SafetyEventLog
+from app.models.safety_integration import SafetyEventInstance, SafetyEventTimelineLog
+from app.services.safety_event_runtime_service import safety_event_runtime_service
 from app.services.safety_event_engine import (
     DISPOSAL_MONITORING,
     HANDLING_AUTO,
@@ -71,24 +72,26 @@ class SqlSafetyEventStore:
 
             db = SessionLocal()
             try:
-                rows = (
-                    db.query(SafetyEvent)
-                    .filter(SafetyEvent.state != STATE_RESOLVED)
-                    .all()
-                )
+                rows = db.query(SafetyEventInstance).filter(
+                    SafetyEventInstance.source_type == "camera",
+                    SafetyEventInstance.state != STATE_RESOLVED,
+                ).all()
                 for row in rows:
-                    event = self._event_to_dict(row)
+                    event = safety_event_runtime_service.event_dict(db, row)
                     self.events[event["event_id"]] = event
                     track = self._track_from_event(event)
                     self.tracks[self._track_key(track.camera_id, track.entity_type, track.track_id)] = track
 
                 action_rows = (
-                    db.query(SafetyEventLog)
-                    .order_by(SafetyEventLog.id.desc())
+                    db.query(SafetyEventTimelineLog)
+                    .order_by(SafetyEventTimelineLog.id.desc())
                     .limit(5000)
                     .all()
                 )
-                self.actions = [self._action_to_dict(row) for row in reversed(action_rows)]
+                self.actions = [
+                    safety_event_runtime_service.timeline_dict(row)
+                    for row in reversed(action_rows)
+                ]
             finally:
                 db.close()
 
@@ -116,16 +119,6 @@ class SqlSafetyEventStore:
 
             db = SessionLocal()
             try:
-                row = (
-                    db.query(SafetyEvent)
-                    .filter(SafetyEvent.event_id == event["event_id"])
-                    .first()
-                )
-                if row is None:
-                    row = SafetyEvent(event_id=event["event_id"])
-                    db.add(row)
-                self._apply_event(row, event)
-                db.flush()
                 self._sync_unified_event(db, event)
                 db.commit()
             except Exception:
@@ -143,35 +136,17 @@ class SqlSafetyEventStore:
 
             db = SessionLocal()
             try:
-                log_row = db.query(SafetyEventLog).filter(
-                    SafetyEventLog.action_id == action["action_id"]
-                ).first()
-                if not log_row:
-                    payload = action.get("payload") or {}
-                    log_row = SafetyEventLog(
-                        action_id=action["action_id"],
-                        event_id=action["event_id"],
-                        action_type=action["action_type"],
-                        risk_level=action["risk_level"],
-                        status=self._initial_action_status(action["action_type"]),
-                        from_status=payload.get("from_status"),
-                        to_status=payload.get("to_status"),
-                        operator=payload.get("operator"),
-                        operator_role=payload.get("operator_role"),
-                        message=self._action_message(action),
-                        payload=payload,
-                        create_time=_to_datetime(action.get("created_at")) or dt.datetime.now(),
-                    )
-                    db.add(log_row)
-                db.flush()
                 self._sync_unified_action(db, action)
                 db.commit()
+                log_row = db.query(SafetyEventTimelineLog).filter(
+                    SafetyEventTimelineLog.action_key == f"runtime:{action['action_id']}"
+                ).first()
                 try:
                     from app.services.safety_event_ws import safety_event_ws_manager
 
                     safety_event_ws_manager.publish({
                         "type": "EVENT_ACTION_ADDED",
-                        "data": self._action_to_dict(log_row),
+                        "data": safety_event_runtime_service.timeline_dict(log_row) if log_row else action,
                     })
                 except Exception:
                     pass
@@ -187,18 +162,23 @@ class SqlSafetyEventStore:
 
         db = SessionLocal()
         try:
-            event_rows = db.query(SafetyEvent).order_by(SafetyEvent.started_at.desc()).all()
+            event_rows = db.query(SafetyEventInstance).filter(
+                SafetyEventInstance.source_type == "camera"
+            ).order_by(SafetyEventInstance.started_at.desc()).all()
             events = {
-                row.event_id: self._event_to_dict(row)
+                row.instance_no: safety_event_runtime_service.event_dict(db, row)
                 for row in event_rows
             }
             action_rows = (
-                db.query(SafetyEventLog)
-                .order_by(SafetyEventLog.id.desc())
+                db.query(SafetyEventTimelineLog)
+                .order_by(SafetyEventTimelineLog.id.desc())
                 .limit(5000)
                 .all()
             )
-            actions = [self._action_to_dict(row) for row in reversed(action_rows)]
+            actions = [
+                safety_event_runtime_service.timeline_dict(row)
+                for row in reversed(action_rows)
+            ]
             for action in actions:
                 event = events.get(action.get("event_id")) or {}
                 action.setdefault("camera_id", event.get("camera_id"))
@@ -228,15 +208,25 @@ class SqlSafetyEventStore:
 
         db = SessionLocal()
         try:
-            query = db.query(SafetyEvent)
+            query = db.query(SafetyEventInstance).filter(
+                SafetyEventInstance.source_type == "camera"
+            )
             if camera_id:
-                query = query.filter(SafetyEvent.camera_id == camera_id)
+                from app.models.camera import Camera
+                from app.models.safety_integration import VisualEventDetail
+
+                query = query.join(
+                    VisualEventDetail,
+                    VisualEventDetail.event_instance_id == SafetyEventInstance.id,
+                ).join(Camera, Camera.id == VisualEventDetail.camera_id).filter(
+                    Camera.camera_id == camera_id
+                )
             if since is not None:
-                query = query.filter(SafetyEvent.started_at >= _to_datetime(since))
+                query = query.filter(SafetyEventInstance.started_at >= _to_datetime(since))
             if until is not None:
-                query = query.filter(SafetyEvent.started_at < _to_datetime(until))
-            rows = query.order_by(SafetyEvent.started_at.desc()).all()
-            return [self._event_to_dict(row) for row in rows]
+                query = query.filter(SafetyEventInstance.started_at < _to_datetime(until))
+            rows = query.order_by(SafetyEventInstance.started_at.desc()).all()
+            return [safety_event_runtime_service.event_dict(db, row) for row in rows]
         finally:
             db.close()
 
@@ -293,114 +283,6 @@ class SqlSafetyEventStore:
         )
 
     @staticmethod
-    def _event_to_dict(row: SafetyEvent) -> Dict[str, Any]:
-        return {
-            "event_id": row.event_id,
-            "camera_id": row.camera_id,
-            "entity_type": row.entity_type,
-            "track_id": row.track_id,
-            "state": row.state,
-            "status": row.status or ("RESOLVED" if row.state == STATE_RESOLVED else "PENDING"),
-            "event_type": row.event_type,
-            "risk_level": row.risk_level,
-            "max_risk_level": row.max_risk_level or row.risk_level,
-            "handling_mode": row.handling_mode or HANDLING_AUTO,
-            "disposal_status": row.disposal_status or DISPOSAL_MONITORING,
-            "target_status": row.target_status or TARGET_IN_DANGER,
-            "camera_name": row.camera_name,
-            "started_at": _to_timestamp(row.started_at),
-            "first_seen_at": _to_timestamp(row.first_seen_at),
-            "danger_started_at": _to_timestamp(row.danger_started_at),
-            "last_seen_at": _to_timestamp(row.last_seen_at),
-            "low_entered_at": _to_timestamp(row.low_entered_at),
-            "medium_entered_at": _to_timestamp(row.medium_entered_at),
-            "missing_since": _to_timestamp(row.missing_since),
-            "clear_since": _to_timestamp(row.clear_since),
-            "resolved_at": _to_timestamp(row.resolved_at),
-            "resolve_reason": row.resolve_reason,
-            "snapshot_path": row.snapshot_url,
-            "snapshot_url": row.snapshot_url,
-            "video_url": row.video_url,
-            "video_status": row.video_status or "PENDING",
-            "video_error": row.video_error,
-            "video_created_at": _to_timestamp(row.video_created_at),
-            "video_expires_at": _to_timestamp(row.video_expires_at),
-            "duration_seconds": row.duration_seconds or 0,
-            "ack_operator": row.ack_operator,
-            "ack_at": _to_timestamp(row.ack_at),
-            "resolved_operator": row.resolved_operator,
-            "false_alarm_operator": row.false_alarm_operator,
-            "false_alarm_reason": row.false_alarm_reason,
-            "version": row.version or 0,
-            "zone_type": row.zone_type,
-            "zone_name": row.zone_name,
-            "zone_ids": _json_value(row.zone_ids, []),
-            "latest_bbox": _json_value(row.latest_bbox, None),
-            "latest_observation": _json_value(row.latest_observation, {}),
-            "updated_at": _to_timestamp(row.update_time),
-        }
-
-    @staticmethod
-    def _action_to_dict(row: SafetyEventLog) -> Dict[str, Any]:
-        return {
-            "action_id": row.action_id,
-            "event_id": row.event_id,
-            "action_type": row.action_type,
-            "risk_level": row.risk_level,
-            "status": row.status,
-            "from_status": row.from_status,
-            "to_status": row.to_status,
-            "operator": row.operator,
-            "operator_role": row.operator_role,
-            "message": row.message,
-            "payload": _json_value(row.payload, {}),
-            "created_at": _to_timestamp(row.create_time),
-        }
-
-    @staticmethod
-    def _apply_event(row: SafetyEvent, event: Dict[str, Any]) -> None:
-        observation = event.get("latest_observation") or {}
-        previous_status = row.status
-        row.camera_id = event.get("camera_id")
-        row.entity_type = event.get("entity_type")
-        row.track_id = event.get("track_id")
-        row.state = event.get("state")
-        row.status = event.get("status") or ("RESOLVED" if event.get("state") == STATE_RESOLVED else (row.status or "PENDING"))
-        row.event_type = event.get("event_type") or row.event_type
-        row.risk_level = event.get("risk_level")
-        row.max_risk_level = event.get("max_risk_level") or row.max_risk_level or row.risk_level
-        row.handling_mode = event.get("handling_mode") or row.handling_mode or HANDLING_AUTO
-        row.disposal_status = event.get("disposal_status") or row.disposal_status or DISPOSAL_MONITORING
-        row.target_status = event.get("target_status") or row.target_status or TARGET_IN_DANGER
-        row.camera_name = event.get("camera_name") or row.camera_name
-        row.started_at = _to_datetime(event.get("started_at")) or dt.datetime.now()
-        row.first_seen_at = _to_datetime(event.get("first_seen_at")) or row.started_at
-        row.danger_started_at = _to_datetime(event.get("danger_started_at")) or row.started_at
-        row.last_seen_at = _to_datetime(event.get("last_seen_at")) or row.started_at
-        row.low_entered_at = _to_datetime(event.get("low_entered_at"))
-        row.medium_entered_at = _to_datetime(event.get("medium_entered_at"))
-        row.missing_since = _to_datetime(event.get("missing_since"))
-        row.clear_since = _to_datetime(event.get("clear_since"))
-        row.resolved_at = _to_datetime(event.get("resolved_at"))
-        row.resolve_reason = event.get("resolve_reason")
-        row.snapshot_url = event.get("snapshot_path")
-        row.video_url = event.get("video_url") or row.video_url
-        row.video_status = event.get("video_status") or row.video_status or "PENDING"
-        row.video_error = event.get("video_error")
-        row.video_created_at = _to_datetime(event.get("video_created_at"))
-        row.video_expires_at = _to_datetime(event.get("video_expires_at"))
-        if row.started_at:
-            end_at = row.resolved_at or row.last_seen_at or dt.datetime.now()
-            row.duration_seconds = max(0, int((end_at - row.started_at).total_seconds()))
-        if previous_status and row.status != previous_status:
-            row.version = (row.version or 0) + 1
-        row.zone_type = event.get("zone_type") or (observation.get("zone_types") or [None])[0]
-        row.zone_name = event.get("zone_name") or (observation.get("zone_names") or [None])[0]
-        row.zone_ids = event.get("zone_ids") or []
-        row.latest_bbox = event.get("latest_bbox") or observation.get("bbox")
-        row.latest_observation = observation
-
-    @staticmethod
     def _initial_action_status(action_type: str) -> str:
         if action_type in {"push_requested", "PUSH_REQUESTED"}:
             return "success"
@@ -431,52 +313,6 @@ class SqlSafetyEventStore:
             "EVENT_RESOLVED": "安全事件已关闭",
         }
         return names.get(action.get("action_type"), "安全事件动作")
-
-    def _sync_alarm_locked(self, db: Any, action: Dict[str, Any]) -> None:
-        from app.models.alarm import Alarm
-
-        event_id = action.get("event_id")
-        if not event_id:
-            return
-        action_type = action.get("action_type")
-        if action_type not in {
-            "risk_changed",
-            "RISK_CHANGED",
-            "push_requested",
-            "PUSH_REQUESTED",
-            "event_resolved",
-            "EVENT_RESOLVED",
-        }:
-            return
-        alarm = db.query(Alarm).filter(Alarm.alarm_code == event_id).first()
-        if action_type in {"event_resolved", "EVENT_RESOLVED"}:
-            if alarm:
-                alarm.handle_status = 1
-                alarm.handle_user = "系统"
-                alarm.handle_time = dt.datetime.now()
-                alarm.handle_remark = "安全事件自动关闭"
-            return
-        if action_type in {"push_requested", "PUSH_REQUESTED"} and alarm is not None:
-            return
-        risk_level = action.get("risk_level")
-        if risk_level not in {RISK_LOW, RISK_MEDIUM, RISK_HIGH}:
-            return
-        event = self.events.get(event_id, {})
-        level = {RISK_LOW: 1, RISK_MEDIUM: 2, RISK_HIGH: 3}[risk_level]
-        content = (
-            f"摄像头 {action.get('camera_id')} 检测到{event.get('entity_type', '目标')}入侵，"
-            f"风险等级 {risk_level}"
-        )
-        if alarm is None:
-            alarm = Alarm(
-                alarm_code=event_id,
-                alarm_type="ai",
-                alarm_time=dt.datetime.now(),
-                handle_status=0,
-            )
-            db.add(alarm)
-        alarm.alarm_level = level
-        alarm.alarm_content = content[:500]
 
     @staticmethod
     def _unified_event_code(entity_type: str, risk_level: str) -> Optional[str]:
@@ -543,11 +379,27 @@ class SqlSafetyEventStore:
         instance.resolved_at = _to_datetime(event.get("resolved_at"))
         instance.resolve_reason = event.get("resolve_reason")
         instance.summary = f"{camera.camera_name} - {definition.event_name}"
-        instance.latest_observation = event.get("latest_observation") or {}
+        observation = dict(event.get("latest_observation") or {})
+        observation["runtime"] = {
+            "handling_mode": event.get("handling_mode") or HANDLING_AUTO,
+            "disposal_status": event.get("disposal_status") or DISPOSAL_MONITORING,
+            "target_status": event.get("target_status") or TARGET_IN_DANGER,
+            "first_seen_at": event.get("first_seen_at"),
+            "danger_started_at": event.get("danger_started_at"),
+            "low_entered_at": event.get("low_entered_at"),
+            "medium_entered_at": event.get("medium_entered_at"),
+            "missing_since": event.get("missing_since"),
+            "clear_since": event.get("clear_since"),
+            "zone_ids": event.get("zone_ids") or [],
+            "video_status": event.get("video_status") or "PENDING",
+            "video_error": event.get("video_error"),
+            "video_created_at": event.get("video_created_at"),
+            "video_expires_at": event.get("video_expires_at"),
+        }
+        instance.latest_observation = observation
         instance.version = int(event.get("version") or instance.version or 0)
 
         visual = db.query(VisualEventDetail).filter(VisualEventDetail.event_instance_id == instance.id).first()
-        observation = event.get("latest_observation") or {}
         zone_ids = event.get("zone_ids") or observation.get("zone_ids") or []
         zone = db.query(CameraDetectionZone).filter(
             CameraDetectionZone.camera_device_id == camera.id,
@@ -563,7 +415,11 @@ class SqlSafetyEventStore:
         visual.zone_name = event.get("zone_name") or visual.zone_name
         visual.zone_type = event.get("zone_type") or visual.zone_type
         visual.confidence = observation.get("confidence")
-        visual.extra = {"bbox": event.get("latest_bbox"), "class_name": observation.get("class_name")}
+        visual.extra = {
+            **(visual.extra or {}),
+            "bbox": event.get("latest_bbox"),
+            "class_name": observation.get("class_name"),
+        }
 
         snapshot_url = event.get("snapshot_path")
         if snapshot_url and not db.query(SafetyEventEvidence.id).filter(
@@ -575,8 +431,25 @@ class SqlSafetyEventStore:
                 source_id=camera.camera_id, file_url=snapshot_url, description="事件抓拍",
                 captured_at=_to_datetime(event.get("last_seen_at")) or dt.datetime.now(),
             ))
+        video_url = event.get("video_url")
+        if video_url and not db.query(SafetyEventEvidence.id).filter(
+            SafetyEventEvidence.event_instance_id == instance.id,
+            SafetyEventEvidence.file_url == video_url,
+        ).first():
+            db.add(SafetyEventEvidence(
+                event_instance_id=instance.id,
+                evidence_type="VIDEO",
+                source_type="CAMERA",
+                source_id=camera.camera_id,
+                file_url=video_url,
+                description="事件短视频",
+                metadata_json={"status": event.get("video_status") or "READY"},
+                captured_at=_to_datetime(event.get("video_created_at")) or dt.datetime.now(),
+            ))
 
     def _sync_unified_action(self, db: Any, action: Dict[str, Any]) -> None:
+        from app.models.action_step import ActionStep
+        from app.models.event_action import EventAction
         from app.models.safety_integration import SafetyEventEvidence, SafetyEventInstance, SafetyEventTimelineLog
 
         instance = db.query(SafetyEventInstance).filter(
@@ -605,9 +478,32 @@ class SqlSafetyEventStore:
         else:
             log_type = "ACTION"
         payload = action.get("payload") or {}
+        action_step_type = {
+            "AUTO_BROADCAST": "broadcast",
+            "broadcast_requested": "broadcast",
+            "DRONE_DISPATCH": "drone_dispatch",
+            "drone_dispatch_requested": "drone_dispatch",
+            "STAFF_DISPATCH": "staff_task",
+            "staff_task_requested": "staff_task",
+        }.get(action_type)
+        relation = None
+        step = None
+        if action_step_type:
+            relation = db.query(EventAction).filter(
+                EventAction.event_id == instance.current_event_id,
+                EventAction.flow_id.isnot(None),
+                EventAction.is_activate.is_(True),
+            ).order_by(EventAction.priority.asc(), EventAction.id.asc()).first()
+            if relation:
+                step = db.query(ActionStep).filter(
+                    ActionStep.flow_id == relation.flow_id,
+                    ActionStep.action_type == action_step_type,
+                ).order_by(ActionStep.step_order.asc(), ActionStep.id.asc()).first()
         timeline = SafetyEventTimelineLog(
             event_instance_id=instance.id,
             event_id=instance.current_event_id,
+            flow_id=relation.flow_id if relation else None,
+            step_id=step.id if step else None,
             action_key=action_key,
             log_type=log_type,
             trigger_type=str(payload.get("trigger_type") or "AUTO"),
@@ -615,7 +511,7 @@ class SqlSafetyEventStore:
             status=self._initial_action_status(action_type).upper(),
             message=self._action_message(action),
             operator=str(payload.get("operator") or "SYSTEM"),
-            payload={"action_type": action_type, **payload},
+            payload={"instance_no": instance.instance_no, "action_type": action_type, **payload},
             create_time=_to_datetime(action.get("created_at")) or dt.datetime.now(),
         )
         db.add(timeline)

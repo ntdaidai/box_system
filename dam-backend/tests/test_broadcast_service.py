@@ -1,5 +1,8 @@
 import os
+import tempfile
 import unittest
+import datetime as dt
+from pathlib import Path
 
 os.environ.setdefault("JWT_SECRET", "test-secret")
 os.environ.setdefault("DEFAULT_ADMIN_PASSWORD", "test-password")
@@ -11,9 +14,11 @@ from app.core.database import Base
 from app.models.broadcast import BroadcastDevice, BroadcastTemplate, CameraBroadcastDevice
 from app.models.event_action import EventAction
 from app.models.event_library import EventLibrary
+from app.models.data_source import DataSource
+from app.models.safety_integration import SafetyEventInstance, SafetyEventTimelineLog
 from app.models.action_flow import ActionFlow
 from app.core.config import settings
-from app.services.broadcast_service import BroadcastService
+from app.services.broadcast_service import BroadcastAudioFile, BroadcastService
 
 
 class BroadcastServiceTests(unittest.TestCase):
@@ -28,7 +33,49 @@ class BroadcastServiceTests(unittest.TestCase):
     def tearDown(self):
         self.db.close()
 
-    def test_manual_play_uses_bound_devices_and_records_event_action(self):
+    def add_event(self, instance_no):
+        event = self.db.query(EventLibrary).filter(EventLibrary.event_code == "TEST_EVENT").first()
+        if not event:
+            source = DataSource(
+                id=1,
+                source_name="Test camera",
+                source_type="camera",
+                device_id=1,
+                data_path="camera://1",
+                is_activate=True,
+            )
+            event = EventLibrary(
+                id=1,
+                event_code="TEST_EVENT",
+                event_name="Test event",
+                event_category="PERSON_SAFETY",
+                trigger_mode="single",
+                risk_level=3,
+                is_activate=True,
+            )
+            self.db.add_all([source, event])
+            self.db.flush()
+        instance = SafetyEventInstance(
+            instance_no=instance_no,
+            current_event_id=event.id,
+            event_category="PERSON_SAFETY",
+            data_source_id=1,
+            source_type="camera",
+            source_id=1,
+            risk_level="HIGH",
+            max_risk_level="HIGH",
+            state="ACTIVE",
+            status="PENDING",
+            started_at=dt.datetime.now(),
+            last_observed_at=dt.datetime.now(),
+            summary="Test event",
+        )
+        self.db.add(instance)
+        self.db.commit()
+        return instance
+
+    def test_manual_play_uses_bound_devices_and_records_timeline(self):
+        instance = self.add_event("evt_1")
         device = BroadcastDevice(
             id=1,
             name="Mock speaker",
@@ -54,15 +101,17 @@ class BroadcastServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(response["result"], "SUCCESS")
-        action = self.db.query(EventAction).filter(EventAction.action_type == "MANUAL_BROADCAST").one()
-        self.assertEqual(action.broadcast_event_id, "evt_1")
-        self.assertEqual(action.device_id, device.id)
-        self.assertEqual(action.template_id, "PERSON_HIGH")
+        action = self.db.query(SafetyEventTimelineLog).filter(
+            SafetyEventTimelineLog.event_instance_id == instance.id
+        ).one()
         self.assertEqual(action.trigger_type, "MANUAL")
-        self.assertEqual(action.result, "SUCCESS")
+        self.assertEqual(action.status, "SUCCESS")
         self.assertEqual(action.operator, "tester")
+        self.assertEqual(action.payload["devices"][0]["device_id"], device.id)
+        self.assertEqual(self.db.query(EventAction).count(), 0)
 
     def test_failed_device_is_recorded_without_blocking_other_devices(self):
+        instance = self.add_event("evt_2")
         online = BroadcastDevice(
             id=1,
             name="Online speaker",
@@ -94,8 +143,52 @@ class BroadcastServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(response["result"], "PARTIAL_SUCCESS")
-        actions = self.db.query(EventAction).order_by(EventAction.device_id.asc()).all()
-        self.assertEqual([action.result for action in actions], ["SUCCESS", "FAILED"])
+        action = self.db.query(SafetyEventTimelineLog).filter(
+            SafetyEventTimelineLog.event_instance_id == instance.id
+        ).one()
+        self.assertEqual([item["result"] for item in action.payload["devices"]], ["SUCCESS", "FAILED"])
+
+    def test_one_touch_voice_only_records_operator_devices_and_result(self):
+        instance = self.add_event("evt_voice")
+        device = BroadcastDevice(
+            id=1,
+            name="验证广播",
+            vendor_type="MOCK",
+            device_code="mock_voice",
+            status="ONLINE",
+            enabled=True,
+        )
+        self.db.add(device)
+        self.db.flush()
+        self.db.add(CameraBroadcastDevice(id=1, camera_id="cam_voice", broadcast_device_id=device.id))
+        self.db.commit()
+        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as handle:
+            handle.write(b"temporary voice")
+            audio_path = handle.name
+
+        response = self.service.play_recorded_audio(
+            self.db,
+            {
+                "event_id": instance.instance_no,
+                "camera_id": "cam_voice",
+                "trigger_type": "MANUAL",
+                "operator": "tester",
+            },
+            BroadcastAudioFile(path=audio_path, format="audio/webm", uri=audio_path),
+        )
+
+        self.assertEqual(response["result"], "SUCCESS")
+        self.assertNotIn("audio_uri", response)
+        self.assertFalse(Path(audio_path).exists())
+        action = self.db.query(SafetyEventTimelineLog).filter(
+            SafetyEventTimelineLog.event_instance_id == instance.id
+        ).one()
+        self.assertEqual(action.operator, "tester")
+        self.assertEqual(action.message, "用户使用一键喊话")
+        self.assertEqual(action.payload["action_type"], "MANUAL_ONE_TOUCH_BROADCAST")
+        self.assertNotIn("template_id", action.payload)
+        self.assertNotIn("content", action.payload)
+        self.assertNotIn("audio_uri", action.payload)
 
     def test_real_device_takes_precedence_over_local_test_device(self):
         local = BroadcastDevice(

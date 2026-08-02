@@ -1,4 +1,3 @@
-import datetime as dt
 import unittest
 
 from sqlalchemy import create_engine
@@ -12,7 +11,6 @@ from app.models.data_source import DataSource
 from app.models.event_action import EventAction
 from app.models.event_condition import EventCondition
 from app.models.event_library import EventLibrary
-from app.models.event_log import EventLog
 from app.models.safety_integration import SafetyEventInstance, SafetyEventTimelineLog
 from app.services.unified_sensor_event_service import unified_sensor_event_service
 
@@ -33,7 +31,6 @@ class UnifiedSensorEventServiceTests(unittest.TestCase):
                 EventCondition.__table__,
                 ActionFlow.__table__,
                 EventAction.__table__,
-                EventLog.__table__,
                 SafetyEventInstance.__table__,
                 SafetyEventTimelineLog.__table__,
             ],
@@ -80,19 +77,8 @@ class UnifiedSensorEventServiceTests(unittest.TestCase):
         ])
         self.db.commit()
 
-        triggered_at = dt.datetime.now()
-        event_log = EventLog(
-            id=1,
-            event_id=1,
-            trigger_time=triggered_at,
-            trigger_data='{"temperature": 42}',
-            status="triggered",
-        )
-        self.db.add(event_log)
-        self.db.commit()
-
         unified_sensor_event_service.observe(
-            self.db, event, {"temperature": 42}, True, event_log, source.id
+            self.db, event, {"temperature": 42}, True, source.id
         )
         instance = self.db.query(SafetyEventInstance).one()
         self.assertEqual(instance.state, "ACTIVE")

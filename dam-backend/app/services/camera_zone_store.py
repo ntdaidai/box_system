@@ -6,7 +6,6 @@ import json
 import os
 import tempfile
 import threading
-import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -92,7 +91,6 @@ class CameraZoneStore:
     def _clone_zone(zone: Dict[str, Any]) -> Dict[str, Any]:
         return {
             **zone,
-            "rect": dict(zone.get("rect") or {}),
             "polygon_points": [
                 dict(point)
                 for point in zone.get("polygon_points", [])
@@ -122,10 +120,7 @@ class SqlCameraZoneStore:
                 return []
             rows = (
                 db.query(CameraDetectionZone)
-                .filter(
-                    (CameraDetectionZone.camera_device_id == camera.id)
-                    | (CameraDetectionZone.camera_id == camera.camera_id)
-                )
+                .filter(CameraDetectionZone.camera_device_id == camera.id)
                 .order_by(CameraDetectionZone.id.asc())
                 .all()
             )
@@ -165,14 +160,40 @@ class SqlCameraZoneStore:
                     )
                     db.add(source)
                     db.flush()
-                db.query(CameraDetectionZone).filter(
-                    (CameraDetectionZone.camera_device_id == camera.id)
-                    | (CameraDetectionZone.camera_id == camera.camera_id)
-                ).delete(synchronize_session=False)
+                old_zone_ids = [
+                    zone_id
+                    for (zone_id,) in db.query(CameraDetectionZone.id).filter(
+                        CameraDetectionZone.camera_device_id == camera.id
+                    ).all()
+                ]
+                generated_condition_ids = []
+                if old_zone_ids:
+                    bound_condition_ids = [
+                        condition_id
+                        for (condition_id,) in db.query(CameraZoneCondition.condition_id).filter(
+                            CameraZoneCondition.zone_id.in_(old_zone_ids)
+                        ).all()
+                    ]
+                    if bound_condition_ids:
+                        generated_condition_ids = [
+                            condition_id
+                            for (condition_id,) in db.query(ConditionLibrary.id).filter(
+                                ConditionLibrary.id.in_(bound_condition_ids),
+                                ConditionLibrary.description.like("[ZONE_ECA:%"),
+                            ).all()
+                        ]
+                    db.query(CameraDetectionZone).filter(
+                        CameraDetectionZone.id.in_(old_zone_ids)
+                    ).delete(synchronize_session=False)
+                    db.flush()
+                    if generated_condition_ids:
+                        db.query(EventCondition).filter(
+                            EventCondition.condition_id.in_(generated_condition_ids)
+                        ).delete(synchronize_session=False)
+                        db.query(ConditionLibrary).filter(
+                            ConditionLibrary.id.in_(generated_condition_ids)
+                        ).delete(synchronize_session=False)
                 for zone in zones:
-                    zone_id = str(zone.get("zone_id") or zone.get("id") or "")[:64]
-                    if not zone_id:
-                        zone_id = f"zone_{time.time_ns()}"[:64]
                     points = []
                     seen_points = set()
                     for point in zone.get("polygon_points", []):
@@ -190,8 +211,6 @@ class SqlCameraZoneStore:
                         raise ValueError("区域类型无效")
                     row = CameraDetectionZone(
                             camera_device_id=camera.id,
-                            camera_id=camera.camera_id,
-                            zone_id=zone_id,
                             zone_name=str(
                                 zone.get("zone_name")
                                 or zone.get("name")
@@ -200,13 +219,7 @@ class SqlCameraZoneStore:
                                 or "检测区域"
                             )[:80],
                             zone_type=zone_type,
-                            rect_x=None,
-                            rect_y=None,
-                            rect_width=None,
-                            rect_height=None,
                             polygon_points=points,
-                            risk_level={"PERSON_LOW": "LOW", "PERSON_MEDIUM": "MEDIUM", "PERSON_HIGH": "HIGH", "FISHING": "LOW"}[zone_type],
-                            trigger_seconds=float(zone.get("trigger_seconds", 0)),
                             enabled=bool(zone.get("enabled", True)),
                     )
                     db.add(row)
@@ -223,7 +236,7 @@ class SqlCameraZoneStore:
                     }
                     durations = zone.get("condition_durations") or {}
                     for event_code, expression, label, default_duration in definitions[zone_type]:
-                        marker = f"[ZONE_ECA:{camera.id}:{zone_id}:{event_code}]"
+                        marker = f"[ZONE_ECA:{camera.id}:{row.id}:{event_code}]"
                         condition = db.query(ConditionLibrary).filter(ConditionLibrary.description.like(f"{marker}%")).first()
                         if not condition:
                             condition = ConditionLibrary(source_id=source.id, expression=expression)
@@ -252,14 +265,19 @@ class SqlCameraZoneStore:
 
     def remove(self, camera_id: str) -> None:
         from app.core.database import SessionLocal
+        from app.models.camera import Camera
         from app.models.camera_detection_zone import CameraDetectionZone
 
         with self._lock:
             db = SessionLocal()
             try:
-                db.query(CameraDetectionZone).filter(
-                    CameraDetectionZone.camera_id == camera_id
-                ).delete(synchronize_session=False)
+                camera = db.query(Camera).filter(Camera.camera_id == str(camera_id)).first()
+                if camera is None and str(camera_id).isdigit():
+                    camera = db.query(Camera).filter(Camera.id == int(camera_id)).first()
+                if camera:
+                    db.query(CameraDetectionZone).filter(
+                        CameraDetectionZone.camera_device_id == camera.id
+                    ).delete(synchronize_session=False)
                 db.commit()
             except Exception:
                 db.rollback()
@@ -286,7 +304,6 @@ class SqlCameraZoneStore:
             .all()
         )
         condition_durations = {event_code: int(duration or 0) for event_code, duration in duration_rows}
-        zone_id = getattr(row, "zone_id", None) or str(row.id)
         normalized_points = []
         seen_points = set()
         for point in points:
@@ -298,15 +315,19 @@ class SqlCameraZoneStore:
                 normalized_points.append(normalized)
                 seen_points.add(key)
         return {
-            "id": str(zone_id),
-            "zone_id": str(zone_id),
+            "id": str(row.id),
+            "zone_id": str(row.id),
             "name": row.zone_name,
             "zone_name": row.zone_name,
             "type": row.zone_type,
             "zone_type": row.zone_type,
             "enabled": bool(row.enabled),
             "polygon_points": normalized_points,
-            "trigger_seconds": float(row.trigger_seconds) if getattr(row, "trigger_seconds", None) is not None else 0.0,
+            "trigger_seconds": float(condition_durations.get({
+                "PERSON_LOW": "PERSON_INTRUSION",
+                "PERSON_MEDIUM": "PERSON_WATERFRONT",
+                "PERSON_HIGH": "PERSON_WADING",
+            }.get(row.zone_type), 0)),
             "condition_durations": condition_durations,
             "create_time": row.create_time.isoformat() if getattr(row, "create_time", None) else None,
             "update_time": row.update_time.isoformat() if getattr(row, "update_time", None) else None,

@@ -24,7 +24,7 @@ from app.models.broadcast import (
 )
 from app.models.event_action import EventAction
 from app.models.camera import Camera
-from app.models.safety_event import SafetyEventLog
+from app.services.safety_event_runtime_service import safety_event_runtime_service
 
 
 TRIGGER_AUTO = "AUTO"
@@ -281,17 +281,6 @@ class BroadcastService:
 
         items = []
         for device in devices:
-            action = self._start_action(
-                db=db,
-                event_id=event_id,
-                camera_id=camera_id,
-                device=device,
-                template_id=template_id,
-                trigger_type=trigger_type,
-                operator=operator,
-                content=audio.text,
-                risk_level=command.get("risk_level"),
-            )
             try:
                 if not device.enabled:
                     raise BroadcastException("Device is disabled")
@@ -305,7 +294,6 @@ class BroadcastService:
                 final_result = "FAILED"
                 message = str(exc)
                 logger.warning(f"Broadcast play failed: device={device.id}, error={exc}")
-            self._finish_action(db, action, final_result, message)
             items.append({
                 "device_id": device.id,
                 "device_name": device.name,
@@ -321,6 +309,7 @@ class BroadcastService:
             result = "PARTIAL_SUCCESS"
         else:
             result = "FAILED"
+        self._record_execution(db, command, items, result, one_touch=False)
         return {
             "success": success_count > 0,
             "result": result,
@@ -354,6 +343,12 @@ class BroadcastService:
         )
 
     def play_recorded_audio(self, db: Session, command: Dict[str, Any], audio: BroadcastAudioFile) -> Dict[str, Any]:
+        try:
+            return self._play_recorded_audio(db, command, audio)
+        finally:
+            self._delete_recorded_audio(audio)
+
+    def _play_recorded_audio(self, db: Session, command: Dict[str, Any], audio: BroadcastAudioFile) -> Dict[str, Any]:
         trigger_type = (command.get("trigger_type") or TRIGGER_MANUAL).upper()
         if trigger_type != TRIGGER_MANUAL:
             raise BroadcastException("Recorded audio playback only supports MANUAL trigger")
@@ -365,20 +360,8 @@ class BroadcastService:
         if not devices:
             raise BroadcastException("No broadcast devices are bound to this camera")
 
-        content = f"[语音喊话] {Path(audio.path).name}"
         items = []
         for device in devices:
-            action = self._start_action(
-                db=db,
-                event_id=event_id,
-                camera_id=camera_id,
-                device=device,
-                template_id=None,
-                trigger_type=TRIGGER_MANUAL,
-                operator=operator,
-                content=content,
-                risk_level=command.get("risk_level"),
-            )
             try:
                 if not device.enabled:
                     raise BroadcastException("Device is disabled")
@@ -392,7 +375,6 @@ class BroadcastService:
                 final_result = "FAILED"
                 message = str(exc)
                 logger.warning(f"Recorded broadcast play failed: device={device.id}, error={exc}")
-            self._finish_action(db, action, final_result, message)
             items.append({
                 "device_id": device.id,
                 "device_name": device.name,
@@ -408,12 +390,20 @@ class BroadcastService:
             result = "PARTIAL_SUCCESS"
         else:
             result = "FAILED"
+        self._record_execution(db, command, items, result, one_touch=True)
         return {
             "success": success_count > 0,
             "result": result,
-            "audio_uri": audio.uri,
             "items": items,
         }
+
+    @staticmethod
+    def _delete_recorded_audio(audio: BroadcastAudioFile) -> None:
+        source_path = Path(audio.path)
+        converted_path = source_path.with_suffix(".wav")
+        source_path.unlink(missing_ok=True)
+        if converted_path != source_path:
+            converted_path.unlink(missing_ok=True)
 
     def handle_safety_event_action(self, action: Dict[str, Any]) -> None:
         if action.get("action_type") not in {"AUTO_BROADCAST", "broadcast_requested"}:
@@ -442,6 +432,7 @@ class BroadcastService:
                     "trigger_type": TRIGGER_AUTO,
                     "operator": "SYSTEM",
                     "risk_level": risk_level,
+                    "engine_action_id": action.get("action_id"),
                 },
             )
             self._mark_safety_action(
@@ -653,42 +644,67 @@ class BroadcastService:
             if (row.vendor_type or "").upper() != "LOCAL_AUDIO"
         ]
 
-    def _start_action(
-        self,
-        *,
+    @staticmethod
+    def _record_execution(
         db: Session,
-        event_id: Optional[str],
-        camera_id: Optional[str],
-        device: BroadcastDevice,
-        template_id: Optional[str],
-        trigger_type: str,
-        operator: str,
-        content: str,
-        risk_level: Optional[str] = None,
-    ) -> EventAction:
-        action = EventAction(
-            action_type="AUTO_BROADCAST" if trigger_type == TRIGGER_AUTO else "MANUAL_BROADCAST",
-            broadcast_event_id=str(event_id) if event_id else None,
-            camera_id=str(camera_id) if camera_id else None,
-            risk_level=str(risk_level) if risk_level else None,
-            device_id=device.id,
-            template_id=template_id,
-            trigger_type=trigger_type,
-            content=content,
-            start_time=dt.datetime.now(),
-            result="PLAYING",
-            operator=operator,
-            is_activate=True,
-        )
-        db.add(action)
-        db.commit()
-        db.refresh(action)
-        return action
-
-    def _finish_action(self, db: Session, action: EventAction, result: str, message: str) -> None:
-        action.end_time = dt.datetime.now()
-        action.result = result
-        action.error_message = None if result == "SUCCESS" else message[:1000]
+        command: Dict[str, Any],
+        items: List[Dict[str, Any]],
+        result: str,
+        *,
+        one_touch: bool,
+    ) -> None:
+        event_id = command.get("event_id")
+        if not event_id:
+            return
+        instance = safety_event_runtime_service.get_instance(db, str(event_id))
+        if not instance:
+            return
+        trigger_type = str(command.get("trigger_type") or TRIGGER_MANUAL).upper()
+        operator = str(command.get("operator") or ("SYSTEM" if trigger_type == TRIGGER_AUTO else "UNKNOWN"))
+        successful = result in {"SUCCESS", "PARTIAL_SUCCESS"}
+        device_results = [{
+            "device_id": item.get("device_id"),
+            "device_name": item.get("device_name"),
+            "result": item.get("result"),
+            "message": item.get("message"),
+        } for item in items]
+        if one_touch:
+            payload = {
+                "instance_no": instance.instance_no,
+                "action_type": "MANUAL_ONE_TOUCH_BROADCAST",
+                "devices": device_results,
+            }
+            message = "用户使用一键喊话"
+        else:
+            payload = {
+                "instance_no": instance.instance_no,
+                "action_type": "AUTO_BROADCAST" if trigger_type == TRIGGER_AUTO else "MANUAL_BROADCAST",
+                "devices": device_results,
+            }
+            if trigger_type == TRIGGER_AUTO:
+                payload["template_id"] = command.get("template_id")
+            message = "系统自动广播" if trigger_type == TRIGGER_AUTO else "用户执行人工广播"
+        action_id = command.get("engine_action_id")
+        if action_id:
+            safety_event_runtime_service.finish_engine_action(
+                db,
+                str(action_id),
+                status="SUCCESS" if successful else "FAILED",
+                message=message if successful else f"{message}失败",
+                payload=payload,
+            )
+        else:
+            safety_event_runtime_service.append_timeline(
+                db,
+                instance,
+                action_key=safety_event_runtime_service.new_action_key("manual-broadcast"),
+                log_type="ACTION",
+                trigger_type=trigger_type,
+                status="SUCCESS" if successful else "FAILED",
+                message=message if successful else f"{message}失败",
+                operator=operator,
+                payload=payload,
+            )
         db.commit()
 
     @staticmethod
@@ -700,26 +716,12 @@ class BroadcastService:
     ) -> None:
         if not action_id:
             return
-        row = (
-            db.query(SafetyEventLog)
-            .filter(SafetyEventLog.action_id == action_id)
-            .first()
+        safety_event_runtime_service.finish_engine_action(
+            db,
+            action_id,
+            status=status,
+            message=message,
         )
-        if not row:
-            return
-        row.status = status
-        row.message = (message or row.message or "")[:255]
-        try:
-            from app.models.safety_integration import SafetyEventTimelineLog
-
-            timeline = db.query(SafetyEventTimelineLog).filter(
-                SafetyEventTimelineLog.action_key == f"runtime:{action_id}"
-            ).first()
-            if timeline:
-                timeline.status = status.upper()
-                timeline.message = (message or timeline.message or "")[:500]
-        except Exception:
-            pass
         db.commit()
 
     @staticmethod

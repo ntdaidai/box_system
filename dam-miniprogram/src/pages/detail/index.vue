@@ -46,10 +46,9 @@
     <button
       class="primary-btn broadcast-btn"
       :loading="broadcasting"
-      :disabled="broadcasting"
       @tap="handleBroadcast"
     >
-      一键喊话
+      {{ recordingBroadcast ? '结束喊话' : '一键喊话' }}
     </button>
 
     <view v-if="event && event.can_start_manual" class="manual-panel high">
@@ -113,7 +112,7 @@
 </template>
 
 <script>
-import { absoluteUrl, request } from '../../utils/request'
+import { absoluteUrl, request, uploadBroadcastAudio } from '../../utils/request'
 import { formatDateTime, formatDuration, formatTime, riskClass } from '../../utils/format'
 import { subscribeRiskAlert } from '../../utils/subscribe'
 import { WS_BASE_URL } from '../../utils/config'
@@ -132,6 +131,8 @@ export default {
       streamUrl: '',
       videoText: 'V1兼容预览，PC端WebRTC链路不受影响',
       broadcasting: false,
+      recordingBroadcast: false,
+      broadcastRecorder: null,
       startingManual: false,
       subscribingAlert: false,
       socketTask: null
@@ -150,6 +151,7 @@ export default {
     this.loadDetail()
     this.loadVideo()
     this.connectEventSocket()
+    this.prepareBroadcastRecorder()
   },
 
   onUnload() {
@@ -157,6 +159,7 @@ export default {
       this.socketTask.close()
       this.socketTask = null
     }
+    if (this.recordingBroadcast) this.broadcastRecorder?.stop()
   },
 
   onPullDownRefresh() {
@@ -238,24 +241,35 @@ export default {
 
     handleBroadcast() {
       if (!this.eventId || this.broadcasting) return
-      this.broadcasting = true
-      request({
-        url: `/events/${encodeURIComponent(this.eventId)}/broadcast`,
-        method: 'POST',
-        data: {
-          operator: '微信小程序工作人员'
-        }
+      if (this.recordingBroadcast) {
+        this.broadcastRecorder?.stop()
+        return
+      }
+      this.broadcastRecorder?.start({ duration: 60000, format: 'mp3', sampleRate: 16000, numberOfChannels: 1 })
+    },
+
+    prepareBroadcastRecorder() {
+      this.broadcastRecorder = uni.getRecorderManager()
+      this.broadcastRecorder.onStart(() => {
+        this.recordingBroadcast = true
+        uni.showToast({ title: '请开始喊话，再次点击结束', icon: 'none' })
       })
-        .then(() => {
-          uni.showToast({ title: '喊话已下发', icon: 'success' })
-          this.loadDetail()
-        })
-        .catch((error) => {
-          uni.showToast({ title: error.message, icon: 'none' })
-        })
-        .finally(() => {
-          this.broadcasting = false
-        })
+      this.broadcastRecorder.onStop(({ tempFilePath }) => {
+        this.recordingBroadcast = false
+        this.broadcasting = true
+        uploadBroadcastAudio({ filePath: tempFilePath, eventId: this.eventId })
+          .then(() => {
+            uni.showToast({ title: '喊话已播放', icon: 'success' })
+            this.loadDetail()
+          })
+          .catch((error) => uni.showToast({ title: error.message, icon: 'none' }))
+          .finally(() => { this.broadcasting = false })
+      })
+      this.broadcastRecorder.onError((error) => {
+        this.recordingBroadcast = false
+        this.broadcasting = false
+        uni.showToast({ title: error.errMsg || '无法录音', icon: 'none' })
+      })
     },
 
     startManual() {
