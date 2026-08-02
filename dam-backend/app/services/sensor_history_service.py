@@ -910,14 +910,27 @@ class SensorHistoryService:
             cursor_ms = int(
                 self._last_rollup_end_ms.get(rollup_level, latest_end_ms - bucket_ms)
             )
+            bootstrap_lookback_ms = int(config.get("bootstrap_lookback_ms", 0))
+            if bootstrap_lookback_ms:
+                earliest_needed_ms = latest_end_ms - bootstrap_lookback_ms
+                if cursor_ms < earliest_needed_ms:
+                    cursor_ms = earliest_needed_ms
+                    self._last_rollup_end_ms[rollup_level] = cursor_ms
+                    self._save_rollup_state()
             if cursor_ms >= latest_end_ms:
                 continue
 
             total = 0
             processed_buckets = 0
+            catchup_limit = ROLLUP_CATCHUP_BUCKETS_PER_RUN
+            if bootstrap_lookback_ms:
+                catchup_limit = max(
+                    catchup_limit,
+                    (bootstrap_lookback_ms + bucket_ms - 1) // bucket_ms,
+                )
             while (
                 cursor_ms < latest_end_ms
-                and processed_buckets < ROLLUP_CATCHUP_BUCKETS_PER_RUN
+                and processed_buckets < catchup_limit
             ):
                 window = {
                     **latest_window,

@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 
 from app.core.config import settings
 from app.core.database import SessionLocal
@@ -22,6 +23,7 @@ from app.models.broadcast import (
     CameraBroadcastDevice,
 )
 from app.models.event_action import EventAction
+from app.models.camera import Camera
 from app.models.safety_event import SafetyEventLog
 
 
@@ -427,12 +429,16 @@ class BroadcastService:
             return
         db = SessionLocal()
         try:
+            configured_template, configured_devices = self._configured_action_targets(
+                db, str(event_id), str(camera_id)
+            )
             result = self.play(
                 db,
                 {
                     "event_id": event_id,
                     "camera_id": camera_id,
-                    "template_id": self._template_for_action(action),
+                    "template_id": configured_template or self._template_for_action(action),
+                    "device_ids": configured_devices,
                     "trigger_type": TRIGGER_AUTO,
                     "operator": "SYSTEM",
                     "risk_level": risk_level,
@@ -546,6 +552,32 @@ class BroadcastService:
             db.commit()
 
     @staticmethod
+    def _configured_action_targets(db: Session, event_id: str, camera_id: str) -> tuple[Optional[str], List[int]]:
+        from app.models.action_step import ActionStep
+        from app.models.camera import Camera
+        from app.models.safety_integration import EventActionStepConfig, SafetyEventInstance
+
+        instance = db.query(SafetyEventInstance).filter(SafetyEventInstance.instance_no == event_id).first()
+        camera = db.query(Camera).filter(Camera.camera_id == camera_id).first()
+        if not instance or not camera:
+            return None, []
+        config = (
+            db.query(EventActionStepConfig)
+            .join(EventAction, EventAction.id == EventActionStepConfig.event_action_id)
+            .join(ActionStep, ActionStep.id == EventActionStepConfig.step_id)
+            .filter(
+                EventAction.event_id == instance.current_event_id,
+                EventActionStepConfig.camera_id == camera.id,
+                ActionStep.action_type == "broadcast",
+                EventActionStepConfig.enabled.is_(True),
+            )
+            .first()
+        )
+        if not config:
+            return None, []
+        return config.template_id, [config.broadcast_device_id] if config.broadcast_device_id else []
+
+    @staticmethod
     def _sqlite_default_id(db: Session, value: int) -> Dict[str, int]:
         bind = getattr(db, "bind", None)
         if bind is not None and getattr(bind.dialect, "name", "") == "sqlite":
@@ -617,11 +649,22 @@ class BroadcastService:
 
     def _devices_for_camera(self, db: Session, camera_id: str) -> List[BroadcastDevice]:
         self.ensure_defaults(db)
+        camera = None
+        if str(camera_id).isdigit():
+            camera = db.query(Camera).filter(Camera.id == int(camera_id)).first()
+        if camera is None:
+            camera = db.query(Camera).filter(Camera.camera_id == str(camera_id)).first()
+        binding_filter = CameraBroadcastDevice.camera_id == str(camera_id)
+        if camera:
+            binding_filter = or_(
+                CameraBroadcastDevice.camera_device_id == camera.id,
+                CameraBroadcastDevice.camera_id == camera.camera_id,
+            )
         rows = (
             db.query(BroadcastDevice)
             .join(CameraBroadcastDevice, CameraBroadcastDevice.broadcast_device_id == BroadcastDevice.id)
             .filter(
-                CameraBroadcastDevice.camera_id == camera_id,
+                binding_filter,
                 BroadcastDevice.enabled == True,  # noqa: E712
             )
             .order_by(BroadcastDevice.id.asc())
@@ -701,6 +744,17 @@ class BroadcastService:
             return
         row.status = status
         row.message = (message or row.message or "")[:255]
+        try:
+            from app.models.safety_integration import SafetyEventTimelineLog
+
+            timeline = db.query(SafetyEventTimelineLog).filter(
+                SafetyEventTimelineLog.action_key == f"runtime:{action_id}"
+            ).first()
+            if timeline:
+                timeline.status = status.upper()
+                timeline.message = (message or timeline.message or "")[:500]
+        except Exception:
+            pass
         db.commit()
 
     @staticmethod
@@ -711,6 +765,9 @@ class BroadcastService:
             "risk_level": row.risk_level,
             "scene_type": row.scene_type,
             "content": row.content,
+            "enabled": row.enabled,
+            "create_time": row.create_time.isoformat() if row.create_time else None,
+            "update_time": row.update_time.isoformat() if row.update_time else None,
         }
 
     @staticmethod
@@ -718,11 +775,14 @@ class BroadcastService:
         return {
             "id": row.id,
             "name": row.name,
+            "description": row.description,
             "vendor_type": row.vendor_type,
             "device_code": row.device_code,
             "status": row.status,
             "location": row.location,
             "enabled": row.enabled,
+            "create_time": row.create_time.isoformat() if row.create_time else None,
+            "update_time": row.update_time.isoformat() if row.update_time else None,
         }
 
 

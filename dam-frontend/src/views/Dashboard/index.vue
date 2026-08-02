@@ -315,7 +315,6 @@ import windIcon from '@/assets/images/sensors/wind.png'
 import rainIcon from '@/assets/images/sensors/rain.png'
 import vibrationIcon from '@/assets/images/sensors/vibration.png'
 import cameraIcon from '@/assets/images/sensors/camera.png'
-import uavIcon from '/drone.png'
 
 const router = useRouter()
 const DIJ_USERNAME = 'adminPC'
@@ -405,13 +404,6 @@ const sensorCards = [
     values: [
       { label: '接入状态', field: 'device_status' },
       { label: '视频通道', field: 'channel_status' },
-    ],
-  },
-  {
-    key: 'uav', name: '大疆 Matrice 4E', path: '/monitor/drone', icon: uavIcon,
-    values: [
-      { label: '链路状态', field: 'device_status' },
-      { label: '定位状态', field: 'position_status' },
     ],
   },
 ]

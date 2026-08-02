@@ -131,8 +131,13 @@ class CameraRealtimeTests(unittest.TestCase):
                 {
                     "id": "fish_area",
                     "name": "禁捕区",
-                    "type": "illegal_fishing",
-                    "rect": {"x": 0.0, "y": 0.0, "width": 0.8, "height": 0.9},
+                    "type": "FISHING",
+                    "polygon_points": [
+                        {"x": 0.0, "y": 0.0},
+                        {"x": 0.8, "y": 0.0},
+                        {"x": 0.8, "y": 0.9},
+                        {"x": 0.0, "y": 0.9},
+                    ],
                 }
             ]
         )
@@ -144,7 +149,7 @@ class CameraRealtimeTests(unittest.TestCase):
         version, payload = self.camera.get_detection_snapshot()
         self.assertTrue(payload["enabled"])
         self.assertEqual(payload["alert_count"], 1)
-        self.assertEqual(payload["alerts"][0]["type"], "illegal_fishing")
+        self.assertEqual(payload["alerts"][0]["type"], "FISHING")
         self.assertEqual(payload["alerts"][0]["zone_name"], "禁捕区")
         self.assertEqual(payload["detections"][0]["class_name_cn"], "船只")
         self.assertLess(payload["latency_ms"], 1000)

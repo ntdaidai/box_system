@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, Column, DateTime, Integer, JSON, String, Text
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Integer, JSON, String, Text
 
 from app.core.database import Base
 
@@ -11,7 +11,8 @@ class BroadcastDevice(Base):
     __tablename__ = "broadcast_device"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    name = Column(String(128), nullable=False)
+    name = Column(String(128), nullable=False, unique=True)
+    description = Column(String(500))
     vendor_type = Column(String(64), nullable=False, default="LOCAL_AUDIO", index=True)
     device_code = Column(String(128), nullable=False, unique=True)
     ip = Column(String(64))
@@ -30,6 +31,12 @@ class CameraBroadcastDevice(Base):
     __tablename__ = "camera_broadcast_device"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
+    camera_device_id = Column(
+        BigInteger,
+        ForeignKey("camera_device.id", ondelete="CASCADE", onupdate="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     camera_id = Column(String(64), nullable=False, index=True)
     broadcast_device_id = Column(BigInteger, nullable=False, index=True)
     create_time = Column(DateTime, default=datetime.now)

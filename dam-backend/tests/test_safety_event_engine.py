@@ -30,7 +30,7 @@ from app.services.safety_event_engine import (
 )
 
 
-def person_payload(zone_type="WARNING_ZONE", track_id="p1", trigger_seconds=None):
+def person_payload(zone_type="PERSON_LOW", track_id="p1", trigger_seconds=None):
     detection = {
         "class_id": 1,
         "class_name": "person",
@@ -54,6 +54,29 @@ def person_payload(zone_type="WARNING_ZONE", track_id="p1", trigger_seconds=None
     }
 
 
+def boat_payload(track_id="b1", durations=None):
+    return {
+        "image_width": 100,
+        "image_height": 100,
+        "detections": [{
+            "class_id": 0,
+            "class_name": "boat",
+            "confidence": 0.9,
+            "track_id": track_id,
+            "bbox": {"x1": 10, "y1": 10, "x2": 50, "y2": 50},
+        }],
+        "alerts": [{
+            "detection_index": 0,
+            "type": "FISHING",
+            "zone_id": "fishing_1",
+            "zone_name": "捕鱼区",
+            "condition_durations": durations or {
+                "BOAT_INTRUSION": 0,
+                "BOAT_STAY": 30,
+                "BOAT_ILLEGAL_FISHING": 120,
+            },
+        }],
+    }
 def person_seen_outside_zone(track_id="p1"):
     return {
         "image_width": 100,
@@ -115,27 +138,26 @@ class SafetyEventEngineTests(unittest.TestCase):
         self.assertIn("TARGET_LEFT", self.action_types(store))
         self.assertIn(ACTION_EVENT_RESOLVED, self.action_types(store))
 
-    def test_low_unresolved_after_auto_broadcast_upgrades_to_medium_with_same_event_id(self):
+    def test_low_person_event_does_not_escalate_without_entering_another_zone(self):
         engine, store, _bus_actions = self.make_engine()
         engine.process_detection_payload("cam", person_payload(), now=0)
         low_event = engine.process_detection_payload("cam", person_payload(), now=10)[0]
         event_id = low_event["event_id"]
 
-        medium_event = engine.process_detection_payload("cam", person_payload(), now=40)[0]
+        still_low = engine.process_detection_payload("cam", person_payload(), now=40)[0]
 
-        self.assertEqual(medium_event["event_id"], event_id)
-        self.assertEqual(medium_event["risk_level"], RISK_MEDIUM)
-        self.assertEqual(medium_event["handling_mode"], HANDLING_AUTO_DEVICE)
-        self.assertEqual(medium_event["disposal_status"], DISPOSAL_DEVICE_HANDLING)
+        self.assertEqual(still_low["event_id"], event_id)
+        self.assertEqual(still_low["risk_level"], RISK_LOW)
         self.assertEqual(store.events[event_id]["event_id"], event_id)
 
     def test_medium_dispatches_drone_once_even_when_frames_keep_matching(self):
         engine, store, _bus_actions = self.make_engine()
-        events = engine.process_detection_payload("cam", person_payload(zone_type="WATERFRONT_ZONE"), now=100)
+        engine.process_detection_payload("cam", person_payload(zone_type="PERSON_MEDIUM"), now=100)
+        events = engine.process_detection_payload("cam", person_payload(zone_type="PERSON_MEDIUM"), now=103)
         event_id = events[0]["event_id"]
 
         for offset in range(1, 8):
-            events = engine.process_detection_payload("cam", person_payload(zone_type="WATERFRONT_ZONE"), now=100 + offset)
+            events = engine.process_detection_payload("cam", person_payload(zone_type="PERSON_MEDIUM"), now=103 + offset)
             self.assertEqual(events[0]["event_id"], event_id)
 
         self.assertEqual(events[0]["risk_level"], RISK_MEDIUM)
@@ -143,7 +165,8 @@ class SafetyEventEngineTests(unittest.TestCase):
 
     def test_medium_resolves_without_manual_when_target_leaves(self):
         engine, store, _bus_actions = self.make_engine()
-        event_id = engine.process_detection_payload("cam", person_payload(zone_type="WATERFRONT_ZONE"), now=200)[0]["event_id"]
+        engine.process_detection_payload("cam", person_payload(zone_type="PERSON_MEDIUM"), now=200)
+        event_id = engine.process_detection_payload("cam", person_payload(zone_type="PERSON_MEDIUM"), now=203)[0]["event_id"]
 
         engine.process_detection_payload("cam", person_seen_outside_zone(), now=205)
         events = engine.process_detection_payload("cam", person_seen_outside_zone(), now=215)
@@ -152,36 +175,34 @@ class SafetyEventEngineTests(unittest.TestCase):
         self.assertEqual(store.events[event_id]["state"], STATE_RESOLVED)
         self.assertEqual(store.events[event_id]["disposal_status"], DISPOSAL_RESOLVED)
 
-    def test_medium_auto_device_unresolved_upgrades_to_high(self):
+    def test_medium_person_event_does_not_escalate_without_high_zone(self):
         engine, store, _bus_actions = self.make_engine()
-        medium = engine.process_detection_payload("cam", person_payload(zone_type="WATERFRONT_ZONE"), now=300)[0]
+        engine.process_detection_payload("cam", person_payload(zone_type="PERSON_MEDIUM"), now=300)
+        medium = engine.process_detection_payload("cam", person_payload(zone_type="PERSON_MEDIUM"), now=303)[0]
         event_id = medium["event_id"]
 
-        high = engine.process_detection_payload("cam", person_payload(zone_type="WATERFRONT_ZONE"), now=360)[0]
+        current = engine.process_detection_payload("cam", person_payload(zone_type="PERSON_MEDIUM"), now=360)[0]
 
-        self.assertEqual(high["event_id"], event_id)
-        self.assertEqual(high["risk_level"], RISK_HIGH)
-        self.assertEqual(high["state"], STATE_HIGH_RISK)
-        self.assertEqual(high["handling_mode"], HANDLING_MANUAL)
-        self.assertEqual(high["disposal_status"], DISPOSAL_WAITING_MANUAL)
+        self.assertEqual(current["event_id"], event_id)
+        self.assertEqual(current["risk_level"], RISK_MEDIUM)
         self.assertEqual(self.action_types(store).count(ACTION_DRONE_DISPATCH), 1)
-        self.assertEqual(self.action_types(store).count(ACTION_STAFF_DISPATCH), 1)
+        self.assertNotIn(ACTION_STAFF_DISPATCH, self.action_types(store))
 
     def test_water_zone_directly_enters_high_and_skips_lower_auto_actions(self):
         engine, store, _bus_actions = self.make_engine()
 
-        high = engine.process_detection_payload("cam", person_payload(zone_type="WATER_ZONE"), now=400)[0]
+        high = engine.process_detection_payload("cam", person_payload(zone_type="PERSON_HIGH"), now=400)[0]
 
         self.assertEqual(high["risk_level"], RISK_HIGH)
         self.assertEqual(high["handling_mode"], HANDLING_MANUAL)
         self.assertEqual(high["disposal_status"], DISPOSAL_WAITING_MANUAL)
         self.assertIn(ACTION_STAFF_DISPATCH, self.action_types(store))
-        self.assertNotIn(ACTION_AUTO_BROADCAST, self.action_types(store))
+        self.assertIn(ACTION_AUTO_BROADCAST, self.action_types(store))
         self.assertNotIn(ACTION_DRONE_DISPATCH, self.action_types(store))
 
     def test_evidence_video_is_attached_to_the_same_event_once(self):
         engine, store, _bus_actions = self.make_engine()
-        event_id = engine.process_detection_payload("cam", person_payload(zone_type="WATER_ZONE"), now=450)[0]["event_id"]
+        event_id = engine.process_detection_payload("cam", person_payload(zone_type="PERSON_HIGH"), now=450)[0]["event_id"]
 
         self.assertTrue(engine.update_event_video_status(event_id, "GENERATING", now=450.5))
         self.assertEqual(store.events[event_id]["video_status"], "GENERATING")
@@ -197,7 +218,7 @@ class SafetyEventEngineTests(unittest.TestCase):
 
     def test_high_staff_actions_and_resolution_keep_same_event_id(self):
         engine, store, _bus_actions = self.make_engine()
-        event_id = engine.process_detection_payload("cam", person_payload(zone_type="WATER_ZONE"), now=500)[0]["event_id"]
+        event_id = engine.process_detection_payload("cam", person_payload(zone_type="PERSON_HIGH"), now=500)[0]["event_id"]
         track = next(iter(store.tracks.values()))
 
         track.disposal_status = DISPOSAL_MANUAL_HANDLING
@@ -222,6 +243,19 @@ class SafetyEventEngineTests(unittest.TestCase):
         self.assertEqual(events[0]["risk_level"], "NONE")
         events = engine.process_detection_payload("cam", person_payload(trigger_seconds=3), now=3)
         self.assertEqual(events[0]["risk_level"], RISK_LOW)
+
+    def test_same_boat_track_upgrades_one_event_by_fishing_durations(self):
+        engine, store, _bus_actions = self.make_engine()
+        low = engine.process_detection_payload("cam", boat_payload(), now=0)[0]
+        event_id = low["event_id"]
+        medium = engine.process_detection_payload("cam", boat_payload(), now=30)[0]
+        high = engine.process_detection_payload("cam", boat_payload(), now=120)[0]
+
+        self.assertEqual(low["risk_level"], RISK_LOW)
+        self.assertEqual(medium["risk_level"], RISK_MEDIUM)
+        self.assertEqual(high["risk_level"], RISK_HIGH)
+        self.assertEqual({low["event_id"], medium["event_id"], high["event_id"]}, {event_id})
+        self.assertEqual(len(store.events), 1)
 
     def test_daily_report_summarizes_events_and_actions(self):
         engine, _store, _bus_actions = self.make_engine()

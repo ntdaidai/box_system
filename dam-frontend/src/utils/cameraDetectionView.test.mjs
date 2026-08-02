@@ -90,7 +90,7 @@ test('normalizes virtual zones and matches detector anchors inside areas', () =>
     zones: [
       {
         id: 'fish_area',
-        type: 'illegal_fishing',
+        type: 'FISHING',
         polygon_points: [
           { x: 0.1, y: 0.1 },
           { x: 0.6, y: 0.1 },
@@ -113,7 +113,7 @@ test('normalizes virtual zones and matches detector anchors inside areas', () =>
   }
 
   assert.equal(zones.length, 1)
-  assert.equal(zoneTypeLabel(zones[0].type), '违规捕鱼')
+  assert.equal(zoneTypeLabel(zones[0].type), '捕鱼区')
   assert.equal(detectionInZone(boat, zones[0], 1000, 1000), true)
   assert.equal(detectionInZone(person, zones[0], 1000, 1000), false)
   assert.equal(
@@ -121,8 +121,8 @@ test('normalizes virtual zones and matches detector anchors inside areas', () =>
       person,
       {
         ...zones[0],
-        zone_type: 'WARNING_ZONE',
-        type: 'WARNING_ZONE',
+        zone_type: 'PERSON_LOW',
+        type: 'PERSON_LOW',
         polygon_points: [
           { x: 0.1, y: 0.4 },
           { x: 0.3, y: 0.4 },

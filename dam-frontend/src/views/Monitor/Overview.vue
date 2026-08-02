@@ -29,7 +29,6 @@ import windIcon from '@/assets/images/sensors/wind.png'
 import rainIcon from '@/assets/images/sensors/rain.png'
 import vibrationIcon from '@/assets/images/sensors/vibration.png'
 import cameraIcon from '@/assets/images/sensors/camera.png'
-import uavIcon from '/drone.png'
 
 const router = useRouter()
 const deviceStatus = ref({})
@@ -40,7 +39,6 @@ const sensors = [
   { name: '雨量计', key: 'rain', path: '/monitor/rain', icon: rainIcon },
   { name: '振动传感器', key: 'vibration', path: '/monitor/vibration', icon: vibrationIcon },
   { name: '视频监控', key: 'camera', path: '/monitor/camera', icon: cameraIcon },
-  { name: '大疆 Matrice 4E', key: 'uav', path: '/monitor/drone', icon: uavIcon },
 ]
 
 const goTo = (path) => router.push(path)
@@ -48,11 +46,16 @@ const goTo = (path) => router.push(path)
 const getStatusClass = (key) => {
   const status = deviceStatus.value[key]?.status
   if (status === 'online') return 'online'
+  if (status === 'partial') return 'partial'
   return 'offline'
 }
 
 const getStatusText = (key) => {
   const status = deviceStatus.value[key]?.status
+  if (key === 'camera') {
+    const item = deviceStatus.value.camera || {}
+    return `${item.online || 0}/${item.total || 0} 通道在线`
+  }
   if (status === 'online') return '在线'
   return '离线'
 }
@@ -63,7 +66,6 @@ const defaultStatus = {
   rain: { status: 'online' },
   vibration: { status: 'online' },
   camera: { status: 'offline' },
-  uav: { status: 'online' },
 }
 
 const fetchStatus = async () => {
@@ -84,12 +86,16 @@ const fetchStatus = async () => {
     const onlineCount = cameras.filter(camera => camera.connected).length
     deviceStatus.value = {
       ...deviceStatus.value,
-      camera: { status: onlineCount > 0 ? 'online' : 'offline' },
+      camera: {
+        status: onlineCount === 0 ? 'offline' : (onlineCount === cameras.filter(camera => camera.enabled).length ? 'online' : 'partial'),
+        online: onlineCount,
+        total: cameras.filter(camera => camera.enabled).length,
+      },
     }
   } catch (error) {
     deviceStatus.value = {
       ...deviceStatus.value,
-      camera: { status: 'offline' },
+      camera: { status: 'offline', online: 0, total: 0 },
     }
   }
 }
@@ -181,6 +187,8 @@ onMounted(() => {
   color: var(--success-color);
 }
 
+.sensor-status.partial { color: #e6a23c; }
+
 .sensor-status.offline {
   color: var(--danger-color);
 }
@@ -195,6 +203,8 @@ onMounted(() => {
   background: var(--success-color);
   box-shadow: 0 0 8px var(--success-color);
 }
+
+.status-dot.partial { background: #e6a23c; box-shadow: 0 0 8px rgba(230, 162, 60, .8); }
 
 .status-dot.offline {
   background: var(--danger-color);

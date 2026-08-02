@@ -55,6 +55,12 @@ const routes = [
             meta: { title: '振动传感器' }
           },
           {
+            path: 'config',
+            name: 'MonitorInformationConfig',
+            component: () => import('@/views/Monitor/InformationConfig.vue'),
+            meta: { title: '信息配置' }
+          },
+          {
             path: 'camera',
             name: 'CameraView',
             component: () => import('@/views/Monitor/CameraView.vue'),
@@ -115,6 +121,12 @@ const routes = [
             name: 'AlarmList',
             component: () => import('@/views/Alarm/AlarmList.vue'),
             meta: {}
+          },
+          {
+            path: 'safety-events',
+            name: 'AlarmSafetyEvents',
+            component: () => import('@/views/Alarm/SafetyEvents.vue'),
+            meta: { title: '安全事件' }
           },
           {
             path: 'config',

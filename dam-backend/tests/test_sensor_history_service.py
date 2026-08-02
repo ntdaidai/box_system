@@ -615,6 +615,22 @@ class SensorHistoryServiceTest(unittest.TestCase):
             self.assertEqual(second_result["1m"]["processed_buckets"], 3)
             self.assertTrue(Path(state_path).exists())
 
+    def test_ten_minute_rollup_bootstraps_only_the_supported_six_hour_window(self):
+        fake = FakeIoTDB()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = SensorHistoryService(
+                iotdb=fake,
+                state_path=str(Path(tmpdir) / "history_state.json"),
+            )
+            now_ms = 1782957600000
+            service._last_rollup_end_ms["10m"] = now_ms - 10 * 24 * 60 * 60 * 1000
+
+            result = service.build_due_rollups(now_ms=now_ms)
+
+            self.assertEqual(result["10m"]["processed_buckets"], 36)
+            self.assertTrue(result["10m"]["caught_up"])
+            self.assertEqual(result["10m"]["checkpoint_end_ms"], now_ms)
+
     def test_enforce_retention_cleans_raw_and_rollup_paths(self):
         fake = FakeIoTDB()
         service = SensorHistoryService(iotdb=fake)

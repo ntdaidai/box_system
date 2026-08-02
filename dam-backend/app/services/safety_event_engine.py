@@ -36,9 +36,10 @@ RISK_LOW = "LOW"
 RISK_MEDIUM = "MEDIUM"
 RISK_HIGH = "HIGH"
 
-ZONE_WARNING = "WARNING_ZONE"
-ZONE_WATERSIDE = "WATERFRONT_ZONE"
-ZONE_WADING = "WATER_ZONE"
+ZONE_WARNING = "PERSON_LOW"
+ZONE_WATERSIDE = "PERSON_MEDIUM"
+ZONE_WADING = "PERSON_HIGH"
+ZONE_FISHING = "FISHING"
 
 RISK_RANK = {
     RISK_NONE: 0,
@@ -117,6 +118,8 @@ class TrackContext:
     current_zone_roles: List[str] = field(default_factory=list)
     current_zone_ids: List[str] = field(default_factory=list)
     current_trigger_seconds: Dict[str, float] = field(default_factory=dict)
+    current_condition_durations: Dict[str, float] = field(default_factory=dict)
+    zone_entered_at: Dict[str, float] = field(default_factory=dict)
     bbox: Optional[Dict[str, float]] = None
     snapshot_path: Optional[str] = None
     automatic_action_keys: List[str] = field(default_factory=list)
@@ -163,30 +166,33 @@ class JsonSafetyEventStore:
 
     def save(self) -> None:
         with self._lock:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            payload = {
-                "version": 1,
-                "events": self.events,
-                "actions": self.actions[-5000:],
-                "tracks": {
-                    key: asdict(track)
-                    for key, track in self.tracks.items()
-                    if track.state != STATE_RESOLVED
-                },
-            }
-            fd, tmp_name = tempfile.mkstemp(
-                prefix=f".{self.path.name}.",
-                suffix=".tmp",
-                dir=str(self.path.parent),
-                text=True,
-            )
+            tmp_name = None
             try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                payload = {
+                    "version": 1,
+                    "events": self.events,
+                    "actions": self.actions[-5000:],
+                    "tracks": {
+                        key: asdict(track)
+                        for key, track in self.tracks.items()
+                        if track.state != STATE_RESOLVED
+                    },
+                }
+                fd, tmp_name = tempfile.mkstemp(
+                    prefix=f".{self.path.name}.",
+                    suffix=".tmp",
+                    dir=str(self.path.parent),
+                    text=True,
+                )
                 with os.fdopen(fd, "w", encoding="utf-8") as handle:
                     json.dump(payload, handle, ensure_ascii=False, indent=2)
                     handle.write("\n")
                 os.replace(tmp_name, self.path)
+            except Exception as exc:
+                logger.warning(f"Safety event state save failed: {exc}")
             finally:
-                if os.path.exists(tmp_name):
+                if tmp_name and os.path.exists(tmp_name):
                     os.unlink(tmp_name)
 
     def upsert_track(self, key: str, track: TrackContext) -> None:
@@ -252,6 +258,7 @@ class SafetyEventEngine:
         self.bus = bus or SafetyEventBus()
         self._lock = threading.RLock()
         self._local_counter = 0
+        self._policy_cache: Dict[str, Tuple[float, Tuple[int, int]]] = {}
         self.store.load()
 
     def process_detection_payload(
@@ -471,6 +478,7 @@ class SafetyEventEngine:
         alert_zone_names_by_index: Dict[int, Set[str]] = {}
         alert_zone_types_by_index: Dict[int, Set[str]] = {}
         alert_trigger_by_index: Dict[int, Dict[str, float]] = {}
+        alert_durations_by_index: Dict[int, Dict[str, float]] = {}
         for alert in alerts:
             index = alert.get("detection_index")
             if not isinstance(index, int):
@@ -478,6 +486,14 @@ class SafetyEventEngine:
             role = self._zone_role(str(alert.get("type") or ""))
             if role is None:
                 continue
+            raw_durations = alert.get("condition_durations") or {}
+            if isinstance(raw_durations, dict):
+                target = alert_durations_by_index.setdefault(index, {})
+                for key, value in raw_durations.items():
+                    try:
+                        target[str(key)] = max(0.0, float(value))
+                    except (TypeError, ValueError):
+                        continue
             alert_roles_by_index.setdefault(index, set()).add(role)
             zone_id = alert.get("zone_id")
             if zone_id:
@@ -516,6 +532,7 @@ class SafetyEventEngine:
                     "zone_names": sorted(alert_zone_names_by_index.get(index, set())),
                     "zone_types": sorted(alert_zone_types_by_index.get(index, set())),
                     "trigger_seconds": dict(alert_trigger_by_index.get(index, {})),
+                    "condition_durations": dict(alert_durations_by_index.get(index, {})),
                     "bbox": self._bbox(detection.get("bbox")),
                     "confidence": detection.get("confidence", 0),
                     "class_name": detection.get("class_name"),
@@ -591,15 +608,24 @@ class SafetyEventEngine:
         was_missing = track.missing_since is not None
         track.missing_since = None
         track.last_seen_at = now
+        previous_roles = set(track.current_zone_roles)
+        current_roles = set(observation["zone_roles"])
+        for role in current_roles - previous_roles:
+            track.zone_entered_at[role] = now
+        for role in previous_roles - current_roles:
+            track.zone_entered_at.pop(role, None)
         track.current_zone_roles = observation["zone_roles"]
         track.current_zone_ids = observation["zone_ids"]
         track.current_trigger_seconds = observation.get("trigger_seconds") or {}
+        track.current_condition_durations = observation.get("condition_durations") or {}
         track.bbox = observation.get("bbox")
 
         if was_missing:
             changed = True
 
-        if not track.current_zone_roles:
+        active_role = {RISK_LOW: ZONE_WARNING, RISK_MEDIUM: ZONE_WATERSIDE, RISK_HIGH: ZONE_WADING}.get(track.risk_level)
+        left_active_person_stage = track.entity_type == "person" and active_role and active_role not in current_roles
+        if not track.current_zone_roles or left_active_person_stage:
             if track.clear_since is None:
                 track.clear_since = now
                 track.target_status = TARGET_LEFT
@@ -607,7 +633,7 @@ class SafetyEventEngine:
                     self._log_action(track, ACTION_TARGET_LEFT, now, {"clear_since": now})
                 changed = True
             if track.event_id and now - track.clear_since >= self.config.resolve_clear_seconds:
-                self._resolve(track, now, "left_danger_zones")
+                self._resolve(track, now, "left_danger_zones", snapshot_bytes=snapshot_bytes)
                 changed = True
             elif not track.event_id and now - track.clear_since >= self.config.resolve_clear_seconds:
                 track.state = STATE_RESOLVED
@@ -629,6 +655,8 @@ class SafetyEventEngine:
         if target_risk and RISK_RANK[target_risk] > RISK_RANK[track.risk_level]:
             self._upgrade(track, target_risk, now, observation, snapshot_bytes)
             changed = True
+        elif track.event_id and track.risk_level in {RISK_LOW, RISK_MEDIUM, RISK_HIGH}:
+            changed |= self._log_stage_action(track, track.risk_level, ACTION_AUTO_BROADCAST, now)
 
         key = self._track_key(track.camera_id, track.entity_type, track.track_id)
         self.store.upsert_track(key, track)
@@ -656,28 +684,28 @@ class SafetyEventEngine:
 
     def _target_risk(self, track: TrackContext, now: float) -> Optional[str]:
         roles = set(track.current_zone_roles)
-        if ZONE_WADING in roles:
-            return RISK_HIGH
-        if track.risk_level == RISK_MEDIUM and track.medium_entered_at is not None:
-            if (
-                self._has_stage_action(track, RISK_MEDIUM, ACTION_DRONE_DISPATCH)
-                and now - track.medium_entered_at >= self.config.high_after_medium_seconds
-            ):
+        if track.entity_type == "boat" and ZONE_FISHING in roles:
+            entered_at = track.zone_entered_at.get(ZONE_FISHING, track.danger_started_at)
+            elapsed = now - entered_at
+            durations = track.current_condition_durations
+            if elapsed >= float(durations.get("BOAT_ILLEGAL_FISHING", 120)):
                 return RISK_HIGH
-        if ZONE_WATERSIDE in roles:
-            return RISK_MEDIUM
-        if track.risk_level == RISK_LOW and track.low_entered_at is not None:
-            if now - track.low_entered_at >= self.config.medium_after_low_seconds:
+            if elapsed >= float(durations.get("BOAT_STAY", 30)):
                 return RISK_MEDIUM
-        if ZONE_WARNING in roles:
-            trigger_seconds = float(
-                track.current_trigger_seconds.get(
-                    ZONE_WARNING,
-                    self.config.intrusion_seconds,
-                )
-            )
-            if now - track.danger_started_at >= trigger_seconds:
+            if elapsed >= float(durations.get("BOAT_INTRUSION", 0)):
                 return RISK_LOW
+            return None
+        for role, risk, fallback in (
+            (ZONE_WADING, RISK_HIGH, 0),
+            (ZONE_WATERSIDE, RISK_MEDIUM, 3),
+            (ZONE_WARNING, RISK_LOW, 5),
+        ):
+            if role not in roles:
+                continue
+            entered_at = track.zone_entered_at.get(role, track.danger_started_at)
+            trigger_seconds = float(track.current_trigger_seconds.get(role, fallback))
+            if now - entered_at >= trigger_seconds:
+                return risk
         return None
 
     def _upgrade(
@@ -732,7 +760,12 @@ class SafetyEventEngine:
                 "latest_observation": observation,
             }
             self.store.create_or_update_event(event)
-            self._log_action(track, "event_created", now, {"risk_level": risk_level})
+        else:
+            upgrade_snapshot = self._save_snapshot(f"{track.event_id}_{risk_level.lower()}", snapshot_bytes, now)
+            if upgrade_snapshot:
+                track.snapshot_path = upgrade_snapshot
+        if previous_risk == RISK_NONE:
+            self._log_action(track, "event_created", now, {"risk_level": risk_level, "snapshot_url": track.snapshot_path})
 
         track.risk_level = risk_level
         if RISK_RANK[risk_level] > RISK_RANK.get(track.max_risk_level, 0):
@@ -795,12 +828,18 @@ class SafetyEventEngine:
         now: float,
         reason: str,
         *,
+        snapshot_bytes: Optional[bytes] = None,
         emit_action: bool = True,
     ) -> None:
         track.state = STATE_RESOLVED
         track.disposal_status = DISPOSAL_RESOLVED
         track.target_status = TARGET_LEFT
         if track.event_id:
+            exit_snapshot = self._save_snapshot(
+                f"{track.event_id}_resolved",
+                snapshot_bytes,
+                now,
+            ) if snapshot_bytes else None
             event = dict(self.store.events.get(track.event_id, {}))
             event.update(
                 {
@@ -811,11 +850,12 @@ class SafetyEventEngine:
                     "resolved_at": now,
                     "updated_at": now,
                     "resolve_reason": reason,
+                    "exit_snapshot_url": exit_snapshot,
                 }
             )
             self.store.create_or_update_event(event)
             if emit_action:
-                self._log_action(track, ACTION_EVENT_RESOLVED, now, {"reason": reason})
+                self._log_action(track, ACTION_EVENT_RESOLVED, now, {"reason": reason, "snapshot_url": exit_snapshot})
 
     def _log_stage_action(
         self,
@@ -825,12 +865,26 @@ class SafetyEventEngine:
         now: float,
         payload: Optional[Dict[str, Any]] = None,
     ) -> bool:
-        action_key = self._action_key(track.event_id, risk_level, action_type)
-        if action_key in track.automatic_action_keys:
-            return False
-        if self._has_stage_action(track, risk_level, action_type):
-            track.automatic_action_keys.append(action_key)
-            return False
+        matching_actions = [
+            action for action in self.store.actions
+            if action.get("event_id") == track.event_id
+            and action.get("risk_level") == risk_level
+            and action.get("action_type") == action_type
+        ]
+        if action_type == ACTION_AUTO_BROADCAST:
+            interval, max_executions = self._broadcast_repeat_policy(track, risk_level, now)
+            if len(matching_actions) >= max_executions:
+                return False
+            if matching_actions and now - float(matching_actions[-1].get("created_at") or 0) < interval:
+                return False
+            attempt = len(matching_actions) + 1
+            action_key = f"{self._action_key(track.event_id, risk_level, action_type)}:{attempt}"
+        else:
+            action_key = self._action_key(track.event_id, risk_level, action_type)
+            if action_key in track.automatic_action_keys or matching_actions:
+                if action_key not in track.automatic_action_keys:
+                    track.automatic_action_keys.append(action_key)
+                return False
         track.automatic_action_keys.append(action_key)
         self._log_action(
             track,
@@ -844,6 +898,58 @@ class SafetyEventEngine:
             },
         )
         return True
+
+    def _broadcast_repeat_policy(self, track: TrackContext, risk_level: str, now: float) -> Tuple[int, int]:
+        cache_key = f"{track.camera_id}:{track.entity_type}:{risk_level}"
+        cached = self._policy_cache.get(cache_key)
+        if cached and now - cached[0] < 5:
+            return cached[1]
+        policy = (60, 3)
+        if self.store.__class__.__name__ != "JsonSafetyEventStore":
+            try:
+                from app.core.database import SessionLocal
+                from app.models.action_step import ActionStep
+                from app.models.camera import Camera
+                from app.models.event_action import EventAction
+                from app.models.event_library import EventLibrary
+                from app.models.safety_integration import EventActionStepConfig
+
+                event_code = self._unified_event_code(track.entity_type, risk_level)
+                db = SessionLocal()
+                try:
+                    camera = db.query(Camera).filter(Camera.camera_id == track.camera_id).first()
+                    definition = db.query(EventLibrary).filter(EventLibrary.event_code == event_code).first()
+                    if camera and definition:
+                        config = (
+                            db.query(EventActionStepConfig)
+                            .join(EventAction, EventAction.id == EventActionStepConfig.event_action_id)
+                            .join(ActionStep, ActionStep.id == EventActionStepConfig.step_id)
+                            .filter(
+                                EventAction.event_id == definition.id,
+                                EventActionStepConfig.camera_id == camera.id,
+                                ActionStep.action_type == "broadcast",
+                                EventActionStepConfig.enabled.is_(True),
+                            )
+                            .first()
+                        )
+                        if config:
+                            values = config.config_json or {}
+                            policy = (
+                                max(0, int(values.get("repeat_interval_seconds", 60))),
+                                max(1, int(values.get("max_executions", 3))),
+                            )
+                finally:
+                    db.close()
+            except Exception as exc:
+                logger.warning(f"Broadcast repeat policy fallback used: {exc}")
+        self._policy_cache[cache_key] = (now, policy)
+        return policy
+
+    @staticmethod
+    def _unified_event_code(entity_type: str, risk_level: str) -> Optional[str]:
+        if entity_type == "boat":
+            return {RISK_LOW: "BOAT_INTRUSION", RISK_MEDIUM: "BOAT_STAY", RISK_HIGH: "BOAT_ILLEGAL_FISHING"}.get(risk_level)
+        return {RISK_LOW: "PERSON_INTRUSION", RISK_MEDIUM: "PERSON_WATERFRONT", RISK_HIGH: "PERSON_WADING"}.get(risk_level)
 
     def _has_stage_action(self, track: TrackContext, risk_level: str, action_type: str) -> bool:
         event_id = track.event_id
@@ -906,11 +1012,11 @@ class SafetyEventEngine:
             pass
         except Exception as exc:
             logger.warning(f"Safety event snapshot upload to MinIO failed: {exc}")
-        directory = Path(self.config.snapshot_dir)
-        directory.mkdir(parents=True, exist_ok=True)
-        filename = f"{int(now)}_{event_id}.jpg"
-        path = directory / filename
         try:
+            directory = Path(self.config.snapshot_dir)
+            directory.mkdir(parents=True, exist_ok=True)
+            filename = f"{int(now)}_{event_id}.jpg"
+            path = directory / filename
             path.write_bytes(snapshot_bytes)
             return str(path)
         except Exception as exc:
@@ -922,9 +1028,9 @@ class SafetyEventEngine:
         if risk_level == RISK_LOW:
             return [ACTION_AUTO_BROADCAST]
         if risk_level == RISK_MEDIUM:
-            return [ACTION_DRONE_DISPATCH]
+            return [ACTION_AUTO_BROADCAST, ACTION_DRONE_DISPATCH]
         if risk_level == RISK_HIGH:
-            return [ACTION_STAFF_DISPATCH]
+            return [ACTION_AUTO_BROADCAST, ACTION_STAFF_DISPATCH]
         return []
 
     @staticmethod
@@ -970,7 +1076,11 @@ class SafetyEventEngine:
     def _event_type(observation: Dict[str, Any]) -> str:
         zone_type = (observation.get("zone_types") or [None])[0]
         return {
-            "WARNING_ZONE": "人员警戒区停留",
+            "PERSON_LOW": "人员闯入",
+            "PERSON_MEDIUM": "人员亲水",
+            "PERSON_HIGH": "人员涉水",
+            "FISHING": "船只闯入",
+            "WARNING_ZONE": "人员闯入",
             "warning_zone": "人员警戒区停留",
             "person_intrusion": "人员警戒区停留",
             "WATERFRONT_ZONE": "人员进入亲水区",
@@ -1019,6 +1129,10 @@ class SafetyEventEngine:
     @staticmethod
     def _zone_role(zone_type: str) -> Optional[str]:
         mapping = {
+            "PERSON_LOW": ZONE_WARNING,
+            "PERSON_MEDIUM": ZONE_WATERSIDE,
+            "PERSON_HIGH": ZONE_WADING,
+            "FISHING": ZONE_FISHING,
             "person_intrusion": ZONE_WARNING,
             "warning_zone": ZONE_WARNING,
             "WARNING_ZONE": ZONE_WARNING,
@@ -1028,6 +1142,7 @@ class SafetyEventEngine:
             "wading_zone": ZONE_WADING,
             "water_zone": ZONE_WADING,
             "WATER_ZONE": ZONE_WADING,
+            "illegal_fishing": ZONE_FISHING,
         }
         return mapping.get(zone_type)
 
@@ -1160,11 +1275,17 @@ def get_safety_event_engine() -> SafetyEventEngine:
             store = SqlSafetyEventStore()
         else:
             store = JsonSafetyEventStore(config.state_store_path)
-        _safety_event_engine = SafetyEventEngine(
-            config,
-            store,
-            safety_event_bus,
-        )
+        try:
+            _safety_event_engine = SafetyEventEngine(config, store, safety_event_bus)
+        except Exception as exc:
+            if store.__class__.__name__ == "JsonSafetyEventStore":
+                raise
+            logger.warning(f"SQL safety event store unavailable, using local fallback: {exc}")
+            _safety_event_engine = SafetyEventEngine(
+                config,
+                JsonSafetyEventStore(config.state_store_path),
+                safety_event_bus,
+            )
     return _safety_event_engine
 
 

@@ -12,7 +12,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 from urllib.parse import quote, urljoin, urlparse
 
 import cv2
@@ -84,7 +84,7 @@ class CameraDevicePayload(BaseModel):
         None, min_length=1, max_length=50, pattern=r"^[A-Za-z0-9_-]+$"
     )
     camera_name: str = Field(..., min_length=1, max_length=128)
-    brand: CameraBrand = "dahua"
+    brand: Optional[CameraBrand] = None
     ip_address: str = Field(..., min_length=3, max_length=128)
     rtsp_port: int = Field(554, ge=1, le=65535)
     web_port: int = Field(80, ge=1, le=65535)
@@ -113,7 +113,7 @@ class CameraDeviceUpdatePayload(BaseModel):
 
 
 class CameraConnectionTestPayload(BaseModel):
-    brand: CameraBrand = "dahua"
+    brand: Optional[CameraBrand] = None
     ip_address: str = Field(..., min_length=3, max_length=128)
     rtsp_port: int = Field(554, ge=1, le=65535)
     username: str = Field("", max_length=128)
@@ -155,39 +155,25 @@ class DetectionZoneRequest(BaseModel):
     zone_id: Optional[str] = Field(None, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     name: str = Field("", max_length=80)
     zone_name: str = Field("", max_length=80)
-    type: Optional[Literal[
-        "person_intrusion",
-        "warning_zone",
-        "waterside_zone",
-        "wading_zone",
-        "illegal_fishing",
-        "WARNING_ZONE",
-        "WATERFRONT_ZONE",
-        "WATER_ZONE",
-    ]] = None
-    zone_type: Optional[Literal[
-        "WARNING_ZONE",
-        "WATERFRONT_ZONE",
-        "WATER_ZONE",
-        "person_intrusion",
-        "warning_zone",
-        "waterside_zone",
-        "wading_zone",
-        "illegal_fishing",
-    ]] = None
+    type: Optional[Literal["PERSON_LOW", "PERSON_MEDIUM", "PERSON_HIGH", "FISHING"]] = None
+    zone_type: Optional[Literal["PERSON_LOW", "PERSON_MEDIUM", "PERSON_HIGH", "FISHING"]] = None
     camera_id: Optional[str] = Field(None, max_length=50)
-    polygon_points: Optional[List[DetectionZonePoint]] = Field(None, min_length=3, max_length=20)
-    risk_level: Optional[Literal["LOW", "MEDIUM", "HIGH"]] = None
+    polygon_points: List[DetectionZonePoint] = Field(..., min_length=3, max_length=15)
     trigger_seconds: Optional[float] = Field(None, ge=0.0, le=3600.0)
+    condition_durations: Optional[Dict[str, int]] = None
     enabled: bool = True
-    rect: Optional[DetectionZoneRect] = None
 
     @model_validator(mode="after")
     def validate_shape(self):
-        if not self.polygon_points and self.rect is None:
-            raise ValueError("必须提供 polygon_points 或兼容的 rect")
         if not (self.zone_type or self.type):
-            self.zone_type = "WARNING_ZONE"
+            self.zone_type = "PERSON_LOW"
+        if self.condition_durations:
+            for value in self.condition_durations.values():
+                if value < 0 or value > 3600:
+                    raise ValueError("触发时间必须在 0 到 3600 秒之间")
+        unique_points = {(round(point.x, 6), round(point.y, 6)) for point in self.polygon_points}
+        if len(unique_points) < 3:
+            raise ValueError("多边形区域必须至少包含 3 个不同顶点")
         return self
 
 
@@ -341,6 +327,34 @@ def _camera_source_from_parts(
     return f"rtsp://{auth}{ip_address}:{rtsp_port}/{path}"
 
 
+async def _detect_camera_brand(
+    *, ip_address: str, rtsp_port: int, username: str, password: str,
+    preferred_brand: Optional[str] = None,
+) -> tuple[bool, str, str]:
+    brands = [preferred_brand] if preferred_brand else ["dahua", "hikvision"]
+    messages = []
+    for brand in brands:
+        source = _camera_source_from_parts(
+            brand=brand,
+            ip_address=ip_address,
+            rtsp_port=rtsp_port,
+            username=username,
+            password=password,
+        )
+        ok, message = await asyncio.to_thread(_test_camera_source, source)
+        if ok:
+            return True, brand, message
+        messages.append(f"{brand}: {message}")
+    return False, preferred_brand or "dahua", "; ".join(messages)
+
+
+def _camera_device_row(db: Session, identifier: str) -> Optional[Camera]:
+    row = db.query(Camera).filter(Camera.camera_id == identifier).first()
+    if row is None and identifier.isdigit():
+        row = db.query(Camera).filter(Camera.id == int(identifier)).first()
+    return row
+
+
 def _camera_source_from_row(row: Camera) -> str:
     path = row.rtsp_path or _camera_rtsp_path(row.brand)
     auth = ""
@@ -405,7 +419,7 @@ def _camera_row_response(
         "source": "",
         "data_path": "",
         "source_type": "rtsp",
-        "rtsp_path": _camera_rtsp_path(row.brand),
+        "rtsp_path": row.rtsp_path or _camera_rtsp_path(row.brand),
         "web_console_url": _camera_web_proxy_url(row) or _camera_web_console_url(row),
         "web_console_direct_url": _camera_web_console_url(row),
         "web_proxy_url": _camera_web_proxy_url(row),
@@ -814,19 +828,10 @@ async def _mjpeg_response(
 @router.get("/list", response_model=DetectResponse, summary="获取摄像头列表")
 @cached(ttl=2, prefix="camera:list")
 async def list_cameras(
-    db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
     statuses = _camera_status_by_id()
-    rows = db.query(Camera).order_by(Camera.id.asc()).all()
-    cameras = [_camera_row_response(row, statuses.get(row.camera_id)) for row in rows]
-    known_ids = {row.camera_id for row in rows}
-    cameras.extend(
-        status
-        for camera_id, status in statuses.items()
-        if camera_id not in known_ids
-    )
-    db.commit()
+    cameras = list(statuses.values())
     return DetectResponse(code=200, data={"cameras": cameras, "total": len(cameras)})
 
 
@@ -838,7 +843,11 @@ async def list_camera_devices(
 ):
     statuses = _camera_status_by_id()
     rows = db.query(Camera).order_by(Camera.id.asc()).all()
-    cameras = [_camera_row_response(row, statuses.get(row.camera_id)) for row in rows]
+    cameras = []
+    for row in rows:
+        item = _camera_row_response(row, statuses.get(row.camera_id))
+        item["broadcast_devices"] = broadcast_service.list_devices_for_camera(db, str(row.id))
+        cameras.append(item)
     db.commit()
     return DetectResponse(code=200, data={"cameras": cameras, "total": len(cameras)})
 
@@ -848,18 +857,18 @@ async def test_camera_device_connection(
     payload: CameraConnectionTestPayload,
     _user: User = Depends(require_auth),
 ):
-    source = _camera_source_from_parts(
-        brand=payload.brand,
+    ok, brand, message = await _detect_camera_brand(
         ip_address=payload.ip_address,
         rtsp_port=payload.rtsp_port,
         username=payload.username,
         password=payload.password,
+        preferred_brand=payload.brand,
     )
-    ok, message = await asyncio.to_thread(_test_camera_source, source)
     return DetectResponse(
         code=200,
         data={
             "connected": ok,
+            "brand": brand if ok else None,
             "message": message,
         },
         message=message,
@@ -876,26 +885,27 @@ async def create_camera_device(
     existing = db.query(Camera).filter(Camera.camera_id == camera_id).first()
     if existing:
         raise HTTPException(status_code=409, detail="设备ID已存在")
-    source = _camera_source_from_parts(
-        brand=payload.brand,
+    if db.query(Camera.id).filter(Camera.camera_name == payload.camera_name).first():
+        raise HTTPException(status_code=409, detail="摄像头名称已存在")
+    ok, detected_brand, message = await _detect_camera_brand(
         ip_address=payload.ip_address,
         rtsp_port=payload.rtsp_port,
         username=payload.username,
         password=payload.password,
+        preferred_brand=payload.brand,
     )
-    ok, message = await asyncio.to_thread(_test_camera_source, source)
     if not ok:
         raise HTTPException(status_code=400, detail=f"测试连接失败，未保存设备: {message}")
     row = Camera(
         camera_id=camera_id,
         camera_name=payload.camera_name,
-        brand=payload.brand,
+        brand=detected_brand,
         ip_address=payload.ip_address,
         rtsp_port=payload.rtsp_port,
         web_port=payload.web_port,
         username=payload.username,
         password=payload.password,
-        rtsp_path=_camera_rtsp_path(payload.brand),
+        rtsp_path=_camera_rtsp_path(detected_brand),
         install_address=payload.install_address,
         latitude=payload.latitude,
         longitude=payload.longitude,
@@ -926,25 +936,29 @@ async def update_camera_device(
     db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    row = db.query(Camera).filter(Camera.camera_id == camera_id).first()
+    row = _camera_device_row(db, camera_id)
     if not row:
         raise HTTPException(status_code=404, detail="摄像头设备不存在")
     data = payload.model_dump(exclude_unset=True)
+    if "camera_name" in data and db.query(Camera.id).filter(
+        Camera.camera_name == data["camera_name"], Camera.id != row.id
+    ).first():
+        raise HTTPException(status_code=409, detail="摄像头名称已存在")
     enabling_device = data.get("enabled") is True and not row.enabled
     connection_fields = {"brand", "ip_address", "rtsp_port", "username", "password"}
     connection_changed = any(field in data for field in connection_fields)
     will_be_enabled = data.get("enabled", row.enabled)
     if will_be_enabled and (enabling_device or connection_changed):
-        source = _camera_source_from_parts(
-            brand=data.get("brand", row.brand),
+        ok, detected_brand, message = await _detect_camera_brand(
             ip_address=data.get("ip_address", row.ip_address),
             rtsp_port=data.get("rtsp_port", row.rtsp_port),
             username=data.get("username", row.username or ""),
             password=data.get("password", row.password or ""),
+            preferred_brand=data.get("brand"),
         )
-        ok, message = await asyncio.to_thread(_test_camera_source, source)
         if not ok:
             raise HTTPException(status_code=400, detail=f"测试连接失败，未保存设备: {message}")
+        data["brand"] = detected_brand
     field_map = {
         "camera_name": "camera_name",
         "brand": "brand",
@@ -986,10 +1000,10 @@ async def get_camera_device_password(
     db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    row = db.query(Camera).filter(Camera.camera_id == camera_id).first()
+    row = _camera_device_row(db, camera_id)
     if not row:
         raise HTTPException(status_code=404, detail="摄像头设备不存在")
-    return DetectResponse(code=200, data={"camera_id": camera_id, "password": row.password or ""})
+    return DetectResponse(code=200, data={"id": row.id, "has_password": bool(row.password), "password": ""})
 
 
 @router.delete("/devices/{camera_id}", response_model=DetectResponse, summary="删除摄像头设备")
@@ -998,15 +1012,15 @@ async def delete_camera_device(
     db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    row = db.query(Camera).filter(Camera.camera_id == camera_id).first()
+    row = _camera_device_row(db, camera_id)
     if not row:
         raise HTTPException(status_code=404, detail="摄像头设备不存在")
-    camera_manager.remove_camera(camera_id)
-    camera_web_proxy_manager.stop_proxy(camera_id)
+    camera_manager.remove_camera(row.camera_id)
+    camera_web_proxy_manager.stop_proxy(row.camera_id)
     db.delete(row)
     db.commit()
     await invalidate_cache("camera:*")
-    return DetectResponse(code=200, data={"camera_id": camera_id, "message": "摄像头设备已删除"})
+    return DetectResponse(code=200, data={"id": row.id, "message": "摄像头设备已删除"})
 
 
 @router.get("/model/status", response_model=DetectResponse, summary="获取模型状态")

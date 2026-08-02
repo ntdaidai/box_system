@@ -129,7 +129,6 @@
             <span>区域名</span>
             <span>区域类型</span>
             <span>触发时间</span>
-            <span>风险等级</span>
             <span>启用状态</span>
             <span>配置时间</span>
             <span>操作</span>
@@ -146,8 +145,7 @@
               {{ zone.zone_name || zoneTypeLabel(zone.zone_type) }}
             </strong>
             <span>{{ zoneTypeLabel(zone.zone_type) }}</span>
-            <span>{{ formatTriggerSeconds(zone.trigger_seconds) }}</span>
-            <span class="risk-cell">{{ riskLevelLabel(zone.risk_level) }}</span>
+            <span>{{ zone.zone_type === 'FISHING' ? '3 项条件' : formatTriggerSeconds(zone.trigger_seconds) }}</span>
             <span>
               <em class="state-pill" :class="{ disabled: !zone.enabled }">{{ zone.enabled ? '启用' : '暂停' }}</em>
             </span>
@@ -181,26 +179,21 @@
               popper-class="zone-config-select-popper"
               @change="applyTypeDefaults"
             >
-              <el-option label="警戒区" value="WARNING_ZONE" />
-              <el-option label="亲水区" value="WATERFRONT_ZONE" />
-              <el-option label="涉水区" value="WATER_ZONE" />
+              <el-option label="低风险区" value="PERSON_LOW" />
+              <el-option label="中风险区" value="PERSON_MEDIUM" />
+              <el-option label="高风险区" value="PERSON_HIGH" />
+              <el-option label="捕鱼区" value="FISHING" />
             </el-select>
           </el-form-item>
-          <div class="form-grid">
-            <el-form-item label="触发时间">
+          <div v-if="selectedZone.zone_type !== 'FISHING'" class="form-grid">
+            <el-form-item label="触发时间（秒）">
               <el-input-number v-model="selectedZone.trigger_seconds" :min="0" :max="3600" :step="1" controls-position="right" />
             </el-form-item>
-            <el-form-item label="风险等级">
-              <el-select
-                v-model="selectedZone.risk_level"
-                class="zone-config-select"
-                popper-class="zone-config-select-popper"
-              >
-                <el-option label="低风险" value="LOW" />
-                <el-option label="中风险" value="MEDIUM" />
-                <el-option label="高风险" value="HIGH" />
-              </el-select>
-            </el-form-item>
+          </div>
+          <div v-else class="fishing-duration-grid">
+            <el-form-item label="船只闯入（秒）"><el-input-number v-model="selectedZone.condition_durations.BOAT_INTRUSION" :min="0" :max="3600" /></el-form-item>
+            <el-form-item label="船只停留（秒）"><el-input-number v-model="selectedZone.condition_durations.BOAT_STAY" :min="0" :max="3600" /></el-form-item>
+            <el-form-item label="船只偷捕（秒）"><el-input-number v-model="selectedZone.condition_durations.BOAT_ILLEGAL_FISHING" :min="0" :max="3600" /></el-form-item>
           </div>
           <el-form-item label="启用状态">
             <div class="zone-state-control" role="group" aria-label="启用状态">
@@ -280,7 +273,7 @@
             <button
               type="button"
               class="add-point-button"
-              :disabled="selectedZone.polygon_points.length >= 20"
+              :disabled="selectedZone.polygon_points.length >= 15"
               @click="appendVertex"
             >
               <el-icon><Plus /></el-icon>新增顶点
@@ -306,7 +299,7 @@ import {
   createStreamTicket, getCameraList, getCameraZones, saveCameraZones,
 } from '@/api/camera'
 import {
-  defaultRiskLevel, defaultTriggerSeconds, normalizeZones, polygonBounds, zoneTypeLabel,
+  defaultTriggerSeconds, normalizeZones, zoneTypeLabel,
 } from '@/utils/cameraDetectionView'
 
 const route = useRoute()
@@ -328,14 +321,6 @@ const selectedZone = computed(() => zones.value.find((zone) => zone.zone_id === 
 const zoneLabelFontSize = computed(() => Math.max(16, Math.min(64, overlayWidth.value * 0.022)))
 const vertexAnchorRadius = computed(() => Math.max(6, Math.min(28, overlayWidth.value * 0.007)))
 const vertexIndexFontSize = computed(() => Math.max(13, Math.min(42, overlayWidth.value * 0.016)))
-
-function riskLevelLabel(level) {
-  return ({
-    LOW: '低风险',
-    MEDIUM: '中风险',
-    HIGH: '高风险',
-  })[level] || '低风险'
-}
 
 function formatTriggerSeconds(value) {
   const seconds = Number(value)
@@ -415,20 +400,19 @@ function handleZoneClick(zoneId, event) {
 }
 
 function createZone() {
-  const zoneType = 'WARNING_ZONE'
+  const zoneType = 'PERSON_LOW'
   const id = `${zoneType}_${Date.now()}`
   const zone = {
     zone_id: id,
     id,
-    zone_name: `警戒区 ${zones.value.length + 1}`,
-    name: `警戒区 ${zones.value.length + 1}`,
+    zone_name: `低风险区 ${zones.value.length + 1}`,
+    name: `低风险区 ${zones.value.length + 1}`,
     zone_type: zoneType,
     type: zoneType,
     camera_id: currentCameraId.value,
     polygon_points: [],
-    rect: null,
-    risk_level: defaultRiskLevel(zoneType),
     trigger_seconds: defaultTriggerSeconds(zoneType),
+    condition_durations: {},
     enabled: true,
   }
   zones.value = [...zones.value, zone]
@@ -448,15 +432,14 @@ function exitDrawing() {
 
 function appendPointToSelectedZone(point) {
   if (!selectedZone.value) return
-  if (selectedZone.value.polygon_points.length >= 20) {
-    ElMessage.warning('单个区域最多支持 20 个顶点')
+  if (selectedZone.value.polygon_points.length >= 15) {
+    ElMessage.warning('单个区域最多支持 15 个顶点')
     return
   }
   selectedZone.value.polygon_points = [
     ...selectedZone.value.polygon_points,
     { ...point },
   ]
-  selectedZone.value.rect = polygonBounds(selectedZone.value.polygon_points)
 }
 
 function selectZone(zoneId) {
@@ -484,7 +467,6 @@ function dragVertex(event) {
   const zone = zones.value.find((item) => item.zone_id === dragging.value.zoneId)
   if (!zone) return
   zone.polygon_points[dragging.value.index] = point
-  zone.rect = polygonBounds(zone.polygon_points)
 }
 
 function endDrag() {
@@ -501,7 +483,6 @@ function deleteZone(zoneId) {
 function deletePoint(index) {
   if (!selectedZone.value) return
   selectedZone.value.polygon_points.splice(index, 1)
-  selectedZone.value.rect = polygonBounds(selectedZone.value.polygon_points)
 }
 
 function appendVertex() {
@@ -520,8 +501,10 @@ function appendVertex() {
 function applyTypeDefaults(zoneType) {
   if (!selectedZone.value) return
   selectedZone.value.type = zoneType
-  selectedZone.value.risk_level = defaultRiskLevel(zoneType)
   selectedZone.value.trigger_seconds = defaultTriggerSeconds(zoneType)
+  selectedZone.value.condition_durations = zoneType === 'FISHING'
+    ? { BOAT_INTRUSION: 0, BOAT_STAY: 30, BOAT_ILLEGAL_FISHING: 120 }
+    : {}
   if (!selectedZone.value.zone_name) selectedZone.value.zone_name = zoneTypeLabel(zoneType)
 }
 
@@ -546,7 +529,6 @@ function updatePointCoordinate(index, axis, value) {
   } else {
     point.y = Math.max(0, Math.min(1, 1 - (Number(value) / overlayHeight.value)))
   }
-  selectedZone.value.rect = polygonBounds(selectedZone.value.polygon_points)
 }
 
 function zoneLabelPoint(zone) {
@@ -608,9 +590,10 @@ function vertexLabelPoint(point) {
 
 function zoneColor(zone) {
   return ({
-    WARNING_ZONE: '#48d8ff',
-    WATERFRONT_ZONE: '#ffbd65',
-    WATER_ZONE: '#ff5d6c',
+    PERSON_LOW: '#48d8ff',
+    PERSON_MEDIUM: '#ffbd65',
+    PERSON_HIGH: '#ff5d6c',
+    FISHING: '#57df9a',
   })[zone.zone_type] || '#48d8ff'
 }
 
@@ -620,10 +603,10 @@ function zoneFill(zone) {
 
 async function saveZones() {
   if (!currentCameraId.value) return false
-  const invalidZone = zones.value.find((zone) => zone.polygon_points.length < 3)
+  const invalidZone = zones.value.find((zone) => zone.polygon_points.length < 3 || zone.polygon_points.length > 15)
   if (invalidZone) {
     selectedZoneId.value = invalidZone.zone_id
-    ElMessage.warning('多边形区域至少需要 3 个顶点')
+    ElMessage.warning('多边形区域必须包含 3 到 15 个顶点')
     return false
   }
   saving.value = true
@@ -634,8 +617,8 @@ async function saveZones() {
       zone_type: zone.zone_type,
       camera_id: currentCameraId.value,
       polygon_points: zone.polygon_points,
-      risk_level: zone.risk_level,
       trigger_seconds: zone.trigger_seconds,
+      condition_durations: zone.condition_durations,
       enabled: zone.enabled,
     }))
     const response = await saveCameraZones(currentCameraId.value, payload)
@@ -855,7 +838,7 @@ onMounted(async () => {
 .zone-table-row {
   min-width: 980px;
   display: grid;
-  grid-template-columns: minmax(160px, 1.4fr) 120px 120px 120px 120px 170px 160px;
+  grid-template-columns: minmax(160px, 1.4fr) 130px 120px 120px 170px 160px;
   align-items: center;
   gap: 10px;
 }

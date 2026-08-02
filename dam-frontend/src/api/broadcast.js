@@ -4,9 +4,43 @@ export function getBroadcastTemplates() {
   return request.get('/broadcast/templates', { localCache: false })
 }
 
+export function getBroadcastDevices() {
+  return request.get('/broadcast/devices', { localCache: false })
+}
+
+export function createBroadcastDevice(data) {
+  return request.post('/broadcast/devices', data)
+}
+
+export function updateBroadcastDevice(id, data) {
+  return request.put(`/broadcast/devices/${id}`, data)
+}
+
+export function deleteBroadcastDevice(id) {
+  return request.delete(`/broadcast/devices/${id}`)
+}
+
+export function createBroadcastTemplate(data) {
+  return request.post('/broadcast/templates', data)
+}
+
+export function updateBroadcastTemplate(id, data) {
+  return request.put(`/broadcast/templates/${encodeURIComponent(id)}`, data)
+}
+
+export function deleteBroadcastTemplate(id) {
+  return request.delete(`/broadcast/templates/${encodeURIComponent(id)}`)
+}
+
 export function getCameraBroadcastDevices(cameraId) {
   return request.get(`/broadcast/camera/${encodeURIComponent(cameraId)}/devices`, {
     localCache: false,
+  })
+}
+
+export function bindCameraBroadcastDevices(cameraId, deviceIds) {
+  return request.put(`/broadcast/camera/${encodeURIComponent(cameraId)}/devices`, {
+    device_ids: deviceIds,
   })
 }
 

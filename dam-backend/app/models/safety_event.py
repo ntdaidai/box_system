@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Column, DateTime, Integer, JSON, String, Text
+from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Integer, JSON, String, Text
 
 from app.core.database import Base
 
@@ -89,6 +89,13 @@ class SafetyEventTask(Base):
     __tablename__ = "safety_event_task"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True, comment="派单任务ID")
+    event_instance_id = Column(
+        BigInteger,
+        ForeignKey("safety_event_instance.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="统一安全事件实例ID",
+    )
     event_id = Column(String(64), nullable=False, index=True, comment="事件唯一编号")
     assignee = Column(String(128), comment="现场处置人员")
     assignee_phone = Column(String(64), comment="联系电话")
@@ -98,3 +105,7 @@ class SafetyEventTask(Base):
     dispatched_at = Column(DateTime, default=datetime.now, index=True, comment="派单时间")
     accepted_at = Column(DateTime, comment="接单时间")
     completed_at = Column(DateTime, comment="完成时间")
+    result_type = Column(String(32), comment="处置结果类型")
+    result_remark = Column(String(500), comment="处置结果说明")
+    create_time = Column(DateTime, default=datetime.now, comment="创建时间")
+    update_time = Column(DateTime, default=datetime.now, onupdate=datetime.now, comment="更新时间")

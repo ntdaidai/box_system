@@ -110,38 +110,87 @@ class SqlCameraZoneStore:
 
     def get(self, camera_id: str) -> List[Dict[str, Any]]:
         from app.core.database import SessionLocal
+        from app.models.camera import Camera
         from app.models.camera_detection_zone import CameraDetectionZone
 
         db = SessionLocal()
         try:
+            camera = db.query(Camera).filter(Camera.camera_id == str(camera_id)).first()
+            if camera is None and str(camera_id).isdigit():
+                camera = db.query(Camera).filter(Camera.id == int(camera_id)).first()
+            if not camera:
+                return []
             rows = (
                 db.query(CameraDetectionZone)
-                .filter(CameraDetectionZone.camera_id == camera_id)
+                .filter(
+                    (CameraDetectionZone.camera_device_id == camera.id)
+                    | (CameraDetectionZone.camera_id == camera.camera_id)
+                )
                 .order_by(CameraDetectionZone.id.asc())
                 .all()
             )
-            return [self._row_to_zone(row) for row in rows]
+            return [self._row_to_zone(db, row) for row in rows]
         finally:
             db.close()
 
     def save(self, camera_id: str, zones: List[Dict[str, Any]]) -> None:
         from app.core.database import SessionLocal
+        from app.models.camera import Camera
         from app.models.camera_detection_zone import CameraDetectionZone
+        from app.models.condition_library import ConditionLibrary
+        from app.models.data_source import DataSource
+        from app.models.event_condition import EventCondition
+        from app.models.event_library import EventLibrary
+        from app.models.safety_integration import CameraZoneCondition
 
         with self._lock:
             db = SessionLocal()
             try:
+                camera = db.query(Camera).filter(Camera.camera_id == str(camera_id)).first()
+                if camera is None and str(camera_id).isdigit():
+                    camera = db.query(Camera).filter(Camera.id == int(camera_id)).first()
+                if not camera:
+                    raise ValueError("摄像头不存在")
+                source = db.query(DataSource).filter(
+                    DataSource.source_type == "camera", DataSource.device_id == camera.id
+                ).first()
+                if not source:
+                    source = DataSource(
+                        source_name=camera.camera_name,
+                        source_type="camera",
+                        device_id=camera.id,
+                        data_path=f"camera://{camera.id}",
+                        description="摄像头视频数据源",
+                        is_activate=camera.enabled,
+                    )
+                    db.add(source)
+                    db.flush()
                 db.query(CameraDetectionZone).filter(
-                    CameraDetectionZone.camera_id == camera_id
+                    (CameraDetectionZone.camera_device_id == camera.id)
+                    | (CameraDetectionZone.camera_id == camera.camera_id)
                 ).delete(synchronize_session=False)
                 for zone in zones:
-                    rect = zone.get("rect") or {}
                     zone_id = str(zone.get("zone_id") or zone.get("id") or "")[:64]
                     if not zone_id:
                         zone_id = f"zone_{time.time_ns()}"[:64]
-                    db.add(
-                        CameraDetectionZone(
-                            camera_id=camera_id,
+                    points = []
+                    seen_points = set()
+                    for point in zone.get("polygon_points", []):
+                        if not isinstance(point, dict) or "x" not in point or "y" not in point:
+                            continue
+                        normalized = {"x": round(float(point["x"]), 6), "y": round(float(point["y"]), 6)}
+                        key = (normalized["x"], normalized["y"])
+                        if key not in seen_points:
+                            points.append(normalized)
+                            seen_points.add(key)
+                    if not 3 <= len(points) <= 15:
+                        raise ValueError("每个区域必须包含 3 到 15 个多边形顶点")
+                    zone_type = str(zone.get("zone_type") or zone.get("type") or "PERSON_LOW")[:32]
+                    if zone_type not in {"PERSON_LOW", "PERSON_MEDIUM", "PERSON_HIGH", "FISHING"}:
+                        raise ValueError("区域类型无效")
+                    row = CameraDetectionZone(
+                            camera_device_id=camera.id,
+                            camera_id=camera.camera_id,
                             zone_id=zone_id,
                             zone_name=str(
                                 zone.get("zone_name")
@@ -150,21 +199,50 @@ class SqlCameraZoneStore:
                                 or zone.get("type")
                                 or "检测区域"
                             )[:80],
-                            zone_type=str(zone.get("zone_type") or zone.get("type") or "warning_zone")[:32],
-                            rect_x=float(rect.get("x", 0)),
-                            rect_y=float(rect.get("y", 0)),
-                            rect_width=float(rect.get("width", 0)),
-                            rect_height=float(rect.get("height", 0)),
-                            polygon_points=[
-                                dict(point)
-                                for point in zone.get("polygon_points", [])
-                                if isinstance(point, dict)
-                            ],
-                            risk_level=str(zone.get("risk_level") or "LOW")[:16],
-                            trigger_seconds=float(zone.get("trigger_seconds", 10)),
+                            zone_type=zone_type,
+                            rect_x=None,
+                            rect_y=None,
+                            rect_width=None,
+                            rect_height=None,
+                            polygon_points=points,
+                            risk_level={"PERSON_LOW": "LOW", "PERSON_MEDIUM": "MEDIUM", "PERSON_HIGH": "HIGH", "FISHING": "LOW"}[zone_type],
+                            trigger_seconds=float(zone.get("trigger_seconds", 0)),
                             enabled=bool(zone.get("enabled", True)),
-                        )
                     )
+                    db.add(row)
+                    db.flush()
+                    definitions = {
+                        "PERSON_LOW": (("PERSON_INTRUSION", "person_present == 1", "人员闯入", 5),),
+                        "PERSON_MEDIUM": (("PERSON_WATERFRONT", "person_present == 1", "人员亲水", 3),),
+                        "PERSON_HIGH": (("PERSON_WADING", "person_present == 1", "人员涉水", 0),),
+                        "FISHING": (
+                            ("BOAT_INTRUSION", "boat_present == 1", "船只闯入", 0),
+                            ("BOAT_STAY", "boat_present == 1", "船只停留", 30),
+                            ("BOAT_ILLEGAL_FISHING", "boat_present == 1", "船只偷捕", 120),
+                        ),
+                    }
+                    durations = zone.get("condition_durations") or {}
+                    for event_code, expression, label, default_duration in definitions[zone_type]:
+                        marker = f"[ZONE_ECA:{camera.id}:{zone_id}:{event_code}]"
+                        condition = db.query(ConditionLibrary).filter(ConditionLibrary.description.like(f"{marker}%")).first()
+                        if not condition:
+                            condition = ConditionLibrary(source_id=source.id, expression=expression)
+                            db.add(condition)
+                        duration = int(durations.get(event_code, zone.get("trigger_seconds", default_duration)))
+                        if zone_type == "FISHING":
+                            duration = int(durations.get(event_code, default_duration))
+                        condition.condition_name = f"{camera.camera_name}-{row.zone_name}-{label}"
+                        condition.source_id = source.id
+                        condition.expression = expression
+                        condition.time_window = max(1, duration)
+                        condition.duration = duration
+                        condition.description = f"{marker} 区域业务条件，持续时间单位为秒"
+                        condition.is_activate = row.enabled
+                        db.flush()
+                        db.add(CameraZoneCondition(zone_id=row.id, condition_id=condition.id, enabled=row.enabled))
+                        event = db.query(EventLibrary).filter(EventLibrary.event_code == event_code).first()
+                        if event and not db.query(EventCondition.id).filter_by(event_id=event.id, condition_id=condition.id).first():
+                            db.add(EventCondition(event_id=event.id, condition_id=condition.id, logic_type="AND", group_id=0, sort_order=0))
                 db.commit()
             except Exception:
                 db.rollback()
@@ -190,26 +268,35 @@ class SqlCameraZoneStore:
                 db.close()
 
     @staticmethod
-    def _row_to_zone(row: Any) -> Dict[str, Any]:
-        rect = {
-            "x": float(row.rect_x),
-            "y": float(row.rect_y),
-            "width": float(row.rect_width),
-            "height": float(row.rect_height),
-        }
+    def _row_to_zone(db: Any, row: Any) -> Dict[str, Any]:
+        from app.models.condition_library import ConditionLibrary
+        from app.models.event_condition import EventCondition
+        from app.models.event_library import EventLibrary
+        from app.models.safety_integration import CameraZoneCondition
+
         points = row.polygon_points or []
-        if not isinstance(points, list) or len(points) < 3:
-            x = rect["x"]
-            y = rect["y"]
-            width = rect["width"]
-            height = rect["height"]
-            points = [
-                {"x": x, "y": y},
-                {"x": x + width, "y": y},
-                {"x": x + width, "y": y + height},
-                {"x": x, "y": y + height},
-            ]
+        if not isinstance(points, list) or not 3 <= len(points) <= 15:
+            raise ValueError(f"区域 {row.id} 的 polygon_points 不合法")
+        duration_rows = (
+            db.query(EventLibrary.event_code, ConditionLibrary.duration)
+            .join(EventCondition, EventCondition.event_id == EventLibrary.id)
+            .join(CameraZoneCondition, CameraZoneCondition.condition_id == EventCondition.condition_id)
+            .join(ConditionLibrary, ConditionLibrary.id == CameraZoneCondition.condition_id)
+            .filter(CameraZoneCondition.zone_id == row.id)
+            .all()
+        )
+        condition_durations = {event_code: int(duration or 0) for event_code, duration in duration_rows}
         zone_id = getattr(row, "zone_id", None) or str(row.id)
+        normalized_points = []
+        seen_points = set()
+        for point in points:
+            if not isinstance(point, dict) or "x" not in point or "y" not in point:
+                continue
+            normalized = {"x": float(point["x"]), "y": float(point["y"])}
+            key = (normalized["x"], normalized["y"])
+            if key not in seen_points:
+                normalized_points.append(normalized)
+                seen_points.add(key)
         return {
             "id": str(zone_id),
             "zone_id": str(zone_id),
@@ -218,14 +305,9 @@ class SqlCameraZoneStore:
             "type": row.zone_type,
             "zone_type": row.zone_type,
             "enabled": bool(row.enabled),
-            "rect": rect,
-            "polygon_points": [
-                {"x": float(point["x"]), "y": float(point["y"])}
-                for point in points
-                if isinstance(point, dict) and "x" in point and "y" in point
-            ],
-            "risk_level": getattr(row, "risk_level", None) or "LOW",
-            "trigger_seconds": float(getattr(row, "trigger_seconds", None) or 10),
+            "polygon_points": normalized_points,
+            "trigger_seconds": float(row.trigger_seconds) if getattr(row, "trigger_seconds", None) is not None else 0.0,
+            "condition_durations": condition_durations,
             "create_time": row.create_time.isoformat() if getattr(row, "create_time", None) else None,
             "update_time": row.update_time.isoformat() if getattr(row, "update_time", None) else None,
         }

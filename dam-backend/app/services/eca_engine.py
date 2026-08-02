@@ -20,6 +20,7 @@ from app.models.event_log import EventLog
 from app.models.data_source import DataSource
 from app.models.model_library import ModelLibrary
 from app.api.health import _get_gpu_info
+from app.services.unified_sensor_event_service import unified_sensor_event_service
 
 # 主事件循环引用，用于从同步代码提交异步任务
 _main_event_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -1305,6 +1306,10 @@ class ECAEngine:
         }
 
     async def on_sensor_data_updated(self, sensor_name: str, data: Dict[str, Any]):
+        """Schedule blocking sensor ECA evaluation outside the HTTP event loop."""
+        await asyncio.to_thread(self._process_sensor_data_updated, sensor_name, data)
+
+    def _process_sensor_data_updated(self, sensor_name: str, data: Dict[str, Any]):
         """
         传感器数据更新回调（实时触发入口）
 
@@ -1336,6 +1341,7 @@ class ECAEngine:
                     conditions_met = self.check_event_conditions(
                         event.id, sensor_data, db
                     )
+                    event_log = None
                     if conditions_met:
                         event_log = self.trigger_event(event.id, sensor_data, db)
                         if event_log:
@@ -1343,6 +1349,9 @@ class ECAEngine:
                                 f"[实时触发] 事件: {event.event_name} "
                                 f"(风险等级: {event.risk_level}, 触发传感器: {sensor_name})"
                             )
+                    unified_sensor_event_service.observe(
+                        db, event, sensor_data, conditions_met, event_log, source_id
+                    )
                 except Exception as e:
                     logger.error(f"检查事件 {event.event_name} 失败: {e}")
 
@@ -1352,6 +1361,20 @@ class ECAEngine:
             db.close()
 
     async def on_vision_detection_updated(
+        self,
+        camera_id: str,
+        detection_type: str,
+        result: Dict[str, Any]
+    ):
+        """Schedule blocking legacy visual ECA evaluation outside the HTTP event loop."""
+        await asyncio.to_thread(
+            self._process_vision_detection_updated,
+            camera_id,
+            detection_type,
+            result,
+        )
+
+    def _process_vision_detection_updated(
         self,
         camera_id: str,
         detection_type: str,
@@ -1394,6 +1417,7 @@ class ECAEngine:
                     conditions_met = self.check_event_conditions(
                         event.id, sensor_data, db
                     )
+                    event_log = None
                     if conditions_met:
                         event_log = self.trigger_event(event.id, sensor_data, db)
                         if event_log:
@@ -1402,6 +1426,9 @@ class ECAEngine:
                                 f"(风险等级: {event.risk_level}, "
                                 f"检测类型: {detection_type})"
                             )
+                    unified_sensor_event_service.observe(
+                        db, event, sensor_data, conditions_met, event_log, vision_source_id
+                    )
                 except Exception as e:
                     logger.error(f"检查事件 {event.event_name} 失败: {e}")
 
@@ -1506,6 +1533,7 @@ class ECAEngine:
                         event.id, sensor_data, db
                     )
 
+                    event_log = None
                     if conditions_met:
                         # 触发事件
                         event_log = self.trigger_event(event.id, sensor_data, db)
@@ -1521,6 +1549,9 @@ class ECAEngine:
                                 f"事件触发: {event.event_name} "
                                 f"(风险等级: {event.risk_level})"
                             )
+                    unified_sensor_event_service.observe(
+                        db, event, sensor_data, conditions_met, event_log
+                    )
 
                 except Exception as e:
                     logger.error(f"检查事件 {event.event_name} 失败: {e}")

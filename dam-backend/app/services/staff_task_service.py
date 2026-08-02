@@ -10,6 +10,7 @@ from loguru import logger
 from app.core.database import SessionLocal
 from app.models.event_action import EventAction
 from app.models.safety_event import SafetyEvent, SafetyEventLog, SafetyEventTask
+from app.models.safety_integration import SafetyEventInstance
 from app.services.safety_event_engine import DISPOSAL_WAITING_MANUAL, HANDLING_MANUAL
 
 
@@ -26,6 +27,9 @@ class StaffTaskService:
         db = SessionLocal()
         try:
             event = db.query(SafetyEvent).filter(SafetyEvent.event_id == event_id).first()
+            unified_event = db.query(SafetyEventInstance).filter(
+                SafetyEventInstance.instance_no == str(event_id)
+            ).first()
             if event:
                 event.handling_mode = HANDLING_MANUAL
                 event.disposal_status = DISPOSAL_WAITING_MANUAL
@@ -38,6 +42,7 @@ class StaffTaskService:
             )
             if task is None:
                 task = SafetyEventTask(
+                    event_instance_id=unified_event.id if unified_event else None,
                     event_id=str(event_id),
                     dispatch_operator="SYSTEM",
                     task_status="WAITING_ACCEPT",
@@ -45,6 +50,8 @@ class StaffTaskService:
                     dispatched_at=now,
                 )
                 db.add(task)
+            elif unified_event and not task.event_instance_id:
+                task.event_instance_id = unified_event.id
 
             if not self._has_event_action(db, event_id, risk_level):
                 db.add(EventAction(

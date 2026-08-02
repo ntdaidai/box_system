@@ -148,6 +148,11 @@ const menuMap = {
       ],
     },
     {
+      name: '信息配置',
+      path: '/monitor/config',
+      icon: Setting,
+    },
+    {
       name: '无人机监测',
       path: '/monitor/drone',
       icon: 'drone-custom-icon',
@@ -159,6 +164,7 @@ const menuMap = {
       icon: AlarmTriangleIcon,
       children: [
         { name: '告警列表', path: '/alarm/list', icon: AlarmTriangleIcon },
+        { name: '安全事件', path: '/alarm/safety-events', icon: Bell },
         { name: '告警配置', path: '/alarm/config', icon: Setting },
       ],
     },
@@ -190,7 +196,7 @@ const isDashboard = computed(() => route.path === '/dashboard')
 // 需要显示侧边栏的模块
 const showSiderbar = computed(() => {
   const path = route.path
-  return path.startsWith('/monitor') || path.startsWith('/rule') || path.startsWith('/document')
+  return path.startsWith('/monitor') || path.startsWith('/alarm') || path.startsWith('/rule') || path.startsWith('/document')
 })
 
 // 当前菜单

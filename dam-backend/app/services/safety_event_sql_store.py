@@ -125,6 +125,8 @@ class SqlSafetyEventStore:
                     row = SafetyEvent(event_id=event["event_id"])
                     db.add(row)
                 self._apply_event(row, event)
+                db.flush()
+                self._sync_unified_event(db, event)
                 db.commit()
             except Exception:
                 db.rollback()
@@ -161,7 +163,8 @@ class SqlSafetyEventStore:
                         create_time=_to_datetime(action.get("created_at")) or dt.datetime.now(),
                     )
                     db.add(log_row)
-                self._sync_alarm_locked(db, action)
+                db.flush()
+                self._sync_unified_action(db, action)
                 db.commit()
                 try:
                     from app.services.safety_event_ws import safety_event_ws_manager
@@ -474,3 +477,161 @@ class SqlSafetyEventStore:
             db.add(alarm)
         alarm.alarm_level = level
         alarm.alarm_content = content[:500]
+
+    @staticmethod
+    def _unified_event_code(entity_type: str, risk_level: str) -> Optional[str]:
+        if entity_type == "boat":
+            return {RISK_LOW: "BOAT_INTRUSION", RISK_MEDIUM: "BOAT_STAY", RISK_HIGH: "BOAT_ILLEGAL_FISHING"}.get(risk_level)
+        return {RISK_LOW: "PERSON_INTRUSION", RISK_MEDIUM: "PERSON_WATERFRONT", RISK_HIGH: "PERSON_WADING"}.get(risk_level)
+
+    def _sync_unified_event(self, db: Any, event: Dict[str, Any]) -> None:
+        from app.models.camera import Camera
+        from app.models.camera_detection_zone import CameraDetectionZone
+        from app.models.data_source import DataSource
+        from app.models.event_library import EventLibrary
+        from app.models.safety_integration import SafetyEventEvidence, SafetyEventInstance, VisualEventDetail
+
+        risk = event.get("risk_level")
+        event_code = self._unified_event_code(str(event.get("entity_type")), str(risk))
+        if not event_code:
+            return
+        definition = db.query(EventLibrary).filter(EventLibrary.event_code == event_code).first()
+        camera = db.query(Camera).filter(Camera.camera_id == str(event.get("camera_id"))).first()
+        if not definition or not camera:
+            return
+        source = db.query(DataSource).filter(
+            DataSource.source_type == "camera", DataSource.device_id == camera.id
+        ).first()
+        if not source:
+            source = DataSource(
+                source_name=camera.camera_name, source_type="camera", device_id=camera.id,
+                data_path=f"camera://{camera.id}", description="摄像头视频数据源", is_activate=camera.enabled,
+            )
+            db.add(source)
+            db.flush()
+        instance = db.query(SafetyEventInstance).filter(
+            SafetyEventInstance.instance_no == str(event.get("event_id"))
+        ).first()
+        state = "RESOLVED" if event.get("state") == STATE_RESOLVED else "ACTIVE"
+        old_status = str(event.get("status") or "PENDING")
+        status = "COMPLETED" if state == "RESOLVED" else (old_status if old_status in {"PENDING", "PROCESSING", "FALSE_ALARM"} else "PROCESSING")
+        if not instance:
+            instance = SafetyEventInstance(
+                instance_no=str(event.get("event_id")),
+                current_event_id=definition.id,
+                event_category=definition.event_category,
+                data_source_id=source.id,
+                source_type="camera",
+                source_id=camera.id,
+                risk_level=risk,
+                max_risk_level=event.get("max_risk_level") or risk,
+                state=state,
+                status=status,
+                started_at=_to_datetime(event.get("started_at")) or dt.datetime.now(),
+                last_observed_at=_to_datetime(event.get("last_seen_at")) or dt.datetime.now(),
+                summary=f"{camera.camera_name} - {definition.event_name}",
+            )
+            db.add(instance)
+            db.flush()
+        instance.current_event_id = definition.id
+        instance.event_category = definition.event_category
+        instance.risk_level = risk
+        instance.max_risk_level = event.get("max_risk_level") or instance.max_risk_level or risk
+        instance.state = state
+        instance.status = status
+        instance.last_observed_at = _to_datetime(event.get("last_seen_at")) or instance.last_observed_at
+        instance.resolved_at = _to_datetime(event.get("resolved_at"))
+        instance.resolve_reason = event.get("resolve_reason")
+        instance.summary = f"{camera.camera_name} - {definition.event_name}"
+        instance.latest_observation = event.get("latest_observation") or {}
+        instance.version = int(event.get("version") or instance.version or 0)
+
+        visual = db.query(VisualEventDetail).filter(VisualEventDetail.event_instance_id == instance.id).first()
+        observation = event.get("latest_observation") or {}
+        zone_ids = event.get("zone_ids") or observation.get("zone_ids") or []
+        zone = db.query(CameraDetectionZone).filter(
+            CameraDetectionZone.camera_device_id == camera.id,
+            CameraDetectionZone.zone_id == str(zone_ids[0]),
+        ).first() if zone_ids else None
+        if not visual:
+            visual = VisualEventDetail(
+                event_instance_id=instance.id, camera_id=camera.id, camera_name=camera.camera_name,
+                target_type=str(event.get("entity_type")), target_id=str(event.get("track_id") or "") or None,
+            )
+            db.add(visual)
+        visual.zone_id = zone.id if zone else visual.zone_id
+        visual.zone_name = event.get("zone_name") or visual.zone_name
+        visual.zone_type = event.get("zone_type") or visual.zone_type
+        visual.confidence = observation.get("confidence")
+        visual.extra = {"bbox": event.get("latest_bbox"), "class_name": observation.get("class_name")}
+
+        snapshot_url = event.get("snapshot_path")
+        if snapshot_url and not db.query(SafetyEventEvidence.id).filter(
+            SafetyEventEvidence.event_instance_id == instance.id,
+            SafetyEventEvidence.file_url == snapshot_url,
+        ).first():
+            db.add(SafetyEventEvidence(
+                event_instance_id=instance.id, evidence_type="IMAGE", source_type="CAMERA",
+                source_id=camera.camera_id, file_url=snapshot_url, description="事件抓拍",
+                captured_at=_to_datetime(event.get("last_seen_at")) or dt.datetime.now(),
+            ))
+
+    def _sync_unified_action(self, db: Any, action: Dict[str, Any]) -> None:
+        from app.models.safety_integration import SafetyEventEvidence, SafetyEventInstance, SafetyEventTimelineLog
+
+        instance = db.query(SafetyEventInstance).filter(
+            SafetyEventInstance.instance_no == str(action.get("event_id"))
+        ).first()
+        if not instance:
+            event = self.events.get(str(action.get("event_id")))
+            if event:
+                self._sync_unified_event(db, event)
+                db.flush()
+                instance = db.query(SafetyEventInstance).filter(
+                    SafetyEventInstance.instance_no == str(action.get("event_id"))
+                ).first()
+        if not instance:
+            return
+        action_key = f"runtime:{action.get('action_id')}"
+        if db.query(SafetyEventTimelineLog.id).filter(SafetyEventTimelineLog.action_key == action_key).first():
+            return
+        action_type = str(action.get("action_type") or "SYSTEM")
+        if action_type in {"event_created"}:
+            log_type = "TRIGGER"
+        elif action_type in {"risk_changed", "RISK_CHANGED"}:
+            log_type = "RISK_CHANGE"
+        elif action_type in {"event_resolved", "EVENT_RESOLVED"}:
+            log_type = "RESOLVE"
+        else:
+            log_type = "ACTION"
+        payload = action.get("payload") or {}
+        timeline = SafetyEventTimelineLog(
+            event_instance_id=instance.id,
+            event_id=instance.current_event_id,
+            action_key=action_key,
+            log_type=log_type,
+            trigger_type=str(payload.get("trigger_type") or "AUTO"),
+            risk_level=str(action.get("risk_level") or instance.risk_level),
+            status=self._initial_action_status(action_type).upper(),
+            message=self._action_message(action),
+            operator=str(payload.get("operator") or "SYSTEM"),
+            payload={"action_type": action_type, **payload},
+            create_time=_to_datetime(action.get("created_at")) or dt.datetime.now(),
+        )
+        db.add(timeline)
+        db.flush()
+        snapshot_url = payload.get("snapshot_url")
+        if snapshot_url and not db.query(SafetyEventEvidence.id).filter(
+            SafetyEventEvidence.event_instance_id == instance.id,
+            SafetyEventEvidence.file_url == snapshot_url,
+        ).first():
+            db.add(SafetyEventEvidence(
+                event_instance_id=instance.id,
+                timeline_log_id=timeline.id,
+                evidence_type="IMAGE",
+                source_type="CAMERA",
+                source_id=str(action.get("camera_id") or ""),
+                file_url=snapshot_url,
+                description="离场抓拍" if log_type == "RESOLVE" else "风险事件抓拍",
+                captured_at=_to_datetime(action.get("created_at")) or dt.datetime.now(),
+            ))

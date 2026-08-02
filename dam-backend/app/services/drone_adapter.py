@@ -45,6 +45,9 @@ class DroneDispatchService:
         dispatch_time = dt.datetime.now()
         db = SessionLocal()
         try:
+            configured_drone_id, configured_route_id = self._configured_targets(db, str(event_id), str(camera_id))
+            if configured_route_id:
+                strategy_id = configured_route_id
             existing = (
                 db.query(EventAction)
                 .filter(
@@ -78,6 +81,8 @@ class DroneDispatchService:
                 is_activate=True,
             )
             db.add(event_action)
+            if configured_drone_id:
+                event_action.drone_id = configured_drone_id
             self._mark_safety_action(
                 db,
                 action.get("action_id"),
@@ -92,6 +97,32 @@ class DroneDispatchService:
             db.commit()
         finally:
             db.close()
+
+    @staticmethod
+    def _configured_targets(db, event_id: str, camera_id: str) -> tuple[Optional[str], Optional[str]]:
+        from app.models.action_step import ActionStep
+        from app.models.camera import Camera
+        from app.models.safety_integration import EventActionStepConfig, SafetyEventInstance
+
+        instance = db.query(SafetyEventInstance).filter(SafetyEventInstance.instance_no == event_id).first()
+        camera = db.query(Camera).filter(Camera.camera_id == camera_id).first()
+        if not camera and camera_id.isdigit():
+            camera = db.query(Camera).filter(Camera.id == int(camera_id)).first()
+        if not instance or not camera:
+            return None, None
+        config = (
+            db.query(EventActionStepConfig)
+            .join(EventAction, EventAction.id == EventActionStepConfig.event_action_id)
+            .join(ActionStep, ActionStep.id == EventActionStepConfig.step_id)
+            .filter(
+                EventAction.event_id == instance.current_event_id,
+                EventActionStepConfig.camera_id == camera.id,
+                ActionStep.action_type == "drone_dispatch",
+                EventActionStepConfig.enabled.is_(True),
+            )
+            .first()
+        )
+        return (config.drone_id, config.route_id) if config else (None, None)
 
     @staticmethod
     def _mark_safety_action(db, action_id: Optional[str], status: str, message: str) -> None:

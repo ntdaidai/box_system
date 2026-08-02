@@ -38,6 +38,16 @@ class FakeRegistry:
         return self.model if task_type == "detect" else None
 
 
+class MemoryZoneStore:
+    def __init__(self):
+        self.zones = {}
+
+    def save(self, camera_id, zones):
+        self.zones[camera_id] = zones
+
+    def get(self, camera_id):
+        return self.zones.get(camera_id, [])
+
 class CameraApiContractTests(unittest.TestCase):
     def test_static_model_route_precedes_dynamic_camera_status(self):
         paths = [route.path for route in camera_api.router.routes]
@@ -127,6 +137,7 @@ class CameraApiContractTests(unittest.TestCase):
 
     def test_zone_api_saves_camera_area_rules(self):
         manager = CameraManager()
+        zone_store = MemoryZoneStore()
         manager.add_camera(
             "camera_zone",
             "rtsp://example.test/live",
@@ -134,7 +145,9 @@ class CameraApiContractTests(unittest.TestCase):
             capture_factory=ClosedCapture,
         )
         try:
-            with patch.object(camera_api, "camera_manager", manager):
+            with patch.object(camera_api, "camera_manager", manager), patch.object(
+                camera_api, "get_camera_zone_store", return_value=zone_store
+            ):
                 saved = asyncio.run(
                     camera_api.save_detection_zones(
                         "camera_zone",
@@ -143,13 +156,13 @@ class CameraApiContractTests(unittest.TestCase):
                                 camera_api.DetectionZoneRequest(
                                     id="entry_area",
                                     name="入口禁入区",
-                                    type="person_intrusion",
-                                    rect=camera_api.DetectionZoneRect(
-                                        x=0.1,
-                                        y=0.2,
-                                        width=0.3,
-                                        height=0.4,
-                                    ),
+                                    type="PERSON_LOW",
+                                    polygon_points=[
+                                        camera_api.DetectionZonePoint(x=0.1, y=0.2),
+                                        camera_api.DetectionZonePoint(x=0.4, y=0.2),
+                                        camera_api.DetectionZonePoint(x=0.4, y=0.6),
+                                        camera_api.DetectionZonePoint(x=0.1, y=0.6),
+                                    ],
                                 )
                             ]
                         ),
@@ -159,7 +172,7 @@ class CameraApiContractTests(unittest.TestCase):
                 listed = asyncio.run(
                     camera_api.get_detection_zones("camera_zone", object())
                 )
-            self.assertEqual(saved.data["zones"][0]["type"], "person_intrusion")
+            self.assertEqual(saved.data["zones"][0]["type"], "PERSON_LOW")
             self.assertEqual(listed.data["zones"][0]["name"], "入口禁入区")
             self.assertEqual(
                 manager.get_camera("camera_zone").get_status()["detection_zones"][0][

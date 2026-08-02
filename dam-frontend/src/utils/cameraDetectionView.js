@@ -74,27 +74,21 @@ export function classColor(classId) {
 }
 
 export function normalizeZoneType(type) {
-  if (!type) return 'WARNING_ZONE'
+  if (!type) return 'PERSON_LOW'
   return ({
-    person_intrusion: 'WARNING_ZONE',
-    warning_zone: 'WARNING_ZONE',
-    WARNING_ZONE: 'WARNING_ZONE',
-    waterside_zone: 'WATERFRONT_ZONE',
-    waterfront_zone: 'WATERFRONT_ZONE',
-    WATERFRONT_ZONE: 'WATERFRONT_ZONE',
-    wading_zone: 'WATER_ZONE',
-    water_zone: 'WATER_ZONE',
-    WATER_ZONE: 'WATER_ZONE',
-    illegal_fishing: 'illegal_fishing',
+    person_intrusion: 'PERSON_LOW', warning_zone: 'PERSON_LOW', WARNING_ZONE: 'PERSON_LOW', PERSON_LOW: 'PERSON_LOW',
+    waterside_zone: 'PERSON_MEDIUM', waterfront_zone: 'PERSON_MEDIUM', WATERFRONT_ZONE: 'PERSON_MEDIUM', PERSON_MEDIUM: 'PERSON_MEDIUM',
+    wading_zone: 'PERSON_HIGH', water_zone: 'PERSON_HIGH', WATER_ZONE: 'PERSON_HIGH', PERSON_HIGH: 'PERSON_HIGH',
+    illegal_fishing: 'FISHING', fishing_zone: 'FISHING', FISHING_ZONE: 'FISHING', FISHING: 'FISHING',
   })[type] || null
 }
 
 export function zoneTypeLabel(type) {
   return ({
-    WARNING_ZONE: '警戒区',
-    WATERFRONT_ZONE: '亲水区',
-    WATER_ZONE: '涉水区',
-    illegal_fishing: '违规捕鱼',
+    PERSON_LOW: '低风险区',
+    PERSON_MEDIUM: '中风险区',
+    PERSON_HIGH: '高风险区',
+    FISHING: '捕鱼区',
   })[normalizeZoneType(type)] || '检测区域'
 }
 
@@ -103,31 +97,11 @@ export function riskLevelLabel(level) {
 }
 
 export function personZoneTypes() {
-  return ['WARNING_ZONE', 'WATERFRONT_ZONE', 'WATER_ZONE']
-}
-
-export function defaultRiskLevel(type) {
-  return ({
-    WARNING_ZONE: 'LOW',
-    WATERFRONT_ZONE: 'MEDIUM',
-    WATER_ZONE: 'HIGH',
-    illegal_fishing: 'MEDIUM',
-  })[normalizeZoneType(type)] || 'LOW'
+  return ['PERSON_LOW', 'PERSON_MEDIUM', 'PERSON_HIGH']
 }
 
 export function defaultTriggerSeconds(type) {
-  return normalizeZoneType(type) === 'WARNING_ZONE' ? 10 : 0
-}
-
-function rectToPolygon(rect) {
-  if (!rect || ![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite)) return []
-  if (rect.width <= 0 || rect.height <= 0) return []
-  return [
-    { x: rect.x, y: rect.y },
-    { x: rect.x + rect.width, y: rect.y },
-    { x: rect.x + rect.width, y: rect.y + rect.height },
-    { x: rect.x, y: rect.y + rect.height },
-  ]
+  return ({ PERSON_LOW: 5, PERSON_MEDIUM: 3, PERSON_HIGH: 0, FISHING: 0 })[normalizeZoneType(type)] ?? 0
 }
 
 export function polygonBounds(points) {
@@ -143,12 +117,12 @@ export function normalizeZones(payload) {
   const zones = Array.isArray(payload?.zones) ? payload.zones : []
   return zones.map((zone) => {
     const zoneType = normalizeZoneType(zone?.zone_type || zone?.type)
-    const polygonPoints = (Array.isArray(zone?.polygon_points) ? zone.polygon_points : rectToPolygon(zone?.rect))
+    const polygonPoints = (Array.isArray(zone?.polygon_points) ? zone.polygon_points : [])
       .map((point) => ({ x: Number(point?.x), y: Number(point?.y) }))
       .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
     const bounds = polygonBounds(polygonPoints)
     const zoneId = zone?.zone_id || zone?.id
-    if (!zoneId || !bounds || ![...personZoneTypes(), 'illegal_fishing'].includes(zoneType)) return null
+    if (!zoneId || !bounds || polygonPoints.length > 15 || ![...personZoneTypes(), 'FISHING'].includes(zoneType)) return null
     const zoneName = zone?.zone_name || zone?.name || zoneTypeLabel(zoneType)
     return {
       ...zone,
@@ -157,15 +131,16 @@ export function normalizeZones(payload) {
       zone_type: zoneType,
       camera_id: zone?.camera_id || '',
       polygon_points: polygonPoints,
-      risk_level: zone?.risk_level || defaultRiskLevel(zoneType),
       trigger_seconds: Number.isFinite(Number(zone?.trigger_seconds))
         ? Number(zone.trigger_seconds)
         : defaultTriggerSeconds(zoneType),
       enabled: zone?.enabled !== false,
+      condition_durations: zone?.condition_durations || (zoneType === 'FISHING' ? {
+        BOAT_INTRUSION: 0, BOAT_STAY: 30, BOAT_ILLEGAL_FISHING: 120,
+      } : {}),
       id: zoneId,
       name: zoneName,
       type: zoneType,
-      rect: bounds,
     }
   }).filter(Boolean)
 }
@@ -182,7 +157,7 @@ export function detectionMatchesZoneType(detection, zoneType) {
   const normalizedZoneType = normalizeZoneType(zoneType)
   const classId = Number(detection?.class_id)
   const name = String(detection?.class_name || '').toLowerCase()
-  if (normalizedZoneType === 'illegal_fishing') return classId === 0 || ['boat', 'ship', 'vessel', 'fishing_boat'].includes(name)
+  if (normalizedZoneType === 'FISHING') return classId === 0 || ['boat', 'ship', 'vessel', 'fishing_boat'].includes(name)
   if (personZoneTypes().includes(normalizedZoneType)) return [1, 2, 3].includes(classId) || name.includes('person')
   return false
 }
@@ -214,7 +189,7 @@ export function detectionInZone(detection, zone, imageWidth, imageHeight) {
   if (!point || imageWidth <= 0 || imageHeight <= 0) return false
   return pointInPolygon(
     { x: point.x / imageWidth, y: point.y / imageHeight },
-    zone?.polygon_points || rectToPolygon(zone?.rect),
+    zone?.polygon_points || [],
   )
 }
 

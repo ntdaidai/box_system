@@ -22,64 +22,36 @@ from app.services.safety_event_engine import safety_event_engine
 CaptureFactory = Callable[[str], Any]
 LOCAL_VIDEO_PATTERN = re.compile(r"^/dev/video\d+$")
 ZONE_TYPES = {
-    "WARNING_ZONE",
-    "WATERFRONT_ZONE",
-    "WATER_ZONE",
-    "person_intrusion",
-    "warning_zone",
-    "waterside_zone",
-    "wading_zone",
-    "illegal_fishing",
+    "PERSON_LOW",
+    "PERSON_MEDIUM",
+    "PERSON_HIGH",
+    "FISHING",
 }
 ZONE_TYPE_ALIASES = {
-    "person_intrusion": "WARNING_ZONE",
-    "warning_zone": "WARNING_ZONE",
-    "WARNING_ZONE": "WARNING_ZONE",
-    "waterside_zone": "WATERFRONT_ZONE",
-    "waterfront_zone": "WATERFRONT_ZONE",
-    "WATERFRONT_ZONE": "WATERFRONT_ZONE",
-    "wading_zone": "WATER_ZONE",
-    "water_zone": "WATER_ZONE",
-    "WATER_ZONE": "WATER_ZONE",
-    "illegal_fishing": "illegal_fishing",
+    "person_intrusion": "PERSON_LOW", "warning_zone": "PERSON_LOW", "WARNING_ZONE": "PERSON_LOW", "PERSON_LOW": "PERSON_LOW",
+    "waterside_zone": "PERSON_MEDIUM", "waterfront_zone": "PERSON_MEDIUM", "WATERFRONT_ZONE": "PERSON_MEDIUM", "PERSON_MEDIUM": "PERSON_MEDIUM",
+    "wading_zone": "PERSON_HIGH", "water_zone": "PERSON_HIGH", "WATER_ZONE": "PERSON_HIGH", "PERSON_HIGH": "PERSON_HIGH",
+    "illegal_fishing": "FISHING", "fishing_zone": "FISHING", "FISHING_ZONE": "FISHING", "FISHING": "FISHING",
 }
 ZONE_LABELS = {
-    "WARNING_ZONE": "警戒区人员停留",
-    "WATERFRONT_ZONE": "亲水区人员进入",
-    "WATER_ZONE": "涉水区人员进入",
-    "illegal_fishing": "违规捕鱼",
+    "PERSON_LOW": "低风险区域人员进入",
+    "PERSON_MEDIUM": "中风险区域人员进入",
+    "PERSON_HIGH": "高风险区域人员进入",
+    "FISHING": "捕鱼区域船只进入",
 }
 PERSON_ZONE_TYPES = {
-    "WARNING_ZONE",
-    "WATERFRONT_ZONE",
-    "WATER_ZONE",
+    "PERSON_LOW", "PERSON_MEDIUM", "PERSON_HIGH",
 }
 ZONE_TARGET_CLASS_NAMES = {
-    "WARNING_ZONE": {
+    "PERSON_LOW": {
         "person",
         "normal_person",
         "fishing_person",
         "person_in_water",
     },
-    "WATERFRONT_ZONE": {
-        "person",
-        "normal_person",
-        "fishing_person",
-        "person_in_water",
-    },
-    "WATER_ZONE": {
-        "person",
-        "normal_person",
-        "fishing_person",
-        "person_in_water",
-    },
-    "person_intrusion": {
-        "person",
-        "normal_person",
-        "fishing_person",
-        "person_in_water",
-    },
-    "illegal_fishing": {
+    "PERSON_MEDIUM": {"person", "normal_person", "fishing_person", "person_in_water"},
+    "PERSON_HIGH": {"person", "normal_person", "fishing_person", "person_in_water"},
+    "FISHING": {
         "boat",
         "ship",
         "fishing_boat",
@@ -87,23 +59,16 @@ ZONE_TARGET_CLASS_NAMES = {
     },
 }
 ZONE_TARGET_CLASS_IDS = {
-    "WARNING_ZONE": {1, 2, 3},
-    "WATERFRONT_ZONE": {1, 2, 3},
-    "WATER_ZONE": {1, 2, 3},
-    "person_intrusion": {1, 2, 3},
-    "illegal_fishing": {0},
+    "PERSON_LOW": {1, 2, 3},
+    "PERSON_MEDIUM": {1, 2, 3},
+    "PERSON_HIGH": {1, 2, 3},
+    "FISHING": {0},
 }
 DEFAULT_ZONE_RISK = {
-    "WARNING_ZONE": "LOW",
-    "WATERFRONT_ZONE": "MEDIUM",
-    "WATER_ZONE": "HIGH",
-    "illegal_fishing": "MEDIUM",
+    "PERSON_LOW": "LOW", "PERSON_MEDIUM": "MEDIUM", "PERSON_HIGH": "HIGH", "FISHING": "LOW",
 }
 DEFAULT_ZONE_TRIGGER_SECONDS = {
-    "WARNING_ZONE": 10.0,
-    "WATERFRONT_ZONE": 0.0,
-    "WATER_ZONE": 0.0,
-    "illegal_fishing": 0.0,
+    "PERSON_LOW": 5.0, "PERSON_MEDIUM": 3.0, "PERSON_HIGH": 0.0, "FISHING": 0.0,
 }
 DEFAULT_FFMPEG_CAPTURE_OPTIONS = (
     "rtsp_transport;tcp|"
@@ -139,10 +104,10 @@ def _clip_unit(value: Any) -> float:
 
 
 def normalize_zone_type(zone_type: Any) -> str:
-    raw = str(zone_type or "WARNING_ZONE")
+    raw = str(zone_type or "PERSON_LOW")
     normalized = ZONE_TYPE_ALIASES.get(raw) or ZONE_TYPE_ALIASES.get(raw.lower())
     if normalized not in ZONE_TYPES:
-        raise ValueError("区域类型仅支持 WARNING_ZONE、WATERFRONT_ZONE 或 WATER_ZONE")
+        raise ValueError("区域类型仅支持低风险区、中风险区、高风险区或捕鱼区")
     return normalized
 
 
@@ -155,21 +120,6 @@ def _normalize_point(point: Any) -> Dict[str, float]:
     else:
         raise ValueError("多边形顶点格式无效")
     return {"x": round(_clip_unit(x), 6), "y": round(_clip_unit(y), 6)}
-
-
-def _rect_to_polygon(rect: Dict[str, Any]) -> List[Dict[str, float]]:
-    x = _clip_unit(rect.get("x", 0))
-    y = _clip_unit(rect.get("y", 0))
-    width = min(_clip_unit(rect.get("width", 0)), 1.0 - x)
-    height = min(_clip_unit(rect.get("height", 0)), 1.0 - y)
-    if width <= 0.001 or height <= 0.001:
-        raise ValueError("区域宽高必须大于 0")
-    return [
-        {"x": round(x, 6), "y": round(y, 6)},
-        {"x": round(x + width, 6), "y": round(y, 6)},
-        {"x": round(x + width, 6), "y": round(y + height, 6)},
-        {"x": round(x, 6), "y": round(y + height, 6)},
-    ]
 
 
 def _polygon_bounds(points: List[Dict[str, float]]) -> Dict[str, float]:
@@ -188,12 +138,18 @@ def _polygon_bounds(points: List[Dict[str, float]]) -> Dict[str, float]:
 def normalize_detection_zone(zone: Dict[str, Any], fallback_id: str = "") -> Dict[str, Any]:
     zone_type = normalize_zone_type(zone.get("zone_type") or zone.get("type"))
     raw_points = zone.get("polygon_points") or zone.get("points")
-    if raw_points:
-        polygon_points = [_normalize_point(point) for point in raw_points]
-    else:
-        polygon_points = _rect_to_polygon(zone.get("rect") or {})
-    if len(polygon_points) < 3:
-        raise ValueError("多边形区域至少需要 3 个顶点")
+    if not raw_points:
+        raise ValueError("必须提供 polygon_points")
+    polygon_points = []
+    seen_points = set()
+    for raw_point in raw_points:
+        point = _normalize_point(raw_point)
+        key = (point["x"], point["y"])
+        if key not in seen_points:
+            polygon_points.append(point)
+            seen_points.add(key)
+    if not 3 <= len(polygon_points) <= 15:
+        raise ValueError("多边形区域必须包含 3 到 15 个顶点")
 
     rect = _polygon_bounds(polygon_points)
     if rect["width"] <= 0.001 or rect["height"] <= 0.001:
@@ -204,9 +160,7 @@ def normalize_detection_zone(zone: Dict[str, Any], fallback_id: str = "") -> Dic
         raise ValueError("区域 ID 只能包含字母、数字、下划线和短横线")
 
     name = str(zone.get("zone_name") or zone.get("name") or ZONE_LABELS[zone_type])[:80]
-    risk_level = str(zone.get("risk_level") or DEFAULT_ZONE_RISK[zone_type]).upper()
-    if risk_level not in {"LOW", "MEDIUM", "HIGH"}:
-        raise ValueError("风险等级仅支持 LOW、MEDIUM、HIGH")
+    risk_level = DEFAULT_ZONE_RISK[zone_type]
     try:
         trigger_seconds = max(0.0, float(zone.get("trigger_seconds", DEFAULT_ZONE_TRIGGER_SECONDS[zone_type])))
     except (TypeError, ValueError):
@@ -219,12 +173,12 @@ def normalize_detection_zone(zone: Dict[str, Any], fallback_id: str = "") -> Dic
         "polygon_points": polygon_points,
         "risk_level": risk_level,
         "trigger_seconds": round(trigger_seconds, 3),
+        "condition_durations": dict(zone.get("condition_durations") or {}),
         "enabled": bool(zone.get("enabled", True)),
         # Backward-compatible aliases used by older frontend code/tests.
         "id": zone_id,
         "name": name,
         "type": zone_type,
-        "rect": rect,
     }
 
 
@@ -319,6 +273,7 @@ def evaluate_detection_zones(
                     "zone_type": zone_type,
                     "risk_level": zone.get("risk_level"),
                     "trigger_seconds": zone.get("trigger_seconds", 0),
+                    "condition_durations": dict(zone.get("condition_durations") or {}),
                     "message": ZONE_LABELS.get(zone_type, "区域告警"),
                     "detection_index": index,
                     "class_id": detection.get("class_id"),
@@ -677,11 +632,7 @@ class CameraStream:
     def get_detection_zones(self) -> List[Dict[str, Any]]:
         with self.lock:
             return [
-                dict(
-                    zone,
-                    rect=dict(zone["rect"]),
-                    polygon_points=[dict(point) for point in zone["polygon_points"]],
-                )
+                dict(zone, polygon_points=[dict(point) for point in zone["polygon_points"]])
                 for zone in self.detection_zones
             ]
 
