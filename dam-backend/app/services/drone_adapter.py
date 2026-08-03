@@ -102,9 +102,7 @@ class DroneDispatchService:
         from app.models.safety_integration import EventActionStepConfig, SafetyEventInstance
 
         instance = db.query(SafetyEventInstance).filter(SafetyEventInstance.instance_no == event_id).first()
-        camera = db.query(Camera).filter(Camera.camera_id == camera_id).first()
-        if not camera and camera_id.isdigit():
-            camera = db.query(Camera).filter(Camera.id == int(camera_id)).first()
+        camera = db.query(Camera).filter(Camera.id == int(camera_id)).first() if camera_id.isdigit() else None
         if not instance or not camera:
             return None, None
         config = (

@@ -113,9 +113,7 @@ class SqlCameraZoneStore:
 
         db = SessionLocal()
         try:
-            camera = db.query(Camera).filter(Camera.camera_id == str(camera_id)).first()
-            if camera is None and str(camera_id).isdigit():
-                camera = db.query(Camera).filter(Camera.id == int(camera_id)).first()
+            camera = db.query(Camera).filter(Camera.id == int(camera_id)).first() if str(camera_id).isdigit() else None
             if not camera:
                 return []
             rows = (
@@ -141,11 +139,17 @@ class SqlCameraZoneStore:
         with self._lock:
             db = SessionLocal()
             try:
-                camera = db.query(Camera).filter(Camera.camera_id == str(camera_id)).first()
-                if camera is None and str(camera_id).isdigit():
-                    camera = db.query(Camera).filter(Camera.id == int(camera_id)).first()
+                camera = db.query(Camera).filter(Camera.id == int(camera_id)).first() if str(camera_id).isdigit() else None
                 if not camera:
                     raise ValueError("摄像头不存在")
+                zone_names = [
+                    str(zone.get("zone_name") or zone.get("name") or "").strip()
+                    for zone in zones
+                ]
+                if any(not name for name in zone_names):
+                    raise ValueError("区域名称不能为空")
+                if len(zone_names) != len(set(zone_names)):
+                    raise ValueError("同一摄像头下区域名称不能重复")
                 source = db.query(DataSource).filter(
                     DataSource.source_type == "camera", DataSource.device_id == camera.id
                 ).first()
@@ -271,9 +275,7 @@ class SqlCameraZoneStore:
         with self._lock:
             db = SessionLocal()
             try:
-                camera = db.query(Camera).filter(Camera.camera_id == str(camera_id)).first()
-                if camera is None and str(camera_id).isdigit():
-                    camera = db.query(Camera).filter(Camera.id == int(camera_id)).first()
+                camera = db.query(Camera).filter(Camera.id == int(camera_id)).first() if str(camera_id).isdigit() else None
                 if camera:
                     db.query(CameraDetectionZone).filter(
                         CameraDetectionZone.camera_device_id == camera.id
@@ -316,7 +318,6 @@ class SqlCameraZoneStore:
                 seen_points.add(key)
         return {
             "id": str(row.id),
-            "zone_id": str(row.id),
             "name": row.zone_name,
             "zone_name": row.zone_name,
             "type": row.zone_type,

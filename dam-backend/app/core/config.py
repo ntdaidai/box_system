@@ -126,7 +126,7 @@ class Settings:
 
     # ── 自动巡查日报 ─────────────────────────────────────────
     PATROL_REPORT_AUTO_ENABLED: bool = _get_env("PATROL_REPORT_AUTO_ENABLED", "true").lower() == "true"
-    PATROL_REPORT_AUTO_TIME: str = _get_env("PATROL_REPORT_AUTO_TIME", "23:55")
+    PATROL_REPORT_AUTO_TIME: str = _get_env("PATROL_REPORT_AUTO_TIME", "00:00")
     PATROL_REPORT_USER_ID: str = _get_env("PATROL_REPORT_USER_ID", "user_001")
     PATROL_REPORT_USER_NAME: str = _get_env("PATROL_REPORT_USER_NAME", "管理员")
 
@@ -150,14 +150,6 @@ class Settings:
     YOLO_CONFIDENCE: float = float(_get_env("YOLO_CONFIDENCE", "0.5"))
     YOLO_IOU: float = float(_get_env("YOLO_IOU", "0.45"))
 
-    # dai: 单摄像头可直接配置 URL，多摄像头可通过 JSON 数组统一配置。
-    # 默认不携带任何摄像头账号，部署时再传入实际海康 RTSP 地址。
-    CAMERA_RTSP_URL: str = _get_env("CAMERA_RTSP_URL", "")
-    CAMERA_SOURCE: str = _get_env("CAMERA_SOURCE", "")
-    CAMERA_CONFIGS_JSON: str = _get_env("CAMERA_CONFIGS_JSON", "")
-    CAMERA_ID: str = _get_env("CAMERA_ID", "camera_001")
-    CAMERA_NAME: str = _get_env("CAMERA_NAME", "主摄像头")
-    CAMERA_AUTO_START: bool = _get_env("CAMERA_AUTO_START", "true").lower() == "true"
     CAMERA_DETECTION_FPS: float = float(_get_env("CAMERA_DETECTION_FPS", "5"))
     CAMERA_JPEG_QUALITY: int = int(_get_env("CAMERA_JPEG_QUALITY", "80"))
     CAMERA_WEB_PROXY_BIND_HOST: str = _get_env("CAMERA_WEB_PROXY_BIND_HOST", "0.0.0.0")

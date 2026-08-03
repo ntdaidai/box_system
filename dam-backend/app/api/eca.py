@@ -18,7 +18,6 @@ from app.models.event_condition import EventCondition
 from app.models.action_flow import ActionFlow
 from app.models.action_step import ActionStep
 from app.models.event_action import EventAction
-from app.models.event_log import EventLog
 
 router = APIRouter(tags=["ECA规则引擎"])
 
@@ -292,37 +291,6 @@ def get_model(model_id: int, db: Session = Depends(get_db), _user: User = Depend
     if not model:
         raise HTTPException(status_code=404, detail="模型不存在")
     return {"code": 200, "data": model.to_dict()}
-
-
-# ==================== 事件触发记录 ====================
-
-@router.get("/logs", summary="获取事件触发记录")
-@cached(ttl=10, prefix="eca:logs")
-def get_event_logs(
-    event_id: Optional[int] = Query(None, description="事件ID"),
-    status: Optional[str] = Query(None, description="状态: triggered/processing/completed/failed"),
-    limit: int = Query(50, description="返回数量"),
-    db: Session = Depends(get_db),
-    _user: User = Depends(require_auth),
-):
-    """获取事件触发记录"""
-    query = db.query(EventLog)
-    if event_id:
-        query = query.filter(EventLog.event_id == event_id)
-    if status:
-        query = query.filter(EventLog.status == status)
-    logs = query.order_by(EventLog.create_time.desc()).limit(limit).all()
-    return {"code": 200, "data": [l.to_dict() for l in logs]}
-
-
-@router.get("/logs/{log_id}", summary="获取事件触发记录详情")
-@cached(ttl=30, prefix="eca:log")
-def get_event_log(log_id: int, db: Session = Depends(get_db), _user: User = Depends(require_auth)):
-    """获取事件触发记录详情"""
-    log = db.query(EventLog).filter(EventLog.id == log_id).first()
-    if not log:
-        raise HTTPException(status_code=404, detail="记录不存在")
-    return {"code": 200, "data": log.to_dict()}
 
 
 # ==================== 调度器控制 ====================

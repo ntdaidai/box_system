@@ -10,7 +10,6 @@ import json
 import re
 import tempfile
 import time
-import uuid
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
 from urllib.parse import quote, urljoin, urlparse
@@ -18,10 +17,9 @@ from urllib.parse import quote, urljoin, urlparse
 import cv2
 import httpx
 import numpy as np
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from loguru import logger
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field, model_validator
 
@@ -30,18 +28,10 @@ from app.core.cache import cached, invalidate_cache
 from app.core.database import SessionLocal, get_db
 from app.core.security import require_auth
 from app.models.camera import Camera
-from app.models.event_library import EventLibrary
-from app.models.safety_event_task import SafetyEventTask
-from app.models.safety_integration import SafetyEventInstance, SafetyEventTimelineLog, VisualEventDetail
 from app.models.user import User
 from app.services.camera_stream import CameraStream, camera_manager
 from app.services.camera_web_proxy import camera_web_proxy_manager
-from app.services.camera_config import normalize_camera_source
 from app.services.camera_zone_store import get_camera_zone_store
-from app.services.safety_event_engine import get_safety_event_engine
-from app.services.safety_event_engine import RISK_HIGH
-from app.services.safety_event_runtime_service import safety_event_runtime_service
-from app.services.safety_event_ws import safety_event_ws_manager
 from app.services.stream_ticket import stream_ticket_store
 from app.services.video_detection import video_detection_service
 from app.services.vision_model_registry import vision_model_registry
@@ -53,37 +43,7 @@ AnalysisTask = Literal["detect", "classify"]
 CameraBrand = Literal["dahua", "hikvision"]
 
 
-class CameraAddRequest(BaseModel):
-    camera_id: str = Field(
-        ..., min_length=1, max_length=50, pattern=r"^[A-Za-z0-9_-]+$"
-    )
-    source: Optional[str] = Field(None, min_length=7, max_length=2048)
-    rtsp_url: Optional[str] = Field(None, min_length=8, max_length=2048)
-    name: str = Field("", max_length=100)
-
-    @model_validator(mode="after")
-    def validate_source(self):
-        self.source = normalize_camera_source(self.source or self.rtsp_url)
-        return self
-
-
-class CameraUpdateRequest(BaseModel):
-    source: Optional[str] = Field(None, min_length=7, max_length=2048)
-    rtsp_url: Optional[str] = Field(None, min_length=8, max_length=2048)
-    name: Optional[str] = Field(None, max_length=100)
-    auto_start: bool = True
-
-    @model_validator(mode="after")
-    def validate_source(self):
-        if self.source is not None or self.rtsp_url is not None:
-            self.source = normalize_camera_source(self.source or self.rtsp_url)
-        return self
-
-
 class CameraDevicePayload(BaseModel):
-    camera_id: Optional[str] = Field(
-        None, min_length=1, max_length=50, pattern=r"^[A-Za-z0-9_-]+$"
-    )
     camera_name: str = Field(..., min_length=1, max_length=128)
     brand: Optional[CameraBrand] = None
     ip_address: str = Field(..., min_length=3, max_length=128)
@@ -146,12 +106,10 @@ class DetectionZonePoint(BaseModel):
 
 class DetectionZoneRequest(BaseModel):
     id: Optional[str] = Field(None, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
-    zone_id: Optional[str] = Field(None, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     name: str = Field("", max_length=80)
     zone_name: str = Field("", max_length=80)
     type: Optional[Literal["PERSON_LOW", "PERSON_MEDIUM", "PERSON_HIGH", "FISHING"]] = None
     zone_type: Optional[Literal["PERSON_LOW", "PERSON_MEDIUM", "PERSON_HIGH", "FISHING"]] = None
-    camera_id: Optional[str] = Field(None, max_length=50)
     polygon_points: List[DetectionZonePoint] = Field(..., min_length=3, max_length=15)
     trigger_seconds: Optional[float] = Field(None, ge=0.0, le=3600.0)
     condition_durations: Optional[Dict[str, int]] = None
@@ -200,24 +158,6 @@ class DetectResponse(BaseModel):
     message: Optional[str] = None
 
 
-class SafetyEventActionRequest(BaseModel):
-    action_type: Literal[
-        "acknowledge",
-        "dispatch_staff",
-        "close",
-        "USER_ACK",
-        "TASK_DISPATCH",
-        "STAFF_ACCEPTED",
-        "STAFF_COMPLETED",
-        "FALSE_ALARM",
-        "MANUAL_RESOLVED",
-    ] = "USER_ACK"
-    remark: Optional[str] = Field(None, max_length=500)
-    reason: Optional[str] = Field(None, max_length=500)
-    assignee: Optional[str] = Field(None, max_length=128)
-    version: Optional[int] = Field(None, ge=0)
-
-
 VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 PEER_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{8,80}$")
 
@@ -244,13 +184,14 @@ def _persist_video(upload_file, target: Path, max_bytes: int) -> int:
 
 
 def _get_camera_or_404(camera_id: str) -> CameraStream:
-    camera = camera_manager.get_camera(camera_id)
+    runtime_id = str(camera_id)
+    camera = camera_manager.get_camera(runtime_id)
     if not camera:
         db = SessionLocal()
         try:
-            row = _camera_device_row(db, str(camera_id))
+            row = _camera_device_row(db, runtime_id)
             if row:
-                camera = camera_manager.get_camera(row.camera_id)
+                camera = camera_manager.get_camera(str(row.id))
         finally:
             db.close()
     if not camera:
@@ -346,10 +287,9 @@ async def _detect_camera_brand(
 
 
 def _camera_device_row(db: Session, identifier: str) -> Optional[Camera]:
-    row = db.query(Camera).filter(Camera.camera_id == identifier).first()
-    if row is None and identifier.isdigit():
-        row = db.query(Camera).filter(Camera.id == int(identifier)).first()
-    return row
+    if not str(identifier).isdigit():
+        return None
+    return db.query(Camera).filter(Camera.id == int(identifier)).first()
 
 
 def _camera_source_from_row(row: Camera) -> str:
@@ -375,20 +315,11 @@ def _camera_web_proxy_url(row: Camera) -> str:
     return camera_web_proxy_manager.public_url(int(row.web_proxy_port))
 
 
-def _camera_reserved_proxy_ports(db: Session, camera_id: Optional[str] = None) -> set[int]:
+def _camera_reserved_proxy_ports(db: Session, camera_device_id: Optional[int] = None) -> set[int]:
     query = db.query(Camera.web_proxy_port).filter(Camera.web_proxy_port.isnot(None))
-    if camera_id:
-        query = query.filter(Camera.camera_id != camera_id)
+    if camera_device_id is not None:
+        query = query.filter(Camera.id != camera_device_id)
     return {int(port) for (port,) in query.all() if port}
-
-
-def _generate_camera_id(db: Session) -> str:
-    for _ in range(10):
-        camera_id = f"cam_{uuid.uuid4().hex[:10]}"
-        exists = db.query(Camera.id).filter(Camera.camera_id == camera_id).first()
-        if not exists:
-            return camera_id
-    return f"cam_{int(time.time())}_{uuid.uuid4().hex[:6]}"
 
 
 def _camera_status_by_id() -> dict:
@@ -420,7 +351,7 @@ def _camera_row_response(
         "web_console_url": _camera_web_proxy_url(row) or _camera_web_console_url(row),
         "web_console_direct_url": _camera_web_console_url(row),
         "web_proxy_url": _camera_web_proxy_url(row),
-        "web_proxy_running": bool(camera_web_proxy_manager.status(row.camera_id)),
+        "web_proxy_running": bool(camera_web_proxy_manager.status(str(row.id))),
         "configured": True,
         "running": bool(status.get("running")),
         "connected": bool(status.get("connected")),
@@ -434,49 +365,51 @@ def _camera_row_response(
 
 def _sync_camera_runtime(row: Camera) -> Optional[dict]:
     source = _camera_source_from_row(row)
-    existing = camera_manager.get_camera(row.camera_id)
+    runtime_id = str(row.id)
+    existing = camera_manager.get_camera(runtime_id)
     if not row.enabled:
         if existing:
-            camera_manager.remove_camera(row.camera_id)
+            camera_manager.remove_camera(runtime_id)
         return None
     if existing:
         return camera_manager.update_camera(
-            row.camera_id,
+            runtime_id,
             source=source,
             name=row.camera_name,
             auto_start=True,
         )
     if camera_manager.add_camera(
-        camera_id=row.camera_id,
+        camera_id=runtime_id,
         source=source,
         name=row.camera_name,
         auto_start=True,
     ):
-        camera = camera_manager.get_camera(row.camera_id)
+        camera = camera_manager.get_camera(runtime_id)
         if camera:
-            stored_zones = get_camera_zone_store().get(row.camera_id)
+            stored_zones = get_camera_zone_store().get(runtime_id)
             if stored_zones:
                 camera.set_detection_zones(stored_zones)
             return camera.get_status()
-    return camera_manager.get_camera(row.camera_id).get_status() if camera_manager.get_camera(row.camera_id) else None
+    return camera_manager.get_camera(runtime_id).get_status() if camera_manager.get_camera(runtime_id) else None
 
 
 def _sync_camera_web_proxy(row: Camera, db: Session) -> Optional[dict]:
+    runtime_id = str(row.id)
     if not row.enabled:
-        camera_web_proxy_manager.stop_proxy(row.camera_id)
+        camera_web_proxy_manager.stop_proxy(runtime_id)
         return None
     try:
         proxy = camera_web_proxy_manager.start_proxy(
-            camera_id=row.camera_id,
+            camera_id=runtime_id,
             target_host=row.ip_address,
             target_port=row.web_port or 80,
             preferred_port=row.web_proxy_port,
-            reserved_ports=_camera_reserved_proxy_ports(db, row.camera_id),
+            reserved_ports=_camera_reserved_proxy_ports(db, row.id),
         )
         row.web_proxy_port = int(proxy["listen_port"])
         return proxy
     except Exception as exc:
-        logger.warning(f"摄像头 Web 控制台监听启动失败: camera={row.camera_id}, error={exc}")
+        logger.warning(f"摄像头 Web 控制台监听启动失败: camera={row.id}, error={exc}")
         row.last_error = f"Web控制台监听失败: {exc}"
         return None
 
@@ -498,161 +431,6 @@ def _test_camera_source(source: str, timeout_seconds: float = 6.0) -> tuple[bool
     finally:
         if cap is not None:
             cap.release()
-
-
-def _day_bounds(day: Optional[str] = None) -> tuple[str, float, float]:
-    if day:
-        try:
-            parsed = dt.datetime.strptime(day, "%Y-%m-%d").date()
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="日期格式必须为 YYYY-MM-DD") from exc
-    else:
-        parsed = dt.date.today()
-    start = dt.datetime.combine(parsed, dt.time.min).timestamp()
-    end = start + 86400
-    return parsed.isoformat(), start, end
-
-
-def _report_risk_level(report: dict) -> str:
-    counts = report.get("risk_counts") or {}
-    if counts.get("HIGH"):
-        return "high"
-    if counts.get("MEDIUM"):
-        return "medium"
-    return "low"
-
-
-def _report_markdown(report: dict) -> str:
-    counts = report.get("risk_counts") or {}
-    actions = report.get("action_counts") or {}
-    lines = [
-        f"# {report['date']} 今日巡逻报告",
-        "",
-        f"- 摄像头: {report.get('camera_id') or '全部'}",
-        f"- 安全事件总数: {report.get('total_events', 0)}",
-        f"- 低风险: {counts.get('LOW', 0)}",
-        f"- 中风险: {counts.get('MEDIUM', 0)}",
-        f"- 高风险: {counts.get('HIGH', 0)}",
-        f"- 已闭环: {report.get('resolved_events', 0)}",
-        f"- 未闭环: {report.get('open_events', 0)}",
-        "",
-        "## 联动动作",
-    ]
-    if actions:
-        lines.extend(f"- {key}: {value}" for key, value in sorted(actions.items()))
-    else:
-        lines.append("- 今日无联动动作")
-    return "\n".join(lines)
-
-
-def _safety_action_message(action_type: str) -> str:
-    return {
-        "acknowledge": "工作人员已确认告警",
-        "dispatch_staff": "已派出工作人员现场处置",
-        "close": "工作人员手动关闭事件",
-        "USER_ACK": "工作人员已确认事件",
-        "STAFF_ACCEPTED": "工作人员已接受任务",
-        "STAFF_COMPLETED": "工作人员已完成现场处置",
-        "TASK_DISPATCH": "已派现场人员处置",
-        "FALSE_ALARM": "工作人员判断为误报",
-        "MANUAL_RESOLVED": "工作人员确认事件解除",
-    }[action_type]
-
-
-def _canonical_action_type(action_type: str) -> str:
-    return {
-        "acknowledge": "STAFF_ACCEPTED",
-        "dispatch_staff": "TASK_DISPATCH",
-        "close": "MANUAL_RESOLVED",
-        "USER_ACK": "STAFF_ACCEPTED",
-    }.get(action_type, action_type)
-
-
-def _timeline_action_type(action: SafetyEventTimelineLog) -> str:
-    payload = action.payload or {}
-    canonical = payload.get("canonical_action_type")
-    if canonical:
-        return canonical
-    mapping = {
-        "event_created": "AI_DETECTED",
-        "risk_changed": {
-            "LOW": "RISK_LOW",
-            "MEDIUM": "RISK_MEDIUM",
-            "HIGH": "RISK_HIGH",
-        }.get(action.risk_level, "RISK_LOW"),
-        "RISK_CHANGED": {
-            "LOW": "RISK_LOW",
-            "MEDIUM": "RISK_MEDIUM",
-            "HIGH": "RISK_HIGH",
-        }.get(action.risk_level, "RISK_LOW"),
-        "broadcast_requested": "AUTO_BROADCAST",
-        "AUTO_BROADCAST": "AUTO_BROADCAST",
-        "DRONE_DISPATCH": "DRONE_DISPATCH",
-        "STAFF_DISPATCH": "STAFF_DISPATCH",
-        "event_acknowledged": "USER_ACK",
-        "staff_accepted": "STAFF_ACCEPTED",
-        "staff_completed": "STAFF_COMPLETED",
-        "staff_dispatched": "TASK_DISPATCH",
-        "event_manual_closed": "MANUAL_RESOLVED",
-        "RESOLVE": "MANUAL_RESOLVED" if (action.payload or {}).get("reason") == "manual_close" else "AUTO_RESOLVED",
-        "target_left": "TARGET_LEFT",
-        "TARGET_LEFT": "TARGET_LEFT",
-    }
-    raw = payload.get("action_type") or action.log_type
-    return mapping.get(raw, raw)
-
-
-def _timestamp(value: Optional[dt.datetime]) -> Optional[float]:
-    return value.timestamp() if value else None
-
-
-def _event_type_label(event: dict) -> str:
-    return event.get("event_type") or eventTypeFromZoneType(event.get("zone_type"))
-
-
-def eventTypeFromZoneType(zone_type: Optional[str]) -> str:
-    return {
-        "WARNING_ZONE": "人员警戒区停留",
-        "warning_zone": "人员警戒区停留",
-        "person_intrusion": "人员警戒区停留",
-        "WATERFRONT_ZONE": "人员进入亲水区",
-        "waterside_zone": "人员进入亲水区",
-        "WATER_ZONE": "人员进入涉水区",
-        "wading_zone": "人员进入涉水区",
-        "illegal_fishing": "疑似船只靠近",
-    }.get(str(zone_type), "区域风险事件")
-
-
-def _safety_event_to_dict(event: dict) -> dict:
-    return {**event, "event_type": _event_type_label(event)}
-
-
-def _timeline_to_dict(action: SafetyEventTimelineLog) -> dict:
-    payload = action.payload or {}
-    item = safety_event_runtime_service.timeline_dict(action)
-    item.update({
-        "action_type": _timeline_action_type(action),
-        "raw_action_type": payload.get("action_type") or action.log_type,
-        "from_status": payload.get("from_status"),
-        "to_status": payload.get("to_status"),
-        "operator_role": payload.get("operator_role"),
-    })
-    return item
-
-
-def _is_closed(event: SafetyEventInstance) -> bool:
-    return event.status in {"COMPLETED", "FALSE_ALARM"} or event.state == "RESOLVED"
-
-
-def _transition_status(event: SafetyEventInstance, action_type: str) -> str:
-    current = event.status or ("COMPLETED" if event.state == "RESOLVED" else "PENDING")
-    if action_type in {"STAFF_ACCEPTED", "STAFF_COMPLETED", "TASK_DISPATCH"}:
-        return "PROCESSING"
-    if action_type == "FALSE_ALARM":
-        return "FALSE_ALARM"
-    if action_type == "MANUAL_RESOLVED":
-        return "COMPLETED"
-    return current
 
 
 def _validate_peer_id(peer_id: str) -> str:
@@ -756,16 +534,6 @@ async def _mjpeg_response(
 
 # dai: Static routes stay ahead of dynamic camera-id routes so Starlette never
 # mistakes "model" or "detect" for a camera identifier.
-@router.get("/list", response_model=DetectResponse, summary="获取摄像头列表")
-@cached(ttl=2, prefix="camera:list")
-async def list_cameras(
-    _user: User = Depends(require_auth),
-):
-    statuses = _camera_status_by_id()
-    cameras = list(statuses.values())
-    return DetectResponse(code=200, data={"cameras": cameras, "total": len(cameras)})
-
-
 @router.get("/devices", response_model=DetectResponse, summary="获取摄像头设备台账")
 @cached(ttl=10, prefix="camera:devices")
 async def list_camera_devices(
@@ -776,7 +544,7 @@ async def list_camera_devices(
     rows = db.query(Camera).order_by(Camera.id.asc()).all()
     cameras = []
     for row in rows:
-        item = _camera_row_response(row, statuses.get(row.camera_id))
+        item = _camera_row_response(row, statuses.get(str(row.id)))
         item["broadcast_devices"] = broadcast_service.list_devices_for_camera(db, str(row.id))
         cameras.append(item)
     db.commit()
@@ -812,10 +580,6 @@ async def create_camera_device(
     db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    camera_id = payload.camera_id or _generate_camera_id(db)
-    existing = db.query(Camera).filter(Camera.camera_id == camera_id).first()
-    if existing:
-        raise HTTPException(status_code=409, detail="设备ID已存在")
     if db.query(Camera.id).filter(Camera.camera_name == payload.camera_name).first():
         raise HTTPException(status_code=409, detail="摄像头名称已存在")
     ok, detected_brand, message = await _detect_camera_brand(
@@ -828,7 +592,6 @@ async def create_camera_device(
     if not ok:
         raise HTTPException(status_code=400, detail=f"测试连接失败，未保存设备: {message}")
     row = Camera(
-        camera_id=camera_id,
         camera_name=payload.camera_name,
         brand=detected_brand,
         ip_address=payload.ip_address,
@@ -934,7 +697,14 @@ async def get_camera_device_password(
     row = _camera_device_row(db, camera_id)
     if not row:
         raise HTTPException(status_code=404, detail="摄像头设备不存在")
-    return DetectResponse(code=200, data={"id": row.id, "has_password": bool(row.password), "password": ""})
+    return DetectResponse(
+        code=200,
+        data={
+            "id": row.id,
+            "has_password": bool(row.password),
+            "password": row.password or "",
+        },
+    )
 
 
 @router.delete("/devices/{camera_id}", response_model=DetectResponse, summary="删除摄像头设备")
@@ -946,8 +716,8 @@ async def delete_camera_device(
     row = _camera_device_row(db, camera_id)
     if not row:
         raise HTTPException(status_code=404, detail="摄像头设备不存在")
-    camera_manager.remove_camera(row.camera_id)
-    camera_web_proxy_manager.stop_proxy(row.camera_id)
+    camera_manager.remove_camera(str(row.id))
+    camera_web_proxy_manager.stop_proxy(str(row.id))
     db.delete(row)
     db.commit()
     await invalidate_cache("camera:*")
@@ -1171,52 +941,6 @@ async def delete_video_detection_job(
     return DetectResponse(code=200, data={"job_id": job_id, "message": "任务已清理"})
 
 
-@router.post("/add", response_model=DetectResponse, summary="添加摄像头")
-async def add_camera(
-    payload: CameraAddRequest,
-    _user: User = Depends(require_auth),
-):
-    success = camera_manager.add_camera(
-        camera_id=payload.camera_id,
-        source=payload.source,
-        name=payload.name,
-    )
-    if success:
-        camera = _get_camera_or_404(payload.camera_id)
-        stored_zones = get_camera_zone_store().get(payload.camera_id)
-        if stored_zones:
-            camera.set_detection_zones(stored_zones)
-    if not success:
-        raise HTTPException(status_code=409, detail="摄像头 ID 已存在")
-    await invalidate_cache("camera:*")
-    return DetectResponse(
-        code=200,
-        data={"camera_id": payload.camera_id, "message": "摄像头添加成功"},
-    )
-
-
-@router.put("/{camera_id}", response_model=DetectResponse, summary="更新摄像头信息")
-async def update_camera(
-    camera_id: str,
-    payload: CameraUpdateRequest,
-    _user: User = Depends(require_auth),
-):
-    camera = _get_camera_or_404(camera_id)
-    status = camera_manager.update_camera(
-        camera_id,
-        source=payload.source if payload.source is not None else camera.source,
-        name=payload.name if payload.name is not None else camera.name,
-        auto_start=payload.auto_start,
-    )
-    if status is None:
-        raise HTTPException(status_code=404, detail="摄像头不存在")
-    await invalidate_cache("camera:*")
-    return DetectResponse(
-        code=200,
-        data={**status, "message": "摄像头信息已更新"},
-    )
-
-
 @router.post(
     "/stream/{camera_id}/ticket",
     response_model=DetectResponse,
@@ -1268,361 +992,6 @@ async def get_detected_stream(
 
 
 @router.get(
-    "/safety/events",
-    response_model=DetectResponse,
-    summary="获取安全事件列表",
-)
-async def get_safety_events(
-    camera_id: Optional[str] = Query(None, max_length=50),
-    day: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
-    status: Optional[str] = Query(None, max_length=32),
-    disposal_status: Optional[str] = Query(None, max_length=32),
-    risk_level: Optional[str] = Query(None, max_length=16),
-    event_type: Optional[str] = Query(None, max_length=64),
-    keyword: Optional[str] = Query(None, max_length=128),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=200),
-    db: Session = Depends(get_db),
-    _user: User = Depends(require_auth),
-):
-    since_dt = until_dt = None
-    if day:
-        _, since, until = _day_bounds(day)
-        since_dt = dt.datetime.fromtimestamp(since)
-        until_dt = dt.datetime.fromtimestamp(until)
-    query = (
-        db.query(SafetyEventInstance)
-        .join(EventLibrary, EventLibrary.id == SafetyEventInstance.current_event_id)
-        .outerjoin(VisualEventDetail, VisualEventDetail.event_instance_id == SafetyEventInstance.id)
-        .outerjoin(Camera, Camera.id == VisualEventDetail.camera_id)
-    )
-    if camera_id:
-        query = query.filter(Camera.camera_id == camera_id)
-    if status:
-        normalized_status = "COMPLETED" if status.upper() == "RESOLVED" else status.upper()
-        query = query.filter(SafetyEventInstance.status == normalized_status)
-    if risk_level:
-        query = query.filter(SafetyEventInstance.risk_level == risk_level)
-    if event_type:
-        query = query.filter(EventLibrary.event_name == event_type)
-    if since_dt:
-        query = query.filter(SafetyEventInstance.started_at >= since_dt)
-    if until_dt:
-        query = query.filter(SafetyEventInstance.started_at < until_dt)
-    if keyword:
-        like = f"%{keyword}%"
-        query = query.filter(or_(
-            SafetyEventInstance.instance_no.like(like),
-            SafetyEventInstance.summary.like(like),
-            Camera.camera_id.like(like),
-            Camera.camera_name.like(like),
-            EventLibrary.event_name.like(like),
-            VisualEventDetail.zone_name.like(like),
-        ))
-    rows = query.order_by(SafetyEventInstance.started_at.desc()).all()
-    events = [
-        _safety_event_to_dict(safety_event_runtime_service.event_dict(db, row))
-        for row in rows
-    ]
-    if disposal_status:
-        events = [row for row in events if row.get("disposal_status") == disposal_status]
-    total = len(events)
-    events = events[(page - 1) * page_size:page * page_size]
-    return DetectResponse(code=200, data={
-        "events": events,
-        "items": events,
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-    })
-
-
-@router.get(
-    "/safety/events/{event_id}",
-    response_model=DetectResponse,
-    summary="获取安全事件闭环详情",
-)
-async def get_safety_event_detail(
-    event_id: str,
-    db: Session = Depends(get_db),
-    _user: User = Depends(require_auth),
-):
-    event = safety_event_runtime_service.get_instance(db, event_id)
-    if not event:
-        raise HTTPException(status_code=404, detail="安全事件不存在")
-    actions = (
-        db.query(SafetyEventTimelineLog)
-        .filter(SafetyEventTimelineLog.event_instance_id == event.id)
-        .order_by(SafetyEventTimelineLog.create_time.asc(), SafetyEventTimelineLog.id.asc())
-        .all()
-    )
-    tasks = (
-        db.query(SafetyEventTask)
-        .filter(SafetyEventTask.event_instance_id == event.id)
-        .order_by(SafetyEventTask.dispatched_at.desc())
-        .all()
-    )
-    return DetectResponse(code=200, data={
-        "event": _safety_event_to_dict(safety_event_runtime_service.event_dict(db, event)),
-        "timeline": [_timeline_to_dict(action) for action in actions],
-        "tasks": [
-            {
-                "id": task.id,
-                "event_id": event.instance_no,
-                "assignee": task.assignee,
-                "dispatch_operator": task.dispatch_operator,
-                "task_status": task.task_status,
-                "task_note": task.task_note,
-                "dispatched_at": _timestamp(task.dispatched_at),
-                "accepted_at": _timestamp(task.accepted_at),
-                "completed_at": _timestamp(task.completed_at),
-            }
-            for task in tasks
-        ],
-    })
-
-
-@router.get(
-    "/safety/report/today",
-    response_model=DetectResponse,
-    summary="生成今日巡逻报告",
-)
-async def get_today_safety_report(
-    camera_id: Optional[str] = Query(None, max_length=50),
-    persist: bool = Query(False, description="是否保存到 analysis_report"),
-    db: Session = Depends(get_db),
-    _user: User = Depends(require_auth),
-):
-    return DetectResponse(
-        code=200,
-        message="巡查报告模板调整中",
-        data={
-            "available": False,
-            "status": "TEMPLATE_PENDING",
-            "camera_id": camera_id,
-            "persisted": False,
-        },
-    )
-
-
-@router.post(
-    "/safety/events/{event_id}/action",
-    response_model=DetectResponse,
-    summary="记录安全事件人工处置动作",
-)
-async def record_safety_event_action(
-    event_id: str,
-    payload: SafetyEventActionRequest,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_auth),
-):
-    return await _record_safety_event_action(event_id, payload, db, user)
-
-
-async def _record_safety_event_action(
-    event_id: str,
-    payload: SafetyEventActionRequest,
-    db: Session,
-    user: User,
-):
-    event = safety_event_runtime_service.get_instance(db, event_id)
-    if not event:
-        raise HTTPException(status_code=404, detail="安全事件不存在")
-    if _is_closed(event):
-        raise HTTPException(status_code=409, detail="事件已结束，不能继续处置")
-    if payload.version is not None and (event.version or 0) != payload.version:
-        raise HTTPException(status_code=409, detail="事件状态已变化，请刷新后重试")
-
-    now = dt.datetime.now()
-    operator = getattr(user, "username", None) or "UNKNOWN"
-    canonical_action = _canonical_action_type(payload.action_type)
-    from_status = event.status or "PENDING"
-    to_status = _transition_status(event, canonical_action)
-
-    if canonical_action in {"STAFF_ACCEPTED", "STAFF_COMPLETED", "TASK_DISPATCH"} and event.risk_level != RISK_HIGH:
-        raise HTTPException(status_code=409, detail="只有高风险事件需要人工处置")
-
-    task = safety_event_runtime_service.latest_task(db, event.id)
-    if canonical_action == "STAFF_ACCEPTED" and task and task.task_status not in {"WAITING_ACCEPT", "DISPATCHED"}:
-        raise HTTPException(status_code=409, detail="当前任务不能重复接单")
-
-    if canonical_action == "TASK_DISPATCH":
-        if task is None:
-            task = SafetyEventTask(
-                event_instance_id=event.id,
-                assignee=payload.assignee,
-                dispatch_operator=operator,
-                task_status="WAITING_ACCEPT",
-                task_note=payload.remark,
-                dispatched_at=now,
-            )
-            db.add(task)
-        else:
-            task.assignee = payload.assignee or task.assignee
-            task.dispatch_operator = operator
-            task.task_status = "WAITING_ACCEPT"
-            task.task_note = payload.remark or task.task_note
-            task.dispatched_at = now
-    elif canonical_action == "STAFF_ACCEPTED":
-        if task is None:
-            task = SafetyEventTask(
-                event_instance_id=event.id,
-                dispatch_operator="SYSTEM",
-                task_status="WAITING_ACCEPT",
-                task_note="工作人员接单时自动补建任务",
-                dispatched_at=now,
-            )
-            db.add(task)
-        task.assignee = task.assignee or operator
-        task.task_status = "ACCEPTED"
-        task.accepted_at = now
-    elif canonical_action == "STAFF_COMPLETED":
-        if task:
-            task.task_status = "COMPLETED"
-            task.completed_at = now
-
-    event.status = to_status
-    if canonical_action in {"FALSE_ALARM", "MANUAL_RESOLVED", "STAFF_COMPLETED"}:
-        event.state = "RESOLVED"
-        event.status = "FALSE_ALARM" if canonical_action == "FALSE_ALARM" else "COMPLETED"
-        event.resolved_at = now
-        event.resolve_reason = (
-            "false_alarm" if canonical_action == "FALSE_ALARM"
-            else "staff_completed" if canonical_action == "STAFF_COMPLETED"
-            else "manual_close"
-        )
-    event.version = (event.version or 0) + 1
-    db.flush()
-    log = safety_event_runtime_service.append_timeline(
-        db,
-        event,
-        action_key=safety_event_runtime_service.new_action_key("manual-operation"),
-        log_type="RESOLVE" if event.state == "RESOLVED" else "MANUAL",
-        trigger_type="MANUAL",
-        status="SUCCESS",
-        message=_safety_action_message(payload.action_type),
-        operator=operator,
-        payload={
-            "instance_no": event.instance_no,
-            "canonical_action_type": canonical_action,
-            "from_status": from_status,
-            "to_status": event.status,
-            "operator_role": getattr(user, "role", None),
-            "remark": payload.remark,
-            "reason": payload.reason,
-            "assignee": payload.assignee,
-            "task_id": task.id if task else None,
-        },
-        create_time=now,
-    )
-    db.commit()
-    if canonical_action in {"MANUAL_RESOLVED", "FALSE_ALARM", "STAFF_COMPLETED"}:
-        get_safety_event_engine().resolve_event(
-            event.instance_no,
-            reason=event.resolve_reason,
-            now=now.timestamp(),
-            emit_action=False,
-        )
-    await invalidate_cache("alarm:*")
-    response_event = _safety_event_to_dict(safety_event_runtime_service.event_dict(db, event))
-    timeline_item = _timeline_to_dict(log)
-    await safety_event_ws_manager.broadcast({
-        "type": "EVENT_UPDATED",
-        "data": response_event,
-    })
-    await safety_event_ws_manager.broadcast({
-        "type": "EVENT_ACTION_ADDED",
-        "data": timeline_item,
-    })
-    return DetectResponse(
-        code=200,
-        data={
-            "event_id": event.instance_no,
-            "action_type": canonical_action,
-            "event": response_event,
-            "timeline_item": timeline_item,
-            "message": _safety_action_message(payload.action_type),
-        },
-    )
-
-
-@router.post("/safety/events/{event_id}/ack", response_model=DetectResponse, summary="确认安全事件")
-async def acknowledge_safety_event(
-    event_id: str,
-    payload: SafetyEventActionRequest,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_auth),
-):
-    payload.action_type = "USER_ACK"
-    return await _record_safety_event_action(event_id, payload, db, user)
-
-
-@router.post("/safety/events/{event_id}/accept", response_model=DetectResponse, summary="接受人工处置任务")
-async def accept_safety_event(
-    event_id: str,
-    payload: SafetyEventActionRequest,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_auth),
-):
-    payload.action_type = "STAFF_ACCEPTED"
-    return await _record_safety_event_action(event_id, payload, db, user)
-
-
-@router.post("/safety/events/{event_id}/dispatch", response_model=DetectResponse, summary="派现场人员")
-async def dispatch_safety_event(
-    event_id: str,
-    payload: SafetyEventActionRequest,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_auth),
-):
-    payload.action_type = "TASK_DISPATCH"
-    return await _record_safety_event_action(event_id, payload, db, user)
-
-
-@router.post("/safety/events/{event_id}/false-alarm", response_model=DetectResponse, summary="标记误报")
-async def false_alarm_safety_event(
-    event_id: str,
-    payload: SafetyEventActionRequest,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_auth),
-):
-    payload.action_type = "FALSE_ALARM"
-    return await _record_safety_event_action(event_id, payload, db, user)
-
-
-@router.post("/safety/events/{event_id}/resolve", response_model=DetectResponse, summary="人工确认解除")
-async def resolve_safety_event(
-    event_id: str,
-    payload: SafetyEventActionRequest,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_auth),
-):
-    payload.action_type = "MANUAL_RESOLVED"
-    return await _record_safety_event_action(event_id, payload, db, user)
-
-
-@router.post("/safety/events/{event_id}/complete", response_model=DetectResponse, summary="工作人员完成现场处置")
-async def complete_safety_event(
-    event_id: str,
-    payload: SafetyEventActionRequest,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_auth),
-):
-    payload.action_type = "STAFF_COMPLETED"
-    return await _record_safety_event_action(event_id, payload, db, user)
-
-
-@router.websocket("/safety/ws")
-async def safety_event_ws(websocket: WebSocket):
-    await safety_event_ws_manager.connect(websocket)
-    try:
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        await safety_event_ws_manager.disconnect(websocket)
-
-
-@router.get(
     "/{camera_id}/zones",
     response_model=DetectResponse,
     summary="获取摄像头虚拟检测区域",
@@ -1633,13 +1002,13 @@ async def get_detection_zones(
     _user: User = Depends(require_auth),
 ):
     camera = _get_camera_or_404(camera_id)
-    runtime_camera_id = camera.camera_id
-    stored_zones = get_camera_zone_store().get(runtime_camera_id)
+    camera_device_id = camera.camera_id
+    stored_zones = get_camera_zone_store().get(camera_device_id)
     if stored_zones:
         camera.set_detection_zones(stored_zones)
     return DetectResponse(
         code=200,
-        data={"camera_id": runtime_camera_id, "zones": stored_zones or camera.get_detection_zones()},
+        data={"camera_device_id": int(camera_device_id), "zones": stored_zones or camera.get_detection_zones()},
     )
 
 
@@ -1654,19 +1023,18 @@ async def save_detection_zones(
     _user: User = Depends(require_auth),
 ):
     camera = _get_camera_or_404(camera_id)
-    runtime_camera_id = camera.camera_id
+    camera_device_id = camera.camera_id
     try:
         zones = camera.set_detection_zones(
             [
                 {
                     **zone.model_dump(exclude_none=True),
-                    "camera_id": runtime_camera_id,
                 }
                 for zone in payload.zones
             ]
         )
-        get_camera_zone_store().save(runtime_camera_id, zones)
-        zones = get_camera_zone_store().get(runtime_camera_id)
+        get_camera_zone_store().save(camera_device_id, zones)
+        zones = get_camera_zone_store().get(camera_device_id)
         if zones:
             camera.set_detection_zones(zones)
         await invalidate_cache("camera:zones*")
@@ -1674,7 +1042,7 @@ async def save_detection_zones(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return DetectResponse(
         code=200,
-        data={"camera_id": runtime_camera_id, "zones": zones, "message": "检测区域已保存"},
+        data={"camera_device_id": int(camera_device_id), "zones": zones, "message": "检测区域已保存"},
     )
 
 
@@ -1855,15 +1223,22 @@ async def detection_events(
 @cached(ttl=2, prefix="camera:status")
 async def get_camera_status(
     camera_id: str,
+    db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    return DetectResponse(code=200, data=_get_camera_or_404(camera_id).get_status())
+    row = _camera_device_row(db, camera_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="摄像头不存在")
+    return DetectResponse(
+        code=200,
+        data=_camera_row_response(row, _get_camera_or_404(camera_id).get_status()),
+    )
 
 
 @router.api_route(
     "/{camera_id}/web-console/{path:path}",
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    summary="代理访问摄像头 Web 控制台",
+    include_in_schema=False,
 )
 async def proxy_camera_web_console(
     camera_id: str,
@@ -2021,18 +1396,4 @@ async def snapshot_detect(
     return DetectResponse(
         code=200,
         data={**result, "image_base64": image_base64, "minio_url": minio_url},
-    )
-
-
-@router.delete("/{camera_id}", response_model=DetectResponse, summary="删除摄像头")
-async def remove_camera(
-    camera_id: str,
-    _user: User = Depends(require_auth),
-):
-    if not camera_manager.remove_camera(camera_id):
-        raise HTTPException(status_code=404, detail="摄像头不存在")
-    await invalidate_cache("camera:*")
-    return DetectResponse(
-        code=200,
-        data={"camera_id": camera_id, "message": "摄像头已删除"},
     )

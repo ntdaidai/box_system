@@ -258,7 +258,9 @@ class SensorHistoryServiceTest(unittest.TestCase):
                 "timestamp": first_bucket_end,
                 "data": {
                     "wind_speed_ms": 3.0,
+                    "wind_speed_ms_max": 5.0,
                     "wind_speed_kmh": 10.8,
+                    "wind_speed_kmh_max": 18.0,
                     "wind_level": 2.6,
                     "wind_angle": 270.0,
                     "wind_dir_code": 12,
@@ -284,6 +286,8 @@ class SensorHistoryServiceTest(unittest.TestCase):
         self.assertEqual(payload["point_count"], 2)
         self.assertEqual(len(payload["history"]), 31)
         self.assertEqual(payload["history"][0]["data"]["wind_speed_kmh"], 10.8)
+        self.assertEqual(payload["history"][0]["data"]["wind_speed_kmh_max"], 18.0)
+        self.assertEqual(payload["history"][0]["data"]["wind_speed_ms_max"], 5.0)
         self.assertEqual(payload["history"][0]["data"]["wind_level"], 2.6)
         self.assertEqual(payload["history"][0]["data"]["wind_direction"], "西")
         self.assertEqual(payload["history"][1]["data"]["wind_direction"], "西北")
@@ -310,6 +314,23 @@ class SensorHistoryServiceTest(unittest.TestCase):
         july_first = next(row for row in payload["history"] if row["date"] == "2026-07-01")
         self.assertEqual(july_first["data"]["wind_direction"], "西")
 
+    def test_vibration_calendar_returns_daily_average_and_max_rms(self):
+        fake = FakeIoTDB()
+        timezone = ZoneInfo("Asia/Shanghai")
+        bucket_end = datetime(2026, 7, 2, tzinfo=timezone).timestamp()
+        fake.points_by_path["root.dam.rollup_1d.vib_001"] = [{
+            "timestamp": bucket_end,
+            "data": {"total_rms": 0.012, "total_rms_max": 0.034, "dominant_freq": 41.2},
+        }]
+        service = SensorHistoryService(iotdb=fake)
+
+        payload = service.query_vibration_calendar(2026, 7)
+
+        self.assertEqual(payload["aggregation"], "daily_rms_average")
+        self.assertEqual(payload["point_count"], 1)
+        self.assertEqual(payload["history"][0]["data"]["rms"], 0.012)
+        self.assertEqual(payload["history"][0]["data"]["rms_max"], 0.034)
+
     def test_rain_calendar_returns_only_daily_rainfall(self):
         fake = FakeIoTDB()
         timezone = ZoneInfo("Asia/Shanghai")
@@ -321,6 +342,7 @@ class SensorHistoryServiceTest(unittest.TestCase):
                 "data": {
                     "daily_rain": 18.6,
                     "daily_rain_sample_count": 1440,
+                    "rain_duration_hours": 2.5,
                     "total_rain": 300.0,
                     "today_rain": 9.3,
                 },
@@ -339,6 +361,7 @@ class SensorHistoryServiceTest(unittest.TestCase):
         self.assertEqual(payload["point_count"], 2)
         self.assertEqual(len(payload["history"]), 31)
         self.assertEqual(payload["history"][0]["data"]["daily_rain"], 18.6)
+        self.assertEqual(payload["history"][0]["data"]["rain_duration_hours"], 2.5)
         self.assertEqual(payload["history"][1]["data"]["daily_rain"], 0.0)
         self.assertNotIn("total_rain", payload["history"][0]["data"])
         self.assertNotIn("today_rain", payload["history"][0]["data"])

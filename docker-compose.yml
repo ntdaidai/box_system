@@ -81,7 +81,7 @@ services:
       - ./dam-miniprogram/wechat-keys/wechat.env
     environment:
       # vLLM 视觉模型
-      VLLM_QWEN3VL_URL: http://localhost:8000
+      VLLM_QWEN3VL_URL: "${VLLM_QWEN3VL_URL:-http://localhost:8003}"
       # IoTDB
       IOTDB_HOST: 127.0.0.1
       IOTDB_PORT: 6667
@@ -110,14 +110,6 @@ services:
       YOLO_CLASSIFY_FALLBACK_PATH: "${YOLO_CLASSIFY_FALLBACK_PATH:-/models/disaster-classifier/best.pt}"
       YOLO_CONFIDENCE: "0.5"
       YOLO_IOU: "0.45"
-      # dai: 未接入摄像头时保持为空；接入后在 .env 中填写真实海康地址。
-      # 多路模式可改用 CAMERA_CONFIGS_JSON，格式见 README 的摄像头章节。
-      CAMERA_RTSP_URL: "${CAMERA_RTSP_URL:-}"
-      CAMERA_SOURCE: "${CAMERA_SOURCE:-}"
-      CAMERA_CONFIGS_JSON: "${CAMERA_CONFIGS_JSON:-}"
-      CAMERA_ID: "${CAMERA_ID:-camera_001}"
-      CAMERA_NAME: "${CAMERA_NAME:-主摄像头}"
-      CAMERA_AUTO_START: "${CAMERA_AUTO_START:-true}"
       CAMERA_DETECTION_FPS: "${CAMERA_DETECTION_FPS:-5}"
       CAMERA_JPEG_QUALITY: "${CAMERA_JPEG_QUALITY:-80}"
       # WebRTC Streamer 仅监听宿主机回环地址，信令通过后端认证代理。
@@ -133,6 +125,10 @@ services:
       ONLYOFFICE_PUBLIC_URL: "${ONLYOFFICE_PUBLIC_URL:-http://121.248.203.47}"
       ONLYOFFICE_JWT_SECRET: "${ONLYOFFICE_JWT_SECRET:-mysecretkey}"
       DOCUMENT_BUCKET: "${DOCUMENT_BUCKET:-documents}"
+      PATROL_REPORT_AUTO_ENABLED: "${PATROL_REPORT_AUTO_ENABLED:-true}"
+      PATROL_REPORT_AUTO_TIME: "${PATROL_REPORT_AUTO_TIME:-00:00}"
+      PATROL_REPORT_USER_ID: "${PATROL_REPORT_USER_ID:-user_001}"
+      PATROL_REPORT_USER_NAME: "${PATROL_REPORT_USER_NAME:-管理员}"
       MINIO_ENDPOINT: "${MINIO_ENDPOINT:-localhost:9000}"
       MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY:-minioadmin}"
       MINIO_SECRET_KEY: "${MINIO_SECRET_KEY:-minioadmin}"
@@ -147,9 +143,6 @@ services:
       BROADCAST_TTS_VOICE: "${BROADCAST_TTS_VOICE:-cmn}"
       BROADCAST_TTS_SPEED_WPM: "${BROADCAST_TTS_SPEED_WPM:-150}"
     devices:
-      # dai: 海康网络摄像头不需要设备映射；USB/UVC 摄像头接入 Jetson
-      # 时，在 .env 同时设置 CAMERA_DEVICE=/dev/video0 和 CAMERA_SOURCE=/dev/video0。
-      - "${CAMERA_DEVICE:-/dev/null}:${CAMERA_DEVICE:-/dev/null}"
       - "/dev/snd:/dev/snd"
       - "/dev/ttyCH341USB0:/dev/ttyCH341USB0"
       - "/dev/ttyCH341USB1:/dev/ttyCH341USB1"

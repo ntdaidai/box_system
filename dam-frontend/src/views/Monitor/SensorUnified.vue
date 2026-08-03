@@ -45,6 +45,7 @@
               <span>{{ metric.label }}</span>
             </div>
           </div>
+          <div class="card-update">{{ card.updatedAgo }}</div>
           <div class="today-strip">
             <span v-for="item in card.todayInfo" :key="item.label">
               {{ item.label }} {{ item.value }}
@@ -54,33 +55,39 @@
       </div>
     </section>
 
+    <section class="yesterday-summary">
+      <div class="yesterday-head">
+        <h3>昨日摘要</h3>
+        <span>{{ yesterdayLabel }}</span>
+      </div>
+      <div class="yesterday-grid">
+        <div v-for="item in yesterdaySummary" :key="item.key" class="yesterday-card">
+          <div class="yesterday-card-title">
+            <span class="sensor-dot" :class="item.key"></span>
+            <strong>{{ item.title }}</strong>
+          </div>
+          <div class="yesterday-main">
+            <span>{{ item.primaryLabel }}</span>
+            <strong>{{ item.primaryValue }}</strong>
+          </div>
+          <div class="yesterday-stat-pills">
+            <span v-for="stat in item.stats" :key="stat.label">
+              <small>{{ stat.label }}</small>
+              <b>{{ stat.value }}</b>
+            </span>
+          </div>
+          <div class="yesterday-change" :class="item.changeClass">
+            <span>{{ item.changeLabel }}</span>
+            <strong>{{ item.change }}</strong>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section class="history-panel">
       <div class="history-header">
         <div class="history-title">
           <h3>历史记录</h3>
-        </div>
-      </div>
-
-      <div class="yesterday-summary">
-        <div class="yesterday-head">
-          <div>
-            <h4>昨日摘要</h4>
-            <span>{{ yesterdayLabel }}</span>
-          </div>
-        </div>
-        <div class="yesterday-grid">
-          <div v-for="item in yesterdaySummary" :key="item.key" class="yesterday-card">
-            <div class="yesterday-card-title">
-              <span class="sensor-dot" :class="item.key"></span>
-              <strong>{{ item.title }}</strong>
-            </div>
-            <div class="yesterday-main">{{ item.primary }}</div>
-            <div class="yesterday-meta">
-              <span v-for="meta in item.meta" :key="meta.label">
-                {{ meta.label }} {{ meta.value }}
-              </span>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -215,7 +222,18 @@
       <div class="summary-card data-overview-card">
         <div class="summary-title overview">
           <h3>周期概览</h3>
-          <span>{{ periodOverviewLabel }}</span>
+          <div class="overview-title-meta">
+            <span>{{ periodOverviewLabel }}</span>
+            <b>{{ periodComparisonLabel }}</b>
+            <el-tooltip
+              :content="periodOverviewHelp"
+              placement="top-end"
+            >
+              <button type="button" class="period-help" aria-label="周期说明">
+                <el-icon><InfoFilled /></el-icon>
+              </button>
+            </el-tooltip>
+          </div>
         </div>
         <div class="period-overview-grid">
           <div v-for="item in periodOverviewRows" :key="item.key" class="period-overview-card">
@@ -239,7 +257,7 @@
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
-import { Download } from '@element-plus/icons-vue'
+import { Download, InfoFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import {
   getAllSensorRealtime,
@@ -274,6 +292,7 @@ const chartData = ref({ view: 'recent24h', history: [], window: null })
 const thresholdVisibility = reactive({ warning: false, alarm: false })
 const exportRange = ref([])
 const exportLoading = ref(false)
+const nowTick = ref(Date.now())
 const summaryData = reactive({
   tempRecent: [],
   rainRecent: [],
@@ -289,6 +308,7 @@ let chart = null
 let realtimeTimer = null
 let refreshTimer = null
 let summaryTimer = null
+let tickTimer = null
 let resizeHandler = null
 let requestSerial = 0
 let isMounted = false
@@ -339,6 +359,7 @@ const liveCards = computed(() => {
       statusClass: tempHumidityStatusClass(temp),
       note: '环境状态',
       time: formatCommTime(realtimeData.value.temp_humidity?.timestamp),
+      updatedAgo: formatUpdatedAgo(realtimeData.value.temp_humidity?.timestamp),
       metrics: [
         { label: '温度', value: formatMetric(temp.temperature, 1, '℃') },
         { label: '湿度', value: formatMetric(temp.humidity, 1, '%') },
@@ -353,6 +374,7 @@ const liveCards = computed(() => {
       statusClass: rainStatusClass(rain),
       note: '瞬时 / 今日',
       time: formatCommTime(realtimeData.value.rain?.timestamp),
+      updatedAgo: formatUpdatedAgo(realtimeData.value.rain?.timestamp),
       metrics: [
         { label: '瞬时', value: formatMetric(rain.instant_rain, 1, 'mm') },
         { label: '今日', value: formatMetric(rain.today_rain, 1, 'mm') },
@@ -367,6 +389,7 @@ const liveCards = computed(() => {
       statusClass: windStatusClass(wind),
       note: wind.wind_direction || '--',
       time: formatCommTime(realtimeData.value.wind?.timestamp),
+      updatedAgo: formatUpdatedAgo(realtimeData.value.wind?.timestamp),
       angle: windDirectionAngle(wind),
       directionText: wind.wind_direction || '--',
       metrics: [
@@ -383,6 +406,7 @@ const liveCards = computed(() => {
       statusClass: vibrationStatusClass(vibration),
       note: 'RMS / 主频',
       time: formatCommTime(vibration.timestamp),
+      updatedAgo: formatUpdatedAgo(vibration.timestamp),
       metrics: [
         { label: 'RMS', value: formatMetric(vibration.total_rms, 3, 'g') },
         { label: '主频', value: formatMetric(vibration.dominant_freq, 1, 'Hz') },
@@ -403,79 +427,114 @@ const yesterdayLabel = computed(() => displayDateKey(yesterdayKey.value))
 const yesterdaySummary = computed(() => {
   const yesterday = daySnapshot(yesterdayKey.value)
   const prior = daySnapshot(priorDayKey.value)
+  const tempDelta = buildDelta(tempAverage(yesterday.temp), tempAverage(prior.temp), 1, '℃')
+  const humidityDelta = buildDelta(humidityAverage(yesterday.temp), humidityAverage(prior.temp), 1, '%')
+  const rainDelta = buildDelta(rainTotal(yesterday.rain), rainTotal(prior.rain), 1, 'mm')
+  const windDelta = buildDelta(windAverage(yesterday.wind), windAverage(prior.wind), 1, 'km/h')
+  const vibrationDelta = buildDelta(vibrationAverage(yesterday.vibration), vibrationAverage(prior.vibration), 3, 'g')
   return [
     {
       key: 'temperature',
       title: '温度',
-      icon: '♨',
-      primary: `平均 ${formatMetric(tempAverage(yesterday.temp), 1, '℃')}`,
-      meta: [
-        { label: '高/低', value: formatRange(tempMin(yesterday.temp), tempMax(yesterday.temp), 1, '℃', true) },
-        { label: '较前日', value: formatDelta(tempAverage(yesterday.temp), tempAverage(prior.temp), 1, '℃') },
+      primaryLabel: '平均',
+      primaryValue: formatMetricOrZero(tempAverage(yesterday.temp), 1, '℃'),
+      stats: [
+        { label: '最高', value: formatMetricOrZero(tempMax(yesterday.temp), 1, '℃') },
+        { label: '最低', value: formatMetricOrZero(tempMin(yesterday.temp), 1, '℃') },
       ],
+      changeLabel: '较前日',
+      change: tempDelta.text,
+      changeClass: tempDelta.className,
     },
     {
       key: 'humidity',
       title: '湿度',
-      icon: '♧',
-      primary: `平均 ${formatMetric(humidityAverage(yesterday.temp), 1, '%')}`,
-      meta: [
-        { label: '高/低', value: formatRange(humidityMin(yesterday.temp), humidityMax(yesterday.temp), 1, '%', true) },
-        { label: '较前日', value: formatDelta(humidityAverage(yesterday.temp), humidityAverage(prior.temp), 1, '%') },
+      primaryLabel: '平均',
+      primaryValue: formatMetricOrZero(humidityAverage(yesterday.temp), 1, '%'),
+      stats: [
+        { label: '最高', value: formatMetricOrZero(humidityMax(yesterday.temp), 1, '%') },
+        { label: '最低', value: formatMetricOrZero(humidityMin(yesterday.temp), 1, '%') },
       ],
+      changeLabel: '较前日',
+      change: humidityDelta.text,
+      changeClass: humidityDelta.className,
     },
     {
       key: 'rain',
       title: '降水',
-      icon: '◇',
-      primary: `累计 ${formatMetric(rainTotal(yesterday.rain), 1, 'mm')}`,
-      meta: [
-        { label: '降雨时长', value: formatRainDuration(yesterday.rain) },
-        { label: '较前日', value: formatDelta(rainTotal(yesterday.rain), rainTotal(prior.rain), 1, 'mm') },
+      primaryLabel: '累计',
+      primaryValue: formatMetricOrZero(rainTotal(yesterday.rain), 1, 'mm'),
+      stats: [
+        { label: '降雨时长', value: formatRainDuration(yesterday.rain, true) },
       ],
+      changeLabel: '较前日',
+      change: rainDelta.text,
+      changeClass: rainDelta.className,
     },
     {
       key: 'wind',
       title: '风速',
-      icon: '≋',
-      primary: `平均 ${formatMetric(windAverage(yesterday.wind), 1, 'km/h')}`,
-      meta: [
-        { label: '最大', value: formatMetric(windMax(yesterday.wind), 1, 'km/h') },
+      primaryLabel: '平均',
+      primaryValue: formatMetricOrZero(windAverage(yesterday.wind), 1, 'km/h'),
+      stats: [
+        { label: '最大风速', value: formatMetricOrZero(windMaxForSummary(yesterday.wind), 1, 'km/h') },
         { label: '主导风向', value: windDirection(yesterday.wind) },
       ],
+      changeLabel: '较前日',
+      change: windDelta.text,
+      changeClass: windDelta.className,
     },
     {
       key: 'vibration',
       title: '振动',
-      icon: '⌁',
-      primary: `平均RMS ${formatMetric(vibrationAverage(yesterday.vibration), 3, 'g')}`,
-      meta: [
-        { label: '最大', value: formatMetric(vibrationMax(yesterday.vibration), 3, 'g') },
-        { label: '较前日', value: formatDelta(vibrationAverage(yesterday.vibration), vibrationAverage(prior.vibration), 3, 'g') },
+      primaryLabel: '平均RMS',
+      primaryValue: formatMetricOrZero(vibrationAverage(yesterday.vibration), 3, 'g'),
+      stats: [
+        { label: '最大值', value: formatMetricOrZero(vibrationMaxForSummary(yesterday.vibration), 3, 'g') },
       ],
+      changeLabel: '较前日',
+      change: vibrationDelta.text,
+      changeClass: vibrationDelta.className,
     },
   ]
 })
 
 const periodOverviewLabel = computed(() => {
   const range = currentPeriodRange()
-  if (historyMode.value === 'recent24h') return '今日按天统计'
-  if (historyMode.value === 'overview') return '全部可用数据'
-  return `${displayDateKey(range.startKey)} 至 ${displayDateKey(offsetDateKey(range.endKey, -1))}`
+  if (historyMode.value === 'recent24h') return '当前周期: 今日'
+  if (historyMode.value === 'overview') return '当前周期: 全部数据'
+  if (selectedMonth.value === 'all') return `当前周期: ${selectedYear.value}年`
+  return `当前周期: ${displayDateKey(range.startKey)} 至 ${displayDateKey(offsetDateKey(range.endKey, -1))}`
+})
+
+const periodComparisonLabel = computed(() => {
+  if (historyMode.value === 'recent24h') return '对比: 昨日'
+  if (historyMode.value === 'overview') return '不做周期对比'
+  if (selectedMonth.value === 'all') return '对比: 上一年'
+  return '对比: 上一月'
+})
+
+const periodOverviewHelp = computed(() => {
+  if (historyMode.value === 'overview') {
+    return '总览统计所有可用历史数据，只展示整体平均、累计和最大值，不计算涨跌。'
+  }
+  return '周期概览按当前选择范围统计；较上一周期使用相邻的同等时长范围。红色表示增加，绿色表示减少，灰色表示持平。'
 })
 
 const periodOverviewRows = computed(() => {
   const current = currentPeriodDailyRows()
   const previous = previousPeriodDailyRows()
+  const windMaxValue = maximum(current.wind.map(windMaxForSummary))
+  const vibrationMaxValue = maximum(current.vibration.map(vibrationMaxForSummary))
   const rows = [
     {
       key: 'temperature',
       title: '温度',
       icon: '♨',
       metrics: [
-        { label: '平均值', value: formatMetric(average(current.temp.map(tempAverage)), 1, '℃') },
-        { label: '最高', value: formatMetric(maximum(current.temp.map(tempMax)), 1, '℃') },
-        { label: '最低', value: formatMetric(minimum(current.temp.map(tempMin)), 1, '℃') },
+        { label: '平均值', value: formatMetricOrZero(average(current.temp.map(tempAverage)), 1, '℃') },
+        { label: '最高', value: formatMetricOrZero(maximum(current.temp.map(tempMax)), 1, '℃') },
+        { label: '最低', value: formatMetricOrZero(minimum(current.temp.map(tempMin)), 1, '℃') },
       ],
       changeValue: valueDelta(average(current.temp.map(tempAverage)), average(previous.temp.map(tempAverage))),
       decimals: 1,
@@ -486,9 +545,9 @@ const periodOverviewRows = computed(() => {
       title: '湿度',
       icon: '♧',
       metrics: [
-        { label: '平均值', value: formatMetric(average(current.temp.map(humidityAverage)), 1, '%') },
-        { label: '最高', value: formatMetric(maximum(current.temp.map(humidityMax)), 1, '%') },
-        { label: '最低', value: formatMetric(minimum(current.temp.map(humidityMin)), 1, '%') },
+        { label: '平均值', value: formatMetricOrZero(average(current.temp.map(humidityAverage)), 1, '%') },
+        { label: '最高', value: formatMetricOrZero(maximum(current.temp.map(humidityMax)), 1, '%') },
+        { label: '最低', value: formatMetricOrZero(minimum(current.temp.map(humidityMin)), 1, '%') },
       ],
       changeValue: valueDelta(average(current.temp.map(humidityAverage)), average(previous.temp.map(humidityAverage))),
       decimals: 1,
@@ -499,7 +558,7 @@ const periodOverviewRows = computed(() => {
       title: '降水',
       icon: '◇',
       metrics: [
-        { label: '累计值', value: formatMetric(sum(current.rain.map(rainTotal)), 1, 'mm') },
+        { label: '累计值', value: formatMetricOrZero(sum(current.rain.map(rainTotal)), 1, 'mm') },
       ],
       changeValue: valueDelta(sum(current.rain.map(rainTotal)), sum(previous.rain.map(rainTotal))),
       decimals: 1,
@@ -510,8 +569,8 @@ const periodOverviewRows = computed(() => {
       title: '风速',
       icon: '≋',
       metrics: [
-        { label: '平均值', value: formatMetric(average(current.wind.map(windAverage)), 1, 'km/h') },
-        { label: '最大值', value: formatMetric(maximum(current.wind.map(windMax)), 1, 'km/h') },
+        { label: '平均值', value: formatMetricOrZero(average(current.wind.map(windAverage)), 1, 'km/h') },
+        { label: '最大值', value: formatMetricOrZero(windMaxValue, 1, 'km/h') },
       ],
       changeValue: valueDelta(average(current.wind.map(windAverage)), average(previous.wind.map(windAverage))),
       decimals: 1,
@@ -522,8 +581,8 @@ const periodOverviewRows = computed(() => {
       title: '振动',
       icon: '⌁',
       metrics: [
-        { label: '平均RMS', value: formatMetric(average(current.vibration.map(vibrationAverage)), 3, 'g') },
-        { label: '最大值', value: formatMetric(maximum(current.vibration.map(vibrationMax)), 3, 'g') },
+        { label: '平均RMS', value: formatMetricOrZero(average(current.vibration.map(vibrationAverage)), 3, 'g') },
+        { label: '最大值', value: formatMetricOrZero(vibrationMaxValue, 3, 'g') },
       ],
       changeValue: valueDelta(average(current.vibration.map(vibrationAverage)), average(previous.vibration.map(vibrationAverage))),
       decimals: 3,
@@ -533,7 +592,7 @@ const periodOverviewRows = computed(() => {
   return rows.map(row => ({
     ...row,
     change: formatOverviewDelta(row.changeValue, row.decimals, row.unit),
-    changeClass: row.changeValue === null ? 'neutral' : (row.changeValue > 0 ? 'up' : row.changeValue < 0 ? 'down' : 'neutral'),
+    changeClass: overviewDeltaClass(row.changeValue, row.decimals),
   }))
 })
 
@@ -549,10 +608,33 @@ const formatMetric = (value, decimals, unit) => {
   return `${numeric.toFixed(decimals)}${unit}`
 }
 
-const formatCommTime = (timestamp) => {
+const formatMetricOrZero = (value, decimals, unit) => {
+  const numeric = toNumber(value)
+  return `${(numeric ?? 0).toFixed(decimals)}${unit}`
+}
+
+const timestampMs = (timestamp) => {
   const numeric = Number(timestamp)
-  if (!Number.isFinite(numeric) || numeric <= 0) return '--'
-  const timeMs = numeric > 1e12 ? numeric : numeric * 1000
+  if (!Number.isFinite(numeric) || numeric <= 0) return null
+  return numeric > 1e12 ? numeric : numeric * 1000
+}
+
+const formatUpdatedAgo = (timestamp) => {
+  const timeMs = timestampMs(timestamp)
+  nowTick.value
+  if (timeMs === null) return '暂无更新时间'
+  const seconds = Math.max(0, Math.floor((Date.now() - timeMs) / 1000))
+  if (seconds < 5) return '刚刚更新'
+  if (seconds < 60) return `${seconds}秒前更新`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}分钟前更新`
+  const hours = Math.floor(minutes / 60)
+  return `${hours}小时前更新`
+}
+
+const formatCommTime = (timestamp) => {
+  const timeMs = timestampMs(timestamp)
+  if (timeMs === null) return '--'
   return new Date(timeMs).toLocaleString('zh-CN', {
     timeZone: 'Asia/Shanghai',
     year: 'numeric',
@@ -641,12 +723,26 @@ const humidityAverage = row => dataValue(row, ['humidity', 'humidity_avg'])
 const humidityMin = row => dataValue(row, ['humidity_min', 'humidity'])
 const humidityMax = row => dataValue(row, ['humidity_max', 'humidity'])
 const rainTotal = row => dataValue(row, ['daily_rain', 'today_rain', 'rain_total'])
-const rainDurationHours = row => dataValue(row, ['rain_duration_hours', 'rain_hours', 'duration_hours', 'rain_duration'])
+const rainDurationHours = (row) => {
+  const hours = dataValue(row, ['rain_duration_hours', 'rain_hours', 'duration_hours', 'rain_duration'])
+  if (hours !== null) return hours
+  const minutes = dataValue(row, ['rain_duration_minutes', 'rain_minutes', 'rainy_minutes'])
+  if (minutes !== null) return minutes / 60
+  const seconds = dataValue(row, ['rain_duration_seconds', 'rain_seconds', 'rainy_seconds'])
+  return seconds === null ? null : seconds / 3600
+}
 const windAverage = row => windSpeedKmh(row?.data || {})
-const windMax = row => dataValue(row, ['wind_speed_kmh_max', 'wind_speed_max_kmh', 'max_wind_speed_kmh', 'max_wind_speed'])
+const windMax = (row) => {
+  const kmh = dataValue(row, ['wind_speed_kmh_max', 'wind_speed_max_kmh', 'max_wind_speed_kmh', 'max_wind_speed'])
+  if (kmh !== null) return kmh
+  const ms = dataValue(row, ['wind_speed_ms_max', 'max_wind_speed_ms'])
+  return ms === null ? null : ms * 3.6
+}
 const windDirection = row => firstTextValue(row, ['dominant_wind_direction', 'wind_direction'])
 const vibrationAverage = row => dataValue(row, ['rms', 'total_rms'])
 const vibrationMax = row => dataValue(row, ['rms_max', 'total_rms_max', 'max_rms', 'peak_accel', 'peak_acceleration'])
+const windMaxForSummary = row => windMax(row) ?? windAverage(row)
+const vibrationMaxForSummary = row => vibrationMax(row) ?? vibrationAverage(row)
 
 const normalizeNumbers = values => values.map(toNumber).filter(value => value !== null)
 const average = values => {
@@ -670,7 +766,7 @@ const formatRange = (low, high, decimals, unit, highFirst = false) => {
   const first = highFirst ? high : low
   const second = highFirst ? low : high
   if (toNumber(first) === null && toNumber(second) === null) return '--'
-  return `${formatMetric(first, decimals, unit)} / ${formatMetric(second, decimals, unit)}`
+  return `${formatMetric(first, decimals, unit)} ~ ${formatMetric(second, decimals, unit)}`
 }
 
 const valueDelta = (current, previous) => {
@@ -680,17 +776,26 @@ const valueDelta = (current, previous) => {
   return currentValue - previousValue
 }
 
-const formatDelta = (current, previous, decimals, unit) => {
+const buildDelta = (current, previous, decimals, unit) => {
   const delta = valueDelta(current, previous)
-  if (delta === null) return '--'
-  if (Math.abs(delta) < 10 ** (-decimals)) return `持平 0${unit}`
-  return `${delta > 0 ? '+' : ''}${delta.toFixed(decimals)}${unit}`
+  if (delta === null || Math.abs(delta) < 10 ** (-decimals)) {
+    return { text: `持平 0${unit}`, className: 'neutral' }
+  }
+  return {
+    text: `${delta > 0 ? '+' : ''}${delta.toFixed(decimals)}${unit}`,
+    className: delta > 0 ? 'up' : 'down',
+  }
 }
 
 const formatOverviewDelta = (delta, decimals, unit) => {
-  if (delta === null) return '较上一周期 --'
+  if (delta === null) return '暂无对比'
   if (Math.abs(delta) < 10 ** (-decimals)) return `较上一周期 持平`
   return `较上一周期 ${delta > 0 ? '+' : ''}${delta.toFixed(decimals)}${unit}`
+}
+
+const overviewDeltaClass = (delta, decimals) => {
+  if (delta === null || Math.abs(delta) < 10 ** (-decimals)) return 'neutral'
+  return delta > 0 ? 'up' : 'down'
 }
 
 const formatHours = (value) => {
@@ -698,11 +803,11 @@ const formatHours = (value) => {
   return numeric === null ? '--' : `${numeric.toFixed(1)}h`
 }
 
-const formatRainDuration = (row) => {
+const formatRainDuration = (row, zeroFallback = false) => {
   const duration = rainDurationHours(row)
   if (duration !== null) return formatHours(duration)
   const total = rainTotal(row)
-  return total === 0 ? '0.0h' : '--'
+  return total === 0 || zeroFallback ? '0.0h' : '--'
 }
 
 const todayRow = sensorKey => daySnapshot(todayKey.value)[sensorKey]
@@ -712,30 +817,30 @@ const tempTodayInfo = (realtime = {}) => {
   const tempNow = toNumber(realtime.temperature)
   const humidityNow = toNumber(realtime.humidity)
   return [
-    { label: '温度', value: formatRange(tempMin(row) ?? tempNow, tempMax(row) ?? tempNow, 1, '℃') },
-    { label: '湿度', value: formatRange(humidityMin(row) ?? humidityNow, humidityMax(row) ?? humidityNow, 1, '%') },
+    { label: '今日温度', value: formatRange(tempMin(row) ?? tempNow, tempMax(row) ?? tempNow, 1, '℃') },
+    { label: '今日湿度', value: formatRange(humidityMin(row) ?? humidityNow, humidityMax(row) ?? humidityNow, 1, '%') },
   ]
 }
 
 const rainTodayInfo = () => {
   const row = todayRow('rain')
   return [
-    { label: '降雨时长', value: formatRainDuration(row) },
+    { label: '今日降雨时长', value: formatRainDuration(row, true) },
   ]
 }
 
 const windTodayInfo = (realtime = {}) => {
   const row = todayRow('wind')
   return [
-    { label: '最大', value: formatMetric(windMax(row) ?? windSpeedKmh(realtime), 1, 'km/h') },
-    { label: '主导', value: windDirection(row) !== '--' ? windDirection(row) : (realtime.wind_direction || '--') },
+    { label: '今日最大风速', value: formatMetric(windMaxForSummary(row) ?? windSpeedKmh(realtime), 1, 'km/h') },
+    { label: '主导风向', value: windDirection(row) !== '--' ? windDirection(row) : (realtime.wind_direction || '--') },
   ]
 }
 
 const vibrationTodayInfo = (realtime = {}) => {
   const row = todayRow('vibration')
   return [
-    { label: '最大值', value: formatMetric(vibrationMax(row) ?? toNumber(realtime.peak_accel) ?? toNumber(realtime.total_rms), 3, 'g') },
+    { label: '今日最大值', value: formatMetric(vibrationMaxForSummary(row) ?? toNumber(realtime.peak_accel) ?? toNumber(realtime.total_rms), 3, 'g') },
   ]
 }
 
@@ -835,7 +940,9 @@ const dailyRowsForRange = (range) => {
 }
 
 const currentPeriodDailyRows = () => dailyRowsForRange(currentPeriodRange())
-const previousPeriodDailyRows = () => dailyRowsForRange(previousPeriodRange())
+const previousPeriodDailyRows = () => historyMode.value === 'overview'
+  ? { temp: [], rain: [], wind: [], vibration: [] }
+  : dailyRowsForRange(previousPeriodRange())
 
 const availableDateBounds = () => {
   const keys = Object.values(allDailyRows())
@@ -933,6 +1040,11 @@ const csvMetric = (value, decimals) => {
   return numeric === null ? '' : numeric.toFixed(decimals)
 }
 
+const csvMetricOrZero = (value, decimals) => {
+  const numeric = toNumber(value)
+  return (numeric ?? 0).toFixed(decimals)
+}
+
 const excelValue = (value) => {
   const text = value === null || value === undefined ? '' : String(value)
   return text
@@ -995,12 +1107,12 @@ const buildDailyWorkbook = (rowsByKind, startKey, endKey) => {
       csvMetric(humidityMax(temp), 2),
       csvMetric(humidityMin(temp), 2),
       csvMetric(rainTotal(rain), 2),
-      csvMetric(rainDurationHours(rain), 2),
+      csvMetricOrZero(rainDurationHours(rain), 2),
       csvMetric(windAverage(wind), 2),
-      csvMetric(windMax(wind), 2),
+      csvMetricOrZero(windMaxForSummary(wind), 2),
       windDirection(wind) === '--' ? '' : windDirection(wind),
       csvMetric(vibrationAverage(vibration), 4),
-      csvMetric(vibrationMax(vibration), 4),
+      csvMetricOrZero(vibrationMaxForSummary(vibration), 4),
       `${Math.round(coverage * 100)}%`,
     ]
     return `<Row>${row.map((value, index) => excelCell(value, columns[index].style)).join('')}</Row>`
@@ -1583,10 +1695,10 @@ const fullChartOption = () => {
     toolbox: { show: false },
     grid: { left: 46, right: 54, bottom: overview ? 104 : 48, top: 44, containLabel: true },
     dataZoom: overviewZoom
-      ? [{
+        ? [{
           type: 'inside',
-          zoomOnMouseWheel: false,
-          moveOnMouseWheel: true,
+          zoomOnMouseWheel: true,
+          moveOnMouseWheel: false,
           moveOnMouseMove: true,
           preventDefaultMouseMove: true,
           ...overviewZoomWindow,
@@ -1870,6 +1982,9 @@ onMounted(async () => {
   syncExportRange()
   fetchRealtime()
   loadHistory(currentQuery())
+  tickTimer = setInterval(() => {
+    nowTick.value = Date.now()
+  }, 1000)
   summaryTimer = window.setTimeout(() => {
     if (isMounted) loadSummary()
   }, 2200)
@@ -1880,6 +1995,7 @@ onUnmounted(() => {
   isMounted = false
   requestSerial += 1
   if (realtimeTimer) clearInterval(realtimeTimer)
+  if (tickTimer) clearInterval(tickTimer)
   if (refreshTimer) clearTimeout(refreshTimer)
   if (summaryTimer) clearTimeout(summaryTimer)
   if (resizeHandler) window.removeEventListener('resize', resizeHandler)
@@ -1913,8 +2029,8 @@ onUnmounted(() => {
 .live-card {
   position: relative;
   min-width: 0;
-  min-height: 172px;
-  padding: 16px 20px;
+  min-height: 190px;
+  padding: 17px 21px;
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
@@ -1952,7 +2068,7 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 9px;
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 700;
   color: #f4f8ff;
   line-height: 1.2;
@@ -2029,24 +2145,24 @@ onUnmounted(() => {
 }
 
 .metric-cell strong {
-  min-height: 38px;
+  min-height: 40px;
   display: flex;
   align-items: flex-end;
   color: #fff;
-  font: 800 31px/1 "Consolas", "Monaco", monospace;
+  font: 800 32px/1 "Consolas", "Monaco", monospace;
   white-space: nowrap;
   letter-spacing: 0;
 }
 
 .metric-columns .metric-cell strong {
-  font-size: 26px;
+  font-size: 28px;
 }
 
 .metric-cell span {
   display: block;
   margin-top: 9px;
   color: #8ea8c9;
-  font-size: 15px;
+  font-size: 16px;
   line-height: 1.2;
 }
 
@@ -2061,7 +2177,7 @@ onUnmounted(() => {
 
 .wind-direction strong {
   font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
-  font-size: 31px;
+  font-size: 32px;
   letter-spacing: 0;
 }
 
@@ -2125,17 +2241,27 @@ onUnmounted(() => {
   font-size: 12px;
 }
 
+.card-update {
+  min-height: 16px;
+  margin-top: auto;
+  align-self: flex-end;
+  color: #7189aa;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
 .today-strip {
   min-height: 26px;
-  margin-top: auto;
-  padding-top: 10px;
+  margin-top: 0;
+  padding-top: 9px;
   display: flex;
   align-items: center;
   gap: 9px;
   flex-wrap: wrap;
   border-top: 1px solid rgba(174, 202, 245, 0.11);
   color: #9fb6d3;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.2;
 }
 
@@ -2149,6 +2275,7 @@ onUnmounted(() => {
 }
 
 .history-panel,
+.yesterday-summary,
 .summary-card {
   border: 1px solid rgba(84, 130, 202, 0.25);
   border-radius: 10px;
@@ -2182,6 +2309,11 @@ onUnmounted(() => {
   margin-top: 4px;
   color: #8ea8c9;
   font-size: 12px;
+}
+
+.yesterday-summary {
+  margin-bottom: 14px;
+  padding: 18px;
 }
 
 .history-controls {
@@ -2340,43 +2472,43 @@ onUnmounted(() => {
   background: rgba(10, 23, 43, 0.98);
 }
 
-.yesterday-summary {
-  padding: 13px 18px 4px;
-  border-bottom: 1px solid rgba(124, 157, 207, 0.1);
-}
-
 .yesterday-head {
-  margin-bottom: 10px;
+  margin-bottom: 14px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.yesterday-head h4 {
+.yesterday-head h3 {
   margin: 0;
   color: #f4f8ff;
-  font-size: 16px;
+  font-size: 20px;
   font-weight: 750;
 }
 
 .yesterday-head span {
   color: #8ea8c9;
-  font-size: 12px;
+  font-size: 16px;
+  font-weight: 750;
+  letter-spacing: 0;
 }
 
 .yesterday-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 10px;
+  gap: 12px;
 }
 
 .yesterday-card {
   min-width: 0;
-  padding: 11px 12px;
+  min-height: 154px;
+  padding: 14px 15px;
+  display: flex;
+  flex-direction: column;
   border: 1px solid rgba(84, 130, 202, 0.18);
   border-radius: 8px;
-  background: rgba(12, 30, 55, 0.62);
+  background: rgba(12, 30, 55, 0.68);
 }
 
 .yesterday-card-title {
@@ -2393,13 +2525,67 @@ onUnmounted(() => {
 }
 
 .yesterday-main {
-  margin-top: 8px;
-  color: #ffffff;
-  font-size: 16px;
+  margin-top: 12px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: #8ea8c9;
+  font-size: 12px;
   font-weight: 750;
   line-height: 1.2;
   white-space: nowrap;
 }
+
+.yesterday-main strong {
+  color: #ffffff;
+  font-size: 21px;
+}
+
+.yesterday-stat-pills {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.yesterday-stat-pills span {
+  min-width: 72px;
+  padding: 7px 8px;
+  display: grid;
+  gap: 4px;
+  border-radius: 7px;
+  background: rgba(34, 62, 100, 0.52);
+}
+
+.yesterday-stat-pills small {
+  color: #7f98ba;
+  font-size: 11px;
+}
+
+.yesterday-stat-pills b {
+  color: #dce9fa;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.yesterday-change {
+  margin-top: auto;
+  padding-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #9fb6d3;
+  font-size: 12px;
+}
+
+.yesterday-change strong {
+  font-size: 14px;
+}
+
+.yesterday-change.up strong { color: #ff5b6e; }
+.yesterday-change.down strong { color: #67c23a; }
+.yesterday-change.neutral strong { color: #9fb6d3; }
 
 .yesterday-meta {
   margin-top: 9px;
@@ -2592,6 +2778,38 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
+.overview-title-meta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.overview-title-meta b {
+  color: #dce9fa;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.period-help {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(120, 155, 211, 0.24);
+  border-radius: 50%;
+  background: rgba(31, 53, 88, 0.72);
+  color: #9fb6d3;
+  cursor: help;
+}
+
+.period-help:hover {
+  color: #ffffff;
+  border-color: rgba(32, 215, 255, 0.56);
+}
+
 .period-overview-grid {
   padding: 14px 16px 12px;
   display: grid;
@@ -2662,7 +2880,7 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-.period-change.up { color: #e6a23c; }
+.period-change.up { color: #ff5b6e; }
 .period-change.down { color: #67c23a; }
 .period-change.neutral { color: #9fb6d3; }
 

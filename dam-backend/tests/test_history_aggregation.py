@@ -53,6 +53,17 @@ class HistoryAggregationTest(unittest.TestCase):
         self.assertEqual(result["wind_dir_code"], 0)
         self.assertEqual(result["wind_direction"], "北")
 
+    def test_wind_daily_rollup_keeps_max_speed(self):
+        result = aggregate_bucket_values(
+            "wind",
+            {"wind_speed_kmh": [7.2, 14.4, 10.8], "wind_speed_ms": [2.0, 4.0, 3.0]},
+            include_extrema=True,
+        )
+
+        self.assertEqual(result["wind_speed_kmh"], 10.8)
+        self.assertEqual(result["wind_speed_kmh_max"], 14.4)
+        self.assertEqual(result["wind_speed_ms_max"], 4.0)
+
     def test_temperature_humidity_use_average(self):
         result = aggregate_bucket_values(
             "temp_humidity",
@@ -103,12 +114,13 @@ class HistoryAggregationTest(unittest.TestCase):
     def test_rain_daily_rollup_uses_maximum_running_total(self):
         result = aggregate_bucket_values(
             "rain",
-            {"today_rain": [0.0, 4.2, 12.8, 12.8]},
+            {"today_rain": [0.0, 4.2, 12.8, 12.8], "instant_rain": [0.0, 0.2, 0.0, 0.4]},
             include_extrema=True,
         )
 
         self.assertEqual(result["daily_rain"], 12.8)
         self.assertEqual(result["daily_rain_sample_count"], 4)
+        self.assertAlmostEqual(result["rain_duration_hours"], 2 / 60, places=4)
 
     def test_rain_daily_rollup_propagates_existing_daily_value(self):
         result = aggregate_bucket_values(
@@ -117,17 +129,30 @@ class HistoryAggregationTest(unittest.TestCase):
                 "today_rain": [5.0, 6.0],
                 "daily_rain": [18.5, 12.0],
                 "daily_rain_sample_count": [80, 90],
+                "rain_duration_hours": [1.5, 2.25],
             },
             include_extrema=True,
         )
 
         self.assertEqual(result["daily_rain"], 18.5)
         self.assertEqual(result["daily_rain_sample_count"], 170)
+        self.assertEqual(result["rain_duration_hours"], 3.75)
 
     def test_vibration_uses_average_for_current_template(self):
         result = aggregate_bucket_values("vibration", {"加速度X": [0.1, 0.3], "频率X": [40, 44]})
         self.assertEqual(result["加速度X"], 0.2)
         self.assertEqual(result["频率X"], 42.0)
+
+    def test_vibration_daily_rollup_keeps_max_rms(self):
+        result = aggregate_bucket_values(
+            "vibration",
+            {"rms": [0.01, 0.03, 0.02], "total_rms": [0.02, 0.04, 0.03]},
+            include_extrema=True,
+        )
+
+        self.assertEqual(result["rms"], 0.02)
+        self.assertEqual(result["rms_max"], 0.03)
+        self.assertEqual(result["total_rms_max"], 0.04)
 
 
 if __name__ == "__main__":

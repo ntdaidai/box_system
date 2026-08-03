@@ -221,7 +221,7 @@ export default {
     connectEventSocket() {
       if (!this.eventId) return
       this.socketTask = uni.connectSocket({
-        url: `${WS_BASE_URL}/api/v1/camera/safety/ws`,
+        url: `${WS_BASE_URL}/api/v1/integration/safety-events/ws`,
         complete: () => {}
       })
       this.socketTask.onMessage((message) => {

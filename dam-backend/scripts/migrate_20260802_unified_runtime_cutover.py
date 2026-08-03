@@ -1,6 +1,6 @@
 """Cut over test runtime data to the unified safety-event schema.
 
-ECA definitions and historical ``event_log`` rows are deliberately untouched.
+ECA definitions are preserved. Legacy runtime logs are backed up and removed.
 Run without ``--apply`` for a read-only audit.
 """
 
@@ -97,7 +97,7 @@ def backup(connection, audit_data: dict) -> Path:
     target = BACKUP_DIR / f"unified_runtime_cutover_{dt.datetime.now():%Y%m%d_%H%M%S}.json"
     table_names = set(inspect(connection).get_table_names())
     payload = {"audit": audit_data, "tables": {}}
-    for table in (*RUNTIME_TABLES, "event_action"):
+    for table in (*RUNTIME_TABLES, "event_action", "event_log", "camera_detection_zone", "camera_zone_condition"):
         if table in table_names:
             payload["tables"][table] = rows(connection, table)
     target.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=serializable), encoding="utf-8")
@@ -138,6 +138,7 @@ def migrate(engine) -> None:
         ))
 
     with engine.begin() as connection:
+        connection.execute(text("DROP TABLE IF EXISTS event_log"))
         connection.execute(text("DROP TABLE IF EXISTS safety_event_log"))
         connection.execute(text("DROP TABLE IF EXISTS safety_event"))
 
@@ -189,6 +190,37 @@ def migrate(engine) -> None:
                 "UNIQUE (event_instance_id)"
             ))
 
+        zone_columns = {
+            column["name"] for column in inspect(connection).get_columns("camera_detection_zone")
+        }
+        if "camera_device_id" in zone_columns:
+            connection.execute(text(
+                "DELETE FROM camera_detection_zone WHERE camera_device_id IS NULL"
+            ))
+            connection.execute(text(
+                "ALTER TABLE camera_detection_zone MODIFY camera_device_id BIGINT NOT NULL"
+            ))
+        zone_drops = [
+            name for name in (
+                "camera_id", "zone_id", "rect_x", "rect_y", "rect_width", "rect_height",
+                "risk_level", "trigger_seconds",
+            )
+            if name in zone_columns
+        ]
+        if zone_drops:
+            connection.execute(text(
+                "ALTER TABLE camera_detection_zone "
+                + ", ".join(f"DROP COLUMN {name}" for name in zone_drops)
+            ))
+        zone_indexes = {
+            item["name"] for item in inspect(connection).get_indexes("camera_detection_zone")
+        }
+        if "uq_camera_zone_name" not in zone_indexes:
+            connection.execute(text(
+                "ALTER TABLE camera_detection_zone ADD CONSTRAINT uq_camera_zone_name "
+                "UNIQUE (camera_device_id, zone_name)"
+            ))
+
     with engine.connect() as connection:
         after = audit(connection)
     if before["eca_relations"] != after["eca_relations"]:
@@ -196,13 +228,11 @@ def migrate(engine) -> None:
     for table in CONFIG_TABLES:
         if before["counts"].get(table) != after["counts"].get(table):
             raise RuntimeError(f"ECA configuration count changed: {table}")
-    if before["counts"].get("event_log") != after["counts"].get("event_log"):
-        raise RuntimeError("Historical event_log rows changed")
     if not reset_legacy_runtime:
         for table in RUNTIME_TABLES[:5]:
             if before["counts"].get(table) != after["counts"].get(table):
                 raise RuntimeError(f"Unified runtime count changed during repeat migration: {table}")
-    print("Cutover complete; all protected ECA data is unchanged.")
+    print("Cutover complete; ECA definitions are unchanged and legacy runtime logs are removed.")
 
 
 def main() -> None:

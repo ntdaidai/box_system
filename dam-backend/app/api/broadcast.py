@@ -55,9 +55,7 @@ class CameraBindingPayload(BaseModel):
 
 
 def _camera_row(db: Session, identifier: str) -> Camera:
-    row = db.query(Camera).filter(Camera.camera_id == identifier).first()
-    if not row and identifier.isdigit():
-        row = db.query(Camera).filter(Camera.id == int(identifier)).first()
+    row = db.query(Camera).filter(Camera.id == int(identifier)).first() if identifier.isdigit() else None
     if not row:
         raise HTTPException(status_code=404, detail="摄像头不存在")
     return row
@@ -206,10 +204,10 @@ async def bind_camera_devices(camera_id: str, payload: CameraBindingPayload, db:
     if len(valid_ids) != len(set(payload.device_ids)):
         raise HTTPException(status_code=422, detail="包含不存在的广播设备")
     db.query(CameraBroadcastDevice).filter(
-        (CameraBroadcastDevice.camera_device_id == camera.id) | (CameraBroadcastDevice.camera_id == camera.camera_id)
+        CameraBroadcastDevice.camera_device_id == camera.id
     ).delete(synchronize_session=False)
     for device_id in sorted(valid_ids):
-        db.add(CameraBroadcastDevice(camera_device_id=camera.id, camera_id=camera.camera_id, broadcast_device_id=device_id))
+        db.add(CameraBroadcastDevice(camera_device_id=camera.id, broadcast_device_id=device_id))
     db.commit()
     return Result.success(broadcast_service.list_devices_for_camera(db, str(camera.id)), "摄像头广播绑定已保存")
 

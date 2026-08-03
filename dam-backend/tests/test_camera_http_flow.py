@@ -285,22 +285,19 @@ class CameraHttpFlowTests(unittest.TestCase):
             active_patch.stop()
 
     def test_complete_camera_and_detection_workflow(self):
-        added = self.client.post(
-            "/api/v1/camera/add",
-            json={
-                "camera_id": "camera_http",
-                "name": "HTTP 测试摄像头",
-                "rtsp_url": "rtsp://camera.example.test/live",
-            },
+        self.manager.add_camera(
+            "camera_http",
+            "rtsp://camera.example.test/live",
+            name="HTTP 测试摄像头",
         )
-        self.assertEqual(added.status_code, 200)
         camera = self.manager.get_camera("camera_http")
         self.assertTrue(wait_until(lambda: camera.get_status()["connected"]))
 
-        listed = self.client.get("/api/v1/camera/list")
-        self.assertEqual(listed.status_code, 200)
-        self.assertEqual(listed.json()["data"]["total"], 1)
-        self.assertNotIn("rtsp_url", listed.text)
+        self.assertIn(
+            self.client.post("/api/v1/camera/add", json={}).status_code,
+            {404, 405},
+        )
+        self.assertEqual(self.client.get("/api/v1/camera/list").status_code, 404)
 
         model = self.client.get("/api/v1/camera/model/status")
         self.assertEqual(model.status_code, 200)
@@ -359,10 +356,9 @@ class CameraHttpFlowTests(unittest.TestCase):
         self.assertEqual(disabled.status_code, 200)
         self.assertFalse(disabled.json()["data"]["detection_enabled"])
 
-        removed = self.client.delete("/api/v1/camera/camera_http")
-        self.assertEqual(removed.status_code, 200)
-        self.assertEqual(
-            self.client.get("/api/v1/camera/list").json()["data"]["total"], 0
+        self.assertIn(
+            self.client.delete("/api/v1/camera/camera_http").status_code,
+            {404, 405},
         )
 
     def test_uploaded_image_detection_and_input_validation(self):
@@ -408,15 +404,11 @@ class CameraHttpFlowTests(unittest.TestCase):
         self.assertEqual(malformed.status_code, 400)
 
     def test_authenticated_webrtc_signaling_hides_rtsp_credentials(self):
-        added = self.client.post(
-            "/api/v1/camera/add",
-            json={
-                "camera_id": "camera_webrtc",
-                "name": "WebRTC 测试",
-                "source": "rtsp://admin:secret@camera.example.test/live",
-            },
+        self.manager.add_camera(
+            "camera_webrtc",
+            "rtsp://admin:secret@camera.example.test/live",
+            name="WebRTC 测试",
         )
-        self.assertEqual(added.status_code, 200)
 
         ice = self.client.get("/api/v1/camera/camera_webrtc/webrtc/ice")
         self.assertEqual(ice.status_code, 200)

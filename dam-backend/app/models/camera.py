@@ -9,7 +9,6 @@ class Camera(Base):
     __tablename__ = "camera_device"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
-    camera_id = Column(String(64), nullable=False, unique=True, index=True, comment="设备ID")
     camera_name = Column(String(128), nullable=False, unique=True, comment="设备名称")
     brand = Column(String(32), nullable=False, default="dahua", comment="品牌: dahua/hikvision")
     ip_address = Column(String(128), nullable=False, comment="摄像头IP地址")
@@ -33,7 +32,6 @@ class Camera(Base):
         password = self.password or ""
         return {
             "id": self.id,
-            "camera_id": self.camera_id,
             "camera_name": self.camera_name,
             "name": self.camera_name,
             "brand": self.brand,

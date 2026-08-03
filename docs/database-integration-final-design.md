@@ -62,11 +62,11 @@
 | 字段 | 释义 |
 | --- | --- |
 | id | 主键 |
-| camera_id | 外键，关联 `camera_device.id` |
+| camera_device_id | 外键，关联 `camera_device.id` |
 | broadcast_device_id | 外键，关联 `broadcast_device.id` |
 | create_time | 创建时间 |
 
-唯一约束：`(camera_id, broadcast_device_id)`。摄像头可以绑定多个广播设备，一个 USB 广播也可以供多个摄像头使用。
+唯一约束：`(camera_device_id, broadcast_device_id)`。摄像头可以绑定多个广播设备，一个 USB 广播也可以供多个摄像头使用。
 
 ### 2.4 `broadcast_template` 广播模板表
 
@@ -85,14 +85,14 @@
 | 字段 | 释义 |
 | --- | --- |
 | id | 主键，也是保存后的绘制区域 ID |
-| camera_id | 外键，关联 `camera_device.id` |
+| camera_device_id | 外键，关联 `camera_device.id` |
 | name | 区域名称，同一摄像头内唯一 |
 | zone_type | PERSON_LOW / PERSON_MEDIUM / PERSON_HIGH / FISHING |
 | polygon_points | 多边形点位 JSON，3 至 15 个归一化坐标点 |
 | enabled | 是否启用 |
 | create_time / update_time | 创建、更新时间 |
 
-新接口不再使用矩形坐标、宽高、风险重复字段和区域表 `trigger_seconds`；触发时间统一保存到条件库。对应物理列因启动兼容逻辑仍在检查而暂未删除。
+矩形坐标、宽高、旧绘制 ID、风险重复字段和区域表 `trigger_seconds` 已删除；触发时间统一保存到条件库。
 
 ### 2.6 `camera_zone_condition` 区域条件绑定表
 
@@ -382,14 +382,14 @@
 | 原表/字段 | 处理 |
 | --- | --- |
 | `alarm` | 本期保持不变，不迁移数据、不修改原有业务 |
-| `event_log` | 仅保留 3 条既有 ECA 历史记录供查询；新触发不再写入 |
+| `event_log` | 3 条旧测试日志已备份并删除，触发和动作统一写入 `safety_event_timeline_log` |
 | `safety_event_log` | 已备份并删除，动作统一写入 `safety_event_timeline_log` |
 | 旧 `event_action` 执行字段 | 35 条测试执行记录已清理，16 个执行字段已删除；表仅保留事件到流程关系 |
 | `safety_event` | 6 条测试事件已备份并删除，检测引擎和接口均已切换到统一实例 |
 | `safety_event_task` | 仅通过非空 `event_instance_id` 关联实例，旧 `event_id` 和电话字段已删除 |
 | `sys_device` | 已删除；原表 0 行、无外键，旧 API/模型/Schema 同步删除 |
 | `sys_trigger_rule` | 已删除；原表 0 行、无外键，统一由 ECA 条件和事件处理 |
-| 区域 rect、旧绘制 ID、风险字段、`trigger_seconds` | 前端与新接口已停用旧概念；数据库列暂留兼容 |
+| 区域 rect、旧绘制 ID、风险字段、`trigger_seconds` | 已从模型、启动逻辑和数据库删除 |
 
 告警管理页面新增一个独立的“安全事件”入口，用于查看 `safety_event_instance` 列表。原告警列表继续查询 `alarm`，两套数据本期不合并；是否最终融合由后续协作结果决定。
 

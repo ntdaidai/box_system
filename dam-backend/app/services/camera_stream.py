@@ -27,12 +27,6 @@ ZONE_TYPES = {
     "PERSON_HIGH",
     "FISHING",
 }
-ZONE_TYPE_ALIASES = {
-    "person_intrusion": "PERSON_LOW", "warning_zone": "PERSON_LOW", "WARNING_ZONE": "PERSON_LOW", "PERSON_LOW": "PERSON_LOW",
-    "waterside_zone": "PERSON_MEDIUM", "waterfront_zone": "PERSON_MEDIUM", "WATERFRONT_ZONE": "PERSON_MEDIUM", "PERSON_MEDIUM": "PERSON_MEDIUM",
-    "wading_zone": "PERSON_HIGH", "water_zone": "PERSON_HIGH", "WATER_ZONE": "PERSON_HIGH", "PERSON_HIGH": "PERSON_HIGH",
-    "illegal_fishing": "FISHING", "fishing_zone": "FISHING", "FISHING_ZONE": "FISHING", "FISHING": "FISHING",
-}
 ZONE_LABELS = {
     "PERSON_LOW": "低风险区域人员进入",
     "PERSON_MEDIUM": "中风险区域人员进入",
@@ -105,10 +99,9 @@ def _clip_unit(value: Any) -> float:
 
 def normalize_zone_type(zone_type: Any) -> str:
     raw = str(zone_type or "PERSON_LOW")
-    normalized = ZONE_TYPE_ALIASES.get(raw) or ZONE_TYPE_ALIASES.get(raw.lower())
-    if normalized not in ZONE_TYPES:
+    if raw not in ZONE_TYPES:
         raise ValueError("区域类型仅支持低风险区、中风险区、高风险区或捕鱼区")
-    return normalized
+    return raw
 
 
 def _normalize_point(point: Any) -> Dict[str, float]:
@@ -155,7 +148,7 @@ def normalize_detection_zone(zone: Dict[str, Any], fallback_id: str = "") -> Dic
     if rect["width"] <= 0.001 or rect["height"] <= 0.001:
         raise ValueError("多边形区域面积过小")
 
-    zone_id = str(zone.get("zone_id") or zone.get("id") or fallback_id or f"{zone_type}_{time.time_ns()}")
+    zone_id = str(zone.get("id") or fallback_id or f"{zone_type}_{time.time_ns()}")
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", zone_id):
         raise ValueError("区域 ID 只能包含字母、数字、下划线和短横线")
 
@@ -169,13 +162,11 @@ def normalize_detection_zone(zone: Dict[str, Any], fallback_id: str = "") -> Dic
         "zone_id": zone_id,
         "zone_name": name,
         "zone_type": zone_type,
-        "camera_id": str(zone.get("camera_id") or ""),
         "polygon_points": polygon_points,
         "risk_level": risk_level,
         "trigger_seconds": round(trigger_seconds, 3),
         "condition_durations": dict(zone.get("condition_durations") or {}),
         "enabled": bool(zone.get("enabled", True)),
-        # Backward-compatible aliases used by older frontend code/tests.
         "id": zone_id,
         "name": name,
         "type": zone_type,

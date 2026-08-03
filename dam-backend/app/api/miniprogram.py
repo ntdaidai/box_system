@@ -14,13 +14,6 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.api.camera import (
-    SafetyEventActionRequest,
-    _event_type_label,
-    _record_safety_event_action,
-    _safety_event_to_dict,
-    _timeline_to_dict,
-)
 from app.core.cache import invalidate_cache
 from app.core.config import settings
 from app.core.database import SessionLocal
@@ -42,6 +35,12 @@ from app.services.safety_event_engine import (
     get_safety_event_engine,
 )
 from app.services.safety_event_runtime_service import safety_event_runtime_service
+from app.services.safety_event_operation_service import (
+    event_dict as _safety_event_to_dict,
+    event_type_label as _event_type_label,
+    operate_safety_event,
+    timeline_dict as _timeline_to_dict,
+)
 from app.services.safety_event_ws import safety_event_ws_manager
 from app.services.stream_ticket import stream_ticket_store
 from app.services.wechat_subscription_service import (
@@ -168,15 +167,11 @@ def _system_action_text(event: dict) -> str:
 def _mini_event(db: Session, event: SafetyEventInstance, camera: Optional[Camera] = None) -> dict:
     base = _safety_event_to_dict(safety_event_runtime_service.event_dict(db, event))
     status = _mini_status(base)
-    camera = camera if camera and camera.camera_id == base.get("camera_id") else None
+    camera = camera if camera and str(camera.id) == str(base.get("camera_id")) else None
     install_address = getattr(camera, "install_address", None)
     latitude = getattr(camera, "latitude", None)
     longitude = getattr(camera, "longitude", None)
     monitor_point = base.get("camera_name") or base.get("camera_id") or "监控点位"
-    if (base.get("camera_id") in {"camera_001", "dahua_001"} or "一号" in monitor_point) and not (latitude and longitude):
-        install_address = install_address or "河海大学西康路校区图书馆"
-        latitude = 32.055156
-        longitude = 118.75809
     return {
         **base,
         "risk_level_label": RISK_LABELS.get(base.get("risk_level"), base.get("risk_level")),
@@ -199,10 +194,6 @@ def _mini_camera(row: Optional[Camera], camera_id: str, status: Optional[dict] =
     install_address = getattr(row, "install_address", None)
     latitude = getattr(row, "latitude", None)
     longitude = getattr(row, "longitude", None)
-    if (camera_id in {"camera_001", "dahua_001"} or "一号" in camera_name) and not (latitude and longitude):
-        install_address = install_address or "河海大学西康路校区图书馆"
-        latitude = 32.055156
-        longitude = 118.75809
     return {
         "camera_id": camera_id,
         "camera_name": camera_name,
@@ -336,26 +327,10 @@ async def list_cameras():
         }
         rows = db.query(Camera).filter(Camera.enabled == True).order_by(Camera.id.asc()).all()  # noqa: E712
         cameras = []
-        known_ids = set()
         for row in rows:
-            known_ids.add(row.camera_id)
-            item = _mini_camera(row, row.camera_id, statuses.get(row.camera_id))
-            devices = broadcast_service.list_devices_for_camera(db, row.camera_id)
-            item["broadcast_devices"] = devices
-            item["broadcast_device_count"] = len(devices)
-            cameras.append(item)
-        for camera_id, status in statuses.items():
-            if camera_id not in known_ids:
-                item = _mini_camera(None, camera_id, status)
-                devices = broadcast_service.list_devices_for_camera(db, camera_id)
-                item["broadcast_devices"] = devices
-                item["broadcast_device_count"] = len(devices)
-                cameras.append(item)
-        if not cameras and settings.CAMERA_ID:
-            item = _mini_camera(None, settings.CAMERA_ID, None)
-            item["camera_name"] = settings.CAMERA_NAME or settings.CAMERA_ID
-            item["name"] = item["camera_name"]
-            devices = broadcast_service.list_devices_for_camera(db, settings.CAMERA_ID)
+            camera_id = str(row.id)
+            item = _mini_camera(row, camera_id, statuses.get(camera_id))
+            devices = broadcast_service.list_devices_for_camera(db, camera_id)
             item["broadcast_devices"] = devices
             item["broadcast_device_count"] = len(devices)
             cameras.append(item)
@@ -461,10 +436,11 @@ async def list_events(
         total = len(event_rows)
         event_rows = event_rows[(page - 1) * page_size:page * page_size]
         camera_ids = {data.get("camera_id") for _, data in event_rows if data.get("camera_id")}
+        numeric_ids = [int(value) for value in camera_ids if str(value).isdigit()]
         cameras = {
-            row.camera_id: row
-            for row in db.query(Camera).filter(Camera.camera_id.in_(camera_ids)).all()
-        } if camera_ids else {}
+            str(row.id): row
+            for row in db.query(Camera).filter(Camera.id.in_(numeric_ids)).all()
+        } if numeric_ids else {}
         return MiniResponse(data={
             "items": [_mini_event(db, row, cameras.get(data.get("camera_id"))) for row, data in event_rows],
             "total": total,
@@ -507,7 +483,8 @@ async def get_event_detail(event_id: str):
     try:
         event = _get_event_or_404(db, event_id)
         event_data = safety_event_runtime_service.event_dict(db, event)
-        camera = db.query(Camera).filter(Camera.camera_id == event_data.get("camera_id")).first()
+        camera_id = str(event_data.get("camera_id") or "")
+        camera = db.query(Camera).filter(Camera.id == int(camera_id)).first() if camera_id.isdigit() else None
         return MiniResponse(data={
             "event": _mini_event(db, event, camera),
             "timeline": _build_timeline(db, event_id),
@@ -588,15 +565,16 @@ async def start_manual_process(event_id: str, payload: StartManualRequest):
         if event.risk_level != RISK_HIGH:
             raise HTTPException(status_code=409, detail="只有高风险事件需要人工现场处理")
         operator = _operator_name(db, payload.operator)
-        response = await _record_safety_event_action(
-            event_id,
-            SafetyEventActionRequest(action_type="STAFF_ACCEPTED", remark=payload.remark),
+        result = await operate_safety_event(
             db,
             SimpleNamespace(username=operator, role="miniprogram"),
+            event.id,
+            action="ACCEPT_TASK",
+            reason=payload.remark or "",
         )
         return MiniResponse(data={
-            "event": response.data.get("event"),
-            "timeline_item": response.data.get("timeline_item"),
+            "event": result.get("event"),
+            "timeline_item": result.get("timeline_item"),
         }, message="已进入人工处理")
     finally:
         db.close()

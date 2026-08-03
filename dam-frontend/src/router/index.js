@@ -75,7 +75,10 @@ const routes = [
           {
             path: 'camera/zones',
             name: 'CameraZoneConfig',
-            component: () => import('@/views/Monitor/ZoneConfig.vue'),
+            redirect: (to) => ({
+              path: '/monitor/camera',
+              query: { ...to.query, drawer: 'zones' },
+            }),
             meta: { title: '区域配置' }
           },
           {
@@ -122,25 +125,25 @@ const routes = [
             component: () => import('@/views/Alarm/SafetyEvents.vue'),
             meta: { title: '安全事件' }
           },
-          {
-            path: 'config',
-            name: 'AlarmConfig',
-            component: () => import('@/views/Alarm/AlarmConfig.vue'),
-            meta: { title: '告警配置' }
-          },
         ],
       },
-      // ========== 文档管理 ==========
+      // ========== 数据管理 ==========
       {
         path: 'document',
         redirect: '/document/hub',
-        meta: { title: '文档管理' },
+        meta: { title: '数据管理' },
         children: [
           {
             path: 'hub',
             name: 'DocumentHub',
             component: () => import('@/views/DocumentHub.vue'),
-            meta: { title: '文档中心' }
+            meta: { title: '文档管理' }
+          },
+          {
+            path: 'knowledge',
+            name: 'KnowledgeBase',
+            component: () => import('@/views/KnowledgeBase.vue'),
+            meta: { title: '知识库' }
           },
           {
             path: 'upload',

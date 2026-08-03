@@ -7,7 +7,6 @@ import datetime as dt
 import uuid
 from types import SimpleNamespace
 
-from app.api.camera import SafetyEventActionRequest, _record_safety_event_action
 from app.core.database import SessionLocal
 from app.models.broadcast import BroadcastDevice, CameraBroadcastDevice
 from app.models.camera import Camera
@@ -22,6 +21,7 @@ from app.models.safety_integration import (
 from app.services.broadcast_service import BroadcastAudioFile, broadcast_service
 from app.services.drone_adapter import drone_dispatch_service
 from app.services.safety_event_runtime_service import safety_event_runtime_service
+from app.services.safety_event_operation_service import operate_safety_event
 from app.services.staff_task_service import staff_task_service
 
 
@@ -107,7 +107,6 @@ async def run() -> None:
         device_id = mock_device.id
         binding = CameraBroadcastDevice(
             camera_device_id=camera.id,
-            camera_id=camera.camera_id,
             broadcast_device_id=mock_device.id,
         )
         db.add(binding)
@@ -132,7 +131,7 @@ async def run() -> None:
         db.commit()
         broadcast_service.play(db, {
             "event_id": low.instance_no,
-            "camera_id": camera.camera_id,
+            "camera_id": str(camera.id),
             "device_ids": [mock_device.id],
             "template_id": "PERSON_LOW",
             "trigger_type": "AUTO",
@@ -142,7 +141,7 @@ async def run() -> None:
         })
         broadcast_service.play_recorded_audio(db, {
             "event_id": low.instance_no,
-            "camera_id": camera.camera_id,
+            "camera_id": str(camera.id),
             "device_ids": [mock_device.id],
             "trigger_type": "MANUAL",
             "operator": "verify-user",
@@ -159,7 +158,7 @@ async def run() -> None:
         drone_dispatch_service.handle_safety_event_action({
             "action_id": drone_id,
             "event_id": medium.instance_no,
-            "camera_id": camera.camera_id,
+            "camera_id": str(camera.id),
             "risk_level": "MEDIUM",
             "action_type": "DRONE_DISPATCH",
             "payload": {},
@@ -175,7 +174,7 @@ async def run() -> None:
         staff_task_service.handle_safety_event_action({
             "action_id": staff_id,
             "event_id": high.instance_no,
-            "camera_id": camera.camera_id,
+            "camera_id": str(camera.id),
             "risk_level": "HIGH",
             "action_type": "STAFF_DISPATCH",
         })
@@ -183,17 +182,19 @@ async def run() -> None:
         # transaction so MySQL does not keep the pre-dispatch repeatable-read snapshot.
         db.rollback()
         db.expire_all()
-        await _record_safety_event_action(
-            high.instance_no,
-            SafetyEventActionRequest(action_type="STAFF_ACCEPTED", remark="验证接单"),
+        await operate_safety_event(
             db,
             SimpleNamespace(username="verify-user", role="tester"),
+            high.id,
+            action="ACCEPT_TASK",
+            reason="验证接单",
         )
-        await _record_safety_event_action(
-            high.instance_no,
-            SafetyEventActionRequest(action_type="STAFF_COMPLETED", remark="验证完成"),
+        await operate_safety_event(
             db,
             SimpleNamespace(username="verify-user", role="tester"),
+            high.id,
+            action="COMPLETE_TASK",
+            reason="验证完成",
         )
 
         db.expire_all()

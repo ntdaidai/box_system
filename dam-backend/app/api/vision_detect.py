@@ -10,10 +10,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
-from datetime import datetime
 from loguru import logger
+from sqlalchemy.orm import Session
 
+from app.core.database import get_db
 from app.core.security import require_auth
+from app.models.camera import Camera
 from app.models.user import User
 from app.services.vision_detector import vision_detector
 
@@ -24,7 +26,7 @@ router = APIRouter()
 
 class DetectionResultRequest(BaseModel):
     """检测结果请求"""
-    camera_id: str = Field(..., description="摄像头ID", min_length=1, max_length=50)
+    camera_id: int = Field(..., ge=1, description="摄像头设备主键")
     detection_type: str = Field(
         ...,
         description="检测类型: crack/seepage/slope_damage/gate_deform",
@@ -35,10 +37,22 @@ class DetectionResultRequest(BaseModel):
     details: Optional[Dict[str, Any]] = Field(None, description="详细信息")
 
 
+class DetectionItemRequest(BaseModel):
+    """同一摄像头的一项检测结果。"""
+    detection_type: str = Field(
+        ...,
+        description="检测类型: crack/seepage/slope_damage/gate_deform",
+        pattern="^(crack|seepage|slope_damage|gate_deform)$",
+    )
+    detected: bool
+    confidence: float = Field(0.0, ge=0.0, le=1.0)
+    details: Optional[Dict[str, Any]] = None
+
+
 class BatchDetectionRequest(BaseModel):
     """批量检测结果请求"""
-    camera_id: str = Field(..., description="摄像头ID")
-    detections: List[DetectionResultRequest] = Field(..., description="检测结果列表")
+    camera_id: int = Field(..., ge=1, description="摄像头设备主键")
+    detections: List[DetectionItemRequest] = Field(..., description="检测结果列表")
 
 
 # ==================== 响应模型 ====================
@@ -54,6 +68,7 @@ class DetectionResponse(BaseModel):
 @router.post("/report", response_model=DetectionResponse, summary="上报检测结果")
 async def report_detection(
     request: DetectionResultRequest,
+    db: Session = Depends(get_db),
     _user: User = Depends(require_auth)
 ):
     """
@@ -64,7 +79,7 @@ async def report_detection(
     示例请求：
     ```json
     {
-        "camera_id": "camera_001",
+        "camera_id": 1,
         "detection_type": "crack",
         "detected": true,
         "confidence": 0.95,
@@ -77,8 +92,10 @@ async def report_detection(
     ```
     """
     try:
+        if not db.query(Camera.id).filter(Camera.id == request.camera_id).first():
+            raise HTTPException(status_code=404, detail="摄像头不存在")
         vision_detector.update_detection_result(
-            camera_id=request.camera_id,
+            camera_id=str(request.camera_id),
             detection_type=request.detection_type,
             detected=request.detected,
             confidence=request.confidence,
@@ -94,6 +111,8 @@ async def report_detection(
                 "message": "检测结果已上报，ECA事件检查已触发"
             }
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"上报检测结果失败: {e}")
         raise HTTPException(status_code=500, detail=f"上报失败: {str(e)}")
@@ -102,6 +121,7 @@ async def report_detection(
 @router.post("/report/batch", response_model=DetectionResponse, summary="批量上报检测结果")
 async def report_batch_detections(
     request: BatchDetectionRequest,
+    db: Session = Depends(get_db),
     _user: User = Depends(require_auth)
 ):
     """
@@ -112,7 +132,7 @@ async def report_batch_detections(
     示例请求：
     ```json
     {
-        "camera_id": "camera_001",
+        "camera_id": 1,
         "detections": [
             {
                 "detection_type": "crack",
@@ -129,11 +149,13 @@ async def report_batch_detections(
     }
     ```
     """
+    if not db.query(Camera.id).filter(Camera.id == request.camera_id).first():
+        raise HTTPException(status_code=404, detail="摄像头不存在")
     results = []
     for detection in request.detections:
         try:
             vision_detector.update_detection_result(
-                camera_id=request.camera_id,
+                camera_id=str(request.camera_id),
                 detection_type=detection.detection_type,
                 detected=detection.detected,
                 confidence=detection.confidence,
@@ -163,7 +185,7 @@ async def report_batch_detections(
 
 @router.get("/latest", response_model=DetectionResponse, summary="获取最新检测结果")
 async def get_latest_detections(
-    camera_id: Optional[str] = Query(None, description="摄像头ID"),
+    camera_id: Optional[int] = Query(None, ge=1, description="摄像头设备主键"),
     detection_type: Optional[str] = Query(None, description="检测类型"),
     _user: User = Depends(require_auth)
 ):
@@ -172,7 +194,7 @@ async def get_latest_detections(
 
     可按摄像头ID和检测类型过滤。
     """
-    result = vision_detector.get_latest_result(camera_id, detection_type)
+    result = vision_detector.get_latest_result(str(camera_id) if camera_id else None, detection_type)
     return DetectionResponse(code=200, data=result)
 
 
@@ -201,7 +223,7 @@ async def get_detection_snapshot(
 
 @router.get("/history", response_model=DetectionResponse, summary="获取检测历史")
 async def get_detection_history(
-    camera_id: Optional[str] = Query(None, description="摄像头ID"),
+    camera_id: Optional[int] = Query(None, ge=1, description="摄像头设备主键"),
     detection_type: Optional[str] = Query(None, description="检测类型"),
     limit: int = Query(100, ge=1, le=1000, description="返回数量"),
     _user: User = Depends(require_auth)
@@ -211,7 +233,7 @@ async def get_detection_history(
 
     可按摄像头ID和检测类型过滤。
     """
-    history = vision_detector.get_history(camera_id, detection_type, limit)
+    history = vision_detector.get_history(str(camera_id) if camera_id else None, detection_type, limit)
     return DetectionResponse(
         code=200,
         data={

@@ -9,7 +9,6 @@ from app.models.event_condition import EventCondition
 from app.models.action_flow import ActionFlow
 from app.models.action_step import ActionStep
 from app.models.event_action import EventAction
-from app.models.event_log import EventLog
 from app.models.camera_detection_zone import CameraDetectionZone
 from app.models.safety_event_task import SafetyEventTask
 from app.models.analysis_report import AnalysisReport
@@ -36,7 +35,6 @@ __all__ = [
     "ActionFlow",
     "ActionStep",
     "EventAction",
-    "EventLog",
     "CameraDetectionZone",
     "SafetyEventTask",
     "AnalysisReport",

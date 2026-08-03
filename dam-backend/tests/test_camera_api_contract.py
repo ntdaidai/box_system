@@ -6,8 +6,6 @@ import os
 import unittest
 from unittest.mock import patch
 
-from pydantic import ValidationError
-
 os.environ.setdefault("JWT_SECRET", "camera-tests-jwt-secret-that-is-long-enough")
 os.environ.setdefault("DEFAULT_ADMIN_PASSWORD", "camera-tests-admin-password")
 
@@ -52,22 +50,6 @@ class CameraApiContractTests(unittest.TestCase):
     def test_static_model_route_precedes_dynamic_camera_status(self):
         paths = [route.path for route in camera_api.router.routes]
         self.assertLess(paths.index("/model/status"), paths.index("/{camera_id}/status"))
-
-    def test_camera_request_rejects_path_ids_and_non_rtsp_sources(self):
-        with self.assertRaises(ValidationError):
-            camera_api.CameraAddRequest(
-                camera_id="../camera",
-                rtsp_url="rtsp://example.test/live",
-            )
-        with self.assertRaises(ValidationError):
-            camera_api.CameraAddRequest(
-                camera_id="camera_1",
-                rtsp_url="http://example.test/live",
-            )
-        usb = camera_api.CameraAddRequest(camera_id="usb_1", source="/dev/video0")
-        self.assertEqual(usb.source, "/dev/video0")
-        with self.assertRaises(ValidationError):
-            camera_api.CameraAddRequest(camera_id="csi_1", source="csi://0")
 
     def test_toggle_preserves_zero_threshold_and_stops_cleanly(self):
         manager = CameraManager()
@@ -139,7 +121,7 @@ class CameraApiContractTests(unittest.TestCase):
         manager = CameraManager()
         zone_store = MemoryZoneStore()
         manager.add_camera(
-            "camera_zone",
+            "1",
             "rtsp://example.test/live",
             auto_start=False,
             capture_factory=ClosedCapture,
@@ -150,7 +132,7 @@ class CameraApiContractTests(unittest.TestCase):
             ):
                 saved = asyncio.run(
                     camera_api.save_detection_zones(
-                        "camera_zone",
+                        "1",
                         camera_api.DetectionZonesRequest(
                             zones=[
                                 camera_api.DetectionZoneRequest(
@@ -170,12 +152,12 @@ class CameraApiContractTests(unittest.TestCase):
                     )
                 )
                 listed = asyncio.run(
-                    camera_api.get_detection_zones("camera_zone", object())
+                    camera_api.get_detection_zones("1", object())
                 )
             self.assertEqual(saved.data["zones"][0]["type"], "PERSON_LOW")
             self.assertEqual(listed.data["zones"][0]["name"], "入口禁入区")
             self.assertEqual(
-                manager.get_camera("camera_zone").get_status()["detection_zones"][0][
+                manager.get_camera("1").get_status()["detection_zones"][0][
                     "id"
                 ],
                 "entry_area",

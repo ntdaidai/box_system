@@ -80,7 +80,7 @@ import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores'
 import {
-  ArrowDown, Bell, Cloudy, Crop, DataAnalysis, Odometer, Setting, Sunny, WindPower,
+  ArrowDown, Bell, Cloudy, DataAnalysis, Odometer, Setting, Sunny, WindPower,
 } from '@element-plus/icons-vue'
 import {
   AlarmTriangleIcon,
@@ -111,7 +111,7 @@ const navList = [
   { name: '系统概览', path: '/dashboard', icon: SystemOverviewIcon },
   { name: '实时监控', path: '/monitor', icon: RealtimeMonitorIcon },
   { name: '告警管理', path: '/alarm', icon: AlarmTriangleIcon },
-  { name: '文档管理', path: '/document', icon: DocumentSheetIcon },
+  { name: '数据管理', path: '/document', icon: DocumentSheetIcon },
 ]
 
 // 各模块对应的菜单
@@ -142,14 +142,9 @@ const menuMap = {
       children: [
         { name: '视频监控', path: '/monitor/camera', icon: VideoMonitorIcon },
         { name: '设备管理', path: '/monitor/camera/devices', icon: Setting },
-        { name: '区域配置', path: '/monitor/camera/zones', icon: Crop },
         { name: '图片/视频分析', path: '/monitor/camera/image', icon: DataAnalysis },
+        { name: '信息配置', path: '/monitor/config', icon: Setting },
       ],
-    },
-    {
-      name: '信息配置',
-      path: '/monitor/config',
-      icon: Setting,
     },
     {
       name: '无人机监测',
@@ -164,16 +159,16 @@ const menuMap = {
       children: [
         { name: '告警列表', path: '/alarm/list', icon: AlarmTriangleIcon },
         { name: '安全事件', path: '/alarm/safety-events', icon: Bell },
-        { name: '告警配置', path: '/alarm/config', icon: Setting },
       ],
     },
   ],
   '/document': [
     {
-      name: '文档管理',
+      name: '数据管理',
       icon: DocumentSheetIcon,
       children: [
-        { name: '文档中心', path: '/document/hub', icon: DocumentSheetIcon },
+        { name: '文档管理', path: '/document/hub', icon: DocumentSheetIcon },
+        { name: '知识库', path: '/document/knowledge', icon: DataAnalysis },
       ],
     },
   ],

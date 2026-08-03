@@ -123,7 +123,7 @@ docker compose up -d
 | MySQL       | 3306 | 关系数据库                 |
 | Redis       | 6379 | 缓存                       |
 | IoTDB       | 6667 | 时序数据库                 |
-| Qwen3-VL-8B | 8000 | 视觉模型                   |
+| Qwen3-VL-8B | 8003 | 视觉模型                   |
 | WebRTC 网关 | 8002 | 仅回环监听的 RTSP 信令代理 |
 
 ## 安全注意事项
@@ -155,23 +155,9 @@ Jetson/TensorRT/CUDA 环境导出的 TensorRT FP16 engine；如果部署到不�
 TensorRT 版本机器，需要在目标机器上重新导出 engine；系统会用 `best.pt` 作为兜底分类
 权重，避免 engine 不兼容时分类功能直接不可用。
 
-未接入摄像头时 `CAMERA_RTSP_URL` 保持为空，系统会正常启动，`/monitor/camera`
-页面显示待配置状态。接入单路海康摄像头时，在项目 `.env` 中配置：
-
-```dotenv
-CAMERA_RTSP_URL=rtsp://用户名:密码@摄像头IP:554/Streaming/Channels/102
-CAMERA_ID=camera_001
-CAMERA_NAME=主摄像头
-CAMERA_AUTO_START=true
-CAMERA_DETECTION_FPS=5
-CAMERA_JPEG_QUALITY=80
-```
-
-如果需要展示并切换多路摄像头，使用 JSON 数组替代单路地址：
-
-```dotenv
-CAMERA_CONFIGS_JSON=[{"camera_id":"camera_east","name":"东侧摄像头","rtsp_url":"rtsp://用户:密码@192.0.2.10:554/Streaming/Channels/102","auto_start":true},{"camera_id":"camera_west","name":"西侧摄像头","rtsp_url":"rtsp://用户:密码@192.0.2.11:554/Streaming/Channels/102","auto_start":true}]
-```
+摄像头统一在“实时监控 / 设备管理”中录入。连接测试成功后，设备保存到
+`camera_device`，视频监控页按数据库主键加载已启用的视频源，不再读取环境变量中的
+临时视频源配置。
 
 海康 `101` 通常为主码流，`102` 通常为子码流。实时检测优先使用子码流以降低端到端延迟。
 检测默认关闭，只有在页面点击“开启检测”后才会启动该摄像头的共享推理线程。
@@ -186,20 +172,6 @@ TURN 并开放对应 UDP 端口，当前默认配置面向 Jetson 同一局域�
 后端另行通过 OpenCV 拉取同一 RTSP，按 `CAMERA_DETECTION_FPS` 抽帧交给 YOLO。
 检测结果以 SSE 元数据发送到前端，并用 SVG 叠加框，不会把标注后画面重新编码推流。
 WebRTC 不可用时，页面会自动回退到原有的鉴权 MJPEG 兼容流。
-
-<!-- dai -->
-海康网络摄像头即使网线连接在 Jetson 上，仍使用 RTSP 地址接入，不需要映射
-`/dev/video0`。USB/UVC 摄像头才使用本地设备方式：
-
-```dotenv
-CAMERA_SOURCE=/dev/video0
-CAMERA_DEVICE=/dev/video0
-```
-
-多路 JSON 的每一项也可以使用 `source`，例如
-`{"camera_id":"usb","source":"/dev/video0"}`。页面中的“接入视频源”支持
-RTSP 和 USB 两种类型；页面临时添加的配置在后端重启后不会
-保留，正式部署请写入 `.env` 或 `CAMERA_CONFIGS_JSON`。
 
 图片与视频上传分析均位于 `/monitor/camera`。视频采用临时任务处理：浏览器播放本地
 视频，后端按时间抽帧并返回分析时间轴；检测模式同步显示检测框，分类模式显示对应

@@ -38,7 +38,7 @@ def test_vision_detection():
     # 2. 模拟视觉检测结果
     print("\n2. 模拟视觉检测：检测到裂缝...")
     vision_detector.update_detection_result(
-        camera_id="camera_001",
+        camera_id="1",
         detection_type="crack",
         detected=True,
         confidence=0.95,
@@ -93,7 +93,7 @@ Authorization: Bearer <token>
 Content-Type: application/json
 
 {
-    "camera_id": "camera_001",
+    "camera_id": 1,
     "detection_type": "crack",
     "detected": true,
     "confidence": 0.95,
@@ -112,7 +112,7 @@ Authorization: Bearer <token>
 Content-Type: application/json
 
 {
-    "camera_id": "camera_001",
+    "camera_id": 1,
     "detections": [
         {
             "detection_type": "crack",
@@ -131,7 +131,7 @@ Content-Type: application/json
 
 查询检测结果：
 
-GET /api/v1/vision/detect/latest?camera_id=camera_001&detection_type=crack
+GET /api/v1/vision/detect/latest?camera_id=1&detection_type=crack
 GET /api/v1/vision/detect/snapshot
 GET /api/v1/vision/detect/history?limit=50
 GET /api/v1/vision/detect/types

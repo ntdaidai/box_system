@@ -47,6 +47,11 @@ def sum_values(values):
     return int(sum(numeric)) if numeric else None
 
 
+def total_values(values):
+    numeric = _numeric_values(values)
+    return round(sum(numeric), 4) if numeric else None
+
+
 def circular_mean_degrees(values):
     numeric = _numeric_values(values)
     if not numeric:
@@ -84,6 +89,8 @@ def aggregate_bucket_values(
             value = circular_mean_degrees(values)
         elif field in {"wind_direction", "wind_dir_code"}:
             continue
+        elif device_name == "rain" and field == "rain_duration_hours":
+            value = total_values(values)
         elif field.endswith("_min"):
             value = minimum_value(values)
         elif field.endswith("_max"):
@@ -137,6 +144,40 @@ def aggregate_bucket_values(
         )
         if sample_count:
             result["daily_rain_sample_count"] = sample_count
+
+        if "rain_duration_hours" not in result:
+            duration_hours = total_values(values_by_field.get("rain_duration_hours", []))
+            if duration_hours is None:
+                instant_values = _numeric_values(values_by_field.get("instant_rain", []))
+                if instant_values:
+                    duration_hours = round(
+                        sum(1 for value in instant_values if value > 0) / 60,
+                        4,
+                    )
+            if duration_hours is not None:
+                result["rain_duration_hours"] = duration_hours
+
+    if device_name == "wind" and include_extrema:
+        for field in ("wind_speed_kmh", "wind_speed_ms"):
+            max_field = f"{field}_max"
+            if max_field in result:
+                continue
+            value = maximum_value(values_by_field.get(max_field, []))
+            if value is None:
+                value = maximum_value(values_by_field.get(field, []))
+            if value is not None:
+                result[max_field] = value
+
+    if device_name == "vibration" and include_extrema:
+        for field in ("rms", "total_rms"):
+            max_field = f"{field}_max"
+            if max_field in result:
+                continue
+            value = maximum_value(values_by_field.get(max_field, []))
+            if value is None:
+                value = maximum_value(values_by_field.get(field, []))
+            if value is not None:
+                result[max_field] = value
 
     if device_name == "wind" and "wind_angle" in result:
         code, direction = wind_direction_from_angle(result["wind_angle"])

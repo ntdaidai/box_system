@@ -55,7 +55,7 @@ curl -X POST http://localhost:8090/api/v1/vision/detect/report \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "camera_id": "camera_001",
+    "camera_id": 1,
     "detection_type": "crack",
     "detected": true,
     "confidence": 0.95,
@@ -70,7 +70,7 @@ curl -X POST http://localhost:8090/api/v1/vision/detect/report/batch \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "camera_id": "camera_001",
+    "camera_id": 1,
     "detections": [
       {"detection_type": "crack", "detected": true, "confidence": 0.95},
       {"detection_type": "seepage", "detected": false, "confidence": 0.1}
@@ -82,7 +82,7 @@ curl -X POST http://localhost:8090/api/v1/vision/detect/report/batch \
 
 ```bash
 # 获取最新结果
-curl "http://localhost:8090/api/v1/vision/detect/latest?camera_id=camera_001" \
+curl "http://localhost:8090/api/v1/vision/detect/latest?camera_id=1" \
   -H "Authorization: Bearer <token>"
 
 # 获取快照（ECA引擎格式）

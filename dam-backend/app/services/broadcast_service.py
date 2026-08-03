@@ -13,7 +13,6 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
 
 from app.core.config import settings
 from app.core.database import SessionLocal
@@ -493,7 +492,6 @@ class BroadcastService:
                     device_code="jetson_usb_speaker",
                     status="ONLINE",
                     enabled=True,
-                    location="Jetson USB音频输出",
                     config_json=usb_config,
                     description="一号点 USB 广播设备",
                 )
@@ -507,16 +505,6 @@ class BroadcastService:
                 if (device.config_json or {}).get("alsa_device") != settings.BROADCAST_USB_ALSA_DEVICE:
                     device.config_json = usb_config
                     changed = True
-            if settings.CAMERA_ID and not db.query(CameraBroadcastDevice).filter(
-                CameraBroadcastDevice.camera_id == settings.CAMERA_ID,
-                CameraBroadcastDevice.broadcast_device_id == device.id,
-            ).first():
-                db.add(CameraBroadcastDevice(
-                    **self._sqlite_default_id(db, 900001),
-                    camera_id=settings.CAMERA_ID,
-                    broadcast_device_id=device.id,
-                ))
-                changed = True
         if changed:
             db.commit()
 
@@ -527,7 +515,7 @@ class BroadcastService:
         from app.models.safety_integration import EventActionStepConfig, SafetyEventInstance
 
         instance = db.query(SafetyEventInstance).filter(SafetyEventInstance.instance_no == event_id).first()
-        camera = db.query(Camera).filter(Camera.camera_id == camera_id).first()
+        camera = db.query(Camera).filter(Camera.id == int(camera_id)).first() if str(camera_id).isdigit() else None
         if not instance or not camera:
             return None, []
         config = (
@@ -622,18 +610,12 @@ class BroadcastService:
         if str(camera_id).isdigit():
             camera = db.query(Camera).filter(Camera.id == int(camera_id)).first()
         if camera is None:
-            camera = db.query(Camera).filter(Camera.camera_id == str(camera_id)).first()
-        binding_filter = CameraBroadcastDevice.camera_id == str(camera_id)
-        if camera:
-            binding_filter = or_(
-                CameraBroadcastDevice.camera_device_id == camera.id,
-                CameraBroadcastDevice.camera_id == camera.camera_id,
-            )
+            return []
         rows = (
             db.query(BroadcastDevice)
             .join(CameraBroadcastDevice, CameraBroadcastDevice.broadcast_device_id == BroadcastDevice.id)
             .filter(
-                binding_filter,
+                CameraBroadcastDevice.camera_device_id == camera.id,
                 BroadcastDevice.enabled == True,  # noqa: E712
             )
             .order_by(BroadcastDevice.id.asc())
@@ -746,7 +728,6 @@ class BroadcastService:
             "vendor_type": row.vendor_type,
             "device_code": row.device_code,
             "status": row.status,
-            "location": row.location,
             "enabled": row.enabled,
             "create_time": row.create_time.isoformat() if row.create_time else None,
             "update_time": row.update_time.isoformat() if row.update_time else None,

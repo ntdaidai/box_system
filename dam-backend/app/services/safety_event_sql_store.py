@@ -114,13 +114,13 @@ class SqlSafetyEventStore:
     def create_or_update_event(self, event: Dict[str, Any]) -> None:
         self.load()
         with self._lock:
-            self.events[event["event_id"]] = dict(event)
             from app.core.database import SessionLocal
 
             db = SessionLocal()
             try:
                 self._sync_unified_event(db, event)
                 db.commit()
+                self.events[event["event_id"]] = dict(event)
             except Exception:
                 db.rollback()
                 raise
@@ -219,7 +219,7 @@ class SqlSafetyEventStore:
                     VisualEventDetail,
                     VisualEventDetail.event_instance_id == SafetyEventInstance.id,
                 ).join(Camera, Camera.id == VisualEventDetail.camera_id).filter(
-                    Camera.camera_id == camera_id
+                    Camera.id == int(camera_id)
                 )
             if since is not None:
                 query = query.filter(SafetyEventInstance.started_at >= _to_datetime(since))
@@ -332,7 +332,8 @@ class SqlSafetyEventStore:
         if not event_code:
             return
         definition = db.query(EventLibrary).filter(EventLibrary.event_code == event_code).first()
-        camera = db.query(Camera).filter(Camera.camera_id == str(event.get("camera_id"))).first()
+        camera_id = str(event.get("camera_id") or "")
+        camera = db.query(Camera).filter(Camera.id == int(camera_id)).first() if camera_id.isdigit() else None
         if not definition or not camera:
             return
         source = db.query(DataSource).filter(
@@ -398,13 +399,15 @@ class SqlSafetyEventStore:
         }
         instance.latest_observation = observation
         instance.version = int(event.get("version") or instance.version or 0)
+        event["instance_id"] = instance.id
 
         visual = db.query(VisualEventDetail).filter(VisualEventDetail.event_instance_id == instance.id).first()
         zone_ids = event.get("zone_ids") or observation.get("zone_ids") or []
+        zone_db_id = int(zone_ids[0]) if zone_ids and str(zone_ids[0]).isdigit() else None
         zone = db.query(CameraDetectionZone).filter(
             CameraDetectionZone.camera_device_id == camera.id,
-            CameraDetectionZone.zone_id == str(zone_ids[0]),
-        ).first() if zone_ids else None
+            CameraDetectionZone.id == zone_db_id,
+        ).first() if zone_db_id is not None else None
         if not visual:
             visual = VisualEventDetail(
                 event_instance_id=instance.id, camera_id=camera.id, camera_name=camera.camera_name,
@@ -428,7 +431,7 @@ class SqlSafetyEventStore:
         ).first():
             db.add(SafetyEventEvidence(
                 event_instance_id=instance.id, evidence_type="IMAGE", source_type="CAMERA",
-                source_id=camera.camera_id, file_url=snapshot_url, description="事件抓拍",
+                source_id=str(camera.id), file_url=snapshot_url, description="事件抓拍",
                 captured_at=_to_datetime(event.get("last_seen_at")) or dt.datetime.now(),
             ))
         video_url = event.get("video_url")
@@ -440,7 +443,7 @@ class SqlSafetyEventStore:
                 event_instance_id=instance.id,
                 evidence_type="VIDEO",
                 source_type="CAMERA",
-                source_id=camera.camera_id,
+                source_id=str(camera.id),
                 file_url=video_url,
                 description="事件短视频",
                 metadata_json={"status": event.get("video_status") or "READY"},

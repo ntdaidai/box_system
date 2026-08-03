@@ -35,9 +35,9 @@
         >
           <el-option
             v-for="camera in cameras"
-            :key="camera.camera_id"
+            :key="camera.id"
             :label="camera.name"
-            :value="camera.camera_id"
+            :value="camera.id"
           >
             <div class="camera-option">
               <span>{{ camera.name }}</span>
@@ -64,9 +64,6 @@
       </div>
 
       <div v-if="!isMediaAnalysisRoute" class="toolbar-actions">
-        <el-button class="ghost-button" @click="showAddDialog = true">
-          <el-icon><Plus /></el-icon>接入视频源
-        </el-button>
         <el-button
           class="detect-button"
           :class="{ active: detectionEnabled }"
@@ -137,7 +134,15 @@
             :loading="reportLoading"
             @click="openPatrolReport(false)"
           >
-            <el-icon><Files /></el-icon>今日报告
+            <el-icon><Files /></el-icon>巡查报告
+          </el-button>
+          <el-button
+            class="ops-ghost-button"
+            :class="{ active: zoneConfigVisible }"
+            :disabled="!currentCameraId"
+            @click="toggleZoneConfigPanel"
+          >
+            <el-icon><Crop /></el-icon>区域配置
           </el-button>
           <el-button
             class="ops-ghost-button"
@@ -157,12 +162,12 @@
           :class="{
             online: slot.camera?.connected,
             empty: !slot.camera,
-            active: slot.camera?.camera_id === currentCameraId,
+            active: slot.camera?.id === currentCameraId,
           }"
         >
           <header>
             <el-select
-              :model-value="slot.camera?.camera_id || ''"
+              :model-value="slot.camera?.id || ''"
               class="slot-camera-select"
               placeholder="不展示摄像头"
               popper-class="vision-select-popper"
@@ -171,9 +176,9 @@
               <el-option label="不展示摄像头" value="" />
               <el-option
                 v-for="camera in cameras"
-                :key="camera.camera_id"
-                :label="camera.name || camera.camera_id"
-                :value="camera.camera_id"
+                :key="camera.id"
+                :label="camera.name || camera.id"
+                :value="camera.id"
               />
             </el-select>
             <span :class="slot.camera?.connected ? 'online' : 'offline'">
@@ -182,38 +187,38 @@
           </header>
           <div class="tile-video-box">
             <img
-              v-if="slot.camera && gridStreamUrls[slot.camera.camera_id]"
-              :src="gridStreamUrls[slot.camera.camera_id]"
-              :alt="`${slot.camera.name || slot.camera.camera_id}实时画面`"
+              v-if="slot.camera && gridStreamUrls[slot.camera.id]"
+              :src="gridStreamUrls[slot.camera.id]"
+              :alt="`${slot.camera.name || slot.camera.id}实时画面`"
               class="tile-video"
-              @load="handleGridImageLoad(slot.camera.camera_id, $event)"
-              @error="handleGridStreamError(slot.camera.camera_id)"
+              @load="handleGridImageLoad(slot.camera.id, $event)"
+              @error="handleGridStreamError(slot.camera.id)"
             />
             <svg
               v-if="gridZoneOverlayVisible(slot.camera)"
               class="tile-zone-overlay"
-              :viewBox="`0 0 ${gridOverlaySize(slot.camera.camera_id).width} ${gridOverlaySize(slot.camera.camera_id).height}`"
+              :viewBox="`0 0 ${gridOverlaySize(slot.camera.id).width} ${gridOverlaySize(slot.camera.id).height}`"
               preserveAspectRatio="xMidYMid meet"
             >
-              <g v-for="zone in gridZonesForCamera(slot.camera.camera_id)" :key="zone.id">
+              <g v-for="zone in gridZonesForCamera(slot.camera.id)" :key="zone.id">
                 <polygon
                   class="ops-zone-polygon"
-                  :points="zonePolygonPointsForSize(zone, gridOverlaySize(slot.camera.camera_id).width, gridOverlaySize(slot.camera.camera_id).height)"
+                  :points="zonePolygonPointsForSize(zone, gridOverlaySize(slot.camera.id).width, gridOverlaySize(slot.camera.id).height)"
                   :stroke="zoneStroke(zone)"
                   :fill="zoneFill(zone)"
-                  :stroke-width="Math.max(2, gridOverlaySize(slot.camera.camera_id).width / 520)"
+                  :stroke-width="Math.max(2, gridOverlaySize(slot.camera.id).width / 520)"
                 />
                 <text
                   class="ops-zone-label"
-                  :x="zoneLabelPointForSize(zone, gridOverlaySize(slot.camera.camera_id).width, gridOverlaySize(slot.camera.camera_id).height).x"
-                  :y="zoneLabelPointForSize(zone, gridOverlaySize(slot.camera.camera_id).width, gridOverlaySize(slot.camera.camera_id).height).y"
+                  :x="zoneLabelPointForSize(zone, gridOverlaySize(slot.camera.id).width, gridOverlaySize(slot.camera.id).height).x"
+                  :y="zoneLabelPointForSize(zone, gridOverlaySize(slot.camera.id).width, gridOverlaySize(slot.camera.id).height).y"
                   :fill="zoneStroke(zone)"
                 >
-                  {{ zone.name || zoneTypeLabel(zone.type) }}
+                  {{ zone.zone_name || zone.name || zoneTypeLabel(zone.type) }}
                 </text>
               </g>
             </svg>
-            <div v-if="!(slot.camera && gridStreamUrls[slot.camera.camera_id])" class="tile-empty">
+            <div v-if="!(slot.camera && gridStreamUrls[slot.camera.id])" class="tile-empty">
               <el-icon><VideoCamera /></el-icon>
               <span>{{ gridSlotEmptyText(slot) }}</span>
             </div>
@@ -234,9 +239,9 @@
               <el-option label="不展示摄像头" value="" />
               <el-option
                 v-for="camera in cameras"
-                :key="camera.camera_id"
-                :label="camera.name || camera.camera_id"
-                :value="camera.camera_id"
+                :key="camera.id"
+                :label="camera.name || camera.id"
+                :value="camera.id"
               />
             </el-select>
           </div>
@@ -303,32 +308,74 @@
             </svg>
 
             <svg
-              v-if="analysisTask === 'detect' && streamZoneOverlayVisible"
+              v-if="analysisTask === 'detect' && editableZoneOverlayVisible"
               class="zone-overlay ops-zone-overlay visible"
+              :class="{ editing: zoneConfigVisible, drawing: zoneDrawing }"
               :viewBox="`0 0 ${overlayWidth} ${overlayHeight}`"
               preserveAspectRatio="xMidYMid meet"
+              @click="handleConfigZoneOverlayClick"
+              @mousemove="dragConfigVertex"
+              @mouseup="endConfigVertexDrag"
+              @mouseleave="endConfigVertexDrag"
             >
-              <g v-for="zone in zonesForOverlay" :key="zone.id">
+              <g
+                v-for="zone in zonesForOverlay"
+                :key="zone.id"
+                class="editable-zone"
+                :class="{ selected: zone.id === selectedZoneId, disabled: !zone.enabled }"
+                @click.stop="handleConfigZoneClick(zone.id, $event)"
+              >
                 <polygon
+                  v-if="zone.polygon_points.length >= 3"
                   class="ops-zone-polygon"
                   :points="zonePolygonPoints(zone)"
                   :stroke="zoneStroke(zone)"
                   :fill="zoneFill(zone)"
                   :stroke-width="Math.max(2, overlayWidth / 520)"
                 />
+                <polyline
+                  v-else-if="zone.polygon_points.length"
+                  class="ops-zone-polyline"
+                  :points="zonePolygonPoints(zone)"
+                  :stroke="zoneStroke(zone)"
+                />
                 <text
+                  v-if="zone.polygon_points.length"
                   class="ops-zone-label"
                   :x="zoneLabelPoint(zone).x"
                   :y="zoneLabelPoint(zone).y"
                   :fill="zoneStroke(zone)"
                 >
-                  {{ zone.name || zoneTypeLabel(zone.type) }}
+                  {{ zone.zone_name || zone.name || zoneTypeLabel(zone.type) }}
                 </text>
+                <g
+                  v-for="(point, index) in zone.polygon_points"
+                  v-show="showConfigZoneAnchors(zone)"
+                  :key="`${zone.id}-vertex-${index}`"
+                  class="ops-zone-vertex"
+                  @click.stop.prevent
+                >
+                  <circle
+                    class="ops-zone-anchor"
+                    :cx="point.x * overlayWidth"
+                    :cy="point.y * overlayHeight"
+                    :r="zoneVertexAnchorRadius"
+                    @mousedown.stop.prevent="startConfigVertexDrag(zone.id, index)"
+                  />
+                  <text
+                    class="ops-zone-vertex-label"
+                    :x="vertexLabelPoint(point).x"
+                    :y="vertexLabelPoint(point).y"
+                    :font-size="zoneVertexFontSize"
+                  >
+                    {{ index + 1 }}
+                  </text>
+                </g>
               </g>
             </svg>
 
             <div v-if="false" class="video-topline">
-              <span>{{ currentCamera.camera_id }}</span>
+              <span>#{{ currentCamera.id }}</span>
               <strong>{{ currentCamera.name || '未命名监控点' }}</strong>
               <em>{{ sourceTypeLabel(currentCamera.source_type) }}</em>
             </div>
@@ -343,6 +390,9 @@
               <el-icon class="is-loading" :size="34"><Loading /></el-icon>
               <span>正在建立实时视频链路</span>
             </div>
+            <div v-if="zoneConfigVisible && zoneDrawing" class="zone-draw-tip">
+              点击视频画面添加顶点，拖动白色锚点微调位置
+            </div>
           </div>
 
           <div v-else class="video-empty ops-video-empty">
@@ -351,16 +401,13 @@
               <el-icon :size="52"><VideoCamera /></el-icon>
             </div>
             <template v-if="currentCamera">
-              <h3>{{ currentCamera.name || currentCamera.camera_id }} 暂未连接</h3>
+              <h3>{{ currentCamera.name }} 暂未连接</h3>
               <p>请检查摄像头供电、RTSP 地址、边缘节点网络和设备映射。</p>
               <code v-if="currentCamera.last_error">{{ currentCamera.last_error }}</code>
             </template>
             <template v-else>
-              <h3>等待接入视频源</h3>
-              <p>接入后实时监控页将只呈现值守态、风险事件和处置动作。</p>
-              <el-button class="ops-primary-button" @click="showAddDialog = true">
-                <el-icon><Connection /></el-icon>接入视频源
-              </el-button>
+              <h3>暂无摄像头设备</h3>
+              <p>请先在设备管理中添加并启用摄像头。</p>
             </template>
           </div>
 
@@ -377,39 +424,174 @@
           </div>
         </article>
 
-        <aside class="risk-panel">
-          <div class="risk-panel-heading">
+        <section v-if="zoneConfigVisible" class="zone-config-panel inline-zone-config">
+          <header class="zone-config-panel-header">
+            <div>
+              <span class="section-kicker">当前摄像头区域列表</span>
+              <h2>区域配置</h2>
+            </div>
+            <div class="zone-config-header-actions">
+              <span class="zone-total-pill">共 {{ detectionZones.length }} 个区域</span>
+              <el-button class="drawer-tool-button" :class="{ active: zoneDrawing }" @click="zoneDrawing ? exitZoneDrawing() : startNewConfigZone()">
+                <el-icon><EditPen /></el-icon>{{ zoneDrawing ? '退出新增' : '新增区域' }}
+              </el-button>
+              <el-button class="drawer-save-button" :loading="zoneSaving" @click="saveZoneConfig">
+                <el-icon><Check /></el-icon>保存配置
+              </el-button>
+            </div>
+          </header>
+          <div class="zone-origin-note">坐标以视频画面左下角为原点，选中区域后可在视频画面拖动顶点微调位置。</div>
+
+          <div class="inline-zone-layout">
+            <section class="inline-zone-list">
+              <div class="inline-zone-table-head">
+                <span>区域名</span>
+                <span>区域类型</span>
+                <span>触发时间</span>
+                <span>启用状态</span>
+                <span>配置时间</span>
+                <span>操作</span>
+              </div>
+              <article
+                v-for="zone in detectionZones"
+                :key="zone.id"
+                class="inline-zone-row"
+                :class="{ selected: zone.id === selectedZoneId, disabled: !zone.enabled }"
+                @click="selectConfigZone(zone.id)"
+              >
+                <strong><i :style="{ background: zoneStroke(zone) }"></i>{{ zone.zone_name || zoneTypeLabel(zone.zone_type) }}</strong>
+                <span>{{ zoneTypeLabel(zone.zone_type) }}</span>
+                <div class="drawer-zone-row-control compact" @click.stop>
+                  <em v-if="zone.zone_type === 'FISHING'">多条件</em>
+                  <el-input-number
+                    v-else
+                    v-model="zone.trigger_seconds"
+                    :min="0"
+                    :max="3600"
+                    :step="1"
+                    :controls="false"
+                    size="small"
+                  />
+                </div>
+                <button
+                  type="button"
+                  class="drawer-enable-toggle"
+                  :class="{ active: zone.enabled }"
+                  @click.stop="zone.enabled = !zone.enabled"
+                >
+                  <i></i>{{ zone.enabled ? '启用' : '未启用' }}
+                </button>
+                <span>{{ formatZoneTime(zone) }}</span>
+                <div class="inline-zone-actions">
+                  <button type="button" @click.stop="selectConfigZone(zone.id)">编辑</button>
+                  <button type="button" class="danger" @click.stop="deleteConfigZone(zone.id)">删除</button>
+                </div>
+              </article>
+              <div v-if="!detectionZones.length" class="drawer-zone-empty">暂无区域配置</div>
+            </section>
+
+            <section v-if="selectedZone" class="drawer-point-panel inline-point-panel">
+              <div class="point-panel-heading">
+                <strong>点位配置</strong>
+                <b>顶点 {{ selectedZone.polygon_points.length }}</b>
+              </div>
+              <el-form label-position="top" class="drawer-zone-form">
+                <el-form-item label="区域名称">
+                  <el-input v-model="selectedZone.zone_name" maxlength="80" placeholder="请输入区域名称" />
+                </el-form-item>
+                <el-form-item label="区域类型">
+                  <el-select
+                    v-model="selectedZone.zone_type"
+                    class="drawer-zone-select"
+                    popper-class="vision-select-popper"
+                    @change="applyConfigZoneTypeDefaults"
+                  >
+                    <el-option label="低风险区" value="PERSON_LOW" />
+                    <el-option label="中风险区" value="PERSON_MEDIUM" />
+                    <el-option label="高风险区" value="PERSON_HIGH" />
+                    <el-option label="捕鱼区" value="FISHING" />
+                  </el-select>
+                </el-form-item>
+              </el-form>
+              <div class="drawer-point-table">
+                <div class="drawer-point-head">
+                  <span>序号</span>
+                  <span>X</span>
+                  <span>Y</span>
+                  <span></span>
+                </div>
+                <div
+                  v-for="(point, index) in selectedZone.polygon_points"
+                  :key="`${selectedZone.id}-inline-point-${index}`"
+                  class="drawer-point-row"
+                >
+                  <strong>#{{ index + 1 }}</strong>
+                  <el-input-number
+                    :model-value="pointCoordinateX(point)"
+                    :controls="false"
+                    :precision="3"
+                    :step="0.1"
+                    :min="0"
+                    :max="overlayWidth"
+                    size="small"
+                    @update:model-value="updatePointCoordinate(index, 'x', $event)"
+                  />
+                  <el-input-number
+                    :model-value="pointCoordinateY(point)"
+                    :controls="false"
+                    :precision="3"
+                    :step="0.1"
+                    :min="0"
+                    :max="overlayHeight"
+                    size="small"
+                    @update:model-value="updatePointCoordinate(index, 'y', $event)"
+                  />
+                  <button type="button" @click="deleteConfigPoint(index)">删除</button>
+                </div>
+                <div v-if="!selectedZone.polygon_points.length" class="drawer-point-empty">在视频画面上点击添加顶点</div>
+              </div>
+              <button
+                type="button"
+                class="drawer-add-point"
+                :disabled="selectedZone.polygon_points.length >= 15"
+                @click="appendConfigVertex"
+              >
+                <el-icon><Plus /></el-icon>新增顶点
+              </button>
+            </section>
+            <div v-else class="drawer-zone-empty large">请选择或新增一个区域</div>
+          </div>
+        </section>
+
+        <aside v-else class="risk-panel risk-overview-panel">
+          <header class="risk-overview-header">
             <div>
               <span class="section-kicker">当前风险事件</span>
               <h2>{{ activeRiskEvents.length ? `${activeRiskEvents.length} 起待处置` : '运行正常' }}</h2>
             </div>
             <b :class="riskThemeClass(overallRiskLevel)">{{ overallRiskText }}</b>
-          </div>
+          </header>
 
-          <div class="risk-diagnostics">
-            <div class="diagnostic-heading">
-              <span>实时诊断</span>
-              <small>{{ latestDetectionTimeText }}</small>
-            </div>
-            <div class="diagnostic-grid">
-              <div
-                v-for="item in diagnosticItems"
-                :key="item.label"
-                class="diagnostic-item"
-                :class="item.tone"
-              >
-                <small>{{ item.label }}</small>
-                <strong>{{ item.value }}</strong>
-                <span>{{ item.hint }}</span>
-              </div>
-            </div>
-            <div class="diagnostic-foot">
-              <span>最近目标</span>
-              <strong>{{ latestDetectionClasses }}</strong>
-            </div>
-          </div>
+          <section class="risk-metric-strip">
+            <article
+              v-for="item in diagnosticItems"
+              :key="item.label"
+              class="risk-metric"
+              :class="item.tone"
+            >
+              <span>{{ item.label }}</span>
+              <strong>{{ item.value }}</strong>
+              <small>{{ item.hint }}</small>
+            </article>
+          </section>
 
-          <div v-if="activeRiskEvents.length" class="risk-event-list">
+          <section class="risk-recent-line">
+            <span>最近目标</span>
+            <strong>{{ latestDetectionClasses }}</strong>
+            <em>{{ latestDetectionTimeText }}</em>
+          </section>
+
+          <div v-if="activeRiskEvents.length" class="risk-event-list compact-events">
             <article
               v-for="event in activeRiskEvents"
               :key="event.event_id"
@@ -421,51 +603,32 @@
                 <b>{{ riskLevelText(event.risk_level) }}</b>
               </header>
               <div class="event-main">
-                <div class="event-snapshot">
-                  <el-icon><Camera /></el-icon>
-                  <span>现场截图</span>
-                </div>
                 <div class="event-copy">
                   <strong>{{ event.event_type }}</strong>
                   <small>{{ event.camera_name }} / {{ event.camera_id }}</small>
                   <small>发生 {{ formatEventTime(event.started_at) }} · 持续 {{ formatDuration(event.duration_seconds) }}</small>
                 </div>
               </div>
-              <div class="event-state-grid">
-                <div><small>当前状态</small><strong>{{ event.state_text }}</strong></div>
-                <div><small>目标状态</small><strong>{{ event.target_status }}</strong></div>
-                <div><small>自动广播</small><strong>{{ event.broadcast_status }}</strong></div>
-                <div><small>处置状态</small><strong>{{ event.disposal_status }}</strong></div>
-              </div>
               <div class="event-actions">
                 <el-button class="action-button" @click="viewEvent(event)">
                   <el-icon><DataAnalysis /></el-icon>查看事件
                 </el-button>
                 <template v-if="requiresManual(event)">
-                  <el-button class="action-button" :disabled="event.raw_disposal_status !== 'WAITING_MANUAL'" @click="acceptEvent(event)">
-                    <el-icon><Aim /></el-icon>接受任务
-                  </el-button>
                   <el-button class="action-button warn" @click="manualBroadcast(event)">
                     <el-icon><Connection /></el-icon>一键喊话
-                  </el-button>
-                  <el-button class="action-button" @click="completeEvent(event)">
-                    <el-icon><Monitor /></el-icon>现场处置
                   </el-button>
                   <el-button class="action-button danger" @click="closeEvent(event)">
                     <el-icon><Delete /></el-icon>关闭事件
                   </el-button>
                 </template>
-                <span v-else class="event-no-manual">无需人工处置</span>
               </div>
             </article>
           </div>
 
-          <div v-else class="risk-empty-state">
-            <div class="safe-mark">
-              <el-icon><Monitor /></el-icon>
-            </div>
-            <h3>当前运行正常，暂无安全风险事件</h3>
-            <p>系统正在监测人员停留、亲水进入、涉水进入和船只靠近等风险。</p>
+          <div v-else class="risk-quiet-state">
+            <el-icon><Monitor /></el-icon>
+            <strong>当前运行正常，暂无安全风险事件</strong>
+            <span>系统正在持续监测人员停留、区域命中和船只靠近等风险。</span>
           </div>
         </aside>
       </main>
@@ -561,7 +724,7 @@
                 :y="zoneLabelPoint(zone).y"
                 :fill="zoneStroke(zone)"
               >
-                {{ zone.name || zoneTypeLabel(zone.type) }}
+                  {{ zone.zone_name || zone.name || zoneTypeLabel(zone.type) }}
               </text>
             </g>
           </svg>
@@ -612,7 +775,7 @@
             {{ streamMode === 'webrtc' ? '低延迟实时' : '兼容模式' }}
           </div>
           <div class="stage-badge right-badge">
-            {{ sourceTypeLabel(currentCamera.source_type) }} / {{ currentCamera.camera_id }}
+            {{ sourceTypeLabel(currentCamera.source_type) }} / #{{ currentCamera.id }}
           </div>
           <div v-if="liveAlerts.length" class="alert-ribbon">
             <strong>{{ liveAlerts[0].message }}</strong>
@@ -630,12 +793,9 @@
             <p>Jetson 正在后台重连，请检查视频源地址、设备映射和网络。</p>
             <code v-if="currentCamera.last_error">{{ currentCamera.last_error }}</code>
           </template>
-          <template v-else>
-            <h3>等待接入视频源</h3>
-            <p>支持海康 RTSP 与 Jetson USB / UVC 摄像头。</p>
-            <el-button class="detect-button" @click="showAddDialog = true">
-              <el-icon><Connection /></el-icon>现在接入
-            </el-button>
+            <template v-else>
+            <h3>暂无摄像头设备</h3>
+            <p>请先在设备管理中添加并启用摄像头。</p>
           </template>
         </div>
       </article>
@@ -952,37 +1112,6 @@
       </div>
     </section>
 
-    <el-dialog v-model="showAddDialog" title="接入 Jetson 视频源" width="560px" class="source-dialog">
-      <el-form :model="addForm" label-position="top">
-        <div class="dialog-grid">
-          <el-form-item label="摄像头 ID" required>
-            <el-input v-model.trim="addForm.camera_id" placeholder="例如 camera_east" maxlength="50" />
-          </el-form-item>
-          <el-form-item label="显示名称">
-            <el-input v-model.trim="addForm.name" placeholder="例如 坝体东侧" maxlength="100" />
-          </el-form-item>
-        </div>
-        <el-form-item label="接入方式" required>
-          <el-radio-group v-model="addForm.source_type" class="source-type-group" @change="applySourceDefault">
-            <el-radio-button value="rtsp">海康 RTSP</el-radio-button>
-            <el-radio-button value="usb">Jetson USB</el-radio-button>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="视频源" required>
-          <el-input
-            v-model.trim="addForm.source"
-            type="textarea"
-            :rows="3"
-            :placeholder="sourcePlaceholder"
-          />
-        </el-form-item>
-        <p class="source-help">{{ sourceHelp }}</p>
-      </el-form>
-      <template #footer>
-        <el-button @click="showAddDialog = false">取消</el-button>
-        <el-button type="primary" :loading="addingCamera" @click="handleAddCamera">保存并连接</el-button>
-      </template>
-    </el-dialog>
     <BroadcastDialog
       v-model="broadcastDialogVisible"
       :event="broadcastTargetEvent"
@@ -990,11 +1119,16 @@
     />
     <el-drawer
       v-model="reportDrawerVisible"
-      title="今日巡逻报告"
+      title="巡查报告"
       size="520px"
       class="patrol-report-drawer"
     >
-      <div v-if="patrolReport" class="patrol-report">
+      <div v-if="patrolReport && patrolReport.available === false" class="report-pending-state">
+        <el-icon><Files /></el-icon>
+        <strong>巡查报告模板调整中</strong>
+        <span>当前接口已经预留报告生成入口，但后端返回模板未完成状态，暂时不会生成正式报告。</span>
+      </div>
+      <div v-else-if="patrolReport" class="patrol-report">
         <header>
           <span>{{ patrolReport.date }}</span>
           <strong>{{ patrolReport.camera_id || '全部摄像头' }}</strong>
@@ -1034,7 +1168,7 @@
       <el-empty v-else description="暂无报告数据" />
       <template #footer>
         <el-button @click="reportDrawerVisible = false">关闭</el-button>
-        <el-button type="primary" :loading="reportSaving" @click="openPatrolReport(true)">
+        <el-button type="primary" :disabled="patrolReport?.available === false" :loading="reportSaving" @click="openPatrolReport(true)">
           保存到报告库
         </el-button>
       </template>
@@ -1047,14 +1181,13 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  Aim, Camera, Connection, Crop, DataAnalysis, Delete, Files, Loading, Monitor,
+  Aim, Camera, Check, Connection, Crop, DataAnalysis, Delete, EditPen, Files, Loading, Monitor,
   Hide, Picture, Plus, UploadFilled, VideoCamera, VideoPlay, View,
 } from '@element-plus/icons-vue'
 import {
-  addCamera, createStreamTicket, createVideoDetection, deleteVideoDetectionJob,
+  createStreamTicket, createVideoDetection, deleteVideoDetectionJob,
   detectImage, getCameraList, getCameraStatus, getCameraZones, getModelStatus,
   getTodaySafetyReport,
-  recordSafetyEventAction,
   getVideoDetectionResult, getVideoDetectionStatus, saveCameraZones,
   setDetectionEnabled, snapshotDetect,
 } from '@/api/camera'
@@ -1062,8 +1195,9 @@ import {
   classColor as getClassColor, confidencePercent, detectionName,
   detectionInZone, findVideoSample, formatDeviceCommTime, isValidDetection,
   normalizeClassifications, normalizeDetections, normalizeZones, primaryClassification,
-  zoneTypeLabel,
+  defaultTriggerSeconds, zoneTypeLabel,
 } from '@/utils/cameraDetectionView'
+import { operateUnifiedSafetyEvent } from '@/api/integration'
 import { camerasFromPayload, readCameraListSnapshot, writeCameraListSnapshot } from '@/utils/cameraSnapshots'
 import { CameraWebRtcPlayer } from '@/utils/cameraWebRtc'
 import { subscribeDetectionEvents } from '@/utils/detectionEvents'
@@ -1093,21 +1227,23 @@ const reportLoading = ref(false)
 const reportSaving = ref(false)
 const patrolReport = ref(null)
 const zoneOptions = [
-  { label: '警戒区', value: 'warning_zone' },
-  { label: '亲水区', value: 'waterside_zone' },
-  { label: '涉水区', value: 'wading_zone' },
+  { label: '低风险区', value: 'PERSON_LOW' },
+  { label: '中风险区', value: 'PERSON_MEDIUM' },
+  { label: '高风险区', value: 'PERSON_HIGH' },
+  { label: '捕鱼区', value: 'FISHING' },
 ]
-const activeZoneType = ref('warning_zone')
+const activeZoneType = ref('PERSON_LOW')
 const zoneDrawing = ref(false)
 const draftZone = ref(null)
+const zoneConfigVisible = ref(false)
+const selectedZoneId = ref('')
+const zoneVertexDragging = ref(null)
+const zoneSaving = ref(false)
 const liveVideoRef = ref(null)
 const liveImageRef = ref(null)
 const streamMode = ref('webrtc')
 const streamUrl = ref('')
 const streamLoading = ref(false)
-const showAddDialog = ref(false)
-const addingCamera = ref(false)
-const addForm = ref({ camera_id: '', name: '', source_type: 'rtsp', source: '' })
 const cameraViewMode = ref('single')
 const gridStreamUrls = ref({})
 const gridSlotCameraIds = ref([])
@@ -1163,7 +1299,15 @@ const liveAlertZoneIds = computed(() => new Set(liveAlerts.value.map((alert) => 
 const zonesForOverlay = computed(() => [...detectionZones.value, ...(draftZone.value ? [draftZone.value] : [])])
 const showZoneOverlay = computed(() => zoneDrawing.value || detectionZones.value.length > 0)
 const streamZoneOverlayVisible = computed(() => assistOverlayVisible.value && zonesForOverlay.value.length > 0)
+const editableZoneOverlayVisible = computed(() => (
+  zoneConfigVisible.value
+  || zoneDrawing.value
+  || streamZoneOverlayVisible.value
+))
 const assistOverlayLabel = computed(() => assistOverlayVisible.value ? '已显示辅助框' : '未显示辅助框')
+const selectedZone = computed(() => detectionZones.value.find((zone) => zone.id === selectedZoneId.value) || null)
+const zoneVertexAnchorRadius = computed(() => Math.max(6, Math.min(24, overlayWidth.value * 0.006)))
+const zoneVertexFontSize = computed(() => Math.max(12, Math.min(34, overlayWidth.value * 0.014)))
 const singleCameraSelectValue = computed(() => (singleCameraHidden.value ? '' : currentCameraId.value))
 const analysisTaskLabel = computed(() => taskTypeLabel(analysisTask.value))
 const selectedModelReady = computed(() => Boolean(modelStatus.value.models?.[analysisTask.value]?.loaded))
@@ -1172,14 +1316,14 @@ const canRenderCurrentStream = computed(() => Boolean(currentCamera.value?.confi
 const emergencyBroadcastCamera = computed(() => currentCamera.value || cameras.value[0] || null)
 const isMultiCameraMode = computed(() => cameraViewMode.value !== 'single')
 const gridCameraLimit = computed(() => cameraViewMode.value === 'nine' ? 9 : 4)
-const cameraById = computed(() => new Map(cameras.value.map((camera) => [camera.camera_id, camera])))
+const cameraById = computed(() => new Map(cameras.value.map((camera) => [camera.id, camera])))
 const gridSlots = computed(() => Array.from({ length: gridCameraLimit.value }, (_, index) => {
   const cameraId = gridSlotCameraIds.value[index]
   const camera = cameraId ? cameraById.value.get(cameraId) : null
   return {
     index,
     camera: camera || null,
-    slotKey: `slot-${index}-${camera?.camera_id || 'empty'}`,
+    slotKey: `slot-${index}-${camera?.id || 'empty'}`,
   }
 }))
 const normalizedSafetyEvents = computed(() => buildRiskEvents())
@@ -1208,8 +1352,8 @@ const reportEvents = computed(() => Array.isArray(patrolReport.value?.events) ? 
 const engineEventCount = computed(() => (
   Array.isArray(latestDetection.value.safety_events) ? latestDetection.value.safety_events.length : 0
 ))
-const watersideHitCount = computed(() => liveAlerts.value.filter((alert) => isZoneType(alert, ['WATERFRONT_ZONE', 'waterside_zone', 'waterfront_zone'])).length)
-const wadingHitCount = computed(() => liveAlerts.value.filter((alert) => isZoneType(alert, ['WATER_ZONE', 'wading_zone', 'water_zone'])).length)
+const watersideHitCount = computed(() => liveAlerts.value.filter((alert) => isZoneType(alert, ['PERSON_MEDIUM'])).length)
+const wadingHitCount = computed(() => liveAlerts.value.filter((alert) => isZoneType(alert, ['PERSON_HIGH'])).length)
 const latestDetectionTimeText = computed(() => latestDetection.value.timestamp ? formatDeviceCommTime(latestDetection.value.timestamp) : '--')
 const latestDetectionClasses = computed(() => {
   if (!visibleDetections.value.length) return '--'
@@ -1239,9 +1383,9 @@ const diagnosticItems = computed(() => [
     tone: liveAlerts.value.length ? 'warn' : 'muted',
   },
   {
-    label: '亲水/涉水',
+    label: '中/高风险',
     value: `${watersideHitCount.value}/${wadingHitCount.value}`,
-    hint: '亲水命中 / 涉水命中',
+    hint: '中风险命中 / 高风险命中',
     tone: wadingHitCount.value ? 'high' : watersideHitCount.value ? 'medium' : 'muted',
   },
   {
@@ -1279,14 +1423,6 @@ const videoStateText = computed(() => ({
   uploading: '正在上传', queued: '等待推理', processing: 'AI 分析中',
   completed: '分析完成', failed: '分析失败', cancelled: '已取消',
 }[videoJob.value?.state] || '准备中'))
-const sourcePlaceholder = computed(() => ({
-  rtsp: 'rtsp://用户名:密码@摄像头IP:554/Streaming/Channels/102',
-  usb: '/dev/video0',
-}[addForm.value.source_type]))
-const sourceHelp = computed(() => ({
-  rtsp: '海康网络摄像头接在 Jetson 网口或同一网络后，填写摄像头 RTSP 地址。',
-  usb: 'USB/UVC 摄像头需同时在 .env 设置 CAMERA_DEVICE=/dev/video0。',
-}[addForm.value.source_type]))
 const isMediaAnalysisRoute = computed(() => ['image', 'video'].includes(route.meta.mediaTab))
 const mediaTab = computed(() => route.meta.mediaTab === 'video' ? 'video' : 'image')
 const mediaHeadingTitle = computed(() => mediaTab.value === 'video' ? '视频分析' : '图片分析')
@@ -1338,14 +1474,10 @@ function riskThemeClass(level) {
 
 function eventTypeFromZoneType(type) {
   return ({
-    WARNING_ZONE: '人员警戒区停留',
-    warning_zone: '人员警戒区停留',
-    person_intrusion: '人员警戒区停留',
-    WATERFRONT_ZONE: '人员进入亲水区',
-    waterside_zone: '人员进入亲水区',
-    WATER_ZONE: '人员进入涉水区',
-    wading_zone: '人员进入涉水区',
-    illegal_fishing: '疑似船只靠近',
+    PERSON_LOW: '人员闯入',
+    PERSON_MEDIUM: '人员亲水',
+    PERSON_HIGH: '人员涉水',
+    FISHING: '非法捕鱼',
   })[type] || '区域风险事件'
 }
 
@@ -1399,6 +1531,7 @@ function buildRiskEvents() {
     const riskLevel = event.risk_level || 'NONE'
     const startedAt = Number(event.started_at || event.danger_started_at || event.first_seen_at || latestDetection.value.timestamp || Date.now() / 1000)
     return {
+      instance_id: event.instance_id || event.id,
       event_id: eventId,
       risk_level: riskLevel,
       event_type: eventTypeFromZoneType(event.zone_roles?.[0]),
@@ -1422,7 +1555,7 @@ function buildRiskEvents() {
   }
 
   return liveAlerts.value.map((alert, index) => {
-    const riskLevel = alert.risk_level || (alert.type === 'WATER_ZONE' || alert.type === 'wading_zone' ? 'HIGH' : alert.type === 'WATERFRONT_ZONE' || alert.type === 'waterside_zone' ? 'MEDIUM' : 'LOW')
+    const riskLevel = alert.risk_level || (alert.type === 'PERSON_HIGH' ? 'HIGH' : alert.type === 'PERSON_MEDIUM' ? 'MEDIUM' : 'LOW')
     const eventId = `evt_${alert.zone_id || 'zone'}_${alert.detection_index ?? index}`
     const startedAt = Number(latestDetection.value.timestamp || Date.now() / 1000)
     return {
@@ -1521,8 +1654,8 @@ function openEmergencyBroadcast() {
   if (!camera) return
   broadcastTargetEvent.value = {
     event_id: null,
-    camera_id: camera.camera_id,
-    camera_name: camera.name || camera.camera_name || camera.camera_id,
+    camera_id: camera.id,
+    camera_name: camera.name || camera.camera_name || camera.id,
     event_type: '应急喊话',
     risk_level: overallRiskLevel.value === 'NONE' ? 'LOW' : overallRiskLevel.value,
   }
@@ -1543,7 +1676,7 @@ async function openPatrolReport(persist = false) {
     })
     patrolReport.value = response.data || null
     reportDrawerVisible.value = true
-    if (persist) ElMessage.success('今日巡逻报告已保存到报告库')
+    if (persist) ElMessage.success('巡查报告已保存到报告库')
   } finally {
     reportLoading.value = false
     reportSaving.value = false
@@ -1567,30 +1700,30 @@ function viewEvent(event) {
 }
 
 async function acceptEvent(event) {
-  if (!event.event_id) return
-  await recordSafetyEventAction(event.event_id, {
-    action_type: 'STAFF_ACCEPTED',
-    remark: '实时监控页接受人工处置任务',
+  if (!event.instance_id) return ElMessage.warning('事件实例尚未完成入库，请稍后重试')
+  await operateUnifiedSafetyEvent(event.instance_id, {
+    action: 'ACCEPT_TASK',
+    reason: '实时监控页接受人工处置任务',
   })
   setEventAction(event, 'disposal', '人工处置中')
   ElMessage.success('已接受人工处置任务')
 }
 
 async function completeEvent(event) {
-  if (!event.event_id) return
-  await recordSafetyEventAction(event.event_id, {
-    action_type: 'STAFF_COMPLETED',
-    remark: '实时监控页记录现场处置完成',
+  if (!event.instance_id) return ElMessage.warning('事件实例尚未完成入库，请稍后重试')
+  await operateUnifiedSafetyEvent(event.instance_id, {
+    action: 'COMPLETE_TASK',
+    reason: '实时监控页记录现场处置完成',
   })
   setEventAction(event, 'disposal', '现场处置完成')
   ElMessage.success('已记录现场处置完成')
 }
 
 async function closeEvent(event) {
-  if (!event.event_id) return
-  await recordSafetyEventAction(event.event_id, {
-    action_type: 'close',
-    remark: '实时监控页手动关闭',
+  if (!event.instance_id) return ElMessage.warning('事件实例尚未完成入库，请稍后重试')
+  await operateUnifiedSafetyEvent(event.instance_id, {
+    action: 'RESOLVE',
+    reason: '实时监控页手动关闭',
   })
   setEventAction(event, 'disposal', '已关闭')
   ElMessage.success('事件已关闭并写入处置日志')
@@ -1612,9 +1745,9 @@ async function fetchModelStatus() {
 function applyCameraList(nextCameras) {
   cameras.value = nextCameras
   if (!currentCameraId.value && cameras.value.length && !singleCameraHidden.value) {
-    currentCameraId.value = cameras.value[0].camera_id
+    currentCameraId.value = cameras.value[0].id
   }
-  currentCamera.value = cameras.value.find((item) => item.camera_id === currentCameraId.value) || null
+  currentCamera.value = cameras.value.find((item) => item.id === currentCameraId.value) || null
   syncGridSlots()
 }
 
@@ -1646,7 +1779,7 @@ async function fetchCameras(options = {}) {
 
 function syncGridSlots() {
   const limit = gridCameraLimit.value
-  const validIds = new Set(cameras.value.map((camera) => camera.camera_id))
+  const validIds = new Set(cameras.value.map((camera) => camera.id))
   const nextSlots = gridSlotCameraIds.value
     .slice(0, limit)
     .map((cameraId) => {
@@ -1658,18 +1791,18 @@ function syncGridSlots() {
 
   for (let index = 0; index < limit; index += 1) {
     if (nextSlots[index] !== null && nextSlots[index] !== undefined) continue
-    while (cameraIndex < cameras.value.length && usedIds.has(cameras.value[cameraIndex].camera_id)) {
+    while (cameraIndex < cameras.value.length && usedIds.has(cameras.value[cameraIndex].id)) {
       cameraIndex += 1
     }
-    const cameraId = cameras.value[cameraIndex]?.camera_id || ''
+    const cameraId = cameras.value[cameraIndex]?.id || ''
     nextSlots[index] = cameraId
     if (cameraId) usedIds.add(cameraId)
   }
 
   while (nextSlots.length < limit) {
-    const camera = cameras.value.find((item) => !usedIds.has(item.camera_id))
-    nextSlots.push(camera?.camera_id || '')
-    if (camera) usedIds.add(camera.camera_id)
+    const camera = cameras.value.find((item) => !usedIds.has(item.id))
+    nextSlots.push(camera?.id || '')
+    if (camera) usedIds.add(camera.id)
   }
 
   gridSlotCameraIds.value = nextSlots
@@ -1686,7 +1819,10 @@ async function fetchCameraZones(cameraId = currentCameraId.value) {
     ...gridCameraZones.value,
     [cameraId]: zones,
   }
-  if (cameraId === currentCameraId.value) detectionZones.value = zones
+  if (cameraId === currentCameraId.value) {
+    detectionZones.value = zones
+    selectedZoneId.value = zones.find((zone) => zone.id === selectedZoneId.value)?.id || zones[0]?.id || ''
+  }
 }
 
 function buildZoneAlert(zone, detection, index) {
@@ -1758,9 +1894,9 @@ function gridZonesForCamera(cameraId) {
 function gridZoneOverlayVisible(camera) {
   return Boolean(
     assistOverlayVisible.value
-    && camera?.camera_id
-    && gridStreamUrls.value[camera.camera_id]
-    && gridZonesForCamera(camera.camera_id).length,
+    && camera?.id
+    && gridStreamUrls.value[camera.id]
+    && gridZonesForCamera(camera.id).length,
   )
 }
 
@@ -1788,7 +1924,6 @@ async function startMjpegFallback(error = null, notify = true) {
   streamLoading.value = true
   await nextTick()
   await refreshStreamTicket()
-  if (error && notify) ElMessage.warning('WebRTC 连接失败，已切换到 MJPEG 兼容画面')
 }
 
 async function startLiveStream() {
@@ -1830,7 +1965,9 @@ async function activateCamera(cameraId) {
   detectionZones.value = []
   draftZone.value = null
   zoneDrawing.value = false
-  currentCamera.value = cameras.value.find((camera) => camera.camera_id === cameraId) || null
+  selectedZoneId.value = ''
+  zoneVertexDragging.value = null
+  currentCamera.value = cameras.value.find((camera) => camera.id === cameraId) || null
   detectionEnabled.value = Boolean(currentCamera.value?.detection_enabled)
   if (detectionEnabled.value && currentCamera.value?.analysis_task) {
     analysisTask.value = currentCamera.value.analysis_task
@@ -1847,7 +1984,7 @@ async function activateCamera(cameraId) {
   })
   if (isMediaAnalysisRoute.value) return
   if (cameraViewMode.value === 'single') {
-    if (canRenderCurrentStream.value) await startLiveStream()
+    if (canRenderCurrentStream.value) startLiveStream().catch(() => null)
     if (detectionEnabled.value) startDetectionSubscription()
   } else {
     await refreshGridStreams(true)
@@ -1884,16 +2021,16 @@ async function refreshGridStreams(force = false) {
   await fetchCameras({ silent: true }).catch(() => null)
   const gridCameras = gridSlots.value
     .map((slot) => slot.camera)
-    .filter((camera, index, list) => camera && list.findIndex((item) => item?.camera_id === camera.camera_id) === index)
-  const visibleCameraIds = new Set(gridCameras.map((camera) => camera.camera_id))
+    .filter((camera, index, list) => camera && list.findIndex((item) => item?.id === camera.id) === index)
+  const visibleCameraIds = new Set(gridCameras.map((camera) => camera.id))
   const urls = Object.fromEntries(
     Object.entries(gridStreamUrls.value).filter(([cameraId]) => visibleCameraIds.has(cameraId)),
   )
   await Promise.allSettled(gridCameras.map(async (camera) => {
-    await ensureGridCameraZones(camera.camera_id)
-    if (!camera.camera_id || !camera.connected) return
-    const response = await createStreamTicket(camera.camera_id, false)
-    urls[camera.camera_id] = response.data.stream_url
+    await ensureGridCameraZones(camera.id)
+    if (!camera.id || !camera.connected) return
+    const response = await createStreamTicket(camera.id, false)
+    urls[camera.id] = response.data.stream_url
   }))
   if (isMultiCameraMode.value) gridStreamUrls.value = urls
 }
@@ -1915,7 +2052,7 @@ async function setCameraViewMode(mode) {
   if (mode === 'single') {
     stopGridStreams()
     if (!currentCameraId.value && cameras.value.length && !singleCameraHidden.value) {
-      currentCameraId.value = cameras.value[0].camera_id
+      currentCameraId.value = cameras.value[0].id
     }
     if (currentCameraId.value) await activateCamera(currentCameraId.value)
   } else {
@@ -1946,9 +2083,9 @@ async function setGridSlotCamera(slotIndex, cameraId) {
     await activateGridCamera(cameraId)
   } else if (previousCameraId && previousCameraId === currentCameraId.value) {
     const nextActiveSlot = gridSlots.value.find((slot) => slot.camera)
-    currentCameraId.value = nextActiveSlot?.camera?.camera_id || ''
+    currentCameraId.value = nextActiveSlot?.camera?.id || ''
     currentCamera.value = currentCameraId.value
-      ? cameras.value.find((camera) => camera.camera_id === currentCameraId.value) || null
+      ? cameras.value.find((camera) => camera.id === currentCameraId.value) || null
       : null
   }
   await refreshGridStreams(true)
@@ -1956,7 +2093,7 @@ async function setGridSlotCamera(slotIndex, cameraId) {
 
 async function activateGridCamera(cameraId) {
   currentCameraId.value = cameraId
-  currentCamera.value = cameras.value.find((camera) => camera.camera_id === cameraId) || null
+  currentCamera.value = cameras.value.find((camera) => camera.id === cameraId) || null
   if (cameraViewMode.value === 'single') await activateCamera(cameraId)
 }
 
@@ -2056,12 +2193,12 @@ async function refreshCameraStatus() {
     if (detectionToggling.value || statusRevision !== cameraMutationRevision) return
     const previousConnected = Boolean(currentCamera.value?.connected)
     const backendDetectionEnabled = Boolean(response.data.detection_enabled)
-    currentCamera.value = response.data
+    currentCamera.value = { ...response.data, id: String(response.data.id) }
     if (!detectionZones.value.length && response.data.detection_zones?.length) {
       detectionZones.value = normalizeZones({ zones: response.data.detection_zones })
       gridCameraZones.value = {
         ...gridCameraZones.value,
-        [response.data.camera_id]: detectionZones.value,
+        [response.data.camera_device_id]: detectionZones.value,
       }
     }
     updateCameraInList(response.data)
@@ -2086,8 +2223,9 @@ async function refreshCameraStatus() {
 }
 
 function updateCameraInList(camera) {
-  const index = cameras.value.findIndex((item) => item.camera_id === camera.camera_id)
-  if (index >= 0) cameras.value[index] = camera
+  const normalized = { ...camera, id: String(camera.id) }
+  const index = cameras.value.findIndex((item) => item.id === normalized.id)
+  if (index >= 0) cameras.value[index] = normalized
 }
 
 function resetStatusTimer() {
@@ -2221,33 +2359,6 @@ async function clearVideoJob() {
   videoDetections.value = []
 }
 
-function applySourceDefault(type) {
-  addForm.value.source = type === 'usb' ? '/dev/video0' : ''
-}
-
-async function handleAddCamera() {
-  if (!/^[A-Za-z0-9_-]{1,50}$/.test(addForm.value.camera_id)) {
-    return ElMessage.warning('摄像头 ID 只能包含字母、数字、下划线和短横线')
-  }
-  const source = addForm.value.source
-  const validSource = /^rtsps?:\/\/[^\s]+$/i.test(source)
-    || /^\/dev\/video\d+$/.test(source)
-  if (!validSource) return ElMessage.warning('请填写有效的 RTSP 或 /dev/videoN 视频源')
-  addingCamera.value = true
-  try {
-    const cameraId = addForm.value.camera_id
-    await addCamera({ camera_id: cameraId, name: addForm.value.name, source })
-    showAddDialog.value = false
-    addForm.value = { camera_id: '', name: '', source_type: 'rtsp', source: '' }
-    await fetchCameras()
-    currentCameraId.value = cameraId
-    await activateCamera(cameraId)
-    ElMessage.success('视频源已保存，Jetson 正在建立连接')
-  } finally {
-    addingCamera.value = false
-  }
-}
-
 function zonePolygonPoints(zone) {
   return zonePolygonPointsForSize(zone, overlayWidth.value, overlayHeight.value)
 }
@@ -2272,11 +2383,247 @@ function zoneLabelPointForSize(zone, width, height) {
   }
 }
 
-function goZoneConfig() {
-  router.push({
-    path: '/monitor/camera/zones',
-    query: currentCameraId.value ? { camera_id: currentCameraId.value } : {},
-  })
+async function goZoneConfig() {
+  await openZoneConfigPanel()
+}
+
+async function openZoneConfigPanel() {
+  if (!currentCameraId.value && cameras.value[0]?.id) {
+    singleCameraHidden.value = false
+    currentCameraId.value = cameras.value[0].id
+  }
+  if (!currentCameraId.value) return
+  if (isMultiCameraMode.value) await setCameraViewMode('single')
+  if (!currentCamera.value || currentCamera.value.id !== currentCameraId.value) {
+    await activateCamera(currentCameraId.value)
+  }
+  if (!detectionZones.value.length) await fetchCameraZones(currentCameraId.value).catch(() => null)
+  selectedZoneId.value = selectedZoneId.value || detectionZones.value[0]?.id || ''
+  assistOverlayVisible.value = true
+  zoneConfigVisible.value = true
+}
+
+async function toggleZoneConfigPanel() {
+  if (zoneConfigVisible.value) {
+    zoneConfigVisible.value = false
+    zoneDrawing.value = false
+    zoneVertexDragging.value = null
+    return
+  }
+  await openZoneConfigPanel()
+}
+
+function handleZonePanelClosed() {
+  zoneDrawing.value = false
+  zoneVertexDragging.value = null
+}
+
+function formatZoneTime(zone) {
+  const value = zone?.update_time
+    || zone?.updated_at
+    || zone?.config_time
+    || zone?.configured_at
+    || zone?.create_time
+    || zone?.created_at
+  if (!value) return '--'
+  const date = typeof value === 'number' ? new Date(value * 1000) : new Date(value)
+  if (Number.isNaN(date.getTime())) return '--'
+  const pad = (number) => String(number).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+function selectConfigZone(zoneId) {
+  selectedZoneId.value = zoneId
+}
+
+function createConfigZone() {
+  const zoneType = 'PERSON_LOW'
+  const id = `${zoneType}_${Date.now()}`
+  const name = `${zoneTypeLabel(zoneType)} ${detectionZones.value.length + 1}`
+  const zone = {
+    id,
+    zone_name: name,
+    name,
+    zone_type: zoneType,
+    type: zoneType,
+    polygon_points: [],
+    trigger_seconds: defaultTriggerSeconds(zoneType),
+    condition_durations: {},
+    enabled: true,
+  }
+  detectionZones.value = [...detectionZones.value, zone]
+  selectedZoneId.value = id
+  return zone
+}
+
+function startNewConfigZone() {
+  if (!currentCameraId.value) return
+  createConfigZone()
+  zoneDrawing.value = true
+  assistOverlayVisible.value = true
+}
+
+function exitZoneDrawing() {
+  zoneDrawing.value = false
+}
+
+function pointerToUnitPoint(event) {
+  const pixel = pointerToImagePoint(event)
+  if (!pixel) return null
+  return {
+    x: Math.max(0, Math.min(1, pixel.x / overlayWidth.value)),
+    y: Math.max(0, Math.min(1, pixel.y / overlayHeight.value)),
+  }
+}
+
+function appendPointToSelectedZone(point) {
+  if (!selectedZone.value || !point) return
+  if (selectedZone.value.polygon_points.length >= 15) {
+    ElMessage.warning('单个区域最多支持 15 个顶点')
+    return
+  }
+  selectedZone.value.polygon_points = [
+    ...selectedZone.value.polygon_points,
+    { ...point },
+  ]
+}
+
+function handleConfigZoneOverlayClick(event) {
+  if (!zoneDrawing.value) return
+  if (!selectedZone.value) createConfigZone()
+  appendPointToSelectedZone(pointerToUnitPoint(event))
+}
+
+function handleConfigZoneClick(zoneId, event) {
+  if (zoneDrawing.value) {
+    handleConfigZoneOverlayClick(event)
+    return
+  }
+  selectConfigZone(zoneId)
+}
+
+function showConfigZoneAnchors(zone) {
+  return zoneConfigVisible.value && zone.id === selectedZoneId.value
+}
+
+function startConfigVertexDrag(zoneId, index) {
+  selectedZoneId.value = zoneId
+  zoneVertexDragging.value = { zoneId, index }
+}
+
+function dragConfigVertex(event) {
+  if (!zoneVertexDragging.value) return
+  const point = pointerToUnitPoint(event)
+  const zone = detectionZones.value.find((item) => item.id === zoneVertexDragging.value.zoneId)
+  if (!zone || !point) return
+  zone.polygon_points[zoneVertexDragging.value.index] = point
+}
+
+function endConfigVertexDrag() {
+  zoneVertexDragging.value = null
+}
+
+function deleteConfigZone(zoneId) {
+  detectionZones.value = detectionZones.value.filter((zone) => zone.id !== zoneId)
+  selectedZoneId.value = detectionZones.value[0]?.id || ''
+  if (!selectedZoneId.value) zoneDrawing.value = false
+}
+
+function deleteConfigPoint(index) {
+  if (!selectedZone.value) return
+  selectedZone.value.polygon_points.splice(index, 1)
+}
+
+function appendConfigVertex() {
+  if (!selectedZone.value) createConfigZone()
+  const points = selectedZone.value?.polygon_points || []
+  const lastPoint = points[points.length - 1]
+  appendPointToSelectedZone(lastPoint
+    ? {
+      x: Math.max(0, Math.min(1, lastPoint.x + 0.03)),
+      y: Math.max(0, Math.min(1, lastPoint.y + 0.03)),
+    }
+    : { x: 0.5, y: 0.5 })
+}
+
+function applyConfigZoneTypeDefaults(zoneType) {
+  if (!selectedZone.value) return
+  selectedZone.value.type = zoneType
+  selectedZone.value.name = selectedZone.value.zone_name || zoneTypeLabel(zoneType)
+  selectedZone.value.trigger_seconds = defaultTriggerSeconds(zoneType)
+  selectedZone.value.condition_durations = zoneType === 'FISHING'
+    ? { BOAT_INTRUSION: 0, BOAT_STAY: 30, BOAT_ILLEGAL_FISHING: 120 }
+    : {}
+}
+
+function pointCoordinateX(point) {
+  return Number((point.x * overlayWidth.value).toFixed(3))
+}
+
+function pointCoordinateY(point) {
+  return Number(((1 - point.y) * overlayHeight.value).toFixed(3))
+}
+
+function updatePointCoordinate(index, axis, value) {
+  if (!selectedZone.value || !Number.isFinite(Number(value))) return
+  const point = selectedZone.value.polygon_points[index]
+  if (!point) return
+  if (axis === 'x') {
+    point.x = Math.max(0, Math.min(1, Number(value) / overlayWidth.value))
+  } else {
+    point.y = Math.max(0, Math.min(1, 1 - (Number(value) / overlayHeight.value)))
+  }
+}
+
+function vertexLabelPoint(point) {
+  const anchorX = point.x * overlayWidth.value
+  const anchorY = point.y * overlayHeight.value
+  const offset = zoneVertexAnchorRadius.value + zoneVertexFontSize.value * 0.82
+  const rightX = anchorX + offset
+  const leftX = anchorX - offset * 1.35
+  const belowY = anchorY + offset
+  const aboveY = anchorY - offset * 0.72
+
+  return {
+    x: rightX < overlayWidth.value - offset ? rightX : Math.max(12, leftX),
+    y: anchorY < offset ? belowY : Math.max(zoneVertexFontSize.value, aboveY),
+  }
+}
+
+async function saveZoneConfig() {
+  if (!currentCameraId.value) return false
+  const invalidZone = detectionZones.value.find((zone) => zone.polygon_points.length < 3 || zone.polygon_points.length > 15)
+  if (invalidZone) {
+    selectedZoneId.value = invalidZone.id
+    ElMessage.warning('多边形区域必须包含 3 到 15 个顶点')
+    return false
+  }
+  zoneSaving.value = true
+  try {
+    const payload = detectionZones.value.map((zone) => ({
+      id: zone.id,
+      zone_name: zone.zone_name,
+      zone_type: zone.zone_type,
+      polygon_points: zone.polygon_points,
+      trigger_seconds: zone.trigger_seconds,
+      condition_durations: zone.condition_durations,
+      enabled: zone.enabled,
+    }))
+    const response = await saveCameraZones(currentCameraId.value, payload)
+    detectionZones.value = normalizeZones(response.data)
+    selectedZoneId.value = detectionZones.value.find((zone) => zone.id === selectedZoneId.value)?.id || detectionZones.value[0]?.id || ''
+    gridCameraZones.value = {
+      ...gridCameraZones.value,
+      [currentCameraId.value]: detectionZones.value,
+    }
+    currentCamera.value = { ...currentCamera.value, detection_zones: detectionZones.value }
+    updateCameraInList(currentCamera.value)
+    latestDetection.value = enrichDetectionPayload(latestDetection.value)
+    ElMessage.success(response.data.message || '区域配置已保存')
+    return true
+  } finally {
+    zoneSaving.value = false
+  }
 }
 
 function zonePixelRect(zone) {
@@ -2290,7 +2637,9 @@ function zonePixelRect(zone) {
 }
 
 function pointerToImagePoint(event) {
-  const svg = event.currentTarget
+  const svg = event.currentTarget?.ownerSVGElement
+    || event.currentTarget?.closest?.('svg')
+    || event.currentTarget
   if (!svg || overlayWidth.value <= 0 || overlayHeight.value <= 0) return null
   if (svg.createSVGPoint) {
     const point = svg.createSVGPoint()
@@ -2388,28 +2737,21 @@ function zoneStroke(zone) {
   if (zone.id?.startsWith('draft_')) return '#ffffff'
   if (liveAlertZoneIds.value.has(zone.id)) return '#ff5d6c'
   return ({
-    WARNING_ZONE: '#f1c45b',
-    WATERFRONT_ZONE: '#f08a3c',
-    WATER_ZONE: '#ff4d5e',
-    warning_zone: '#48d8ff',
-    waterside_zone: '#ffbd65',
-    wading_zone: '#ff5d6c',
-    person_intrusion: '#48d8ff',
-    illegal_fishing: '#51e6be',
+    PERSON_LOW: '#48d8ff',
+    PERSON_MEDIUM: '#ffbd65',
+    PERSON_HIGH: '#ff5d6c',
+    FISHING: '#51e6be',
   })[zone.type] || '#48d8ff'
 }
 
 function zoneFill(zone) {
+  if (zone.enabled === false) return 'rgba(120, 139, 153, 0.12)'
   if (liveAlertZoneIds.value.has(zone.id)) return 'rgba(255, 93, 108, 0.20)'
   return ({
-    WARNING_ZONE: 'rgba(241, 196, 91, 0.12)',
-    WATERFRONT_ZONE: 'rgba(240, 138, 60, 0.14)',
-    WATER_ZONE: 'rgba(255, 77, 94, 0.14)',
-    warning_zone: 'rgba(72, 216, 255, 0.10)',
-    waterside_zone: 'rgba(255, 189, 101, 0.12)',
-    wading_zone: 'rgba(255, 93, 108, 0.12)',
-    person_intrusion: 'rgba(72, 216, 255, 0.10)',
-    illegal_fishing: 'rgba(81, 230, 190, 0.10)',
+    PERSON_LOW: 'rgba(72, 216, 255, 0.10)',
+    PERSON_MEDIUM: 'rgba(255, 189, 101, 0.12)',
+    PERSON_HIGH: 'rgba(255, 93, 108, 0.12)',
+    FISHING: 'rgba(81, 230, 190, 0.10)',
   })[zone.type] || 'rgba(72, 216, 255, 0.10)'
 }
 
@@ -2435,6 +2777,7 @@ onMounted(async () => {
   try {
     await Promise.allSettled([fetchModelStatus(), fetchCameras()])
     if (currentCameraId.value) await activateCamera(currentCameraId.value)
+    if (route.query.drawer === 'zones' && !isMediaAnalysisRoute.value) await openZoneConfigPanel()
   } catch {
     // Authentication interceptor handles an expired login and redirects once.
   }
@@ -2444,12 +2787,18 @@ onMounted(async () => {
 watch(isMediaAnalysisRoute, async (mediaMode) => {
   resetStatusTimer()
   if (mediaMode) {
+    zoneConfigVisible.value = false
+    zoneDrawing.value = false
     stopLiveStream()
     stopGridStreams()
     stopDetectionSubscription()
     return
   }
   if (currentCameraId.value) await activateCamera(currentCameraId.value)
+})
+
+watch(() => route.query.drawer, async (drawer) => {
+  if (drawer === 'zones' && !isMediaAnalysisRoute.value) await openZoneConfigPanel()
 })
 
 onBeforeUnmount(() => {
@@ -2684,6 +3033,7 @@ h1, h2, h3, p { margin-top: 0; }
 .corner-bl { left: 12px; bottom: 12px; border-left: 2px solid; border-bottom: 2px solid; }
 .corner-br { right: 12px; bottom: 12px; border-right: 2px solid; border-bottom: 2px solid; }
 .stage-loading, .video-processing-overlay { position: absolute; inset: 0; z-index: 6; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: #8ddcf0; background: rgba(3, 14, 23, 0.76); backdrop-filter: blur(3px); }
+.stage-loading { pointer-events: none; }
 .stage-badge { position: absolute; z-index: 5; top: 14px; padding: 6px 9px; color: #89a7b9; font-family: monospace; font-size: 10px; border-radius: 5px; background: rgba(2, 13, 21, 0.76); }
 .left-badge { left: 16px; }.right-badge { right: 16px; }
 .stage-badge i { display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: #71808a; }
@@ -3212,12 +3562,60 @@ h1, h2, h3, p { margin-top: 0; }
   stroke-dasharray: 9 7;
   opacity: 0.72;
 }
+.ops-zone-polyline {
+  fill: none;
+  stroke-width: 3px;
+  stroke-dasharray: 9 7;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 3px currentColor);
+}
 .ops-zone-label {
   font-size: 15px;
   font-weight: 900;
   paint-order: stroke;
   stroke: rgba(3, 9, 12, 0.92);
   stroke-width: 4px;
+}
+.ops-zone-overlay.editing {
+  cursor: default;
+  pointer-events: auto;
+}
+.ops-zone-overlay.drawing {
+  cursor: crosshair;
+}
+.editable-zone.disabled {
+  opacity: 0.42;
+}
+.ops-zone-anchor {
+  fill: #f7fbff;
+  stroke: #061b23;
+  stroke-width: 2.5px;
+  vector-effect: non-scaling-stroke;
+  cursor: grab;
+  filter: drop-shadow(0 0 5px rgba(72, 216, 255, 0.88));
+}
+.ops-zone-vertex-label {
+  fill: #ffffff;
+  font-weight: 900;
+  paint-order: stroke;
+  pointer-events: none;
+  stroke: rgba(3, 12, 18, 0.95);
+  stroke-width: 3px;
+  text-anchor: middle;
+  dominant-baseline: central;
+  user-select: none;
+}
+.zone-draw-tip {
+  position: absolute;
+  z-index: 8;
+  left: 14px;
+  bottom: 14px;
+  padding: 8px 11px;
+  color: #d7edf6;
+  border: 1px solid rgba(245, 251, 255, 0.22);
+  border-radius: 7px;
+  background: rgba(4, 16, 25, 0.82);
+  pointer-events: none;
 }
 .video-topline {
   position: absolute;
@@ -3694,6 +4092,318 @@ h1, h2, h3, p { margin-top: 0; }
 .source-type-group :deep(.el-radio-button__inner) { width: 100%; }
 .source-help { margin: -6px 0 0; color: #71899a; font-size: 11px; line-height: 1.6; }
 
+.drawer-zone-summary,
+.drawer-zone-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.drawer-zone-summary {
+  padding: 12px;
+  border: 1px solid rgba(83, 159, 191, 0.15);
+  border-radius: 8px;
+  background: rgba(6, 25, 37, 0.82);
+}
+.drawer-zone-summary > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.drawer-zone-summary span {
+  overflow: hidden;
+  color: #8fb0c2;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.drawer-zone-summary strong {
+  color: #f1fbff;
+  font-size: 18px;
+}
+.drawer-save-button {
+  color: #061b23;
+  border: none;
+  font-weight: 900;
+  background: linear-gradient(110deg, var(--cyan), var(--mint));
+}
+.drawer-zone-actions span {
+  min-width: 0;
+  color: #8fb0c2;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: right;
+}
+.drawer-tool-button {
+  color: #b9d2df;
+  border-color: rgba(101, 184, 212, 0.22);
+  background: rgba(20, 64, 86, 0.42);
+}
+.drawer-tool-button.active {
+  color: #061b23;
+  border-color: transparent;
+  background: linear-gradient(110deg, var(--cyan), var(--mint));
+  font-weight: 900;
+}
+.drawer-zone-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.drawer-zone-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 12px;
+  padding: 11px;
+  border: 1px solid rgba(85, 166, 201, 0.14);
+  border-radius: 8px;
+  background: rgba(7, 29, 43, 0.76);
+  cursor: pointer;
+}
+.drawer-zone-item:hover,
+.drawer-zone-item.selected {
+  border-color: rgba(72, 216, 255, 0.5);
+  background: rgba(9, 43, 65, 0.82);
+}
+.drawer-zone-item.disabled {
+  opacity: 0.58;
+}
+.drawer-zone-main {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 4px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+}
+.drawer-zone-main > i {
+  width: 4px;
+  height: 36px;
+  border-radius: 2px;
+  box-shadow: 0 0 9px currentColor;
+}
+.drawer-zone-main strong,
+.drawer-zone-main span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.drawer-zone-main strong {
+  color: #e9f7ff;
+  font-size: 14px;
+}
+.drawer-zone-main span {
+  margin-top: 4px;
+  color: #7f9bb0;
+  font-size: 11px;
+}
+.drawer-enable-toggle {
+  min-width: 82px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid rgba(127, 155, 176, 0.28);
+  border-radius: 999px;
+  color: #9bbbd0;
+  background: rgba(15, 39, 55, 0.72);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+.drawer-enable-toggle i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #7f9bb0;
+}
+.drawer-enable-toggle.active {
+  color: #061b23;
+  border-color: transparent;
+  background: linear-gradient(110deg, var(--cyan), var(--mint));
+}
+.drawer-enable-toggle.active i {
+  background: #061b23;
+}
+.drawer-zone-row-control,
+.drawer-zone-row-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+}
+.drawer-zone-row-control {
+  padding-top: 8px;
+  border-top: 1px solid rgba(137, 174, 184, 0.12);
+}
+.drawer-zone-row-control > span {
+  color: #8fb0c2;
+  font-size: 12px;
+  font-weight: 800;
+}
+.drawer-zone-row-control em {
+  color: #8ddcf0;
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 900;
+}
+.drawer-zone-row-control :deep(.el-input-number) { width: 104px; }
+.drawer-zone-row-control :deep(.el-input__wrapper),
+.drawer-point-row :deep(.el-input__wrapper) {
+  min-height: 30px;
+  border-radius: 7px;
+  background: rgba(3, 18, 29, 0.66);
+  box-shadow: 0 0 0 1px rgba(72, 216, 255, 0.18) inset;
+}
+.drawer-zone-row-control :deep(.el-input__inner),
+.drawer-point-row :deep(.el-input__inner) {
+  color: #dff5ff;
+  font-weight: 800;
+}
+.drawer-zone-row-actions {
+  justify-content: flex-end;
+}
+.drawer-zone-row-actions button,
+.drawer-point-row button {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(81, 230, 190, 0.36);
+  border-radius: 6px;
+  color: #51e6be;
+  background: rgba(11, 73, 78, 0.44);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+.drawer-zone-row-actions button.danger,
+.drawer-point-row button {
+  color: #ff9ca7;
+  border-color: rgba(255, 93, 108, 0.32);
+  background: rgba(72, 32, 48, 0.54);
+}
+.drawer-zone-empty {
+  min-height: 84px;
+  display: grid;
+  place-items: center;
+  color: #6f8da0;
+  border: 1px dashed rgba(54, 221, 212, 0.28);
+  border-radius: 8px;
+  background: rgba(5, 22, 34, 0.42);
+}
+.drawer-zone-empty.large {
+  min-height: 160px;
+}
+.drawer-point-panel {
+  padding: 12px;
+  border: 1px solid rgba(54, 221, 212, 0.34);
+  border-radius: 8px;
+  background: rgba(8, 30, 48, 0.72);
+}
+.point-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.point-panel-heading strong {
+  color: #e9f7ff;
+  font-size: 15px;
+}
+.point-panel-heading b {
+  min-width: 62px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  color: #51e6be;
+  border: 1px solid rgba(81, 230, 190, 0.42);
+  border-radius: 999px;
+  background: rgba(4, 45, 55, 0.72);
+  font-size: 12px;
+}
+.drawer-zone-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 142px;
+  gap: 10px;
+}
+.drawer-zone-form :deep(.el-form-item) {
+  margin-bottom: 10px;
+}
+.drawer-zone-form :deep(.el-form-item__label) {
+  color: #8fb0c2;
+  font-size: 12px;
+}
+.drawer-zone-select { width: 100%; }
+.drawer-point-table {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.drawer-point-head,
+.drawer-point-row {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) minmax(0, 1fr) 58px;
+  align-items: center;
+  gap: 7px;
+}
+.drawer-point-head {
+  color: #9bbbd0;
+  font-size: 12px;
+  font-weight: 900;
+}
+.drawer-point-row {
+  padding: 7px;
+  border: 1px solid rgba(54, 221, 212, 0.24);
+  border-radius: 8px;
+  background: rgba(7, 40, 55, 0.6);
+}
+.drawer-point-row strong {
+  height: 30px;
+  display: inline-grid;
+  place-items: center;
+  color: #51e6be;
+  border: 1px solid rgba(81, 230, 190, 0.32);
+  border-radius: 6px;
+  background: rgba(17, 82, 91, 0.64);
+  font: 800 12px monospace;
+}
+.drawer-point-row :deep(.el-input-number) {
+  width: 100%;
+}
+.drawer-point-empty {
+  min-height: 50px;
+  display: grid;
+  place-items: center;
+  color: #6f8da0;
+  border: 1px dashed rgba(54, 221, 212, 0.28);
+  border-radius: 8px;
+}
+.drawer-add-point {
+  width: 100%;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 10px;
+  border: 1px dashed rgba(81, 230, 190, 0.68);
+  border-radius: 8px;
+  color: #51e6be;
+  background: rgba(5, 29, 43, 0.62);
+  font: inherit;
+  font-weight: 900;
+  cursor: pointer;
+}
+.drawer-add-point:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
 :global(.patrol-report-drawer.el-drawer) {
   color: #dbeaf1;
   border-left: 1px solid rgba(72, 216, 255, 0.32);
@@ -3855,6 +4565,286 @@ h1, h2, h3, p { margin-top: 0; }
 .report-event small {
   color: #7898aa;
   font-size: 11px;
+}
+.report-pending-state {
+  min-height: 280px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+  padding: 28px;
+  color: #8fa8ad;
+  text-align: center;
+  border: 1px dashed rgba(137, 174, 184, 0.22);
+  border-radius: 8px;
+  background: rgba(4, 16, 20, 0.56);
+}
+.report-pending-state .el-icon {
+  color: #62d7b1;
+  font-size: 38px;
+}
+.report-pending-state strong {
+  color: #edf8fa;
+  font-size: 18px;
+}
+.report-pending-state span {
+  max-width: 360px;
+  line-height: 1.7;
+  font-size: 13px;
+}
+
+.zone-config-panel {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(137, 174, 184, 0.16);
+  border-radius: 8px;
+  background: rgba(7, 20, 25, 0.86);
+  box-shadow: 0 16px 40px rgba(0, 5, 10, 0.2);
+}
+.zone-config-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+.zone-config-panel-header h2 {
+  margin: 4px 0 0;
+  color: #f1fbff;
+  font-size: 20px;
+}
+.zone-config-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.zone-total-pill {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  color: #061b23;
+  border-radius: 7px;
+  background: linear-gradient(110deg, var(--cyan), var(--mint));
+  font-size: 13px;
+  font-weight: 900;
+}
+.zone-origin-note {
+  margin-bottom: 12px;
+  padding: 9px 11px;
+  color: #a9bdc1;
+  border: 1px solid rgba(98, 215, 177, 0.14);
+  border-radius: 7px;
+  background: rgba(25, 69, 58, 0.16);
+  font-size: 12px;
+}
+.inline-zone-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 0.38fr);
+  gap: 12px;
+  align-items: start;
+}
+.inline-zone-list {
+  min-width: 0;
+  overflow-x: auto;
+}
+.inline-zone-table-head,
+.inline-zone-row {
+  min-width: 920px;
+  display: grid;
+  grid-template-columns: minmax(180px, 1.35fr) 122px 118px 110px 160px 118px;
+  align-items: center;
+  gap: 12px;
+}
+.inline-zone-table-head {
+  min-height: 36px;
+  padding: 0 12px;
+  color: #8fb0c2;
+  border-bottom: 1px solid rgba(137, 174, 184, 0.14);
+  font-size: 12px;
+  font-weight: 900;
+}
+.inline-zone-row {
+  min-height: 58px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  color: #cfe5ee;
+  border: 1px solid rgba(85, 166, 201, 0.14);
+  border-radius: 8px;
+  background: rgba(8, 31, 47, 0.58);
+  cursor: pointer;
+}
+.inline-zone-row:hover,
+.inline-zone-row.selected {
+  border-color: rgba(72, 216, 255, 0.48);
+  background: rgba(9, 43, 65, 0.72);
+}
+.inline-zone-row.disabled {
+  opacity: 0.58;
+}
+.inline-zone-row strong {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inline-zone-row strong i {
+  width: 4px;
+  height: 28px;
+  flex: 0 0 auto;
+  border-radius: 2px;
+}
+.drawer-zone-row-control.compact {
+  grid-column: auto;
+  justify-content: flex-start;
+  padding-top: 0;
+  border-top: none;
+}
+.inline-zone-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.inline-zone-actions button {
+  min-width: 50px;
+  height: 30px;
+  border: 1px solid rgba(81, 230, 190, 0.36);
+  border-radius: 6px;
+  color: #51e6be;
+  background: rgba(11, 73, 78, 0.44);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+.inline-zone-actions button.danger {
+  color: #ff9ca7;
+  border-color: rgba(255, 93, 108, 0.32);
+  background: rgba(72, 32, 48, 0.54);
+}
+.inline-point-panel {
+  margin: 0;
+}
+
+.risk-overview-panel {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  gap: 12px;
+  padding: 14px;
+}
+.risk-overview-header {
+  min-height: 118px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(98, 215, 177, 0.16);
+  border-radius: 8px;
+  background: rgba(25, 69, 58, 0.18);
+}
+.risk-overview-header h2 {
+  margin: 6px 0 0;
+  color: #f1fbff;
+  font-size: 24px;
+}
+.risk-overview-header b {
+  padding: 7px 11px;
+  border-radius: 7px;
+  color: #061412;
+  background: #62d7b1;
+}
+.risk-overview-header b.risk-low { background: #f1c45b; }
+.risk-overview-header b.risk-medium { background: #f08a3c; }
+.risk-overview-header b.risk-high { color: #fff; background: #ff4d5e; }
+.risk-metric-strip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  gap: 10px;
+}
+.risk-metric {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid rgba(137, 174, 184, 0.12);
+  border-radius: 8px;
+  background: rgba(4, 16, 20, 0.68);
+}
+.risk-metric span,
+.risk-metric small {
+  display: block;
+  overflow: hidden;
+  color: #809ba1;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.risk-metric strong {
+  display: block;
+  margin: 8px 0 5px;
+  color: #dcebed;
+  font: 900 22px/1 "Consolas", "Monaco", monospace;
+}
+.risk-metric.ok strong { color: #62d7b1; }
+.risk-metric.warn strong,
+.risk-metric.medium strong { color: #f08a3c; }
+.risk-metric.high strong { color: #ff4d5e; }
+.risk-metric.low strong { color: #f1c45b; }
+.risk-metric.muted strong { color: #8fa8ad; }
+.risk-recent-line {
+  grid-column: 2;
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  color: #8fa8ad;
+  border: 1px solid rgba(137, 174, 184, 0.12);
+  border-radius: 8px;
+  background: rgba(4, 16, 20, 0.56);
+}
+.risk-recent-line strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #c9dde2;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.risk-recent-line em {
+  font-style: normal;
+  font-size: 11px;
+}
+.risk-quiet-state {
+  grid-column: 1 / -1;
+  min-height: 72px;
+  display: grid;
+  grid-template-columns: 36px minmax(0, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  color: #8fa8ad;
+  border: 1px solid rgba(137, 174, 184, 0.12);
+  border-radius: 8px;
+  background: rgba(4, 16, 20, 0.56);
+}
+.risk-quiet-state .el-icon {
+  color: #62d7b1;
+  font-size: 26px;
+}
+.risk-quiet-state strong {
+  color: #dcebed;
+  font-size: 15px;
+}
+.risk-quiet-state span {
+  font-size: 12px;
+}
+.compact-events {
+  grid-column: 1 / -1;
 }
 
 @media (max-width: 1200px) {

@@ -45,6 +45,7 @@ const sensors = [
 const goTo = (path) => router.push(path)
 
 const getStatusClass = (key) => {
+  if (key === 'uav') return 'online'
   const status = deviceStatus.value[key]?.status
   if (status === 'online') return 'online'
   if (status === 'partial') return 'partial'
@@ -52,6 +53,7 @@ const getStatusClass = (key) => {
 }
 
 const getStatusText = (key) => {
+  if (key === 'uav') return '在线'
   const status = deviceStatus.value[key]?.status
   if (key === 'camera') {
     const item = deviceStatus.value.camera || {}
@@ -67,7 +69,7 @@ const defaultStatus = {
   rain: { status: 'online' },
   vibration: { status: 'online' },
   camera: { status: 'offline' },
-  uav: { status: 'offline' },
+  uav: { status: 'online' },
 }
 
 const fetchStatus = async () => {

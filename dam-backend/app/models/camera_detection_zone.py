@@ -29,7 +29,7 @@ class CameraDetectionZone(Base):
         comment="区域类型: PERSON_LOW/PERSON_MEDIUM/PERSON_HIGH/FISHING",
     )
     polygon_points = Column(JSON, nullable=False, comment="多边形顶点坐标，3-15个，0-1归一化")
-    enabled = Column(Boolean, default=True, index=True, comment="是否启用")
+    enabled = Column(Boolean, nullable=False, default=True, index=True, comment="是否启用")
     create_time = Column(DateTime, default=datetime.now, comment="创建时间")
     update_time = Column(
         DateTime,

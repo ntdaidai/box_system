@@ -372,7 +372,12 @@ class SensorHistoryService:
 
         wanted_fields = {
             "wind_speed_ms",
+            "wind_speed_ms_max",
             "wind_speed_kmh",
+            "wind_speed_kmh_max",
+            "wind_speed_max_kmh",
+            "max_wind_speed_kmh",
+            "max_wind_speed",
             "wind_level",
             "wind_angle",
             "wind_dir_code",
@@ -487,7 +492,19 @@ class SensorHistoryService:
         if temperature is None:
             temperature = cls._to_float(data.get("温度"))
 
+        rms_max = cls._to_float(data.get("rms_max"))
+        if rms_max is None:
+            rms_max = cls._to_float(data.get("total_rms_max"))
+        if rms_max is None:
+            rms_max = cls._to_float(data.get("max_rms"))
+        if rms_max is None:
+            rms_max = cls._to_float(data.get("peak_accel"))
+        if rms_max is None:
+            rms_max = cls._to_float(data.get("peak_acceleration"))
+
         result = {"rms": rms, "freq": freq}
+        if rms_max is not None:
+            result["rms_max"] = rms_max
         if temperature is not None:
             result["temperature"] = temperature
         return result
@@ -807,7 +824,7 @@ class SensorHistoryService:
             source = point.get("data") or {}
             data = {
                 key: source[key]
-                for key in ("daily_rain", "daily_rain_sample_count")
+                for key in ("daily_rain", "daily_rain_sample_count", "rain_duration_hours")
                 if source.get(key) is not None
             }
             rows_by_date[point_date.isoformat()] = {
@@ -1044,21 +1061,35 @@ class SensorHistoryService:
     @staticmethod
     def _summarize_rain_archive(path: Path) -> dict:
         values = []
+        rainy_samples = 0
+        instant_sample_count = 0
         with path.open(newline="", encoding="utf-8") as handle:
             for row in csv.DictReader(handle):
                 try:
                     value = float(row.get("today_rain", ""))
                 except (TypeError, ValueError):
-                    continue
-                if math.isfinite(value):
+                    value = None
+                if value is not None and math.isfinite(value):
                     values.append(value)
+
+                try:
+                    instant_rain = float(row.get("instant_rain", ""))
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(instant_rain):
+                    instant_sample_count += 1
+                    if instant_rain > 0:
+                        rainy_samples += 1
 
         if not values:
             return {}
-        return {
+        summary = {
             "daily_rain": round(max(values), 4),
             "daily_rain_sample_count": len(values),
         }
+        if instant_sample_count:
+            summary["rain_duration_hours"] = round(rainy_samples / 60, 4)
+        return summary
 
     def backfill_temp_extrema_due_days(self, max_days: int = 1) -> list[str]:
         """Backfill old archive manifests into exact daily extrema rollups."""

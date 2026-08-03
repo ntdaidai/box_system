@@ -4,7 +4,6 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 from contextlib import asynccontextmanager
 import asyncio
-from urllib.parse import unquote, urlparse
 
 from app.api import (
     alarm,
@@ -32,7 +31,6 @@ from app.services.vision_detector import vision_detector
 from app.services.vision_model_registry import vision_model_registry
 from app.services.camera_stream import camera_manager
 from app.services.camera_web_proxy import camera_web_proxy_manager
-from app.services.camera_config import load_camera_configs
 from app.services.camera_zone_store import get_camera_zone_store
 from app.services.video_detection import video_detection_service
 from app.services.eca_engine import set_main_event_loop, eca_scheduler, eca_engine
@@ -47,49 +45,6 @@ from app.services.wechat_subscription_service import wechat_subscription_service
 
 import httpx
 import traceback
-
-
-def _brand_from_rtsp_path(path: str) -> str:
-    return "hikvision" if "Streaming/Channels" in path else "dahua"
-
-
-def _import_legacy_camera_configs(db, camera_configs):
-    from app.models.camera import Camera
-
-    imported_count = 0
-    for config in camera_configs:
-        camera_id = config["camera_id"]
-        if db.query(Camera.id).filter(Camera.camera_id == camera_id).first():
-            continue
-        parsed = urlparse(config["source"])
-        if parsed.scheme not in {"rtsp", "rtsps"} or not parsed.hostname:
-            logger.warning(f"旧摄像头配置 {camera_id} 不是 RTSP 地址，未导入 camera_device")
-            continue
-        rtsp_path = parsed.path.lstrip("/")
-        if parsed.query:
-            rtsp_path = f"{rtsp_path}?{parsed.query}"
-        row = Camera(
-            camera_id=camera_id,
-            camera_name=config.get("name") or camera_id,
-            brand=_brand_from_rtsp_path(rtsp_path),
-            ip_address=parsed.hostname,
-            rtsp_port=parsed.port or 554,
-            web_port=80,
-            username=unquote(parsed.username or ""),
-            password=unquote(parsed.password or ""),
-            rtsp_path=rtsp_path,
-            description="",
-            enabled=bool(config.get("auto_start", True)),
-        )
-        if camera_id in {"camera_001", "dahua_001"} or "一号" in row.camera_name:
-            row.install_address = "河海大学西康路校区图书馆"
-            row.latitude = 32.055156
-            row.longitude = 118.75809
-        db.add(row)
-        imported_count += 1
-    if imported_count:
-        db.commit()
-    return imported_count
 
 
 # ── 全局异常处理 ──────────────────────────────────────────────
@@ -174,22 +129,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"视觉模型加载失败，部分分析功能将不可用: {e}")
 
-    # dai: 兼容旧环境变量摄像头配置，但不再绕过 camera_device 台账。
-    # 旧 RTSP 配置会自动导入一次，之后监测页和设备管理页都以表为准。
-    try:
-        camera_configs = load_camera_configs(settings)
-        if camera_configs:
-            db = SessionLocal()
-            try:
-                imported_count = _import_legacy_camera_configs(db, camera_configs)
-                logger.info(f"旧摄像头配置已导入 camera_device: {imported_count}/{len(camera_configs)}")
-            finally:
-                db.close()
-        else:
-            logger.info("未配置旧摄像头环境变量")
-    except Exception as e:
-        logger.error(f"旧摄像头配置导入失败: {e}")
-
     db = SessionLocal()
     try:
         from app.models.camera import Camera
@@ -199,7 +138,8 @@ async def lifespan(app: FastAPI):
         loaded_count = 0
         proxy_count = 0
         for row in rows:
-            if not camera_manager.get_camera(row.camera_id):
+            runtime_id = str(row.id)
+            if not camera_manager.get_camera(runtime_id):
                 path = row.rtsp_path or (
                     "Streaming/Channels/101"
                     if row.brand == "hikvision"
@@ -215,20 +155,20 @@ async def lifespan(app: FastAPI):
                     auth = f"{auth}@"
                 source = f"rtsp://{auth}{row.ip_address}:{row.rtsp_port}/{path}"
                 camera_manager.add_camera(
-                    camera_id=row.camera_id,
+                    camera_id=runtime_id,
                     source=source,
                     name=row.camera_name,
                     auto_start=True,
                 )
-                camera_obj = camera_manager.get_camera(row.camera_id)
+                camera_obj = camera_manager.get_camera(runtime_id)
                 if camera_obj:
-                    stored_zones = zone_store.get(row.camera_id)
+                    stored_zones = zone_store.get(runtime_id)
                     if stored_zones:
                         camera_obj.set_detection_zones(stored_zones)
                     loaded_count += 1
             try:
                 proxy = camera_web_proxy_manager.start_proxy(
-                    camera_id=row.camera_id,
+                    camera_id=runtime_id,
                     target_host=row.ip_address,
                     target_port=row.web_port or 80,
                     preferred_port=row.web_proxy_port,
@@ -236,7 +176,7 @@ async def lifespan(app: FastAPI):
                 row.web_proxy_port = int(proxy["listen_port"])
                 proxy_count += 1
             except Exception as proxy_exc:
-                logger.warning(f"数据库摄像头 Web 控制台监听加载失败: camera={row.camera_id}, error={proxy_exc}")
+                logger.warning(f"数据库摄像头 Web 控制台监听加载失败: camera={row.id}, error={proxy_exc}")
         db.commit()
         logger.info(f"已加载 {loaded_count} 路数据库摄像头设备，{proxy_count} 路 Web 控制台监听")
     except Exception as e:

@@ -1,5 +1,5 @@
 /**
- * 文档管理路由配置
+ * 数据管理路由配置
  */
 
 export default [
@@ -8,7 +8,7 @@ export default [
     name: 'DocumentHub',
     component: () => import('@/views/DocumentHub.vue'),
     meta: {
-      title: '文档管理',
+      title: '数据管理',
       icon: 'Document',
       requireAuth: true
     }

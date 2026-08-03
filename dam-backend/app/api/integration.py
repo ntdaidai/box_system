@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import datetime as dt
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -28,7 +27,8 @@ from app.models.safety_integration import (
     VisualEventDetail,
 )
 from app.models.user import User
-from app.services.safety_event_engine import get_safety_event_engine
+from app.services.safety_event_operation_service import operate_safety_event as apply_safety_event_operation
+from app.services.safety_event_ws import safety_event_ws_manager
 
 
 router = APIRouter()
@@ -68,9 +68,14 @@ class ActionConfigUpdate(BaseModel):
 
 
 class SafetyEventOperation(BaseModel):
-    action: Literal["RESOLVE", "FALSE_ALARM", "UPGRADE"]
+    action: Literal[
+        "ACKNOWLEDGE", "DISPATCH_TASK", "ACCEPT_TASK", "COMPLETE_TASK",
+        "RESOLVE", "FALSE_ALARM", "UPGRADE",
+    ]
     risk_level: Optional[Literal["LOW", "MEDIUM", "HIGH"]] = None
     reason: str = Field("", max_length=500)
+    assignee: Optional[str] = Field(None, max_length=128)
+    version: Optional[int] = Field(None, ge=0)
     evidence_url: Optional[str] = Field(None, max_length=1024)
 
 
@@ -307,6 +312,23 @@ def list_safety_events(
     return {"code": 200, "data": {"items": [_event_dict(instance, event) for instance, event in rows], "total": total}}
 
 
+@router.get("/patrol-report/today", summary="获取今日巡查报告状态")
+def get_today_patrol_report(
+    camera_id: Optional[int] = Query(None, ge=1),
+    _user: User = Depends(require_auth),
+):
+    return {
+        "code": 200,
+        "message": "巡查报告模板调整中",
+        "data": {
+            "available": False,
+            "status": "TEMPLATE_PENDING",
+            "camera_id": camera_id,
+            "persisted": False,
+        },
+    }
+
+
 @router.get("/safety-events/{instance_id}", summary="获取统一安全事件详情")
 def get_safety_event_detail(
     instance_id: int,
@@ -353,76 +375,31 @@ def get_safety_event_detail(
 
 
 @router.post("/safety-events/{instance_id}/operation", summary="人工处置统一安全事件")
-def operate_safety_event(
+async def operate_safety_event(
     instance_id: int,
     payload: SafetyEventOperation,
     db: Session = Depends(get_db),
     user: User = Depends(require_auth),
 ):
-    instance = db.query(SafetyEventInstance).filter(SafetyEventInstance.id == instance_id).first()
-    if not instance:
-        raise HTTPException(status_code=404, detail="安全事件不存在")
-    operator = getattr(user, "username", None) or "SYSTEM"
-    now = dt.datetime.now()
-    if payload.action == "UPGRADE":
-        if payload.risk_level not in {"MEDIUM", "HIGH"}:
-            raise HTTPException(status_code=422, detail="请选择中风险或高风险")
-        previous = instance.risk_level
-        rank = {"LOW": 1, "MEDIUM": 2, "HIGH": 3}
-        upgraded_by_engine = False
-        if instance.source_type == "camera":
-            upgraded_by_engine = get_safety_event_engine().upgrade_event(
-                instance.instance_no,
-                payload.risk_level,
-                now=now.timestamp(),
-            )
-        if upgraded_by_engine:
-            db.expire(instance)
-            db.refresh(instance)
-        else:
-            instance.risk_level = payload.risk_level
-            visual = db.query(VisualEventDetail).filter(
-                VisualEventDetail.event_instance_id == instance.id
-            ).first()
-            code = None
-            if visual and visual.target_type == "boat":
-                code = {"MEDIUM": "BOAT_STAY", "HIGH": "BOAT_ILLEGAL_FISHING"}.get(payload.risk_level)
-            elif visual:
-                code = {"MEDIUM": "PERSON_WATERFRONT", "HIGH": "PERSON_WADING"}.get(payload.risk_level)
-            target_event = db.query(EventLibrary).filter(EventLibrary.event_code == code).first() if code else None
-            if target_event:
-                instance.current_event_id = target_event.id
-        if rank[payload.risk_level] > rank.get(instance.max_risk_level, 0):
-            instance.max_risk_level = payload.risk_level
-        log_type, message = "RISK_CHANGE", f"人工将风险从{RISK_LABELS.get(previous)}升级为{RISK_LABELS.get(payload.risk_level)}"
-    else:
-        instance.state = "RESOLVED"
-        instance.status = "FALSE_ALARM" if payload.action == "FALSE_ALARM" else "COMPLETED"
-        instance.resolved_at = now
-        instance.resolve_reason = payload.reason or ("人工标记误报" if payload.action == "FALSE_ALARM" else "人工闭环")
-        log_type = "RESOLVE"
-        message = instance.resolve_reason
-    instance.version = (instance.version or 0) + 1
-    log = SafetyEventTimelineLog(
-        event_instance_id=instance.id, event_id=instance.current_event_id,
-        log_type=log_type, trigger_type="MANUAL", risk_level=instance.risk_level,
-        status="SUCCESS", message=message, operator=operator,
-        payload={"reason": payload.reason, "action": payload.action},
+    result = await apply_safety_event_operation(
+        db,
+        user,
+        instance_id,
+        action=payload.action,
+        reason=payload.reason,
+        assignee=payload.assignee,
+        risk_level=payload.risk_level,
+        version=payload.version,
+        evidence_url=payload.evidence_url,
     )
-    db.add(log)
-    db.flush()
-    if payload.evidence_url:
-        db.add(SafetyEventEvidence(
-            event_instance_id=instance.id, timeline_log_id=log.id,
-            evidence_type="IMAGE", source_type="STAFF", source_id=operator,
-            file_url=payload.evidence_url, description="人工处置证据", captured_at=now,
-        ))
-    db.commit()
-    if payload.action in {"RESOLVE", "FALSE_ALARM"} and instance.source_type == "camera":
-        get_safety_event_engine().resolve_event(
-            instance.instance_no,
-            reason=instance.resolve_reason or "manual_close",
-            now=now.timestamp(),
-            emit_action=False,
-        )
-    return {"code": 200, "message": "事件状态已更新", "data": _event_dict(instance)}
+    return {"code": 200, "message": result["message"], "data": result}
+
+
+@router.websocket("/safety-events/ws")
+async def safety_event_ws(websocket: WebSocket):
+    await safety_event_ws_manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        await safety_event_ws_manager.disconnect(websocket)

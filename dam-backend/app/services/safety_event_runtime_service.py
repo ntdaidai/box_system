@@ -214,7 +214,7 @@ class SafetyEventRuntimeService:
             "event_name": event.event_name if event else instance.summary,
             "event_category": instance.event_category,
             "event_type": event.event_name if event else instance.event_category,
-            "camera_id": camera.camera_id if camera else str(instance.source_id or ""),
+            "camera_id": str(camera.id) if camera else str(instance.source_id or ""),
             "camera_device_id": visual.camera_id if visual else instance.source_id,
             "camera_name": visual.camera_name if visual else (camera.camera_name if camera else None),
             "entity_type": visual.target_type if visual else instance.source_type,

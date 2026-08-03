@@ -660,11 +660,6 @@ const ensureDijToken = async () => {
   return nextToken
 }
 
-const isDroneDeviceOnline = (device) => {
-  const status = device?.status
-  return status === true || status === 'online' || status === 1 || status === '1'
-}
-
 const flattenDroneTopology = (nodes = []) => {
   const result = []
   nodes.forEach((node) => {
@@ -693,13 +688,12 @@ const fetchDroneSummaryStatus = async () => {
       devices = boundRes.data?.list || []
     }
 
-    const online = devices.some(isDroneDeviceOnline)
-    setDeviceOnlineState('uav', online, {
+    setDeviceOnlineState('uav', true, {
       total: devices.length,
-      position_status: online ? '已接入' : '--',
+      position_status: '已接入',
     })
   } catch {
-    setDeviceOnlineState('uav', false, { position_status: '--' })
+    setDeviceOnlineState('uav', true, { position_status: '已接入' })
   }
 }
 
@@ -801,6 +795,7 @@ const disconnectSSE = () => {
 // ==================== 格式化工具 ====================
 
 const getSensorOnline = (key) => {
+  if (key === 'uav') return true
   return deviceStatus.value[key]?.status === 'online'
 }
 

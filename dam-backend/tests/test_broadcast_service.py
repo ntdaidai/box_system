@@ -12,6 +12,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base
 from app.models.broadcast import BroadcastDevice, BroadcastTemplate, CameraBroadcastDevice
+from app.models.camera import Camera
 from app.models.event_action import EventAction
 from app.models.event_library import EventLibrary
 from app.models.data_source import DataSource
@@ -74,6 +75,20 @@ class BroadcastServiceTests(unittest.TestCase):
         self.db.commit()
         return instance
 
+    def add_camera(self, camera_id):
+        camera = Camera(
+            id=camera_id,
+            camera_name=f"Camera {camera_id}",
+            brand="dahua",
+            ip_address=f"192.0.2.{camera_id}",
+            rtsp_port=554,
+            web_port=80,
+            enabled=True,
+        )
+        self.db.add(camera)
+        self.db.flush()
+        return camera
+
     def test_manual_play_uses_bound_devices_and_records_timeline(self):
         instance = self.add_event("evt_1")
         device = BroadcastDevice(
@@ -86,14 +101,15 @@ class BroadcastServiceTests(unittest.TestCase):
         )
         self.db.add(device)
         self.db.flush()
-        self.db.add(CameraBroadcastDevice(id=1, camera_id="cam_1", broadcast_device_id=device.id))
+        camera = self.add_camera(101)
+        self.db.add(CameraBroadcastDevice(id=1, camera_device_id=camera.id, broadcast_device_id=device.id))
         self.db.commit()
 
         response = self.service.play(
             self.db,
             {
                 "event_id": "evt_1",
-                "camera_id": "cam_1",
+                "camera_id": str(camera.id),
                 "template_id": "PERSON_HIGH",
                 "trigger_type": "MANUAL",
                 "operator": "tester",
@@ -160,7 +176,8 @@ class BroadcastServiceTests(unittest.TestCase):
         )
         self.db.add(device)
         self.db.flush()
-        self.db.add(CameraBroadcastDevice(id=1, camera_id="cam_voice", broadcast_device_id=device.id))
+        camera = self.add_camera(102)
+        self.db.add(CameraBroadcastDevice(id=1, camera_device_id=camera.id, broadcast_device_id=device.id))
         self.db.commit()
         with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as handle:
             handle.write(b"temporary voice")
@@ -170,7 +187,7 @@ class BroadcastServiceTests(unittest.TestCase):
             self.db,
             {
                 "event_id": instance.instance_no,
-                "camera_id": "cam_voice",
+                "camera_id": str(camera.id),
                 "trigger_type": "MANUAL",
                 "operator": "tester",
             },
@@ -209,9 +226,10 @@ class BroadcastServiceTests(unittest.TestCase):
         )
         self.db.add_all([local, real])
         self.db.flush()
+        camera = self.add_camera(103)
         self.db.add_all([
-            CameraBroadcastDevice(id=1, camera_id="cam_3", broadcast_device_id=local.id),
-            CameraBroadcastDevice(id=2, camera_id="cam_3", broadcast_device_id=real.id),
+            CameraBroadcastDevice(id=1, camera_device_id=camera.id, broadcast_device_id=local.id),
+            CameraBroadcastDevice(id=2, camera_device_id=camera.id, broadcast_device_id=real.id),
         ])
         self.db.commit()
 
@@ -219,7 +237,7 @@ class BroadcastServiceTests(unittest.TestCase):
             self.db,
             {
                 "event_id": "evt_3",
-                "camera_id": "cam_3",
+                "camera_id": str(camera.id),
                 "template_id": "PERSON_HIGH",
                 "trigger_type": "AUTO",
             },

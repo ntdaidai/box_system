@@ -76,10 +76,10 @@ export function classColor(classId) {
 export function normalizeZoneType(type) {
   if (!type) return 'PERSON_LOW'
   return ({
-    person_intrusion: 'PERSON_LOW', warning_zone: 'PERSON_LOW', WARNING_ZONE: 'PERSON_LOW', PERSON_LOW: 'PERSON_LOW',
-    waterside_zone: 'PERSON_MEDIUM', waterfront_zone: 'PERSON_MEDIUM', WATERFRONT_ZONE: 'PERSON_MEDIUM', PERSON_MEDIUM: 'PERSON_MEDIUM',
-    wading_zone: 'PERSON_HIGH', water_zone: 'PERSON_HIGH', WATER_ZONE: 'PERSON_HIGH', PERSON_HIGH: 'PERSON_HIGH',
-    illegal_fishing: 'FISHING', fishing_zone: 'FISHING', FISHING_ZONE: 'FISHING', FISHING: 'FISHING',
+    PERSON_LOW: 'PERSON_LOW',
+    PERSON_MEDIUM: 'PERSON_MEDIUM',
+    PERSON_HIGH: 'PERSON_HIGH',
+    FISHING: 'FISHING',
   })[type] || null
 }
 
@@ -121,15 +121,13 @@ export function normalizeZones(payload) {
       .map((point) => ({ x: Number(point?.x), y: Number(point?.y) }))
       .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
     const bounds = polygonBounds(polygonPoints)
-    const zoneId = zone?.zone_id || zone?.id
+    const zoneId = zone?.id === undefined || zone?.id === null ? '' : String(zone.id)
     if (!zoneId || !bounds || polygonPoints.length > 15 || ![...personZoneTypes(), 'FISHING'].includes(zoneType)) return null
     const zoneName = zone?.zone_name || zone?.name || zoneTypeLabel(zoneType)
     return {
       ...zone,
-      zone_id: zoneId,
       zone_name: zoneName,
       zone_type: zoneType,
-      camera_id: zone?.camera_id || '',
       polygon_points: polygonPoints,
       trigger_seconds: Number.isFinite(Number(zone?.trigger_seconds))
         ? Number(zone.trigger_seconds)

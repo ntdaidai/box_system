@@ -2,7 +2,17 @@
   <div class="device-admin">
     <header class="admin-header">
       <div class="title-block">
-        <el-segmented v-model="deviceMode" :options="modeOptions" />
+        <div class="mode-switch" aria-label="设备类型切换">
+          <button
+            v-for="option in modeOptions"
+            :key="option.value"
+            type="button"
+            :class="{ active: deviceMode === option.value }"
+            @click="deviceMode = option.value"
+          >
+            {{ option.label }}
+          </button>
+        </div>
         <div>
           <p>视频监测 / 设备管理</p>
           <h2>{{ deviceMode === 'camera' ? '摄像头设备管理' : '广播管理' }}</h2>
@@ -17,16 +27,32 @@
     </header>
 
     <template v-if="deviceMode === 'camera'">
-      <section class="data-panel" v-loading="loading">
-        <el-table :data="cameras" row-key="id" empty-text="暂无摄像头设备">
-          <el-table-column label="名称" min-width="170">
+      <section class="data-panel camera-data-panel" v-loading="loading">
+        <el-table :data="cameras" row-key="id" empty-text="暂无摄像头设备" class="camera-table">
+          <el-table-column label="名称" min-width="190">
             <template #default="{ row }">
               <div class="name-cell"><strong>{{ row.name }}</strong><small>{{ row.description || '暂无描述' }}</small></div>
             </template>
           </el-table-column>
-          <el-table-column label="连接信息" min-width="210">
+          <el-table-column label="连接信息" min-width="240">
             <template #default="{ row }">
-              <div class="stack"><span>IP：{{ row.ip_address }}</span><span>账户：{{ row.username || '--' }}</span><span>密码：{{ row.has_password ? '********' : '--' }}</span></div>
+              <div class="connection-cell">
+                <span>IP：{{ row.ip_address }}</span>
+                <span>账户：{{ row.username || '--' }}</span>
+                <span class="password-line">
+                  密码：{{ passwordLabel(row) }}
+                  <el-button
+                    v-if="row.has_password"
+                    link
+                    type="primary"
+                    class="password-toggle"
+                    :icon="passwordVisible[row.id] ? Hide : View"
+                    :loading="passwordLoading[row.id]"
+                    title="显示/隐藏密码"
+                    @click="togglePassword(row)"
+                  />
+                </span>
+              </div>
             </template>
           </el-table-column>
           <el-table-column label="Web 控制台" min-width="125">
@@ -35,40 +61,41 @@
               <span v-else>--</span>
             </template>
           </el-table-column>
-          <el-table-column label="设备状态" width="105">
-            <template #default="{ row }"><el-tag :type="row.connected ? 'success' : 'danger'">{{ row.connected ? '在线' : '离线' }}</el-tag></template>
-          </el-table-column>
-          <el-table-column label="是否启用" width="95">
-            <template #default="{ row }"><el-tag :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '停用' }}</el-tag></template>
-          </el-table-column>
-          <el-table-column label="绑定扬声器" min-width="160">
+          <el-table-column label="设备状态" min-width="155">
             <template #default="{ row }">
-              <span v-if="row.broadcast_devices?.length">{{ row.broadcast_devices.map(item => item.name).join('、') }}</span>
-              <span v-else class="muted">未绑定</span>
+              <div class="status-cell">
+                <div class="status-tags">
+                  <el-tag :type="row.connected ? 'success' : 'danger'">{{ row.connected ? '在线' : '离线' }}</el-tag>
+                  <el-tag :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '停用' }}</el-tag>
+                </div>
+                <small v-if="!row.connected && row.last_online_at">最后在线：{{ formatDateTime(row.last_online_at) }}</small>
+              </div>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="150" fixed="right">
+          <el-table-column label="绑定扬声器" min-width="190">
             <template #default="{ row }">
-              <el-button link type="primary" :icon="Link" title="绑定扬声器" @click="openBinding(row)" />
-              <el-button link type="primary" :icon="Edit" title="编辑" @click="openCameraEdit(row)" />
-              <el-button link type="danger" :icon="Delete" title="删除" @click="removeCamera(row)" />
+              <div class="speaker-cell">
+                <span v-if="row.broadcast_devices?.length">{{ row.broadcast_devices.map(item => item.name).join('、') }}</span>
+                <span v-else class="muted">未绑定</span>
+                <el-button size="small" :icon="Link" title="绑定扬声器" @click="openBinding(row)">绑定</el-button>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="112" fixed="right">
+            <template #default="{ row }">
+              <div class="action-buttons">
+                <el-button :icon="Edit" title="编辑" @click="openCameraEdit(row)" />
+                <el-button type="danger" :icon="Delete" title="删除" @click="removeCamera(row)" />
+              </div>
             </template>
           </el-table-column>
         </el-table>
       </section>
 
       <section class="map-panel">
-        <header><h3>摄像头点位地图</h3><span>{{ cameras.filter(item => item.latitude != null && item.longitude != null).length }} 个已定位点位</span></header>
+        <header><h3>摄像头点位地图</h3></header>
         <div class="map-stage">
           <img src="/dammap.png" alt="大坝摄像头点位地图" />
-          <button
-            v-for="camera in locatedCameras"
-            :key="camera.id"
-            type="button"
-            class="map-marker"
-            :style="markerStyle(camera)"
-            :title="camera.name"
-          ><el-icon><VideoCamera /></el-icon></button>
         </div>
       </section>
     </template>
@@ -101,7 +128,7 @@
       </el-tabs>
     </template>
 
-    <el-dialog v-model="cameraDialog" :title="editingCamera ? '编辑摄像头' : '添加摄像头'" width="680px" destroy-on-close>
+    <el-dialog v-model="cameraDialog" :title="editingCamera ? '编辑摄像头' : '添加摄像头'" width="680px" class="camera-config-dialog" destroy-on-close>
       <el-form label-position="top">
         <div class="form-grid two"><el-form-item label="名称"><el-input v-model.trim="cameraForm.camera_name" maxlength="128" /></el-form-item><el-form-item label="IP 地址"><el-input v-model.trim="cameraForm.ip_address" /></el-form-item></div>
         <div class="form-grid two"><el-form-item label="登录账号"><el-input v-model.trim="cameraForm.username" autocomplete="off" /></el-form-item><el-form-item label="登录密码"><el-input v-model="cameraForm.password" type="password" show-password autocomplete="new-password" :placeholder="editingCamera ? '留空则保留原密码' : ''" /></el-form-item></div>
@@ -139,8 +166,8 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Check, Connection, Delete, Edit, Link, Plus, Refresh, VideoCamera } from '@element-plus/icons-vue'
-import { createCameraDevice, deleteCameraDevice, getCameraDevices, testCameraDeviceConnection, updateCameraDevice } from '@/api/camera'
+import { Check, Connection, Delete, Edit, Hide, Link, Plus, Refresh, View } from '@element-plus/icons-vue'
+import { createCameraDevice, deleteCameraDevice, getCameraDevicePassword, getCameraDevices, testCameraDeviceConnection, updateCameraDevice } from '@/api/camera'
 import {
   bindCameraBroadcastDevices, createBroadcastDevice, createBroadcastTemplate,
   deleteBroadcastDevice, deleteBroadcastTemplate, getBroadcastDevices, getBroadcastTemplates,
@@ -166,13 +193,15 @@ const editingTemplate = ref(null)
 const bindingCamera = ref(null)
 const selectedDeviceIds = ref([])
 const verifiedKey = ref('')
+const passwordVisible = ref({})
+const passwordLoading = ref({})
+const passwordValues = ref({})
 
 const cameraForm = reactive({ camera_name: '', ip_address: '', username: '', password: '', description: '', install_address: '', latitude: undefined, longitude: undefined, rtsp_port: 554, web_port: 80, enabled: true })
 const broadcastForm = reactive({ name: '', description: '', enabled: true })
 const templateForm = reactive({ name: '', scene_type: 'PERSON', risk_level: 'LOW', content: '', enabled: true })
 const createButtonText = computed(() => deviceMode.value === 'camera' ? '添加摄像头' : (broadcastTab.value === 'devices' ? '添加广播设备' : '添加广播模板'))
 const enabledBroadcastDevices = computed(() => broadcastDevices.value.filter(item => item.enabled))
-const locatedCameras = computed(() => cameras.value.filter(item => Number.isFinite(Number(item.latitude)) && Number.isFinite(Number(item.longitude))))
 const connectionKey = computed(() => JSON.stringify([cameraForm.ip_address, cameraForm.rtsp_port, cameraForm.username, cameraForm.password]))
 const connectionVerified = computed(() => !needsTest.value || verifiedKey.value === connectionKey.value)
 const needsTest = computed(() => !editingCamera.value || connectionKey.value !== editingCamera.value.connectionKey)
@@ -192,6 +221,32 @@ async function removeCamera(row) { try { await ElMessageBox.confirm(`确认删�
 async function openBinding(row) { bindingCamera.value = row; if (!broadcastDevices.value.length) await loadBroadcast(); selectedDeviceIds.value = (row.broadcast_devices || []).map(item => item.id); bindingDialog.value = true }
 async function saveBinding() { saving.value = true; try { await bindCameraBroadcastDevices(String(bindingCamera.value.id), selectedDeviceIds.value); bindingDialog.value = false; ElMessage.success('绑定已保存'); await loadCameras() } catch (error) { ElMessage.error(error.response?.data?.detail || '绑定失败') } finally { saving.value = false } }
 
+function passwordLabel(row) {
+  if (!row.has_password) return '--'
+  if (!passwordVisible.value[row.id]) return '********'
+  return passwordValues.value[row.id] || '********'
+}
+
+async function togglePassword(row) {
+  const id = row.id
+  if (passwordVisible.value[id]) {
+    passwordVisible.value = { ...passwordVisible.value, [id]: false }
+    return
+  }
+  if (!passwordValues.value[id]) {
+    passwordLoading.value = { ...passwordLoading.value, [id]: true }
+    try {
+      const res = await getCameraDevicePassword(String(id))
+      passwordValues.value = { ...passwordValues.value, [id]: res.data?.password || '' }
+    } catch (error) {
+      ElMessage.error(error.response?.data?.detail || '密码读取失败')
+    } finally {
+      passwordLoading.value = { ...passwordLoading.value, [id]: false }
+    }
+  }
+  passwordVisible.value = { ...passwordVisible.value, [id]: true }
+}
+
 function openBroadcastEdit(row) { editingBroadcast.value = row; Object.assign(broadcastForm, row ? { name: row.name, description: row.description || '', enabled: Boolean(row.enabled) } : { name: '', description: '', enabled: true }); broadcastDialog.value = true }
 async function saveBroadcast() { if (!broadcastForm.name) return ElMessage.warning('请填写设备名称'); saving.value = true; try { if (editingBroadcast.value) await updateBroadcastDevice(editingBroadcast.value.id, broadcastForm); else await createBroadcastDevice(broadcastForm); broadcastDialog.value = false; ElMessage.success('广播设备已保存'); await loadBroadcast() } catch (error) { ElMessage.error(error.response?.data?.detail || '保存失败') } finally { saving.value = false } }
 async function removeBroadcast(row) { try { await ElMessageBox.confirm(`确认删除“${row.name}”？`, '删除广播设备', { type: 'warning' }); await deleteBroadcastDevice(row.id); await loadBroadcast() } catch (error) { if (error !== 'cancel') ElMessage.error(error.response?.data?.detail || '删除失败') } }
@@ -203,28 +258,72 @@ async function removeTemplate(row) { try { await ElMessageBox.confirm(`确认删
 function riskLabel(value) { return ({ LOW: '低风险', MEDIUM: '中风险', HIGH: '高风险' })[value] || '通用' }
 function riskTag(value) { return ({ LOW: 'success', MEDIUM: 'warning', HIGH: 'danger' })[value] || 'info' }
 function sceneLabel(value) { return ({ PERSON: '人员安全', FISHING: '非法捕鱼', GENERAL: '通用' })[value] || value }
-function markerStyle(camera) { const left = 50 + ((Number(camera.longitude) - 110.76) * 500); const top = 50 - ((Number(camera.latitude) - 23.99) * 800); return { left: `${Math.max(2, Math.min(98, left))}%`, top: `${Math.max(2, Math.min(98, top))}%` } }
+function formatDateTime(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  const pad = number => String(number).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
 
 onMounted(loadCurrent)
 </script>
 
 <style scoped>
-.device-admin { min-height: 100%; padding: 20px; color: #d9e8f8; background: #071422; }
+.device-admin { min-height: 100%; padding: 22px; color: #d9e8f8; background: #071422; }
 .admin-header, .title-block, .header-actions, .map-panel header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .title-block { justify-content: flex-start; }
 .title-block p { margin: 0 0 5px; color: #79acd0; font-size: 13px; }
 h2, h3 { margin: 0; color: #f3f8fd; letter-spacing: 0; }
 h2 { font-size: 25px; }
-.data-panel, .map-panel { margin-top: 18px; padding: 14px; border: 1px solid rgba(96, 151, 191, .24); border-radius: 8px; background: #0b1d30; }
-.name-cell, .stack { display: grid; gap: 5px; }
+.mode-switch { display: inline-flex; align-items: center; gap: 4px; padding: 4px; border: 1px solid rgba(84, 148, 193, .34); border-radius: 8px; background: #0d2740; }
+.mode-switch button { min-width: 82px; height: 34px; padding: 0 18px; border: 0; border-radius: 6px; color: #9fbbd3; background: transparent; font-size: 14px; font-weight: 700; cursor: pointer; }
+.mode-switch button.active { color: #061827; background: #38d7de; box-shadow: 0 0 18px rgba(39, 194, 214, .28); }
+.mode-switch button:focus-visible { outline: 2px solid #63e3ff; outline-offset: 2px; }
+.data-panel, .map-panel { margin-top: 18px; padding: 22px 24px; border: 1px solid rgba(96, 151, 191, .24); border-radius: 8px; background: #0b1d30; }
+.data-panel { min-height: 310px; }
+.camera-data-panel { min-height: 600px; }
+.camera-table { border-radius: 6px; overflow: hidden; background: #0a1d30; }
+.camera-table :deep(.el-table__inner-wrapper::before) { background: rgba(149, 190, 220, .12); }
+.camera-table :deep(th.el-table__cell) { height: 56px; background: #142d49; color: #d6e8f8; font-size: 14px; font-weight: 700; }
+.camera-table :deep(tr), .camera-table :deep(td.el-table__cell) { background: #0a1d30; color: #d7e8f8; }
+.camera-table :deep(th.el-table__cell), .camera-table :deep(td.el-table__cell) { border-bottom-color: rgba(149, 190, 220, .12); }
+.camera-table :deep(td.el-table__cell) { height: 122px; border-bottom-width: 1px; }
+.camera-table :deep(.el-table__row:hover > td.el-table__cell) { background: #102940; }
+.name-cell, .connection-cell, .status-cell { display: grid; gap: 7px; }
+.name-cell strong { color: #f3f8fd; font-size: 15px; }
 .name-cell small, .muted, .map-panel header span { color: #829bb3; font-size: 12px; }
+.connection-cell { color: #cfe1ef; line-height: 1.45; }
+.password-line { display: inline-flex; align-items: center; gap: 3px; min-height: 22px; }
+.password-toggle { width: 24px; height: 24px; padding: 0; font-size: 15px; }
+.status-tags { display: flex; flex-wrap: wrap; gap: 8px; }
+.status-cell small { color: #8fa8bf; font-size: 12px; line-height: 1.4; }
+.speaker-cell { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #d7e8f8; }
+.speaker-cell > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.speaker-cell :deep(.el-button) { flex: 0 0 auto; border-color: #1b7fa5; color: #dcefff; background: #103954; }
+.action-buttons { display: flex; align-items: center; gap: 8px; }
+.action-buttons :deep(.el-button) { width: 32px; height: 32px; margin: 0; padding: 0; border-color: #1b7fa5; color: #dcefff; background: #103954; }
+.action-buttons :deep(.el-button--danger) { border-color: rgba(220, 92, 111, .42); color: #ff9aa9; background: rgba(122, 30, 48, .34); }
 .broadcast-tabs { margin-top: 16px; }
 .broadcast-tabs .data-panel { margin-top: 0; }
-.map-stage { position: relative; height: clamp(340px, 44vw, 620px); margin-top: 12px; overflow: hidden; border: 1px solid rgba(96, 151, 191, .2); border-radius: 6px; background: #02090f; }
+.map-stage { position: relative; height: clamp(340px, 44vw, 620px); margin-top: 14px; overflow: hidden; border: 1px solid rgba(96, 151, 191, .2); border-radius: 6px; background: #02090f; }
 .map-stage > img { width: 100%; height: 100%; object-fit: contain; }
-.map-marker { position: absolute; width: 32px; height: 32px; transform: translate(-50%, -50%); border: 1px solid #35d5eb; border-radius: 50%; color: #04121e; background: #57e1b5; box-shadow: 0 0 0 5px rgba(53, 213, 235, .16); cursor: pointer; }
 .form-grid { display: grid; gap: 14px; }.form-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .advanced-collapse { margin-bottom: 12px; }
+.camera-config-dialog :deep(.el-dialog), :deep(.camera-config-dialog.el-dialog) { background: #183b62; border: 1px solid rgba(97, 167, 214, .35); }
+.camera-config-dialog :deep(.el-dialog__title), .camera-config-dialog :deep(.el-form-item__label) { color: #e7f4ff; }
+.camera-config-dialog :deep(.el-form-item__label) { font-weight: 600; }
+.camera-config-dialog :deep(.el-input__wrapper), .camera-config-dialog :deep(.el-textarea__inner) { background: #092034; box-shadow: inset 0 0 0 1px rgba(36, 128, 176, .42); color: #f4fbff; }
+.camera-config-dialog :deep(.el-input__inner), .camera-config-dialog :deep(.el-textarea__inner), .camera-config-dialog :deep(.el-input-number .el-input__inner) { color: #f4fbff; }
+.camera-config-dialog :deep(.el-input__inner::placeholder) { color: #93a8bb; }
+.camera-config-dialog :deep(.el-checkbox__label) { color: #d6e8f8; }
+.advanced-collapse { border: 1px solid rgba(70, 145, 190, .35); border-radius: 6px; overflow: hidden; background: #102f4d; }
+.advanced-collapse :deep(.el-collapse) { border: 0; }
+.advanced-collapse :deep(.el-collapse-item__header) { height: 46px; padding: 0 14px; border-bottom-color: rgba(70, 145, 190, .35); color: #e7f4ff; background: #123858; font-weight: 700; }
+.advanced-collapse :deep(.el-collapse-item__wrap) { border-bottom: 0; background: #102f4d; }
+.advanced-collapse :deep(.el-collapse-item__content) { padding: 16px 14px 18px; color: #d7e8f8; }
+.advanced-collapse :deep(.el-input-number) { width: 100%; }
+.advanced-collapse :deep(.el-input-number__decrease), .advanced-collapse :deep(.el-input-number__increase) { border-color: rgba(70, 145, 190, .45); color: #d7e8f8; background: #173a59; }
 .binding-list { display: grid; gap: 10px; }.binding-list :deep(.el-checkbox) { height: auto; margin: 0; padding: 12px; border: 1px solid rgba(96, 151, 191, .22); border-radius: 6px; }.binding-list small { display: block; margin-top: 3px; color: #839cb4; }
-@media (max-width: 900px) { .admin-header { align-items: flex-start; flex-direction: column; }.title-block { align-items: flex-start; flex-direction: column; }.form-grid.two { grid-template-columns: 1fr; }.device-admin { padding: 12px; } }
+@media (max-width: 900px) { .admin-header { align-items: flex-start; flex-direction: column; }.title-block { align-items: flex-start; flex-direction: column; }.form-grid.two { grid-template-columns: 1fr; }.device-admin { padding: 12px; }.camera-data-panel { min-height: 460px; } }
 </style>

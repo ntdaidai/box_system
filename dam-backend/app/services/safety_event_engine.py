@@ -36,9 +36,9 @@ RISK_LOW = "LOW"
 RISK_MEDIUM = "MEDIUM"
 RISK_HIGH = "HIGH"
 
-ZONE_WARNING = "PERSON_LOW"
-ZONE_WATERSIDE = "PERSON_MEDIUM"
-ZONE_WADING = "PERSON_HIGH"
+ZONE_PERSON_LOW = "PERSON_LOW"
+ZONE_PERSON_MEDIUM = "PERSON_MEDIUM"
+ZONE_PERSON_HIGH = "PERSON_HIGH"
 ZONE_FISHING = "FISHING"
 
 RISK_RANK = {
@@ -548,7 +548,7 @@ class SafetyEventEngine:
                 continue
             roles = set(alert_roles_by_index.get(index, set()))
             if self._looks_like_wading_person(detection):
-                roles.add(ZONE_WADING)
+                roles.add(ZONE_PERSON_HIGH)
             observations.append(
                 {
                     "camera_id": camera_id,
@@ -651,7 +651,7 @@ class SafetyEventEngine:
         if was_missing:
             changed = True
 
-        active_role = {RISK_LOW: ZONE_WARNING, RISK_MEDIUM: ZONE_WATERSIDE, RISK_HIGH: ZONE_WADING}.get(track.risk_level)
+        active_role = {RISK_LOW: ZONE_PERSON_LOW, RISK_MEDIUM: ZONE_PERSON_MEDIUM, RISK_HIGH: ZONE_PERSON_HIGH}.get(track.risk_level)
         left_active_person_stage = track.entity_type == "person" and active_role and active_role not in current_roles
         if not track.current_zone_roles or left_active_person_stage:
             if track.clear_since is None:
@@ -724,9 +724,9 @@ class SafetyEventEngine:
                 return RISK_LOW
             return None
         for role, risk, fallback in (
-            (ZONE_WADING, RISK_HIGH, 0),
-            (ZONE_WATERSIDE, RISK_MEDIUM, 3),
-            (ZONE_WARNING, RISK_LOW, 5),
+            (ZONE_PERSON_HIGH, RISK_HIGH, 0),
+            (ZONE_PERSON_MEDIUM, RISK_MEDIUM, 3),
+            (ZONE_PERSON_LOW, RISK_LOW, 5),
         ):
             if role not in roles:
                 continue
@@ -945,7 +945,7 @@ class SafetyEventEngine:
                 event_code = self._unified_event_code(track.entity_type, risk_level)
                 db = SessionLocal()
                 try:
-                    camera = db.query(Camera).filter(Camera.camera_id == track.camera_id).first()
+                    camera = db.query(Camera).filter(Camera.id == int(track.camera_id)).first() if str(track.camera_id).isdigit() else None
                     definition = db.query(EventLibrary).filter(EventLibrary.event_code == event_code).first()
                     if camera and definition:
                         config = (
@@ -1080,13 +1080,13 @@ class SafetyEventEngine:
     @staticmethod
     def _risk_change_reason(previous_risk: str, risk_level: str, observation: Dict[str, Any]) -> str:
         roles = set(observation.get("zone_roles") or [])
-        if risk_level == RISK_HIGH and ZONE_WADING in roles:
+        if risk_level == RISK_HIGH and ZONE_PERSON_HIGH in roles:
             return "目标进入涉水区域"
         if risk_level == RISK_HIGH:
             return "AUTO_DEVICE处置后风险仍未解除"
         if previous_risk == RISK_LOW and risk_level == RISK_MEDIUM:
             return "AUTO_BROADCAST后目标持续未离开"
-        if risk_level == RISK_MEDIUM and ZONE_WATERSIDE in roles:
+        if risk_level == RISK_MEDIUM and ZONE_PERSON_MEDIUM in roles:
             return "目标进入亲水区域"
         if risk_level == RISK_LOW:
             return "触发低风险区域规则"
@@ -1108,14 +1108,6 @@ class SafetyEventEngine:
             "PERSON_MEDIUM": "人员亲水",
             "PERSON_HIGH": "人员涉水",
             "FISHING": "船只闯入",
-            "WARNING_ZONE": "人员闯入",
-            "warning_zone": "人员警戒区停留",
-            "person_intrusion": "人员警戒区停留",
-            "WATERFRONT_ZONE": "人员进入亲水区",
-            "waterside_zone": "人员进入亲水区",
-            "WATER_ZONE": "人员进入涉水区",
-            "wading_zone": "人员进入涉水区",
-            "illegal_fishing": "疑似船只靠近",
         }.get(str(zone_type), "区域风险事件")
 
     @staticmethod
@@ -1157,20 +1149,10 @@ class SafetyEventEngine:
     @staticmethod
     def _zone_role(zone_type: str) -> Optional[str]:
         mapping = {
-            "PERSON_LOW": ZONE_WARNING,
-            "PERSON_MEDIUM": ZONE_WATERSIDE,
-            "PERSON_HIGH": ZONE_WADING,
+            "PERSON_LOW": ZONE_PERSON_LOW,
+            "PERSON_MEDIUM": ZONE_PERSON_MEDIUM,
+            "PERSON_HIGH": ZONE_PERSON_HIGH,
             "FISHING": ZONE_FISHING,
-            "person_intrusion": ZONE_WARNING,
-            "warning_zone": ZONE_WARNING,
-            "WARNING_ZONE": ZONE_WARNING,
-            "waterside_zone": ZONE_WATERSIDE,
-            "waterfront_zone": ZONE_WATERSIDE,
-            "WATERFRONT_ZONE": ZONE_WATERSIDE,
-            "wading_zone": ZONE_WADING,
-            "water_zone": ZONE_WADING,
-            "WATER_ZONE": ZONE_WADING,
-            "illegal_fishing": ZONE_FISHING,
         }
         return mapping.get(zone_type)
 
@@ -1207,6 +1189,7 @@ class SafetyEventEngine:
     def _track_summary(self, track: TrackContext) -> Dict[str, Any]:
         event = self.store.events.get(track.event_id or "") or {}
         return {
+            "instance_id": event.get("instance_id"),
             "event_id": track.event_id,
             "camera_id": track.camera_id,
             "entity_type": track.entity_type,

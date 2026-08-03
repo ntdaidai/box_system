@@ -6,7 +6,7 @@ import request from '@/utils/request'
 
 // 获取摄像头列表
 export function getCameraList() {
-  return request.get('/v1/camera/list', { localCache: false })
+  return request.get('/v1/camera/devices', { localCache: false })
 }
 
 // 获取摄像头状态
@@ -16,15 +16,6 @@ export function getCameraStatus(cameraId) {
     silentError: true,
     timeout: 5000,
   })
-}
-
-// 添加摄像头
-export function addCamera(data) {
-  return request.post('/v1/camera/add', data)
-}
-
-export function updateCamera(cameraId, data) {
-  return request.put(`/v1/camera/${encodeURIComponent(cameraId)}`, data)
 }
 
 export function getCameraDevices() {
@@ -54,11 +45,6 @@ export function getCameraDevicePassword(cameraId) {
   return request.get(`/v1/camera/devices/${encodeURIComponent(cameraId)}/password`, {
     localCache: false,
   })
-}
-
-// 删除摄像头
-export function removeCamera(cameraId) {
-  return request.delete(`/v1/camera/${cameraId}`)
 }
 
 // 切换检测开关
@@ -186,14 +172,10 @@ export function saveCameraZones(cameraId, zones) {
 }
 
 export function getTodaySafetyReport(params = {}) {
-  return request.get('/v1/camera/safety/report/today', {
+  return request.get('/v1/integration/patrol-report/today', {
     params,
     localCache: false,
   })
-}
-
-export function recordSafetyEventAction(eventId, data) {
-  return request.post(`/v1/camera/safety/events/${encodeURIComponent(eventId)}/action`, data)
 }
 
 export function getLatestDetection(cameraId) {

@@ -7,9 +7,10 @@ function storage() {
 }
 
 function normalizeCameraArray(payload) {
-  if (Array.isArray(payload)) return payload
-  if (Array.isArray(payload?.cameras)) return payload.cameras
-  return []
+  const items = Array.isArray(payload) ? payload : (Array.isArray(payload?.cameras) ? payload.cameras : [])
+  return items
+    .filter((item) => item?.id !== undefined && item?.id !== null)
+    .map((item) => ({ ...item, id: String(item.id) }))
 }
 
 function readSnapshot(key) {
