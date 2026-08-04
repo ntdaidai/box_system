@@ -14,6 +14,7 @@ import {
   normalizeDetections,
   normalizeZones,
   primaryClassification,
+  shouldStartLiveStreamOnStatus,
   zoneTypeLabel,
 } from './cameraDetectionView.js'
 
@@ -82,6 +83,22 @@ test('formats camera communication timestamps as fixed Shanghai month-day time',
   assert.equal(cameraDetectionView.formatDeviceCommTime(timestampMs / 1000), '07/20 11:11:12')
   assert.equal(cameraDetectionView.formatDeviceCommTime(timestampMs), '07/20 11:11:12')
   assert.equal(cameraDetectionView.formatDeviceCommTime(0), '--')
+})
+
+
+test('starts a live stream only when camera status transitions online', () => {
+  assert.equal(shouldStartLiveStreamOnStatus({ canRender: true, connected: false }), false)
+  assert.equal(shouldStartLiveStreamOnStatus({ canRender: true, connected: true }), true)
+  assert.equal(shouldStartLiveStreamOnStatus({
+    canRender: true,
+    connected: true,
+    previousConnected: true,
+  }), false)
+  assert.equal(shouldStartLiveStreamOnStatus({
+    canRender: true,
+    connected: true,
+    mediaAnalysis: true,
+  }), false)
 })
 
 

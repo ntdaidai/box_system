@@ -103,13 +103,31 @@
     <template v-else>
       <el-tabs v-model="broadcastTab" class="broadcast-tabs" @tab-change="loadBroadcast">
         <el-tab-pane label="广播设备" name="devices">
-          <section class="data-panel" v-loading="loading">
-            <el-table :data="broadcastDevices" row-key="id" empty-text="暂无广播设备">
-              <el-table-column prop="name" label="设备名称" min-width="180" />
-              <el-table-column prop="description" label="描述" min-width="260" show-overflow-tooltip />
+          <section class="data-panel camera-data-panel" v-loading="loading">
+            <el-table :data="broadcastDevices" row-key="id" empty-text="暂无广播设备" class="camera-table broadcast-device-table">
+              <el-table-column label="设备名称" min-width="180">
+                <template #default="{ row }">
+                  <div class="name-cell">
+                    <strong>{{ row.name }}</strong>
+                    <small>广播设备</small>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="描述" min-width="260">
+                <template #default="{ row }">
+                  <span class="description-cell">{{ row.description || '暂无描述' }}</span>
+                </template>
+              </el-table-column>
               <el-table-column label="状态" width="110"><template #default="{ row }"><el-tag :type="row.status === 'ONLINE' ? 'success' : 'danger'">{{ row.status === 'ONLINE' ? '在线' : '离线' }}</el-tag></template></el-table-column>
               <el-table-column label="是否启用" width="110"><template #default="{ row }"><el-tag :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '停用' }}</el-tag></template></el-table-column>
-              <el-table-column label="操作" width="120"><template #default="{ row }"><el-button link type="primary" :icon="Edit" title="编辑" @click="openBroadcastEdit(row)" /><el-button link type="danger" :icon="Delete" title="删除" @click="removeBroadcast(row)" /></template></el-table-column>
+              <el-table-column label="操作" width="112" fixed="right">
+                <template #default="{ row }">
+                  <div class="action-buttons">
+                    <el-button :icon="Edit" title="编辑" aria-label="编辑广播设备" @click="openBroadcastEdit(row)" />
+                    <el-button type="danger" :icon="Delete" title="删除" aria-label="删除广播设备" @click="removeBroadcast(row)" />
+                  </div>
+                </template>
+              </el-table-column>
             </el-table>
           </section>
         </el-tab-pane>
@@ -214,7 +232,7 @@ watch(deviceMode, loadCurrent)
 function resetCameraForm() { Object.assign(cameraForm, { camera_name: '', ip_address: '', username: '', password: '', description: '', install_address: '', latitude: undefined, longitude: undefined, rtsp_port: 554, web_port: 80, enabled: true }); verifiedKey.value = '' }
 function openCreate() { if (deviceMode.value === 'camera') { editingCamera.value = null; resetCameraForm(); cameraDialog.value = true } else if (broadcastTab.value === 'devices') openBroadcastEdit(null); else openTemplateEdit(null) }
 function openCameraEdit(row) { editingCamera.value = { ...row, connectionKey: JSON.stringify([row.ip_address, Number(row.rtsp_port) || 554, row.username || '', '']) }; Object.assign(cameraForm, { camera_name: row.name, ip_address: row.ip_address, username: row.username || '', password: '', description: row.description || '', install_address: row.install_address || '', latitude: row.latitude ?? undefined, longitude: row.longitude ?? undefined, rtsp_port: Number(row.rtsp_port) || 554, web_port: Number(row.web_port) || 80, enabled: Boolean(row.enabled) }); verifiedKey.value = ''; cameraDialog.value = true }
-async function testConnection() { if (!cameraForm.ip_address || !cameraForm.username || (!editingCamera.value && !cameraForm.password)) return ElMessage.warning('请完整填写 IP、账号和密码'); testing.value = true; try { const res = await testCameraDeviceConnection({ ip_address: cameraForm.ip_address, rtsp_port: cameraForm.rtsp_port, username: cameraForm.username, password: cameraForm.password }); if (res.data?.connected) { verifiedKey.value = connectionKey.value; ElMessage.success(`连接成功，已识别为${res.data.brand === 'hikvision' ? '海康' : '大华'}设备`) } else ElMessage.error(res.data?.message || '连接失败') } catch (error) { ElMessage.error(error.response?.data?.detail || '连接失败') } finally { testing.value = false } }
+async function testConnection() { if (!cameraForm.ip_address || !cameraForm.username || (!editingCamera.value && !cameraForm.password)) return ElMessage.warning('请完整填写 IP、账号和密码'); testing.value = true; try { const res = await testCameraDeviceConnection({ camera_id: editingCamera.value ? String(editingCamera.value.id) : undefined, ip_address: cameraForm.ip_address, rtsp_port: cameraForm.rtsp_port, username: cameraForm.username, password: cameraForm.password }); if (res.data?.connected) { verifiedKey.value = connectionKey.value; ElMessage.success(`连接成功，已识别为${res.data.brand === 'hikvision' ? '海康' : '大华'}设备`) } else ElMessage.error(res.data?.message || '连接失败') } catch (error) { ElMessage.error(error.response?.data?.detail || '连接失败') } finally { testing.value = false } }
 async function saveCamera() { if (!cameraForm.camera_name || !cameraForm.ip_address || !cameraForm.username) return ElMessage.warning('请填写名称、IP 和账号'); if (!connectionVerified.value) return ElMessage.warning('请先测试连接'); saving.value = true; try { const payload = { ...cameraForm }; if (editingCamera.value && !payload.password) delete payload.password; if (editingCamera.value) await updateCameraDevice(String(editingCamera.value.id), payload); else await createCameraDevice(payload); cameraDialog.value = false; ElMessage.success('摄像头已保存'); await loadCurrent() } catch (error) { ElMessage.error(error.response?.data?.detail || '保存失败') } finally { saving.value = false } }
 async function removeCamera(row) { try { await ElMessageBox.confirm(`确认删除“${row.name}”？`, '删除摄像头', { type: 'warning' }); await deleteCameraDevice(String(row.id)); ElMessage.success('摄像头已删除'); await loadCurrent() } catch (error) { if (error !== 'cancel') ElMessage.error(error.response?.data?.detail || '删除失败') } }
 
@@ -293,6 +311,7 @@ h2 { font-size: 25px; }
 .name-cell, .connection-cell, .status-cell { display: grid; gap: 7px; }
 .name-cell strong { color: #f3f8fd; font-size: 15px; }
 .name-cell small, .muted, .map-panel header span { color: #829bb3; font-size: 12px; }
+.description-cell { display: block; overflow: hidden; color: #cfe1ef; line-height: 1.55; text-overflow: ellipsis; white-space: nowrap; }
 .connection-cell { color: #cfe1ef; line-height: 1.45; }
 .password-line { display: inline-flex; align-items: center; gap: 3px; min-height: 22px; }
 .password-toggle { width: 24px; height: 24px; padding: 0; font-size: 15px; }

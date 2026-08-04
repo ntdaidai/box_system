@@ -191,6 +191,20 @@ export function detectionInZone(detection, zone, imageWidth, imageHeight) {
   )
 }
 
+export function shouldStartLiveStreamOnStatus({
+  mediaAnalysis = false,
+  viewMode = 'single',
+  previousConnected = false,
+  connected = false,
+  canRender = false,
+} = {}) {
+  return !mediaAnalysis
+    && viewMode === 'single'
+    && !previousConnected
+    && Boolean(connected)
+    && Boolean(canRender)
+}
+
 export function findVideoSample(timeline, currentTime) {
   if (!Array.isArray(timeline) || timeline.length === 0) return null
   const target = Math.max(0, Number(currentTime) || 0)

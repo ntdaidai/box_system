@@ -2,7 +2,11 @@ import os
 import tempfile
 import unittest
 import datetime as dt
+import subprocess
+import threading
+import time
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("JWT_SECRET", "test-secret")
 os.environ.setdefault("DEFAULT_ADMIN_PASSWORD", "test-password")
@@ -18,8 +22,15 @@ from app.models.event_library import EventLibrary
 from app.models.data_source import DataSource
 from app.models.safety_integration import SafetyEventInstance, SafetyEventTimelineLog
 from app.models.action_flow import ActionFlow
+from app.models.action_step import ActionStep
+from app.models.safety_integration import EventActionStepConfig
 from app.core.config import settings
-from app.services.broadcast_service import BroadcastAudioFile, BroadcastService
+from app.services.broadcast_service import (
+    BroadcastAudioFile,
+    BroadcastException,
+    BroadcastService,
+    UsbAudioAdapter,
+)
 
 
 class BroadcastServiceTests(unittest.TestCase):
@@ -33,6 +44,7 @@ class BroadcastServiceTests(unittest.TestCase):
 
     def tearDown(self):
         self.db.close()
+        self.engine.dispose()
 
     def add_event(self, instance_no):
         event = self.db.query(EventLibrary).filter(EventLibrary.event_code == "TEST_EVENT").first()
@@ -151,7 +163,6 @@ class BroadcastServiceTests(unittest.TestCase):
             self.db,
             {
                 "event_id": "evt_2",
-                "camera_id": "cam_2",
                 "device_ids": [online.id, offline.id],
                 "custom_text": "测试喊话",
                 "trigger_type": "MANUAL",
@@ -206,6 +217,123 @@ class BroadcastServiceTests(unittest.TestCase):
         self.assertNotIn("template_id", action.payload)
         self.assertNotIn("content", action.payload)
         self.assertNotIn("audio_uri", action.payload)
+
+    def test_one_touch_voice_raises_when_every_device_fails(self):
+        instance = self.add_event("evt_voice_failed")
+        device = BroadcastDevice(
+            id=1,
+            name="离线广播",
+            vendor_type="MOCK",
+            device_code="mock_voice_offline",
+            status="OFFLINE",
+            enabled=True,
+        )
+        self.db.add(device)
+        self.db.flush()
+        camera = self.add_camera(104)
+        self.db.add(CameraBroadcastDevice(id=1, camera_device_id=camera.id, broadcast_device_id=device.id))
+        self.db.commit()
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as handle:
+            handle.write(b"temporary voice")
+            audio_path = handle.name
+
+        with self.assertRaisesRegex(BroadcastException, "喊话播放失败"):
+            self.service.play_recorded_audio(
+                self.db,
+                {
+                    "event_id": instance.instance_no,
+                    "camera_id": str(camera.id),
+                    "trigger_type": "MANUAL",
+                    "operator": "tester",
+                },
+                BroadcastAudioFile(path=audio_path, format="audio/mpeg", uri=audio_path),
+            )
+
+        self.assertFalse(Path(audio_path).exists())
+        action = self.db.query(SafetyEventTimelineLog).filter(
+            SafetyEventTimelineLog.event_instance_id == instance.id
+        ).one()
+        self.assertEqual(action.status, "FAILED")
+
+    def test_usb_audio_retries_when_device_is_temporarily_busy(self):
+        adapter = UsbAudioAdapter()
+        device = BroadcastDevice(
+            id=1,
+            name="USB speaker",
+            vendor_type="USB_AUDIO",
+            device_code="usb_test",
+            status="ONLINE",
+            enabled=True,
+            config_json={"alsa_device": "plughw:2,0"},
+        )
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
+            audio_path = handle.name
+        busy = subprocess.CompletedProcess([], 1, "", "Device or resource busy")
+        played = subprocess.CompletedProcess([], 0, "", "")
+
+        try:
+            with patch(
+                "app.services.broadcast_service.subprocess.run",
+                side_effect=[busy, played],
+            ) as run_mock, patch("app.services.broadcast_service.time.sleep") as sleep_mock:
+                result = adapter.play_file(
+                    device,
+                    BroadcastAudioFile(path=audio_path, format="audio/wav", uri=audio_path),
+                )
+            self.assertTrue(result.success)
+            self.assertEqual(run_mock.call_count, 2)
+            sleep_mock.assert_called_once()
+        finally:
+            Path(audio_path).unlink(missing_ok=True)
+
+    def test_usb_audio_serializes_concurrent_playback(self):
+        adapter = UsbAudioAdapter()
+        device = BroadcastDevice(
+            id=1,
+            name="USB speaker",
+            vendor_type="USB_AUDIO",
+            device_code="usb_serial_test",
+            status="ONLINE",
+            enabled=True,
+            config_json={"alsa_device": "plughw:2,0"},
+        )
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
+            audio_path = handle.name
+        state_lock = threading.Lock()
+        active = 0
+        max_active = 0
+        errors = []
+
+        def fake_run(*args, **kwargs):
+            nonlocal active, max_active
+            with state_lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.03)
+            with state_lock:
+                active -= 1
+            return subprocess.CompletedProcess([], 0, "", "")
+
+        def play():
+            try:
+                adapter.play_file(
+                    device,
+                    BroadcastAudioFile(path=audio_path, format="audio/wav", uri=audio_path),
+                )
+            except Exception as exc:
+                errors.append(exc)
+
+        try:
+            with patch("app.services.broadcast_service.subprocess.run", side_effect=fake_run):
+                threads = [threading.Thread(target=play) for _ in range(2)]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join()
+            self.assertEqual(errors, [])
+            self.assertEqual(max_active, 1)
+        finally:
+            Path(audio_path).unlink(missing_ok=True)
 
     def test_real_device_takes_precedence_over_local_test_device(self):
         local = BroadcastDevice(
@@ -263,6 +391,83 @@ class BroadcastServiceTests(unittest.TestCase):
         self.db.refresh(local)
         self.assertFalse(local.enabled)
         self.assertEqual(local.status, "OFFLINE")
+
+    def test_automatic_broadcast_requires_concrete_step_configuration(self):
+        instance = self.add_event("evt_auto_missing")
+        camera = self.add_camera(105)
+        self.db.commit()
+
+        with self.assertRaisesRegex(BroadcastException, "未配置自动广播动作"):
+            self.service._configured_action_targets(
+                self.db,
+                instance.instance_no,
+                str(camera.id),
+            )
+
+    def test_automatic_broadcast_uses_configured_bound_device_and_template(self):
+        instance = self.add_event("evt_auto_configured")
+        camera = self.add_camera(106)
+        device = BroadcastDevice(
+            id=20,
+            name="Configured speaker",
+            vendor_type="MOCK",
+            device_code="configured_speaker",
+            status="ONLINE",
+            enabled=True,
+        )
+        flow = ActionFlow(id=20, flow_name="Configured flow", flow_code="CONFIGURED_FLOW")
+        step = ActionStep(
+            id=20,
+            flow_id=flow.id,
+            step_order=1,
+            step_name="Configured broadcast",
+            action_type="broadcast",
+        )
+        relation = EventAction(id=20, event_id=instance.current_event_id, flow_id=flow.id, is_activate=True)
+        self.db.add_all([device, flow, step, relation])
+        self.db.flush()
+        self.db.add_all([
+            CameraBroadcastDevice(
+                id=20,
+                camera_device_id=camera.id,
+                broadcast_device_id=device.id,
+            ),
+            EventActionStepConfig(
+                id=20,
+                event_action_id=relation.id,
+                camera_device_id=camera.id,
+                step_id=step.id,
+                broadcast_device_id=device.id,
+                template_id="PERSON_HIGH",
+                enabled=True,
+            ),
+        ])
+        self.db.commit()
+
+        template_id, device_ids = self.service._configured_action_targets(
+            self.db,
+            instance.instance_no,
+            str(camera.id),
+        )
+
+        self.assertEqual(template_id, "PERSON_HIGH")
+        self.assertEqual(device_ids, [device.id])
+
+    def test_explicit_device_must_be_bound_to_camera(self):
+        camera = self.add_camera(107)
+        device = BroadcastDevice(
+            id=21,
+            name="Unbound speaker",
+            vendor_type="MOCK",
+            device_code="unbound_speaker",
+            status="ONLINE",
+            enabled=True,
+        )
+        self.db.add(device)
+        self.db.commit()
+
+        with self.assertRaisesRegex(BroadcastException, "未绑定"):
+            self.service._resolve_devices(self.db, str(camera.id), [device.id])
 
 
 if __name__ == "__main__":

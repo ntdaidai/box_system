@@ -47,13 +47,14 @@ def set_main_event_loop(loop: asyncio.AbstractEventLoop):
 class ECAEngine:
     """ECA触发引擎
 
-    数据源与传感器的映射关系：
+    物理传感器数据源与采集器的映射关系：
     - source_id=1 → temp_humidity (温湿度传感器)
     - source_id=2 → wind (风速风向传感器)
     - source_id=3 → rain (雨量计)
     - source_id=4 → vibration (振动传感器)
-    - source_id=5 → camera (摄像头)
-    - source_id=6 → vision (AI视觉检测)
+
+    摄像头检测由 SafetyEventEngine 按 track_id 处理，不进入本引擎的
+    传感器快照与定时扫描链路。
     """
 
     # 数据源ID → 传感器名称映射
@@ -62,8 +63,6 @@ class ECAEngine:
         2: "wind",
         3: "rain",
         4: "vibration",
-        5: "camera",
-        6: "vision",  # AI视觉检测结果
     }
 
     # 数据源ID → 主要变量名映射
@@ -73,8 +72,6 @@ class ECAEngine:
         2: "wind_speed_ms",    # wind.read_once() → {"wind_speed_ms": 26.8, "wind_level": 10, ...}
         3: "hour_rain",        # rain.read_once() → {"hour_rain": 52.0, "today_rain": 120.5, ...}
         4: "加速度X",           # vibration.read_once() → {"加速度X": 0.6, "位移X": 0.5, ...}
-        5: "crack_width",      # 摄像头AI检测结果
-        6: "crack_detected",   # AI视觉检测：裂缝检测结果 (1=检测到, 0=未检测到)
     }
 
     # GPU 资源阈值配置
@@ -430,16 +427,15 @@ class ECAEngine:
 
     def build_sensor_snapshot(self, source_ids: List[int] = None) -> Dict[str, Any]:
         """
-        构建传感器数据快照（包括物理传感器和视觉检测结果）
+        构建物理传感器数据快照
 
         Args:
             source_ids: 数据源ID列表，如果为None则获取所有
 
         Returns:
-            传感器数据字典，如 {"wind_speed_ms": 26.8, "crack_detected": 1}
+            传感器数据字典，如 {"wind_speed_ms": 26.8}
         """
         from app.services.sensor_collector import sensor_collector
-        from app.services.vision_detector import vision_detector
 
         snapshot = {}
 
@@ -451,13 +447,6 @@ class ECAEngine:
             if not sensor_name:
                 continue
 
-            # 视觉检测数据源（source_id=6）
-            if source_id == 6:
-                vision_snapshot = vision_detector.get_detection_snapshot()
-                snapshot.update(vision_snapshot)
-                continue
-
-            # 物理传感器数据源
             latest = sensor_collector.get_latest_data(sensor_name)
             if latest and "data" in latest:
                 # 将传感器数据合并到快照
@@ -860,7 +849,15 @@ class ECAEngine:
         for step in steps:
             try:
                 # 执行步骤
-                step_result = await self.execute_step(step, sensor_data, db, alarm_type, device_id, step_context)
+                step_result = await self.execute_step(
+                    step,
+                    sensor_data,
+                    db,
+                    alarm_type,
+                    device_id,
+                    step_context,
+                    event,
+                )
                 results.append({
                     "step_id": step.id,
                     "step_name": step.step_name,
@@ -939,7 +936,8 @@ class ECAEngine:
         db: Session,
         alarm_type: str = "threshold",
         device_id: int = None,
-        step_context: Dict = None
+        step_context: Dict = None,
+        event: EventLibrary = None,
     ) -> Any:
         """
         执行单个步骤
@@ -951,6 +949,7 @@ class ECAEngine:
             alarm_type: 告警类型 ("threshold" / "ai" / "manual")
             device_id: 关联设备ID
             step_context: 步骤结果上下文（用于步骤间传递数据）
+            event: 当前触发的事件定义
 
         Returns:
             Any: 执行结果
@@ -958,7 +957,14 @@ class ECAEngine:
         if step.action_type == "llm":
             return await self.execute_llm_step(step, sensor_data, db)
         elif step.action_type == "alert":
-            return await self.execute_alert_step(step, sensor_data, alarm_type, device_id, step_context)
+            return await self.execute_alert_step(
+                step,
+                sensor_data,
+                alarm_type,
+                device_id,
+                step_context,
+                event,
+            )
         elif step.action_type == "script":
             return await self.execute_script_step(step, sensor_data)
         elif step.action_type == "http":
@@ -1169,7 +1175,8 @@ class ECAEngine:
         sensor_data: Dict[str, Any],
         alarm_type: str = "threshold",
         device_id: int = None,
-        step_context: Dict = None
+        step_context: Dict = None,
+        event: EventLibrary = None,
     ) -> Dict[str, Any]:
         """执行告警步骤（写入 alarm 表，前端可展示）
 
@@ -1179,6 +1186,7 @@ class ECAEngine:
             alarm_type: 告警类型 ("threshold" / "ai" / "manual")
             device_id: 关联设备ID
             step_context: 步骤结果上下文（用于引用前面步骤的结果）
+            event: 当前触发的事件定义，用于持久化可靠的事件关联
 
         模板变量：
         - {变量名}: 从 sensor_data 中替换
@@ -1222,8 +1230,13 @@ class ECAEngine:
         # 写入 alarm 表（使用独立会话）
         db = SessionLocal()
         try:
+            alarm_code = (
+                f"ECA_EVT_{event.id}_{step.id}_{int(datetime.now().timestamp())}"
+                if event
+                else f"ECA_{step.id}_{int(datetime.now().timestamp())}"
+            )
             alarm = Alarm(
-                alarm_code=f"ECA_{step.id}_{int(datetime.now().timestamp())}",
+                alarm_code=alarm_code,
                 device_id=device_id,
                 alarm_type=alarm_type,
                 alarm_level=level,
@@ -1413,83 +1426,6 @@ class ECAEngine:
         finally:
             db.close()
 
-    async def on_vision_detection_updated(
-        self,
-        camera_id: str,
-        detection_type: str,
-        result: Dict[str, Any]
-    ):
-        """Schedule blocking legacy visual ECA evaluation outside the HTTP event loop."""
-        await asyncio.to_thread(
-            self._process_vision_detection_updated,
-            camera_id,
-            detection_type,
-            result,
-        )
-
-    def _process_vision_detection_updated(
-        self,
-        camera_id: str,
-        detection_type: str,
-        result: Dict[str, Any]
-    ):
-        """
-        视觉检测结果更新回调（实时触发入口）
-
-        当摄像头AI检测到异常时，VisionDetector 会调用此方法。
-        检查涉及视觉数据源的事件（主要是多源触发事件）。
-
-        Args:
-            camera_id: 摄像头ID
-            detection_type: 检测类型 (crack/seepage/slope_damage/gate_deform)
-            result: 检测结果 {"detected": True, "confidence": 0.95, ...}
-        """
-        db = SessionLocal()
-        try:
-            # 只有检测到异常时才检查事件
-            if not result.get("detected"):
-                return
-
-            logger.info(
-                f"[视觉检测] 摄像头: {camera_id}, 类型: {detection_type}, "
-                f"置信度: {result.get('confidence', 0):.2f}"
-            )
-
-            # 1. 找到视觉数据源的所有事件
-            vision_source_id = 6  # vision数据源ID
-            events = self._get_events_by_source(vision_source_id, db)
-            if not events:
-                return
-
-            # 2. 构建完整的传感器数据快照（包含物理传感器+视觉检测）
-            sensor_data = self.build_sensor_snapshot()
-
-            # 3. 检查每个事件的条件
-            for event in events:
-                try:
-                    conditions_met = self.check_event_conditions(
-                        event.id, sensor_data, db
-                    )
-                    event_instance = None
-                    if conditions_met:
-                        event_instance = self.trigger_event(event.id, sensor_data, db)
-                        if event_instance:
-                            logger.info(
-                                f"[视觉触发] 事件: {event.event_name} "
-                                f"(风险等级: {event.risk_level}, "
-                                f"检测类型: {detection_type})"
-                            )
-                    unified_sensor_event_service.observe(
-                        db, event, sensor_data, conditions_met, vision_source_id
-                    )
-                except Exception as e:
-                    logger.error(f"检查事件 {event.event_name} 失败: {e}")
-
-        except Exception as e:
-            logger.error(f"视觉检测触发处理异常: {e}")
-        finally:
-            db.close()
-
     def _get_source_id_by_sensor(self, sensor_name: str) -> Optional[int]:
         """
         根据传感器名称获取数据源ID
@@ -1546,6 +1482,23 @@ class ECAEngine:
 
         return events
 
+    def _get_enabled_sensor_events(self, db: Session) -> List[EventLibrary]:
+        """Return enabled events backed by active physical-sensor conditions."""
+        return (
+            db.query(EventLibrary)
+            .join(EventCondition, EventCondition.event_id == EventLibrary.id)
+            .join(ConditionLibrary, ConditionLibrary.id == EventCondition.condition_id)
+            .join(DataSource, DataSource.id == ConditionLibrary.source_id)
+            .filter(
+                EventLibrary.is_activate.is_(True),
+                ConditionLibrary.is_activate.is_(True),
+                DataSource.is_activate.is_(True),
+                DataSource.source_type == "sensor",
+            )
+            .distinct()
+            .all()
+        )
+
     async def check_all_events(self, db: Session = None) -> List[Dict[str, Any]]:
         """
         检查所有启用的事件，评估条件并触发满足的事件
@@ -1573,10 +1526,8 @@ class ECAEngine:
                 logger.debug("无传感器数据，跳过事件检查")
                 return []
 
-            # 2. 获取所有启用的事件
-            events = db.query(EventLibrary).filter(
-                EventLibrary.is_activate == True
-            ).all()
+            # 2. 摄像头事件由统一安全事件引擎处理，本轮只检查传感器事件
+            events = self._get_enabled_sensor_events(db)
 
             # 3. 逐个检查事件条件
             for event in events:

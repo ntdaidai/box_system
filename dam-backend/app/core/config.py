@@ -152,6 +152,22 @@ class Settings:
 
     CAMERA_DETECTION_FPS: float = float(_get_env("CAMERA_DETECTION_FPS", "5"))
     CAMERA_JPEG_QUALITY: int = int(_get_env("CAMERA_JPEG_QUALITY", "80"))
+    MINIPROGRAM_LIVE_ENABLED: bool = _get_env(
+        "MINIPROGRAM_LIVE_ENABLED", "true"
+    ).lower() == "true"
+    MINIPROGRAM_LIVE_USE_SUBSTREAM: bool = _get_env(
+        "MINIPROGRAM_LIVE_USE_SUBSTREAM", "true"
+    ).lower() == "true"
+    MINIPROGRAM_LIVE_PUBLISH_BASE_URL: str = _get_env(
+        "MINIPROGRAM_LIVE_PUBLISH_BASE_URL", "rtmp://127.0.0.1:1936"
+    ).rstrip("/")
+    MINIPROGRAM_LIVE_PUBLIC_BASE_URL: str = _get_env(
+        "MINIPROGRAM_LIVE_PUBLIC_BASE_URL", f"rtmp://{PUBLIC_HOST}:1936"
+    ).rstrip("/")
+    MINIPROGRAM_LIVE_STARTUP_GRACE_SECONDS: float = float(
+        _get_env("MINIPROGRAM_LIVE_STARTUP_GRACE_SECONDS", "2.0")
+    )
+    FFMPEG_BIN: str = _get_env("FFMPEG_BIN", "ffmpeg")
     CAMERA_WEB_PROXY_BIND_HOST: str = _get_env("CAMERA_WEB_PROXY_BIND_HOST", "0.0.0.0")
     CAMERA_WEB_PROXY_PUBLIC_HOST: str = _get_env("CAMERA_WEB_PROXY_PUBLIC_HOST", PUBLIC_HOST)
     CAMERA_WEB_PROXY_PORT_START: int = int(_get_env("CAMERA_WEB_PROXY_PORT_START", "12345"))
@@ -159,11 +175,6 @@ class Settings:
     CAMERA_WEB_PROXY_TIMEOUT_SECONDS: float = float(
         _get_env("CAMERA_WEB_PROXY_TIMEOUT_SECONDS", "15")
     )
-    CAMERA_ZONE_STORE_PATH: str = _get_env(
-        "CAMERA_ZONE_STORE_PATH",
-        os.path.join(BASE_DIR, "data", "camera_zones.json"),
-    )
-    CAMERA_ZONE_STORE_BACKEND: str = _get_env("CAMERA_ZONE_STORE_BACKEND", "mysql")
     SAFETY_EVENT_INTRUSION_SECONDS: float = float(
         _get_env("SAFETY_EVENT_INTRUSION_SECONDS", "10")
     )
@@ -185,11 +196,6 @@ class Settings:
     SAFETY_EVENT_TRACK_MEMORY_SECONDS: float = float(
         _get_env("SAFETY_EVENT_TRACK_MEMORY_SECONDS", "20")
     )
-    SAFETY_EVENT_STATE_STORE_PATH: str = _get_env(
-        "SAFETY_EVENT_STATE_STORE_PATH",
-        os.path.join(BASE_DIR, "data", "safety_events_state.json"),
-    )
-    SAFETY_EVENT_STORE_BACKEND: str = _get_env("SAFETY_EVENT_STORE_BACKEND", "mysql")
     SAFETY_EVENT_SNAPSHOT_DIR: str = _get_env(
         "SAFETY_EVENT_SNAPSHOT_DIR",
         os.path.join(BASE_DIR, "data", "safety_snapshots"),
@@ -250,6 +256,12 @@ class Settings:
     )
     BROADCAST_AUDIO_PLAY_TIMEOUT_SECONDS: int = int(
         _get_env("BROADCAST_AUDIO_PLAY_TIMEOUT_SECONDS", "90")
+    )
+    BROADCAST_AUDIO_BUSY_RETRIES: int = int(
+        _get_env("BROADCAST_AUDIO_BUSY_RETRIES", "5")
+    )
+    BROADCAST_AUDIO_BUSY_RETRY_SECONDS: float = float(
+        _get_env("BROADCAST_AUDIO_BUSY_RETRY_SECONDS", "1")
     )
     BROADCAST_AUTO_COOLDOWN_SECONDS: int = int(
         _get_env("BROADCAST_AUTO_COOLDOWN_SECONDS", "60")

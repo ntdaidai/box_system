@@ -171,8 +171,8 @@ def get_integration_config(
                 "step_name": steps.get(config.step_id).step_name,
                 "action_type": steps.get(config.step_id).action_type,
                 "action_label": ACTION_LABELS.get(steps.get(config.step_id).action_type, steps.get(config.step_id).step_name),
-                "camera_id": config.camera_id,
-                "camera_name": cameras.get(config.camera_id).camera_name if cameras.get(config.camera_id) else "全部摄像头",
+                "camera_device_id": config.camera_device_id,
+                "camera_name": cameras.get(config.camera_device_id).camera_name if cameras.get(config.camera_device_id) else "全部摄像头",
                 "broadcast_device_id": config.broadcast_device_id,
                 "broadcast_device_name": devices.get(config.broadcast_device_id).name if devices.get(config.broadcast_device_id) else None,
                 "template_id": config.template_id,
@@ -240,6 +240,9 @@ def update_action_config(
     if not row:
         raise HTTPException(status_code=404, detail="动作配置不存在")
     data = payload.model_dump(exclude_unset=True)
+    step = db.query(ActionStep).filter(ActionStep.id == row.step_id).first()
+    if not step:
+        raise HTTPException(status_code=409, detail="动作步骤不存在")
     if data.get("broadcast_device_id") is not None:
         device = db.query(BroadcastDevice).filter(
             BroadcastDevice.id == data["broadcast_device_id"],
@@ -247,8 +250,8 @@ def update_action_config(
         ).first()
         if not device:
             raise HTTPException(status_code=400, detail="广播设备不存在或未启用")
-        if row.camera_id and not db.query(CameraBroadcastDevice.id).filter(
-            CameraBroadcastDevice.camera_device_id == row.camera_id,
+        if row.camera_device_id and not db.query(CameraBroadcastDevice.id).filter(
+            CameraBroadcastDevice.camera_device_id == row.camera_device_id,
             CameraBroadcastDevice.broadcast_device_id == device.id,
         ).first():
             raise HTTPException(status_code=400, detail="该广播设备尚未绑定当前摄像头")
@@ -260,6 +263,13 @@ def update_action_config(
     for field in ("enabled", "broadcast_device_id", "template_id", "drone_id", "route_id"):
         if field in data:
             setattr(row, field, data[field])
+    will_be_enabled = data.get("enabled", row.enabled)
+    if will_be_enabled and step.action_type == "broadcast":
+        if not row.broadcast_device_id or not row.template_id:
+            raise HTTPException(status_code=400, detail="自动广播必须配置广播设备和模板")
+    if will_be_enabled and step.action_type == "drone_dispatch":
+        if not row.drone_id or not row.route_id:
+            raise HTTPException(status_code=400, detail="无人机派飞必须配置无人机和航线")
     config = dict(row.config_json or {})
     for field in ("repeat_interval_seconds", "max_executions"):
         if field in data:

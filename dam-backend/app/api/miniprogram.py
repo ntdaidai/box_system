@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import json
 import uuid
@@ -23,6 +24,7 @@ from app.models.safety_event_task import SafetyEventTask
 from app.models.safety_integration import SafetyEventEvidence, SafetyEventInstance, SafetyEventTimelineLog
 from app.services.broadcast_service import BroadcastException, broadcast_service
 from app.services.camera_stream import camera_manager
+from app.services.camera_live_relay import camera_live_relay_manager
 from app.services.minio_service import minio_service
 from app.services.safety_event_engine import (
     DISPOSAL_AUTO_HANDLING,
@@ -42,7 +44,6 @@ from app.services.safety_event_operation_service import (
     timeline_dict as _timeline_to_dict,
 )
 from app.services.safety_event_ws import safety_event_ws_manager
-from app.services.stream_ticket import stream_ticket_store
 from app.services.wechat_subscription_service import (
     WeChatSubscriptionError,
     wechat_subscription_service,
@@ -188,19 +189,19 @@ def _mini_event(db: Session, event: SafetyEventInstance, camera: Optional[Camera
     }
 
 
-def _mini_camera(row: Optional[Camera], camera_id: str, status: Optional[dict] = None) -> dict:
+def _mini_camera(row: Camera, status: Optional[dict] = None) -> dict:
     status = status or {}
-    camera_name = getattr(row, "camera_name", None) or status.get("name") or camera_id
+    camera_name = row.camera_name or status.get("name") or str(row.id)
     install_address = getattr(row, "install_address", None)
     latitude = getattr(row, "latitude", None)
     longitude = getattr(row, "longitude", None)
     return {
-        "camera_id": camera_id,
+        "id": row.id,
         "camera_name": camera_name,
         "name": camera_name,
         "enabled": bool(getattr(row, "enabled", True)),
         "brand": getattr(row, "brand", None),
-        "online": bool(status.get("running") or status.get("online") or status.get("connected")),
+        "online": bool(status.get("connected") or status.get("online")),
         "running": bool(status.get("running")),
         "last_error": getattr(row, "last_error", None) or status.get("last_error"),
         "install_address": install_address,
@@ -329,7 +330,7 @@ async def list_cameras():
         cameras = []
         for row in rows:
             camera_id = str(row.id)
-            item = _mini_camera(row, camera_id, statuses.get(camera_id))
+            item = _mini_camera(row, statuses.get(camera_id))
             devices = broadcast_service.list_devices_for_camera(db, camera_id)
             item["broadcast_devices"] = devices
             item["broadcast_device_count"] = len(devices)
@@ -357,25 +358,24 @@ async def get_camera_snapshot(camera_id: str):
     )
 
 
-@router.get("/cameras/{camera_id}/video", response_model=MiniResponse, summary="小程序摄像头实时视频适配")
+@router.get("/cameras/{camera_id}/video", response_model=MiniResponse, summary="小程序摄像头实时视频")
 async def get_camera_video(camera_id: str):
-    ticket, expires_at = stream_ticket_store.issue(camera_id, False)
-    stream_path = f"/api/v1/camera/stream/{camera_id}?ticket={ticket}"
+    camera = camera_manager.get_camera(camera_id)
+    if not camera:
+        raise HTTPException(status_code=404, detail="摄像头不存在")
+    if not camera.running:
+        camera.start()
+    try:
+        relay = await asyncio.to_thread(
+            camera_live_relay_manager.ensure, camera_id, camera.source
+        )
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return MiniResponse(data={
-        "camera_id": camera_id,
-        "mode": "mjpeg_ticket_adapter",
-        "stream_url": stream_path,
+        "camera_device_id": int(camera_id),
+        "mode": "rtmp_live_player",
+        "stream_url": relay["stream_url"],
         "snapshot_url": f"/api/miniprogram/v1/cameras/{camera_id}/snapshot.jpg",
-        "expires_at": expires_at,
-        "compatibility": {
-            "pc_webrtc_available": True,
-            "miniprogram_direct_webrtc": False,
-            "adapter": "小程序V1使用点位实时快照预览与短时 MJPEG 票据作为兼容视频层",
-        },
-        "webrtc_signaling": {
-            "ice": f"/api/v1/camera/{camera_id}/webrtc/ice",
-            "session": f"/api/v1/camera/{camera_id}/webrtc/session",
-        },
     })
 
 
@@ -493,30 +493,29 @@ async def get_event_detail(event_id: str):
         db.close()
 
 
-@router.get("/events/{event_id}/video", response_model=MiniResponse, summary="小程序实时视频适配")
+@router.get("/events/{event_id}/video", response_model=MiniResponse, summary="小程序事件实时视频")
 async def get_event_video(event_id: str):
     db = SessionLocal()
     try:
         event = _get_event_or_404(db, event_id)
         event_data = safety_event_runtime_service.event_dict(db, event)
-        camera_id = event_data.get("camera_id")
-        ticket, expires_at = stream_ticket_store.issue(camera_id, False)
-        stream_path = f"/api/v1/camera/stream/{camera_id}?ticket={ticket}"
+        camera_id = str(event_data.get("camera_id") or "")
+        camera = camera_manager.get_camera(camera_id)
+        if not camera:
+            raise HTTPException(status_code=404, detail="摄像头不存在")
+        if not camera.running:
+            camera.start()
+        try:
+            relay = await asyncio.to_thread(
+                camera_live_relay_manager.ensure, camera_id, camera.source
+            )
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         return MiniResponse(data={
-            "camera_id": camera_id,
-            "mode": "mjpeg_ticket_adapter",
-            "stream_url": stream_path,
+            "camera_device_id": int(camera_id),
+            "mode": "rtmp_live_player",
+            "stream_url": relay["stream_url"],
             "snapshot_url": f"/api/miniprogram/v1/events/{event_id}/snapshot.jpg",
-            "expires_at": expires_at,
-            "compatibility": {
-                "pc_webrtc_available": True,
-                "miniprogram_direct_webrtc": False,
-                "adapter": "小程序V1使用实时快照预览与短时 MJPEG 票据作为兼容视频层，PC WebRTC 链路保持不变",
-            },
-            "webrtc_signaling": {
-                "ice": f"/api/v1/camera/{camera_id}/webrtc/ice",
-                "session": f"/api/v1/camera/{camera_id}/webrtc/session",
-            },
         })
     finally:
         db.close()

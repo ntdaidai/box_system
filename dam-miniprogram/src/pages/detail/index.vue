@@ -29,7 +29,21 @@
     <view class="section">
       <view class="section-title">实时视频</view>
       <view class="video-box">
-        <image v-if="snapshotUrl" class="video-frame" :src="snapshotUrl" mode="aspectFit" />
+        <live-player
+          v-if="streamUrl && !liveFallback"
+          :key="livePlayerKey"
+          class="video-frame"
+          :src="streamUrl"
+          mode="live"
+          autoplay
+          muted
+          object-fit="contain"
+          :min-cache="0.5"
+          :max-cache="1.5"
+          @statechange="handleLiveStateChange"
+          @error="handleLiveError"
+        />
+        <image v-else-if="snapshotUrl" class="video-frame" :src="snapshotUrl" mode="aspectFit" />
         <view v-else class="video-empty">正在建立视频链路</view>
       </view>
       <view class="video-footer">
@@ -129,7 +143,9 @@ export default {
       durationText: '--',
       snapshotUrl: '',
       streamUrl: '',
-      videoText: 'V1兼容预览，PC端WebRTC链路不受影响',
+      liveFallback: false,
+      livePlayerKey: 0,
+      videoText: '正在连接实时视频',
       broadcasting: false,
       recordingBroadcast: false,
       broadcastRecorder: null,
@@ -204,18 +220,45 @@ export default {
       return request({ url: `/events/${encodeURIComponent(this.eventId)}/video` })
         .then((data) => {
           this.snapshotUrl = `${absoluteUrl(data.snapshot_url)}?t=${Date.now()}`
-          this.streamUrl = absoluteUrl(data.stream_url)
-          this.videoText = data.compatibility?.adapter || 'V1兼容预览，PC端WebRTC链路不受影响'
+          this.streamUrl = data.stream_url || ''
+          this.liveFallback = !this.streamUrl
+          this.livePlayerKey += 1
+          this.videoText = this.streamUrl ? '正在连接实时视频流' : '实时快照模式'
         })
         .catch(() => {
           this.snapshotUrl = ''
           this.streamUrl = ''
+          this.liveFallback = true
           this.videoText = '当前摄像头暂未返回实时画面'
         })
     },
 
     refreshSnapshot() {
       this.loadVideo()
+    },
+
+    handleLiveStateChange(event) {
+      const code = Number(event?.detail?.code || 0)
+      if (code === 2004) {
+        this.liveFallback = false
+        this.videoText = '实时视频已连接'
+      } else if (code === 2103) {
+        this.videoText = '实时视频正在重连'
+      } else if (code < 0) {
+        this.enableSnapshotFallback('实时视频中断，已切换快照预览')
+      }
+    },
+
+    handleLiveError() {
+      this.enableSnapshotFallback('实时视频播放失败，已切换快照预览')
+    },
+
+    enableSnapshotFallback(message) {
+      this.liveFallback = true
+      this.videoText = message
+      if (this.eventId) {
+        this.snapshotUrl = `${absoluteUrl(`/api/miniprogram/v1/events/${encodeURIComponent(this.eventId)}/snapshot.jpg`)}?t=${Date.now()}`
+      }
     },
 
     connectEventSocket() {
@@ -258,8 +301,11 @@ export default {
         this.recordingBroadcast = false
         this.broadcasting = true
         uploadBroadcastAudio({ filePath: tempFilePath, eventId: this.eventId })
-          .then(() => {
-            uni.showToast({ title: '喊话已播放', icon: 'success' })
+          .then((result) => {
+            uni.showToast({
+              title: result.result === 'PARTIAL_SUCCESS' ? '部分设备播放成功' : '喊话已播放',
+              icon: result.result === 'PARTIAL_SUCCESS' ? 'none' : 'success'
+            })
             this.loadDetail()
           })
           .catch((error) => uni.showToast({ title: error.message, icon: 'none' }))

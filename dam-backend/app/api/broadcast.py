@@ -203,6 +203,19 @@ async def bind_camera_devices(camera_id: str, payload: CameraBindingPayload, db:
     valid_ids = {row.id for row in db.query(BroadcastDevice).filter(BroadcastDevice.id.in_(payload.device_ids)).all()} if payload.device_ids else set()
     if len(valid_ids) != len(set(payload.device_ids)):
         raise HTTPException(status_code=422, detail="包含不存在的广播设备")
+    configured_ids = {
+        value for (value,) in db.query(EventActionStepConfig.broadcast_device_id).filter(
+            EventActionStepConfig.camera_device_id == camera.id,
+            EventActionStepConfig.enabled.is_(True),
+            EventActionStepConfig.broadcast_device_id.isnot(None),
+        ).all()
+    }
+    removed_configured_ids = configured_ids - valid_ids
+    if removed_configured_ids:
+        raise HTTPException(
+            status_code=409,
+            detail="广播设备仍被启用的动作配置使用，请先修改动作配置",
+        )
     db.query(CameraBroadcastDevice).filter(
         CameraBroadcastDevice.camera_device_id == camera.id
     ).delete(synchronize_session=False)

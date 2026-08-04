@@ -15,13 +15,13 @@
       <view v-if="cameras.length === 0" class="empty">暂无可导航点位</view>
       <view
         v-for="item in cameras"
-        :key="item.camera_id"
+        :key="item.id"
         class="camera-item"
-        :class="{ active: item.camera_id === selectedCameraId }"
+        :class="{ active: String(item.id) === selectedCameraId }"
         @tap="openLocation(item)"
       >
         <view>
-          <text>{{ item.camera_name || item.camera_id }}</text>
+          <text>{{ item.camera_name || item.id }}</text>
           <text>{{ item.install_address || '未填写安装地址' }}</text>
         </view>
         <button class="ghost-btn mini-btn" @tap.stop="openLocation(item)">导航</button>
@@ -51,18 +51,18 @@ export default {
     markers() {
       return this.cameras.map((item, index) => ({
         id: index + 1,
-        camera_id: item.camera_id,
+        camera_device_id: item.id,
         latitude: Number(item.latitude),
         longitude: Number(item.longitude),
-        title: item.camera_name || item.camera_id,
+        title: item.camera_name || item.id,
         callout: {
-          content: item.camera_name || item.camera_id,
+          content: item.camera_name || item.id,
           color: '#172026',
           fontSize: 13,
           borderRadius: 6,
           bgColor: '#ffffff',
           padding: 6,
-          display: item.camera_id === this.selectedCameraId ? 'ALWAYS' : 'BYCLICK'
+          display: String(item.id) === this.selectedCameraId ? 'ALWAYS' : 'BYCLICK'
         }
       }))
     }
@@ -99,9 +99,9 @@ export default {
           latitude: Number(item.latitude),
           longitude: Number(item.longitude)
         }))
-      const selected = this.cameras.find((item) => item.camera_id === this.selectedCameraId) || this.cameras[0]
+      const selected = this.cameras.find((item) => String(item.id) === this.selectedCameraId) || this.cameras[0]
       if (selected) {
-        this.selectedCameraId = selected.camera_id
+        this.selectedCameraId = String(selected.id)
         this.centerLatitude = selected.latitude
         this.centerLongitude = selected.longitude
       }
@@ -110,9 +110,9 @@ export default {
     handleMarkerTap(event) {
       const markerId = Number(event.detail.markerId)
       const marker = this.markers.find((item) => item.id === markerId)
-      const camera = marker && this.cameras.find((item) => item.camera_id === marker.camera_id)
+      const camera = marker && this.cameras.find((item) => item.id === marker.camera_device_id)
       if (camera) {
-        this.selectedCameraId = camera.camera_id
+        this.selectedCameraId = String(camera.id)
         this.centerLatitude = camera.latitude
         this.centerLongitude = camera.longitude
         this.openLocation(camera)
@@ -129,7 +129,7 @@ export default {
       uni.openLocation({
         latitude,
         longitude,
-        name: camera.camera_name || camera.camera_id,
+        name: camera.camera_name || camera.id,
         address: camera.install_address || camera.description || '',
         scale: 18
       })

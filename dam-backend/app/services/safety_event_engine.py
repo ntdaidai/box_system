@@ -954,7 +954,7 @@ class SafetyEventEngine:
                             .join(ActionStep, ActionStep.id == EventActionStepConfig.step_id)
                             .filter(
                                 EventAction.event_id == definition.id,
-                                EventActionStepConfig.camera_id == camera.id,
+                                EventActionStepConfig.camera_device_id == camera.id,
                                 ActionStep.action_type == "broadcast",
                                 EventActionStepConfig.enabled.is_(True),
                             )
@@ -1266,7 +1266,6 @@ def _config_from_settings() -> SafetyEventConfig:
         video_retention_days=settings.SAFETY_EVENT_VIDEO_RETENTION_DAYS,
         video_max_per_camera_per_day=settings.SAFETY_EVENT_VIDEO_MAX_PER_CAMERA_PER_DAY,
         video_max_local_gb=settings.SAFETY_EVENT_VIDEO_MAX_LOCAL_GB,
-        state_store_path=settings.SAFETY_EVENT_STATE_STORE_PATH,
     )
 
 
@@ -1278,25 +1277,10 @@ def get_safety_event_engine() -> SafetyEventEngine:
     global _safety_event_engine
     if _safety_event_engine is None:
         config = _config_from_settings()
-        from app.core.config import settings
+        from app.services.safety_event_sql_store import SqlSafetyEventStore
 
-        if settings.SAFETY_EVENT_STORE_BACKEND.lower() == "mysql":
-            from app.services.safety_event_sql_store import SqlSafetyEventStore
-
-            store = SqlSafetyEventStore()
-        else:
-            store = JsonSafetyEventStore(config.state_store_path)
-        try:
-            _safety_event_engine = SafetyEventEngine(config, store, safety_event_bus)
-        except Exception as exc:
-            if store.__class__.__name__ == "JsonSafetyEventStore":
-                raise
-            logger.warning(f"SQL safety event store unavailable, using local fallback: {exc}")
-            _safety_event_engine = SafetyEventEngine(
-                config,
-                JsonSafetyEventStore(config.state_store_path),
-                safety_event_bus,
-            )
+        store = SqlSafetyEventStore()
+        _safety_event_engine = SafetyEventEngine(config, store, safety_event_bus)
     return _safety_event_engine
 
 

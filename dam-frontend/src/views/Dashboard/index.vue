@@ -248,6 +248,7 @@
             <span class="sort-icon">{{ sortIcon('level') }}</span>{{ sortText('level') }}
           </span>
         </div>
+        <div class="col-event">事件名称</div>
         <div class="col-content">告警内容</div>
         <div class="col-status sortable" @click="toggleSort('status')">
           状态
@@ -271,6 +272,7 @@
               {{ alarmLevelText(row.alarm_level) }}
             </span>
           </div>
+          <div class="col-event"><strong :title="row.event_name || '系统告警'">{{ row.event_name || '系统告警' }}</strong></div>
           <div class="col-content">
             <span class="report-link" @click="router.push({ path: '/alarm/list', query: { report: row.id } })">查看分析报告</span>
           </div>
@@ -1523,6 +1525,23 @@ onUnmounted(() => {
 .col-level {
   flex: 1;
   text-align: center;
+}
+
+.alarm-recent-row .col-event {
+  flex: 1.2;
+  min-width: 130px;
+  padding: 0 10px;
+  text-align: center;
+}
+
+.alarm-recent-row .col-event strong {
+  display: block;
+  overflow: hidden;
+  color: #eef8ff;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sortable {

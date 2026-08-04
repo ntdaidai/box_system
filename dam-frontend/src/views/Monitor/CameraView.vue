@@ -564,19 +564,19 @@
         </section>
 
         <aside v-else class="risk-panel risk-overview-panel">
-          <header class="risk-overview-header">
-            <div>
-              <span class="section-kicker">当前风险事件</span>
-              <h2>{{ activeRiskEvents.length ? `${activeRiskEvents.length} 起待处置` : '运行正常' }}</h2>
+          <header class="risk-status-bar" :class="riskThemeClass(overallRiskLevel)">
+            <div class="risk-status-main">
+              <span>当前风险</span>
+              <strong>{{ activeRiskEvents.length ? `${activeRiskEvents.length} 起待处置` : '运行正常' }}</strong>
             </div>
-            <b :class="riskThemeClass(overallRiskLevel)">{{ overallRiskText }}</b>
+            <b>{{ overallRiskText }}</b>
           </header>
 
-          <section class="risk-metric-strip">
+          <section class="risk-summary-strip">
             <article
-              v-for="item in diagnosticItems"
+              v-for="item in riskSummaryItems"
               :key="item.label"
-              class="risk-metric"
+              class="risk-summary-item"
               :class="item.tone"
             >
               <span>{{ item.label }}</span>
@@ -585,7 +585,7 @@
             </article>
           </section>
 
-          <section class="risk-recent-line">
+          <section class="risk-latest-target">
             <span>最近目标</span>
             <strong>{{ latestDetectionClasses }}</strong>
             <em>{{ latestDetectionTimeText }}</em>
@@ -625,10 +625,10 @@
             </article>
           </div>
 
-          <div v-else class="risk-quiet-state">
+          <div v-else class="risk-quiet-line">
             <el-icon><Monitor /></el-icon>
-            <strong>当前运行正常，暂无安全风险事件</strong>
-            <span>系统正在持续监测人员停留、区域命中和船只靠近等风险。</span>
+            <span>暂无安全风险事件</span>
+            <strong>持续监测人员停留、区域命中和船只靠近</strong>
           </div>
         </aside>
       </main>
@@ -1195,7 +1195,7 @@ import {
   classColor as getClassColor, confidencePercent, detectionName,
   detectionInZone, findVideoSample, formatDeviceCommTime, isValidDetection,
   normalizeClassifications, normalizeDetections, normalizeZones, primaryClassification,
-  defaultTriggerSeconds, zoneTypeLabel,
+  defaultTriggerSeconds, shouldStartLiveStreamOnStatus, zoneTypeLabel,
 } from '@/utils/cameraDetectionView'
 import { operateUnifiedSafetyEvent } from '@/api/integration'
 import { camerasFromPayload, readCameraListSnapshot, writeCameraListSnapshot } from '@/utils/cameraSnapshots'
@@ -1398,6 +1398,32 @@ const diagnosticItems = computed(() => [
     label: '结果通道',
     value: detectionEnabled.value ? detectionStatusText.value : '未开启',
     hint: analysisTask.value === 'detect' ? '目标检测模式' : '当前不是目标检测',
+    tone: detectionEnabled.value && analysisTask.value === 'detect' ? 'ok' : 'muted',
+  },
+])
+const riskSummaryItems = computed(() => [
+  {
+    label: '检测人员',
+    value: String(personDetections.value.length),
+    hint: `总目标 ${visibleDetections.value.length}`,
+    tone: personDetections.value.length ? 'ok' : 'muted',
+  },
+  {
+    label: '区域命中',
+    value: String(liveAlerts.value.length),
+    hint: liveAlerts.value.length ? zoneHitSummary.value : '暂无命中',
+    tone: liveAlerts.value.length ? 'warn' : 'muted',
+  },
+  {
+    label: '中/高风险',
+    value: `${watersideHitCount.value}/${wadingHitCount.value}`,
+    hint: '中风险 / 高风险',
+    tone: wadingHitCount.value ? 'high' : watersideHitCount.value ? 'medium' : 'muted',
+  },
+  {
+    label: '分析状态',
+    value: detectionEnabled.value ? detectionStatusText.value : '未开启',
+    hint: analysisTask.value === 'detect' ? '目标检测模式' : '图片分类模式',
     tone: detectionEnabled.value && analysisTask.value === 'detect' ? 'ok' : 'muted',
   },
 ])
@@ -2202,7 +2228,13 @@ async function refreshCameraStatus() {
       }
     }
     updateCameraInList(response.data)
-    if (!isMediaAnalysisRoute.value && cameraViewMode.value === 'single' && !previousConnected && canRenderCurrentStream.value) await startLiveStream()
+    if (shouldStartLiveStreamOnStatus({
+      mediaAnalysis: isMediaAnalysisRoute.value,
+      viewMode: cameraViewMode.value,
+      previousConnected,
+      connected: response.data.connected,
+      canRender: canRenderCurrentStream.value,
+    })) startLiveStream().catch(() => null)
     if (cameraViewMode.value === 'single' && previousConnected && !response.data.connected && !canRenderCurrentStream.value) stopLiveStream()
     if (isMultiCameraMode.value) refreshGridStreams()
     if (backendDetectionEnabled !== detectionEnabled.value) {
@@ -4729,122 +4761,150 @@ h1, h2, h3, p { margin-top: 0; }
   margin: 0;
 }
 
-.risk-overview-panel {
+ .risk-overview-panel {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
-  grid-template-rows: auto auto;
-  gap: 12px;
-  padding: 14px;
+  grid-template-columns: minmax(220px, 0.22fr) minmax(0, 1fr) minmax(260px, 0.26fr);
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  border-color: rgba(137, 174, 184, 0.14);
+  background: rgba(4, 15, 18, 0.72);
 }
-.risk-overview-header {
-  min-height: 118px;
+.risk-status-bar {
+  min-width: 0;
+  min-height: 104px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid rgba(98, 215, 177, 0.16);
-  border-radius: 8px;
-  background: rgba(25, 69, 58, 0.18);
+  gap: 14px;
+  padding: 18px 20px;
+  border-right: 1px solid rgba(137, 174, 184, 0.12);
+  background: rgba(12, 37, 32, 0.48);
 }
-.risk-overview-header h2 {
-  margin: 6px 0 0;
+.risk-status-main {
+  min-width: 0;
+}
+.risk-status-main span {
+  display: block;
+  color: #8fa8ad;
+  font-size: 12px;
+  font-weight: 700;
+}
+.risk-status-main strong {
+  display: block;
+  margin-top: 8px;
   color: #f1fbff;
-  font-size: 24px;
+  font-size: 26px;
+  line-height: 1.08;
+  white-space: nowrap;
 }
-.risk-overview-header b {
-  padding: 7px 11px;
+.risk-status-bar b {
+  min-width: 48px;
+  height: 36px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 12px;
   border-radius: 7px;
   color: #061412;
   background: #62d7b1;
+  font-size: 15px;
 }
-.risk-overview-header b.risk-low { background: #f1c45b; }
-.risk-overview-header b.risk-medium { background: #f08a3c; }
-.risk-overview-header b.risk-high { color: #fff; background: #ff4d5e; }
-.risk-metric-strip {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(120px, 1fr));
-  gap: 10px;
-}
-.risk-metric {
+.risk-status-bar.risk-low b { background: #f1c45b; }
+.risk-status-bar.risk-medium b { background: #f08a3c; }
+.risk-status-bar.risk-high b { color: #fff; background: #ff4d5e; }
+.risk-summary-strip {
   min-width: 0;
-  padding: 13px;
-  border: 1px solid rgba(137, 174, 184, 0.12);
-  border-radius: 8px;
-  background: rgba(4, 16, 20, 0.68);
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-right: 1px solid rgba(137, 174, 184, 0.12);
 }
-.risk-metric span,
-.risk-metric small {
+.risk-summary-item {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  min-height: 104px;
+  padding: 16px 18px;
+  border-left: 1px solid rgba(137, 174, 184, 0.1);
+}
+.risk-summary-item:first-child {
+  border-left: none;
+}
+.risk-summary-item span,
+.risk-summary-item small {
   display: block;
   overflow: hidden;
   color: #809ba1;
-  font-size: 11px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.risk-metric strong {
-  display: block;
-  margin: 8px 0 5px;
+.risk-summary-item strong {
   color: #dcebed;
-  font: 900 22px/1 "Consolas", "Monaco", monospace;
+  font: 900 24px/1 "Consolas", "Monaco", monospace;
 }
-.risk-metric.ok strong { color: #62d7b1; }
-.risk-metric.warn strong,
-.risk-metric.medium strong { color: #f08a3c; }
-.risk-metric.high strong { color: #ff4d5e; }
-.risk-metric.low strong { color: #f1c45b; }
-.risk-metric.muted strong { color: #8fa8ad; }
-.risk-recent-line {
-  grid-column: 2;
-  min-height: 42px;
+.risk-summary-item.ok strong { color: #62d7b1; }
+.risk-summary-item.warn strong,
+.risk-summary-item.medium strong { color: #f08a3c; }
+.risk-summary-item.high strong { color: #ff4d5e; }
+.risk-summary-item.low strong { color: #f1c45b; }
+.risk-summary-item.muted strong { color: #9eb3ba; }
+.risk-latest-target {
+  min-width: 0;
+  min-height: 104px;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  padding: 0 12px;
-  color: #8fa8ad;
-  border: 1px solid rgba(137, 174, 184, 0.12);
-  border-radius: 8px;
-  background: rgba(4, 16, 20, 0.56);
+  align-content: center;
+  gap: 7px;
+  padding: 16px 18px;
 }
-.risk-recent-line strong {
+.risk-latest-target span,
+.risk-latest-target em {
+  color: #809ba1;
+  font-size: 12px;
+  font-style: normal;
+}
+.risk-latest-target strong {
   min-width: 0;
   overflow: hidden;
-  color: #c9dde2;
-  font-size: 12px;
+  color: #dcebed;
+  font-size: 13px;
+  font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.risk-recent-line em {
-  font-style: normal;
-  font-size: 11px;
-}
-.risk-quiet-state {
+.risk-quiet-line {
   grid-column: 1 / -1;
-  min-height: 72px;
-  display: grid;
-  grid-template-columns: 36px minmax(0, auto) minmax(0, 1fr);
+  min-height: 58px;
+  display: flex;
   align-items: center;
   gap: 12px;
-  padding: 14px;
+  padding: 0 20px;
   color: #8fa8ad;
-  border: 1px solid rgba(137, 174, 184, 0.12);
-  border-radius: 8px;
-  background: rgba(4, 16, 20, 0.56);
+  border-top: 1px solid rgba(137, 174, 184, 0.12);
+  background: rgba(4, 16, 20, 0.42);
 }
-.risk-quiet-state .el-icon {
+.risk-quiet-line .el-icon {
   color: #62d7b1;
-  font-size: 26px;
+  font-size: 24px;
 }
-.risk-quiet-state strong {
+.risk-quiet-line span {
   color: #dcebed;
   font-size: 15px;
+  font-weight: 900;
 }
-.risk-quiet-state span {
-  font-size: 12px;
+.risk-quiet-line strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #8fa8ad;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .compact-events {
   grid-column: 1 / -1;
+  border-top: 1px solid rgba(137, 174, 184, 0.12);
 }
 
 @media (max-width: 1200px) {
@@ -4862,6 +4922,17 @@ h1, h2, h3, p { margin-top: 0; }
   }
   .diagnostic-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .risk-overview-panel {
+    grid-template-columns: 1fr;
+  }
+  .risk-status-bar,
+  .risk-summary-strip {
+    border-right: none;
+    border-bottom: 1px solid rgba(137, 174, 184, 0.12);
+  }
+  .risk-latest-target {
+    min-height: 76px;
   }
   .multi-camera-layout.mode-nine {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4897,6 +4968,19 @@ h1, h2, h3, p { margin-top: 0; }
   }
   .diagnostic-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .risk-summary-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .risk-summary-item {
+    min-height: 86px;
+  }
+  .risk-quiet-line {
+    align-items: flex-start;
+    flex-direction: column;
+    justify-content: center;
+    min-height: 86px;
+    padding: 14px 16px;
   }
   .risk-empty-state {
     grid-template-columns: 1fr;

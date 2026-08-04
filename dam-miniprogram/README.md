@@ -97,9 +97,7 @@ src/pages/process/index.vue
 
 ## 视频
 
-PC 端仍使用现有 WebRTC，不做改动。
-
-小程序 V1 使用后端适配层返回实时快照预览，并保留短时 MJPEG 票据和 WebRTC 信令信息。后续如果部署小程序可直接播放的 HLS/FLV/RTMP 网关，只需要扩展 `/api/miniprogram/v1/events/{event_id}/video` 的返回即可。
+PC 端使用 WebRTC，小程序使用 `live-player` 播放后端发布的 RTMP 实时流。实时流异常时，小程序直接切换同一摄像头的快照接口，不再签发未使用的 MJPEG 兼容票据。
 
 ## 服务通知
 

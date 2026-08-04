@@ -85,6 +85,7 @@
               <span class="sort-icon">{{ sortIcon('level') }}</span>{{ sortText('level') }}
             </span>
           </div>
+          <div class="col-event">事件名称</div>
           <div class="col-content">告警内容</div>
           <div class="col-status sortable" @click="toggleSort('status')">
             状态
@@ -106,6 +107,9 @@
             <span class="level-tag" :class="'level-' + row.alarm_level">
               {{ levelText(row.alarm_level) }}
             </span>
+          </div>
+          <div class="col-event">
+            <strong class="event-name-text" :title="alarmEventName(row)">{{ alarmEventName(row) }}</strong>
           </div>
           <div class="col-content">
             <span class="report-link" @click="openReport(row)">查看分析报告</span>
@@ -429,6 +433,18 @@ const typeText = (type) => {
   return map[type] || type || '--'
 }
 
+// 兼容接口缓存或升级前的历史告警，优先使用后端返回的标准事件名称。
+const alarmEventName = (row) => {
+  if (row.event_name) return row.event_name
+  const firstLine = (row.alarm_content || '').split(/\r?\n/).find(line => line.trim())?.trim() || ''
+  const separator = firstLine.includes('：') ? '：' : (firstLine.includes(':') ? ':' : '')
+  if (separator) {
+    const candidate = firstLine.split(separator, 1)[0].trim()
+    if (candidate && candidate.length <= 40) return candidate
+  }
+  return ({ threshold: '阈值告警', ai: 'AI检测告警', manual: '手动告警' })[row.alarm_type] || '系统告警'
+}
+
 // 初始化
 onMounted(async () => {
   fetchStats()
@@ -689,6 +705,24 @@ onMounted(async () => {
 .col-level {
   flex: 1;
   text-align: center;
+}
+
+.col-event {
+  flex: 1.25;
+  min-width: 130px;
+  padding: 0 10px;
+  text-align: center;
+}
+
+.event-name-text {
+  display: block;
+  overflow: hidden;
+  color: #f0f8ff;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sortable {

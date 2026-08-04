@@ -80,7 +80,15 @@ export function uploadBroadcastAudio({ filePath, eventId, cameraId, operator }) 
           return
         }
         if (res.statusCode >= 200 && res.statusCode < 300 && body.code === 200) {
-          resolve(body.data || {})
+          const result = body.data || {}
+          if (result.success !== true || result.result === 'FAILED') {
+            const failedItem = Array.isArray(result.items)
+              ? result.items.find((item) => item.result === 'FAILED')
+              : null
+            reject(new Error(failedItem?.message || body.message || '喊话播放失败'))
+            return
+          }
+          resolve(result)
           return
         }
         reject(new Error(body.detail || body.message || `喊话失败 ${res.statusCode}`))

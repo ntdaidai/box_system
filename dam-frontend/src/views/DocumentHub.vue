@@ -188,6 +188,47 @@
       <p>点击右上方“上传文档”按钮开始上传</p>
     </div>
 
+    <el-dialog
+      v-model="exportFormatDialogVisible"
+      class="export-format-dialog"
+      title="选择导出格式"
+      width="460px"
+      append-to-body
+      destroy-on-close
+      :close-on-click-modal="!exportingSelected"
+      :close-on-press-escape="!exportingSelected"
+      :show-close="!exportingSelected"
+    >
+      <p class="export-dialog-intro">
+        已选择 {{ selectedDocumentIds.length }} 个文件，请选择导出方式。
+      </p>
+      <el-radio-group
+        v-model="selectedExportFormat"
+        class="export-format-options"
+        aria-label="导出文件格式"
+        :disabled="exportingSelected"
+      >
+        <el-radio value="source" class="export-format-option">
+          <span class="export-format-copy">
+            <strong>导出源文件</strong>
+            <small>保留 Word、Excel、PPT 或 PDF 的原始格式</small>
+          </span>
+        </el-radio>
+        <el-radio value="pdf" class="export-format-option">
+          <span class="export-format-copy">
+            <strong>导出 PDF 文件</strong>
+            <small>统一转换为 PDF；选择多个文件时自动打包</small>
+          </span>
+        </el-radio>
+      </el-radio-group>
+      <template #footer>
+        <el-button :disabled="exportingSelected" @click="exportFormatDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="exportingSelected" @click="confirmSelectedExport">
+          开始导出
+        </el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="uploadDialogVisible" title="上传文档" width="500px">
       <el-upload
         class="upload-area"
@@ -273,6 +314,8 @@ const currentPage = ref(1)
 const pageSize = 10
 const selectedDocumentIds = ref([])
 const exportMonth = ref('')
+const exportFormatDialogVisible = ref(false)
+const selectedExportFormat = ref('source')
 
 const uploadDialogVisible = ref(false)
 const uploadFileList = ref([])
@@ -432,6 +475,33 @@ const formatSize = (bytes) => {
 
 const buildExportFileName = (suffix) => `documents_${suffix}.zip`
 
+const getResponseFilename = (response, fallback) => {
+  const disposition = response.headers?.['content-disposition'] || ''
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1]
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded)
+    } catch {
+      return encoded
+    }
+  }
+  const plain = disposition.match(/filename="?([^";]+)"?/i)?.[1]
+  return plain || fallback
+}
+
+const getExportErrorMessage = async (error) => {
+  const data = error.response?.data
+  if (data instanceof Blob) {
+    try {
+      const payload = JSON.parse(await data.text())
+      return payload.detail || payload.message || '导出失败'
+    } catch {
+      return '导出失败'
+    }
+  }
+  return data?.detail || data?.message || '导出失败'
+}
+
 const downloadBlob = (blob, filename) => {
   const url = window.URL.createObjectURL(blob)
   const link = document.createElement('a')
@@ -524,36 +594,53 @@ const toggleCurrentPageSelection = (checked) => {
   }
 }
 
-const exportDocuments = async ({ documentIds = [], month = '', filename, loadingRef }) => {
+const exportDocuments = async ({
+  documentIds = [],
+  month = '',
+  outputFormat = 'source',
+  filename,
+  loadingRef
+}) => {
   try {
     loadingRef.value = true
     const response = await axios.post('/api/onlyoffice/documents/export', {
       user_id: currentUser.value.id,
       document_ids: documentIds,
-      month
+      month,
+      output_format: outputFormat
     }, {
       responseType: 'blob'
     })
-    downloadBlob(response.data, filename)
+    downloadBlob(response.data, getResponseFilename(response, filename))
     ElMessage.success('导出成功')
+    return true
   } catch (error) {
     console.error('导出失败:', error)
-    ElMessage.error(error.response?.data?.detail || '导出失败')
+    ElMessage.error(await getExportErrorMessage(error))
+    return false
   } finally {
     loadingRef.value = false
   }
 }
 
-const exportSelectedDocuments = async () => {
+const exportSelectedDocuments = () => {
   if (selectedDocumentIds.value.length === 0) {
     ElMessage.warning('请先勾选要导出的文档')
     return
   }
-  await exportDocuments({
+  selectedExportFormat.value = 'source'
+  exportFormatDialogVisible.value = true
+}
+
+const confirmSelectedExport = async () => {
+  const outputFormat = selectedExportFormat.value
+  const succeeded = await exportDocuments({
     documentIds: selectedDocumentIds.value,
-    filename: buildExportFileName('selected'),
+    outputFormat,
+    filename: buildExportFileName(`selected_${outputFormat}`),
     loadingRef: exportingSelected
   })
+  if (succeeded) exportFormatDialogVisible.value = false
 }
 
 const exportMonthDocuments = async () => {
@@ -1141,6 +1228,103 @@ onActivated(() => {
 .pagination-bar :deep(.el-pagination.is-background .btn-prev:disabled),
 .pagination-bar :deep(.el-pagination.is-background .btn-next:disabled) {
   opacity: 0.45;
+}
+
+:global(.export-format-dialog) {
+  max-width: calc(100vw - 32px);
+  background: #0b2138;
+  border: 1px solid rgba(88, 156, 222, 0.4);
+  border-radius: 8px;
+  box-shadow: 0 20px 56px rgba(0, 0, 0, 0.46);
+}
+
+:global(.export-format-dialog .el-dialog__header) {
+  margin: 0;
+  padding: 20px 22px 14px;
+  border-bottom: 1px solid rgba(103, 164, 217, 0.18);
+}
+
+:global(.export-format-dialog .el-dialog__title) {
+  color: #f0f6ff;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+:global(.export-format-dialog .el-dialog__headerbtn:focus-visible) {
+  outline: 2px solid #3da4ff;
+  outline-offset: -4px;
+}
+
+:global(.export-format-dialog .el-dialog__close) {
+  color: #b9cce5;
+}
+
+:global(.export-format-dialog .el-dialog__body) {
+  padding: 20px 22px 10px;
+}
+
+:global(.export-format-dialog .el-dialog__footer) {
+  padding: 16px 22px 20px;
+}
+
+.export-dialog-intro {
+  margin: 0 0 14px;
+  color: #b9cce5;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.export-format-options {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+}
+
+.export-format-option.el-radio {
+  width: 100%;
+  height: auto;
+  min-height: 66px;
+  margin: 0;
+  padding: 12px 14px;
+  color: #e7f0fd;
+  background: rgba(19, 53, 87, 0.76);
+  border: 1px solid rgba(103, 164, 217, 0.32);
+  border-radius: 6px;
+}
+
+.export-format-option.el-radio:hover,
+.export-format-option.el-radio.is-checked {
+  background: rgba(26, 77, 119, 0.86);
+  border-color: #3da4ff;
+}
+
+.export-format-option.el-radio:has(.el-radio__original:focus-visible) {
+  outline: 2px solid #7bc2ff;
+  outline-offset: 2px;
+}
+
+.export-format-option :deep(.el-radio__label) {
+  width: 100%;
+  padding-left: 12px;
+  white-space: normal;
+}
+
+.export-format-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.export-format-copy strong {
+  color: #f4f8ff;
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.export-format-copy small {
+  color: #a9bfdc;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .upload-area {

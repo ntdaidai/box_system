@@ -30,6 +30,7 @@ from app.core.security import require_auth
 from app.models.camera import Camera
 from app.models.user import User
 from app.services.camera_stream import CameraStream, camera_manager
+from app.services.camera_live_relay import camera_live_relay_manager, camera_preview_source
 from app.services.camera_web_proxy import camera_web_proxy_manager
 from app.services.camera_zone_store import get_camera_zone_store
 from app.services.stream_ticket import stream_ticket_store
@@ -74,6 +75,7 @@ class CameraDeviceUpdatePayload(BaseModel):
 
 
 class CameraConnectionTestPayload(BaseModel):
+    camera_id: Optional[str] = Field(None, max_length=64, pattern=r"^[0-9]+$")
     brand: Optional[CameraBrand] = None
     ip_address: str = Field(..., min_length=3, max_length=128)
     rtsp_port: int = Field(554, ge=1, le=65535)
@@ -340,6 +342,7 @@ def _camera_row_response(
     last_frame_time = status.get("last_frame_time")
     if status.get("connected") and last_frame_time:
         row.last_online_at = dt.datetime.fromtimestamp(float(last_frame_time))
+        row.last_error = None
     if status.get("last_error"):
         row.last_error = status.get("last_error")
     return {
@@ -554,14 +557,25 @@ async def list_camera_devices(
 @router.post("/devices/test-connection", response_model=DetectResponse, summary="测试摄像头连接")
 async def test_camera_device_connection(
     payload: CameraConnectionTestPayload,
+    db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
+    username = payload.username
+    password = payload.password
+    preferred_brand = payload.brand
+    if payload.camera_id:
+        row = _camera_device_row(db, payload.camera_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="摄像头设备不存在")
+        username = username or row.username or ""
+        password = password or row.password or ""
+        preferred_brand = preferred_brand or row.brand
     ok, brand, message = await _detect_camera_brand(
         ip_address=payload.ip_address,
         rtsp_port=payload.rtsp_port,
-        username=payload.username,
-        password=payload.password,
-        preferred_brand=payload.brand,
+        username=username,
+        password=password,
+        preferred_brand=preferred_brand,
     )
     return DetectResponse(
         code=200,
@@ -610,6 +624,7 @@ async def create_camera_device(
     db.commit()
     db.refresh(row)
     status = _sync_camera_runtime(row)
+    camera_live_relay_manager.stop(str(row.id))
     proxy = _sync_camera_web_proxy(row, db)
     db.commit()
     await invalidate_cache("camera:*")
@@ -675,6 +690,7 @@ async def update_camera_device(
     db.commit()
     db.refresh(row)
     status = _sync_camera_runtime(row)
+    camera_live_relay_manager.stop(str(row.id))
     proxy = _sync_camera_web_proxy(row, db)
     db.commit()
     await invalidate_cache("camera:*")
@@ -717,6 +733,7 @@ async def delete_camera_device(
     if not row:
         raise HTTPException(status_code=404, detail="摄像头设备不存在")
     camera_manager.remove_camera(str(row.id))
+    camera_live_relay_manager.stop(str(row.id))
     camera_web_proxy_manager.stop_proxy(str(row.id))
     db.delete(row)
     db.commit()
@@ -1078,7 +1095,7 @@ async def create_webrtc_session(
     params = {
         "peerid": payload.peer_id,
         # 只在后端到本机回环服务的请求中携带 RTSP 地址；API 响应不回传。
-        "url": camera.source,
+        "url": camera_preview_source(camera.source),
     }
     if settings.WEBRTC_STREAM_OPTIONS:
         params["options"] = settings.WEBRTC_STREAM_OPTIONS

@@ -6,6 +6,7 @@ import datetime as dt
 import shutil
 import subprocess
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -98,6 +99,12 @@ class MockBroadcastAdapter(BroadcastAdapter):
 class UsbAudioAdapter(BroadcastAdapter):
     vendor_type = "USB_AUDIO"
 
+    def __init__(self) -> None:
+        # The USB speaker exposes one ALSA playback stream. Automatic alarms
+        # and manual callouts can arrive from different threads, so serialize
+        # access instead of letting the second aplay fail with EBUSY.
+        self._play_lock = threading.Lock()
+
     def play(self, device: BroadcastDevice, audio: BroadcastAudio) -> BroadcastPlayResult:
         wav_path = self._synthesize_text_to_wav(audio.text)
         return self.play_file(
@@ -121,20 +128,34 @@ class UsbAudioAdapter(BroadcastAdapter):
         if not aplay_bin:
             raise BroadcastException("aplay is not installed on this system")
 
-        try:
-            completed = subprocess.run(
-                [aplay_bin, "-D", alsa_device, str(wav_path)],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=max(1, int(settings.BROADCAST_AUDIO_PLAY_TIMEOUT_SECONDS)),
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise BroadcastException("USB audio playback timed out") from exc
+        retries = max(0, int(settings.BROADCAST_AUDIO_BUSY_RETRIES))
+        retry_seconds = max(0.0, float(settings.BROADCAST_AUDIO_BUSY_RETRY_SECONDS))
+        with self._play_lock:
+            for attempt in range(retries + 1):
+                try:
+                    completed = subprocess.run(
+                        [aplay_bin, "-D", alsa_device, str(wav_path)],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        timeout=max(1, int(settings.BROADCAST_AUDIO_PLAY_TIMEOUT_SECONDS)),
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    raise BroadcastException("USB audio playback timed out") from exc
 
-        if completed.returncode != 0:
-            detail = (completed.stderr or completed.stdout or "").strip()
-            raise BroadcastException(detail or "USB audio playback failed")
+                if completed.returncode == 0:
+                    break
+                detail = (completed.stderr or completed.stdout or "").strip()
+                is_busy = "device or resource busy" in detail.lower()
+                if not is_busy or attempt >= retries:
+                    if is_busy:
+                        raise BroadcastException("喊话设备正忙，请稍后重试")
+                    raise BroadcastException(detail or "USB audio playback failed")
+                logger.warning(
+                    "USB audio device busy; retrying playback: "
+                    f"device={alsa_device}, attempt={attempt + 1}/{retries}"
+                )
+                time.sleep(retry_seconds)
         return BroadcastPlayResult(True, f"USB_AUDIO played via {alsa_device}", audio.uri)
 
     @staticmethod
@@ -390,6 +411,11 @@ class BroadcastService:
         else:
             result = "FAILED"
         self._record_execution(db, command, items, result, one_touch=True)
+        if success_count == 0:
+            details = "；".join(
+                f"{item['device_name']}：{item['message']}" for item in items
+            )
+            raise BroadcastException(f"喊话播放失败：{details}")
         return {
             "success": success_count > 0,
             "result": result,
@@ -414,19 +440,19 @@ class BroadcastService:
         camera_id = action.get("camera_id")
         if not event_id or not camera_id:
             return
-        if not self._allow_auto(event_id, camera_id, risk_level):
-            return
         db = SessionLocal()
         try:
             configured_template, configured_devices = self._configured_action_targets(
                 db, str(event_id), str(camera_id)
             )
+            if not self._allow_auto(event_id, camera_id, risk_level):
+                return
             result = self.play(
                 db,
                 {
                     "event_id": event_id,
                     "camera_id": camera_id,
-                    "template_id": configured_template or self._template_for_action(action),
+                    "template_id": configured_template,
                     "device_ids": configured_devices,
                     "trigger_type": TRIGGER_AUTO,
                     "operator": "SYSTEM",
@@ -517,22 +543,29 @@ class BroadcastService:
         instance = db.query(SafetyEventInstance).filter(SafetyEventInstance.instance_no == event_id).first()
         camera = db.query(Camera).filter(Camera.id == int(camera_id)).first() if str(camera_id).isdigit() else None
         if not instance or not camera:
-            return None, []
+            raise BroadcastException("自动广播关联的事件实例或摄像头不存在")
         config = (
             db.query(EventActionStepConfig)
             .join(EventAction, EventAction.id == EventActionStepConfig.event_action_id)
             .join(ActionStep, ActionStep.id == EventActionStepConfig.step_id)
             .filter(
                 EventAction.event_id == instance.current_event_id,
-                EventActionStepConfig.camera_id == camera.id,
+                EventActionStepConfig.camera_device_id == camera.id,
                 ActionStep.action_type == "broadcast",
                 EventActionStepConfig.enabled.is_(True),
             )
             .first()
         )
         if not config:
-            return None, []
-        return config.template_id, [config.broadcast_device_id] if config.broadcast_device_id else []
+            raise BroadcastException("未配置自动广播动作")
+        if not config.template_id or not config.broadcast_device_id:
+            raise BroadcastException("自动广播未配置广播设备或模板")
+        if not db.query(CameraBroadcastDevice.id).filter(
+            CameraBroadcastDevice.camera_device_id == camera.id,
+            CameraBroadcastDevice.broadcast_device_id == config.broadcast_device_id,
+        ).first():
+            raise BroadcastException("动作配置中的广播设备未绑定当前摄像头")
+        return config.template_id, [config.broadcast_device_id]
 
     @staticmethod
     def _sqlite_default_id(db: Session, value: int) -> Dict[str, int]:
@@ -552,17 +585,6 @@ class BroadcastService:
             self._last_auto_play[key] = now
             return True
 
-    def _template_for_action(self, action: Dict[str, Any]) -> str:
-        payload = action.get("payload") or {}
-        scene = str(payload.get("scene_type") or action.get("entity_type") or "PERSON").upper()
-        if scene in {"FISHING", "BOAT"}:
-            return "FISHING"
-        return {
-            "LOW": "PERSON_LOW",
-            "MEDIUM": "PERSON_MEDIUM",
-            "HIGH": "PERSON_HIGH",
-        }[action["risk_level"]]
-
     def _resolve_text(self, db: Session, template_id: Optional[str], custom_text: Optional[str]) -> str:
         if custom_text and custom_text.strip():
             return custom_text.strip()
@@ -579,14 +601,21 @@ class BroadcastService:
         return template.content
 
     def _resolve_devices(self, db: Session, camera_id: Optional[str], device_ids: Optional[List[int]]) -> List[BroadcastDevice]:
+        if camera_id:
+            bound_devices = self._devices_for_camera(db, camera_id)
+            if not device_ids:
+                return bound_devices
+            requested_ids = {int(value) for value in device_ids}
+            selected = [device for device in bound_devices if device.id in requested_ids]
+            if {device.id for device in selected} != requested_ids:
+                raise BroadcastException("选择的广播设备未绑定当前摄像头")
+            return selected
         if device_ids:
             return (
                 db.query(BroadcastDevice)
                 .filter(BroadcastDevice.id.in_(device_ids), BroadcastDevice.enabled == True)  # noqa: E712
                 .all()
             )
-        if camera_id:
-            return self._devices_for_camera(db, camera_id)
         return []
 
     @staticmethod

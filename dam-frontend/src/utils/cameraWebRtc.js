@@ -68,6 +68,9 @@ export class CameraWebRtcPlayer {
 
       const answer = sessionResponse.data?.answer
       if (!answer?.type || !answer?.sdp) throw new Error('WebRTC 服务未返回有效 SDP')
+      if (!/^a=rtpmap:\d+\s+(H264|VP8|VP9|AV1)\//im.test(answer.sdp)) {
+        throw new Error('当前浏览器与摄像头没有兼容的视频编码，已切换兼容播放')
+      }
       await pc.setRemoteDescription(answer)
       this.remoteDescriptionReady = true
 

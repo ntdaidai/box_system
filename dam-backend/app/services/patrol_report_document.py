@@ -8,7 +8,7 @@ from typing import Any
 
 from docx import Document
 from docx.enum.section import WD_SECTION
-from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
 from docx.enum.text import (
     WD_ALIGN_PARAGRAPH,
     WD_TAB_ALIGNMENT,
@@ -44,7 +44,16 @@ RISK_STYLE = {
 
 def _font(run, *, name=SANS, size=9, color=TEXT, bold=False):
     run.font.name = name
-    run._element.rPr.rFonts.set(qn("w:eastAsia"), name)
+    r_pr = run._element.get_or_add_rPr()
+    r_pr.rFonts.set(qn("w:eastAsia"), name)
+    language = r_pr.find(qn("w:lang"))
+    if language is None:
+        language = OxmlElement("w:lang")
+        r_pr.append(language)
+    language.set(qn("w:val"), "zh-CN")
+    language.set(qn("w:eastAsia"), "zh-CN")
+    if r_pr.find(qn("w:noProof")) is None:
+        r_pr.append(OxmlElement("w:noProof"))
     run.font.size = Pt(size)
     run.font.color.rgb = RGBColor.from_string(color)
     run.bold = bold
@@ -120,7 +129,7 @@ def _crop_picture(paragraph, image_path, *, width, height, crop):
     blip_fill.insert(1, src_rect)
 
 
-def _field(paragraph, instruction):
+def _field(paragraph, instruction, result="1"):
     run = paragraph.add_run()
     begin = OxmlElement("w:fldChar")
     begin.set(qn("w:fldCharType"), "begin")
@@ -130,12 +139,22 @@ def _field(paragraph, instruction):
     separate = OxmlElement("w:fldChar")
     separate.set(qn("w:fldCharType"), "separate")
     text = OxmlElement("w:t")
-    text.text = "1"
+    text.text = str(result)
     end = OxmlElement("w:fldChar")
     end.set(qn("w:fldCharType"), "end")
     for node in (begin, instr, separate, text, end):
         run._r.append(node)
     _font(run, size=8, color=MUTED)
+
+
+def _bookmark(paragraph, name, bookmark_id="1"):
+    start = OxmlElement("w:bookmarkStart")
+    start.set(qn("w:id"), str(bookmark_id))
+    start.set(qn("w:name"), name)
+    end = OxmlElement("w:bookmarkEnd")
+    end.set(qn("w:id"), str(bookmark_id))
+    paragraph._p.append(start)
+    paragraph._p.append(end)
 
 
 def _page_number_start(section, start=1):
@@ -172,10 +191,11 @@ def _header(section, board_image, report_date):
         crop={"l": 1900, "t": 4700, "r": 85600, "b": 86800},
     )
     right = table.cell(0, 1).paragraphs[0]
-    _paragraph(right, align=WD_ALIGN_PARAGRAPH.RIGHT, before=2)
+    _paragraph(right, align=WD_ALIGN_PARAGRAPH.RIGHT, before=0, after=0, line=1)
     _text(right, "大藤峡空地联动每日巡检报告", size=8, color=MUTED)
     _text(right, f"   {report_date}", size=8, color=BLUE, bold=True)
     for cell in table.rows[0].cells:
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.BOTTOM
         _border(cell, bottom={"val": "single", "sz": "8", "color": BLUE})
 
 
@@ -188,6 +208,8 @@ def _footer(section, report_date, numbered=True):
     if numbered:
         _text(p, "    ·    ", size=7.5, color=RULE)
         _field(p, "PAGE")
+        _text(p, "/", size=8, color=MUTED)
+        _field(p, "PAGEREF PatrolReportEnd", result="4")
 
 
 def _section_title(document, number, title, color=BLUE):
@@ -211,7 +233,7 @@ def _cover(document, context, board_image):
     section.bottom_margin = Mm(12)
 
     logo = document.add_paragraph()
-    _paragraph(logo, align=WD_ALIGN_PARAGRAPH.LEFT, after=25)
+    _paragraph(logo, align=WD_ALIGN_PARAGRAPH.LEFT, after=28)
     _crop_picture(
         logo,
         board_image,
@@ -220,24 +242,42 @@ def _cover(document, context, board_image):
         crop={"l": 1900, "t": 4700, "r": 85600, "b": 86800},
     )
     title = document.add_paragraph()
-    _paragraph(title, align=WD_ALIGN_PARAGRAPH.CENTER, after=18)
-    _text(title, "大藤峡空地联动每日巡检报告", name=SERIF, size=25, color=BLUE, bold=True)
+    _paragraph(title, align=WD_ALIGN_PARAGRAPH.CENTER, after=8)
+    _text(title, "大藤峡空地联动每日巡检报告", name=SERIF, size=24, color=BLUE, bold=True)
+
+    rule = document.add_paragraph()
+    _paragraph(rule, align=WD_ALIGN_PARAGRAPH.CENTER, after=18)
+    rule_borders = OxmlElement("w:pBdr")
+    rule_bottom = OxmlElement("w:bottom")
+    for key, value in (("val", "single"), ("sz", "16"), ("color", BLUE), ("space", "2")):
+        rule_bottom.set(qn(f"w:{key}"), value)
+    rule_borders.append(rule_bottom)
+    rule._p.get_or_add_pPr().append(rule_borders)
 
     photo = document.add_paragraph()
-    _paragraph(photo, align=WD_ALIGN_PARAGRAPH.CENTER, after=13)
+    _paragraph(photo, align=WD_ALIGN_PARAGRAPH.CENTER, after=22)
     _crop_picture(
         photo,
         board_image,
         width=Mm(166),
-        height=Mm(142.5),
+        height=Mm(86),
         crop={"l": 780, "t": 33860, "r": 74300, "b": 28800},
     )
-    date = document.add_paragraph()
-    _paragraph(date, align=WD_ALIGN_PARAGRAPH.CENTER, after=5)
-    _text(date, context["report_date_cn"], name=SERIF, size=16, color=BLUE, bold=True)
-    code = document.add_paragraph()
-    _paragraph(code, align=WD_ALIGN_PARAGRAPH.CENTER)
-    _text(code, f"文档编号：DX-XJRB-{context['report_date_compact']}", size=8.5, color=MUTED)
+
+    info = document.add_table(rows=1, cols=2)
+    info.alignment = WD_TABLE_ALIGNMENT.CENTER
+    _clear_borders(info)
+    for cell in info.rows[0].cells:
+        _margins(cell, top=130, bottom=130, start=150, end=150)
+        _border(cell, top={"val": "single", "sz": "10", "color": BLUE})
+    left = info.cell(0, 0).paragraphs[0]
+    _paragraph(left, align=WD_ALIGN_PARAGRAPH.LEFT)
+    _text(left, "报告日期\n", size=8, color=MUTED)
+    _text(left, context["report_date_cn"], name=SERIF, size=14, color=BLUE, bold=True)
+    right = info.cell(0, 1).paragraphs[0]
+    _paragraph(right, align=WD_ALIGN_PARAGRAPH.RIGHT)
+    _text(right, "文档编号\n", size=8, color=MUTED)
+    _text(right, f"DX-XJRB-{context['report_date_compact']}", size=10, color=TEXT, bold=True)
 
 
 def _contents(document, context, board_image):
@@ -245,8 +285,11 @@ def _contents(document, context, board_image):
     _header(document.sections[0], board_image, context["report_date"])
     _footer(document.sections[0], context["report_date"], numbered=False)
     p = document.add_paragraph()
-    _paragraph(p, after=23)
+    _paragraph(p, after=7)
     _text(p, "目录", name=SERIF, size=20, color=BLUE, bold=True)
+    intro = document.add_paragraph()
+    _paragraph(intro, after=24)
+    _text(intro, "CONTENTS", size=8, color=MUTED, bold=True)
     items = [
         ("01", "当日风险统计", "1"),
         ("02", "高风险事件", "2"),
@@ -255,7 +298,7 @@ def _contents(document, context, board_image):
     ]
     for number, title, page in items:
         row = document.add_paragraph()
-        _paragraph(row, after=15)
+        _paragraph(row, after=17)
         tabs = row.paragraph_format.tab_stops
         tabs.add_tab_stop(Mm(18), WD_TAB_ALIGNMENT.LEFT)
         tabs.add_tab_stop(Mm(168), WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS)
@@ -276,100 +319,113 @@ def _start_body(document, context, board_image):
 def _summary(document, context):
     stats = context["stats"]
     _section_title(document, 1, "当日风险统计")
-    p = document.add_paragraph()
-    _paragraph(p, after=8, line=1.35)
-    if stats["total_events"]:
-        _text(p, "当日共记录 ", size=10)
-        _text(p, stats["total_events"], size=11, color=BLUE, bold=True)
-        _text(
-            p,
-            f" 起风险事件：高风险 {stats['high_count']} 起、中风险 {stats['medium_count']} 起、低风险 {stats['low_count']} 起；"
-            f"已闭环 {stats['closed_count']} 起，待跟进 {stats['open_count']} 起。",
-            size=10,
-        )
-    else:
-        _text(p, "当日未记录风险事件。", size=10, color=GREEN, bold=True)
-
+    overview_title = document.add_paragraph()
+    _paragraph(overview_title, before=3, after=5)
+    _text(overview_title, "风险概览", name=SERIF, size=11, color=TEXT, bold=True)
     metrics = [
         ("事件总数", stats["total_events"], BLUE, BLUE_LIGHT),
         ("高风险", stats["high_count"], HIGH, HIGH_BG),
         ("中风险", stats["medium_count"], MEDIUM, MEDIUM_BG),
         ("低风险", stats["low_count"], LOW, LOW_BG),
-        ("已闭环", stats["closed_count"], GREEN, "EAF6EF"),
-        ("待跟进", stats["open_count"], MUTED, "F2F4F7"),
     ]
-    table = document.add_table(rows=2, cols=3)
+    table = document.add_table(rows=1, cols=4)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     for index, (label, value, color, bg) in enumerate(metrics):
-        cell = table.cell(index // 3, index % 3)
+        cell = table.cell(0, index)
         _shade(cell, bg)
-        _margins(cell, top=150, bottom=150, start=150, end=150)
+        _margins(cell, top=210, bottom=190, start=130, end=130)
+        _border(
+            cell,
+            top={"val": "single", "sz": "8", "color": "FFFFFF"},
+            bottom={"val": "single", "sz": "8", "color": "FFFFFF"},
+            start={"val": "single", "sz": "8", "color": "FFFFFF"},
+            end={"val": "single", "sz": "8", "color": "FFFFFF"},
+        )
         p1 = cell.paragraphs[0]
         _paragraph(p1, align=WD_ALIGN_PARAGRAPH.CENTER)
-        _text(p1, value, name=SERIF, size=20, color=color, bold=True)
+        _text(p1, value, name=SERIF, size=22, color=color, bold=True)
         p2 = cell.add_paragraph()
         _paragraph(p2, align=WD_ALIGN_PARAGRAPH.CENTER)
-        _text(p2, label, size=8.5)
+        _text(p2, label, size=8.5, color=MUTED)
 
-    h = document.add_paragraph()
-    _paragraph(h, before=11, after=4)
-    _text(h, "事件来源", name=SERIF, size=12, color=BLUE, bold=True)
-    source = document.add_table(rows=3, cols=3)
-    source.style = "Table Grid"
+    status_title = document.add_paragraph()
+    _paragraph(status_title, before=13, after=5)
+    _text(status_title, "处置状态", name=SERIF, size=11, color=TEXT, bold=True)
+    status_table = document.add_table(rows=1, cols=2)
+    status_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    status_data = [
+        ("已闭环", stats["closed_count"], GREEN, "EAF6EF"),
+        ("待跟进", stats["open_count"], MEDIUM if stats["open_count"] else MUTED, "F4F6F8"),
+    ]
+    for index, (label, value, color, bg) in enumerate(status_data):
+        cell = status_table.cell(0, index)
+        _shade(cell, bg)
+        _margins(cell, top=150, bottom=150, start=170, end=170)
+        _border(cell, start={"val": "single", "sz": "18", "color": color})
+        p = cell.paragraphs[0]
+        _paragraph(p, align=WD_ALIGN_PARAGRAPH.LEFT)
+        _text(p, label, size=9, color=MUTED)
+        _text(p, f"    {value} 起", name=SERIF, size=15, color=color, bold=True)
+
+    source_title = document.add_paragraph()
+    _paragraph(source_title, before=13, after=5)
+    _text(source_title, "事件来源", name=SERIF, size=11, color=TEXT, bold=True)
+    source = document.add_table(rows=1, cols=2)
+    source.alignment = WD_TABLE_ALIGNMENT.CENTER
     source_data = [
-        ("来源", "事件数（起）", "占比"),
         ("传感器事件", stats["sensor_count"], stats["sensor_rate"]),
         ("视觉检测事件", stats["camera_count"], stats["camera_rate"]),
     ]
-    for row_index, values in enumerate(source_data):
-        for col_index, value in enumerate(values):
-            cell = source.cell(row_index, col_index)
-            _margins(cell)
-            if row_index == 0:
-                _shade(cell, BLUE_LIGHT)
-            p = cell.paragraphs[0]
-            _paragraph(p, align=WD_ALIGN_PARAGRAPH.CENTER)
-            _text(p, value, size=8.5, color=BLUE if row_index == 0 else TEXT, bold=row_index == 0)
+    for index, (label, count, rate) in enumerate(source_data):
+        cell = source.cell(0, index)
+        _shade(cell, "F7F9FB")
+        _margins(cell, top=150, bottom=150, start=170, end=170)
+        _border(cell, bottom={"val": "single", "sz": "8", "color": RULE})
+        p = cell.paragraphs[0]
+        _paragraph(p, align=WD_ALIGN_PARAGRAPH.LEFT)
+        _text(p, label, size=9, color=TEXT, bold=True)
+        _text(p, f"\n{count} 起", name=SERIF, size=15, color=BLUE, bold=True)
+        _text(p, f"    {rate}", size=8.5, color=MUTED)
 
     h2 = document.add_paragraph()
-    _paragraph(h2, before=10, after=4)
-    _text(h2, "当日结论", name=SERIF, size=12, color=BLUE, bold=True)
+    _paragraph(h2, before=13, after=5)
+    _text(h2, "当日结论", name=SERIF, size=11, color=TEXT, bold=True)
     box = document.add_table(rows=1, cols=1)
     cell = box.cell(0, 0)
     _shade(cell, BLUE_LIGHT)
-    _margins(cell, top=150, bottom=150, start=170, end=170)
+    _margins(cell, top=190, bottom=190, start=190, end=190)
     _border(cell, start={"val": "single", "sz": "22", "color": BLUE})
-    _text(cell.paragraphs[0], context["conclusion"], size=9.5, color=BLUE, bold=True)
+    _text(cell.paragraphs[0], context["conclusion"], size=9.5, color=TEXT, bold=True)
 
 
 def _event_block(document, event, risk_key):
     risk_label, color, bg = RISK_STYLE[risk_key]
-    table = document.add_table(rows=5, cols=4)
+    table = document.add_table(rows=6, cols=4)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.autofit = False
     for row in table.rows:
-        for cell in row.cells:
-            _margins(cell)
-            _border(cell, bottom={"val": "single", "sz": "5", "color": RULE})
+        for index, cell in enumerate(row.cells):
+            cell.width = Mm((27, 58, 27, 58)[index])
+            cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+            _margins(cell, top=125, bottom=125, start=130, end=130)
+            _border(cell, bottom={"val": "single", "sz": "6", "color": RULE})
     head = table.cell(0, 0).merge(table.cell(0, 2))
     _shade(head, bg)
-    _text(head.paragraphs[0], event["event_name"], name=SERIF, size=11.5, color=color, bold=True)
-    _text(head.paragraphs[0], f"    {event['instance_no']}", size=8, color=MUTED)
+    _margins(head, top=150, bottom=150, start=150, end=150)
+    _text(head.paragraphs[0], event["event_name"], name=SERIF, size=12, color=color, bold=True)
+    _text(head.paragraphs[0], f"    {event['instance_no']}", size=7.5, color=MUTED)
     badge = table.cell(0, 3)
     _shade(badge, bg)
+    _margins(badge, top=150, bottom=150, start=150, end=150)
     badge.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
     _text(badge.paragraphs[0], risk_label, size=9, color=color, bold=True)
 
     pairs = [
-        ("发生时间", event["occur_time"], "来源 / 位置", f"{event['source_label']} · {event['location']}"),
-        ("关键观测", event["key_observation"], "当前状态", event["result_label"]),
-        ("处置情况", event["handling_summary"], "完成时间", event["completed_at"]),
-        ("事件摘要", event["summary"], "", ""),
+        ("发生时间", event["occur_time"], "当前状态", event["result_label"]),
+        ("来源 / 位置", f"{event['source_label']} · {event['location']}", "完成时间", event["completed_at"]),
     ]
     for row_index, values in enumerate(pairs, 1):
-        if row_index == 4:
-            table.cell(row_index, 1).merge(table.cell(row_index, 3))
-        columns = range(2) if row_index == 4 else range(4)
-        for col_index in columns:
+        for col_index in range(4):
             value = values[col_index]
             cell = table.cell(row_index, col_index)
             if col_index in (0, 2) and value:
@@ -382,15 +438,27 @@ def _event_block(document, event, risk_key):
                 bold=col_index in (0, 2) or value == "已闭环",
             )
 
+    details = [
+        ("关键观测", event["key_observation"]),
+        ("处置情况", event["handling_summary"]),
+        ("事件摘要", event["summary"]),
+    ]
+    for row_index, (label, value) in enumerate(details, 3):
+        label_cell = table.cell(row_index, 0)
+        value_cell = table.cell(row_index, 1).merge(table.cell(row_index, 3))
+        _shade(label_cell, "F7F9FB")
+        _text(label_cell.paragraphs[0], label, size=8.2, color=MUTED, bold=True)
+        _text(value_cell.paragraphs[0], value or "—", size=8.8, color=TEXT)
+
     images = event.get("evidence_images") or []
     if images:
         label = document.add_paragraph()
-        _paragraph(label, before=5, after=3)
-        _text(label, "图像佐证", size=9, color=color, bold=True)
+        _paragraph(label, before=8, after=4)
+        _text(label, "图像佐证", name=SERIF, size=10, color=TEXT, bold=True)
         for index, evidence in enumerate(images[:2], 1):
             p = document.add_paragraph()
-            _paragraph(p, align=WD_ALIGN_PARAGRAPH.CENTER, after=2)
-            p.add_run().add_picture(io.BytesIO(evidence["content"]), width=Mm(145))
+            _paragraph(p, align=WD_ALIGN_PARAGRAPH.CENTER, after=3)
+            p.add_run().add_picture(io.BytesIO(evidence["content"]), width=Mm(150))
             caption = document.add_paragraph()
             _paragraph(caption, align=WD_ALIGN_PARAGRAPH.CENTER, after=5)
             description = evidence.get("description") or f"事件图像 {index}"
@@ -436,6 +504,7 @@ def render_daily_report_docx(context: dict[str, Any], board_image: Path) -> byte
     _risk_page(document, context, 2, "HIGH")
     _risk_page(document, context, 3, "MEDIUM")
     _risk_page(document, context, 4, "LOW")
+    _bookmark(document.paragraphs[-1], "PatrolReportEnd")
 
     output = io.BytesIO()
     document.save(output)

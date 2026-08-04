@@ -101,6 +101,8 @@ def test_docx_omits_preview_copy_and_embeds_visual_evidence():
     content = render_daily_report_docx(_context(evidence), REPORT_BOARD_PATH)
     with zipfile.ZipFile(io.BytesIO(content)) as archive:
         document_xml = archive.read("word/document.xml").decode("utf-8")
+        footer_xml = archive.read("word/footer2.xml").decode("utf-8")
+        header_xml = archive.read("word/header2.xml").decode("utf-8")
         media = [name for name in archive.namelist() if name.startswith("word/media/")]
     assert "传感器监测" not in document_xml
     assert "数据口径" not in document_xml
@@ -108,4 +110,10 @@ def test_docx_omits_preview_copy_and_embeds_visual_evidence():
     assert "HIGH / 高风险" not in document_xml
     assert "高风险" in document_xml
     assert "图像佐证" in document_xml
+    assert "<w:noProof" in document_xml
+    assert 'w:name="PatrolReportEnd"' in document_xml
+    assert "PAGE" in footer_xml
+    assert "PAGEREF PatrolReportEnd" in footer_xml
+    assert "<w:t>4</w:t>" in footer_xml
+    assert header_xml.count('w:vAlign w:val="bottom"') == 2
     assert len(media) >= 2

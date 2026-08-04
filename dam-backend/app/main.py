@@ -27,9 +27,9 @@ from app.core.config import settings
 from app.core.database import SessionLocal, init_db
 from app.core.redis import redis_manager
 from app.services.sensor_collector import sensor_collector
-from app.services.vision_detector import vision_detector
 from app.services.vision_model_registry import vision_model_registry
 from app.services.camera_stream import camera_manager
+from app.services.camera_live_relay import camera_live_relay_manager
 from app.services.camera_web_proxy import camera_web_proxy_manager
 from app.services.camera_zone_store import get_camera_zone_store
 from app.services.video_detection import video_detection_service
@@ -187,8 +187,6 @@ async def lifespan(app: FastAPI):
     # 注册传感器数据变化回调（实时触发 ECA 检查）
     sensor_collector.register_data_callback(eca_engine.on_sensor_data_updated)
 
-    # 注册视觉检测结果变化回调（实时触发多源事件检查）
-    vision_detector.register_callback(eca_engine.on_vision_detection_updated)
     safety_event_bus.subscribe(broadcast_service.handle_safety_event_action)
     safety_event_bus.subscribe(drone_dispatch_service.handle_safety_event_action)
     safety_event_bus.subscribe(staff_task_service.handle_safety_event_action)
@@ -210,6 +208,7 @@ async def lifespan(app: FastAPI):
     await eca_scheduler.stop()
     sensor_collector.stop_collection()
     camera_web_proxy_manager.stop_all()
+    camera_live_relay_manager.stop_all()
     camera_manager.stop_all()
     video_detection_service.shutdown()
     await app.state.http_client.aclose()

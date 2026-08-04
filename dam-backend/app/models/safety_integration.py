@@ -39,12 +39,22 @@ class CameraZoneCondition(Base):
 class EventActionStepConfig(Base):
     __tablename__ = "event_action_step_config"
     __table_args__ = (
-        UniqueConstraint("event_action_id", "camera_id", "step_id", name="uq_event_camera_step_config"),
+        UniqueConstraint(
+            "event_action_id",
+            "camera_device_id",
+            "step_id",
+            name="uq_event_camera_device_step_config",
+        ),
     )
 
     id = Column(SQLITE_PK, primary_key=True, autoincrement=True)
     event_action_id = Column(BigInteger, ForeignKey("event_action.id", ondelete="CASCADE"), nullable=False, index=True)
-    camera_id = Column(BigInteger, ForeignKey("camera_device.id", ondelete="CASCADE"), nullable=True, index=True)
+    camera_device_id = Column(
+        BigInteger,
+        ForeignKey("camera_device.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     step_id = Column(BigInteger, ForeignKey("action_step.id", ondelete="CASCADE"), nullable=False, index=True)
     broadcast_device_id = Column(BigInteger, ForeignKey("broadcast_device.id", ondelete="SET NULL"), nullable=True)
     template_id = Column(String(64), ForeignKey("broadcast_template.id", ondelete="SET NULL"), nullable=True)

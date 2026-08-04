@@ -7,24 +7,23 @@ from typing import Any, Dict, Optional
 
 from loguru import logger
 
-from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models.event_action import EventAction
 from app.services.safety_event_runtime_service import safety_event_runtime_service
 
 
 class DroneService:
-    def dispatch(self, eventId: str, cameraId: str, strategyId: str) -> Dict[str, Any]:
+    def dispatch(self, event_id: str, camera_id: str, drone_id: str, route_id: str) -> Dict[str, Any]:
         raise NotImplementedError
 
 
 class MockDroneAdapter(DroneService):
-    def dispatch(self, eventId: str, cameraId: str, strategyId: str) -> Dict[str, Any]:
+    def dispatch(self, event_id: str, camera_id: str, drone_id: str, route_id: str) -> Dict[str, Any]:
         return {
             "success": True,
             "result": "SUCCESS",
-            "drone_id": settings.DRONE_DEFAULT_ID,
-            "strategy_id": strategyId,
+            "drone_id": drone_id,
+            "strategy_id": route_id,
             "message": "Mock drone dispatch accepted",
         }
 
@@ -41,21 +40,23 @@ class DroneDispatchService:
         risk_level = action.get("risk_level")
         if not event_id or not camera_id:
             return
-        strategy_id = str((action.get("payload") or {}).get("strategy_id") or settings.DRONE_DEFAULT_STRATEGY_ID)
         dispatch_time = dt.datetime.now()
         db = SessionLocal()
         try:
             configured_drone_id, configured_route_id = self._configured_targets(db, str(event_id), str(camera_id))
-            if configured_route_id:
-                strategy_id = configured_route_id
-            result = self.adapter.dispatch(event_id, camera_id, strategy_id)
+            result = self.adapter.dispatch(
+                str(event_id),
+                str(camera_id),
+                configured_drone_id,
+                configured_route_id,
+            )
             success = bool(result.get("success", True)) and str(result.get("result", "SUCCESS")).upper() != "FAILED"
             instance = safety_event_runtime_service.get_instance(db, str(event_id))
             execution_payload = {
                 "instance_no": str(event_id),
                 "action_type": "DRONE_DISPATCH",
-                "drone_id": configured_drone_id or str(result.get("drone_id") or settings.DRONE_DEFAULT_ID),
-                "route_id": configured_route_id or str(result.get("strategy_id") or strategy_id),
+                "drone_id": configured_drone_id,
+                "route_id": configured_route_id,
                 "dispatched_at": dispatch_time.isoformat(),
                 "result": "SUCCESS" if success else "FAILED",
             }
@@ -104,20 +105,24 @@ class DroneDispatchService:
         instance = db.query(SafetyEventInstance).filter(SafetyEventInstance.instance_no == event_id).first()
         camera = db.query(Camera).filter(Camera.id == int(camera_id)).first() if camera_id.isdigit() else None
         if not instance or not camera:
-            return None, None
+            raise ValueError("无人机派飞关联的事件实例或摄像头不存在")
         config = (
             db.query(EventActionStepConfig)
             .join(EventAction, EventAction.id == EventActionStepConfig.event_action_id)
             .join(ActionStep, ActionStep.id == EventActionStepConfig.step_id)
             .filter(
                 EventAction.event_id == instance.current_event_id,
-                EventActionStepConfig.camera_id == camera.id,
+                EventActionStepConfig.camera_device_id == camera.id,
                 ActionStep.action_type == "drone_dispatch",
                 EventActionStepConfig.enabled.is_(True),
             )
             .first()
         )
-        return (config.drone_id, config.route_id) if config else (None, None)
+        if not config:
+            raise ValueError("未配置无人机派飞动作")
+        if not config.drone_id or not config.route_id:
+            raise ValueError("无人机派飞未配置无人机或航线")
+        return config.drone_id, config.route_id
 
     @staticmethod
     def _mark_safety_action(

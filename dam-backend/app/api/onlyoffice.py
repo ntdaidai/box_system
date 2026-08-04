@@ -9,11 +9,13 @@ import hashlib
 import io
 import os
 import re
+import subprocess
+import tempfile
 import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 from urllib.parse import quote, unquote
 
 import httpx
@@ -58,6 +60,7 @@ class ExportRequest(BaseModel):
     user_id: str = "user_001"
     document_ids: list[str] = []
     month: Optional[str] = None
+    output_format: Literal["source", "pdf"] = "source"
 
 
 def get_minio_client() -> Minio:
@@ -185,6 +188,74 @@ def encode_metadata_value(value: str) -> str:
 def content_disposition_inline(filename: str) -> str:
     quoted = quote(filename)
     return f"inline; filename*=UTF-8''{quoted}"
+
+
+def content_disposition_attachment(filename: str) -> str:
+    quoted = quote(filename)
+    return f"attachment; filename*=UTF-8''{quoted}"
+
+
+PDF_CONVERTIBLE_EXTENSIONS = {
+    "docx", "doc", "odt", "rtf", "txt",
+    "xlsx", "xls", "ods", "csv",
+    "pptx", "ppt", "odp",
+}
+
+
+def convert_document_to_pdf(content: bytes, title: str, extension: str) -> tuple[bytes, str]:
+    """Convert an office document to PDF in an isolated LibreOffice profile."""
+    safe_title = Path(title).name or f"document.{extension}"
+    if extension == "pdf":
+        return content, safe_title
+    if extension not in PDF_CONVERTIBLE_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"{safe_title} 暂不支持导出为 PDF")
+
+    with tempfile.TemporaryDirectory(prefix="document_pdf_export_") as temp_dir:
+        work_dir = Path(temp_dir)
+        input_dir = work_dir / "input"
+        output_dir = work_dir / "output"
+        profile_dir = work_dir / "profile"
+        runtime_dir = work_dir / "runtime"
+        for directory in (input_dir, output_dir, profile_dir, runtime_dir):
+            directory.mkdir(parents=True, exist_ok=True)
+        runtime_dir.chmod(0o700)
+
+        ascii_stem = re.sub(r"[^A-Za-z0-9_-]+", "_", Path(safe_title).stem).strip("_") or "document"
+        input_path = input_dir / f"{ascii_stem}.{extension}"
+        input_path.write_bytes(content)
+        environment = os.environ.copy()
+        environment["XDG_RUNTIME_DIR"] = str(runtime_dir)
+        command = [
+            "libreoffice",
+            "--headless",
+            f"-env:UserInstallation={profile_dir.as_uri()}",
+            "--convert-to",
+            "pdf",
+            "--outdir",
+            str(output_dir),
+            str(input_path),
+        ]
+        try:
+            result = subprocess.run(
+                command,
+                cwd=work_dir,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=90,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise HTTPException(status_code=500, detail=f"{safe_title} 转换为 PDF 失败") from exc
+
+        output_files = list(output_dir.glob("*.pdf"))
+        if result.returncode != 0 or not output_files:
+            detail = (result.stderr or result.stdout or "").strip()
+            message = f"{safe_title} 转换为 PDF 失败"
+            if detail:
+                message = f"{message}: {detail[-240:]}"
+            raise HTTPException(status_code=500, detail=message)
+        return output_files[0].read_bytes(), f"{Path(safe_title).stem}.pdf"
 
 
 @router.post("/upload")
@@ -644,49 +715,83 @@ async def export_documents(payload: ExportRequest):
     client = get_minio_client()
     selected_ids = set(payload.document_ids or [])
     prefix = f"{OBJECT_PREFIX}/{payload.user_id}/"
+    documents: list[dict] = []
+
+    for obj in client.list_objects(BUCKET_NAME, prefix=prefix, recursive=True):
+        if obj.object_name.endswith(".bak"):
+            continue
+        try:
+            document_id, filename, extension = parse_object_name(obj.object_name)
+        except ValueError:
+            continue
+        if selected_ids and document_id not in selected_ids:
+            continue
+        updated_at = obj.last_modified.isoformat() if obj.last_modified else ""
+        if payload.month and not updated_at.startswith(payload.month):
+            continue
+        try:
+            stat = client.stat_object(BUCKET_NAME, obj.object_name)
+            title = Path(get_original_title(stat, filename)).name or filename
+            response = client.get_object(BUCKET_NAME, obj.object_name)
+            try:
+                content = response.read()
+            finally:
+                response.close()
+                response.release_conn()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"导出文档失败: {exc}") from exc
+        documents.append({
+            "document_id": document_id,
+            "title": title,
+            "extension": extension,
+            "content": content,
+        })
+
+    if not documents:
+        raise HTTPException(status_code=404, detail="没有找到可导出的文档")
+
+    exported_documents = []
+    for document in documents:
+        content = document["content"]
+        title = document["title"]
+        extension = document["extension"]
+        if payload.output_format == "pdf":
+            content, title = convert_document_to_pdf(content, title, extension)
+            extension = "pdf"
+        exported_documents.append({
+            **document,
+            "content": content,
+            "title": title,
+            "extension": extension,
+        })
+
+    if len(exported_documents) == 1 and not payload.month:
+        document = exported_documents[0]
+        return StreamingResponse(
+            io.BytesIO(document["content"]),
+            media_type=get_content_type(document["extension"]),
+            headers={"Content-Disposition": content_disposition_attachment(document["title"])},
+        )
+
     archive = io.BytesIO()
     added_names: set[str] = set()
-    added_count = 0
-
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
-        for obj in client.list_objects(BUCKET_NAME, prefix=prefix, recursive=True):
-            if obj.object_name.endswith(".bak"):
-                continue
-            try:
-                document_id, filename, _ = parse_object_name(obj.object_name)
-            except ValueError:
-                continue
-            if selected_ids and document_id not in selected_ids:
-                continue
-            updated_at = obj.last_modified.isoformat() if obj.last_modified else ""
-            if payload.month and not updated_at.startswith(payload.month):
-                continue
-            try:
-                stat = client.stat_object(BUCKET_NAME, obj.object_name)
-                title = get_original_title(stat, filename)
-                content = client.get_object(BUCKET_NAME, obj.object_name).read()
-            except Exception as exc:
-                raise HTTPException(status_code=500, detail=f"导出文档失败: {exc}") from exc
-
-            archive_name = Path(title).name or filename
+        for document in exported_documents:
+            archive_name = document["title"]
             if archive_name in added_names:
                 stem = Path(archive_name).stem
                 suffix = Path(archive_name).suffix
-                archive_name = f"{stem}_{document_id}{suffix}"
+                archive_name = f"{stem}_{document['document_id']}{suffix}"
             added_names.add(archive_name)
-            zip_file.writestr(archive_name, content)
-            added_count += 1
-
-    if added_count == 0:
-        raise HTTPException(status_code=404, detail="没有找到可导出的文档")
+            zip_file.writestr(archive_name, document["content"])
 
     archive.seek(0)
     suffix = payload.month or datetime.now().strftime("%Y-%m-%d")
-    filename = f"documents_{suffix}.zip"
+    filename = f"documents_{suffix}_{payload.output_format}.zip"
     return StreamingResponse(
         archive,
         media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+        headers={"Content-Disposition": content_disposition_attachment(filename)},
     )
 
 

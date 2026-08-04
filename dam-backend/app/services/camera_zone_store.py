@@ -342,11 +342,7 @@ def get_camera_zone_store(path: Optional[str] = None):
     global _store
     if _store is None:
         if path is None:
-            from app.core.config import settings
-
-            if settings.CAMERA_ZONE_STORE_BACKEND.lower() == "mysql":
-                _store = SqlCameraZoneStore()
-                return _store
-            path = settings.CAMERA_ZONE_STORE_PATH
-        _store = CameraZoneStore(path)
+            _store = SqlCameraZoneStore()
+        else:
+            _store = CameraZoneStore(path)
     return _store

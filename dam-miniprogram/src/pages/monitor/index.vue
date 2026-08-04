@@ -29,8 +29,22 @@
       </view>
 
       <view class="video-box">
+        <live-player
+          v-if="streamUrl && !liveFallback"
+          :key="livePlayerKey"
+          class="video-frame"
+          :src="streamUrl"
+          mode="live"
+          autoplay
+          muted
+          object-fit="contain"
+          :min-cache="0.5"
+          :max-cache="1.5"
+          @statechange="handleLiveStateChange"
+          @error="handleLiveError"
+        />
         <image
-          v-if="snapshotUrl"
+          v-else-if="snapshotUrl"
           class="video-frame"
           :src="snapshotUrl"
           mode="aspectFit"
@@ -43,14 +57,14 @@
         <button
           class="ghost-btn action-btn"
           :loading="videoLoading"
-          :disabled="videoLoading || !selectedCamera.camera_id"
+          :disabled="videoLoading || !selectedCamera.id"
           @tap="refreshCameraSnapshot(true)"
         >
           刷新画面
         </button>
         <button
           class="ghost-btn action-btn"
-          :disabled="!selectedCamera.camera_id"
+          :disabled="!selectedCamera.id"
           @tap="openMapNavigation"
         >
           点位导航
@@ -60,7 +74,7 @@
       <button
         class="primary-btn broadcast-btn"
         :loading="cameraBroadcasting"
-        :disabled="cameraBroadcasting || !selectedCamera.camera_id"
+        :disabled="cameraBroadcasting || !selectedCamera.id"
         @tap="handleCameraBroadcast"
       >
         {{ recordingBroadcast ? '结束喊话' : '一键喊话' }}
@@ -81,13 +95,13 @@
       </view>
       <view
         v-for="(item, index) in cameras"
-        :key="item.camera_id"
+        :key="item.id"
         class="camera-item"
         :class="{ active: index === selectedCameraIndex }"
         @tap="selectCameraByIndex(index)"
       >
         <view>
-          <text>{{ item.camera_name || item.camera_id }}</text>
+          <text>{{ item.camera_name || item.id }}</text>
           <text>{{ item.install_address || item.description || '未填写安装地址' }}</text>
         </view>
         <text>{{ item.online ? '在线' : '待连接' }}</text>
@@ -108,7 +122,10 @@ export default {
       loading: false,
       loadError: '',
       videoLoading: false,
+      streamUrl: '',
       snapshotUrl: '',
+      liveFallback: false,
+      livePlayerKey: 0,
       videoText: '正在加载摄像头',
       cameraBroadcasting: false,
       recordingBroadcast: false,
@@ -119,7 +136,7 @@ export default {
 
   computed: {
     cameraNames() {
-      return this.cameras.map((item) => item.camera_name || item.camera_id)
+      return this.cameras.map((item) => item.camera_name || item.id)
     },
 
     selectedCamera() {
@@ -127,7 +144,7 @@ export default {
     },
 
     selectedCameraStatus() {
-      if (!this.selectedCamera.camera_id) return '未配置'
+      if (!this.selectedCamera.id) return '未配置'
       return this.selectedCamera.online ? '在线' : '待连接'
     },
 
@@ -145,13 +162,12 @@ export default {
   },
 
   onShow() {
-    if (this.selectedCamera.camera_id && !this.liveTimer) {
-      this.startLiveRefresh()
-    }
+    if (this.selectedCamera.id && !this.streamUrl) this.openSelectedCamera(false)
   },
 
   onHide() {
     this.stopLiveRefresh()
+    this.streamUrl = ''
   },
 
   onUnload() {
@@ -206,13 +222,15 @@ export default {
     selectCameraByIndex(index) {
       if (index === this.selectedCameraIndex && this.snapshotUrl) return
       this.selectedCameraIndex = index
+      this.streamUrl = ''
       this.snapshotUrl = ''
+      this.liveFallback = false
       this.videoText = '正在切换点位'
       this.openSelectedCamera(true)
     },
 
     openSelectedCamera(showToast) {
-      if (!this.selectedCamera.camera_id) {
+      if (!this.selectedCamera.id) {
         this.stopLiveRefresh()
         this.snapshotUrl = ''
         this.videoText = this.loadError || '暂无可选摄像头'
@@ -223,15 +241,20 @@ export default {
     },
 
     refreshCameraSnapshot(showToast = false) {
-      const cameraId = this.selectedCamera.camera_id
+      const cameraId = this.selectedCamera.id
       if (!cameraId || this.videoLoading) return Promise.resolve()
       this.videoLoading = true
       return request({ url: `/cameras/${encodeURIComponent(cameraId)}/video` })
         .then((data) => {
+          this.streamUrl = data.stream_url || ''
           this.snapshotUrl = `${absoluteUrl(data.snapshot_url)}?t=${Date.now()}`
-          this.videoText = '实时画面已连接'
+          this.liveFallback = !this.streamUrl
+          this.livePlayerKey += 1
+          this.videoText = this.streamUrl ? '正在连接实时视频流' : '实时快照模式'
         })
         .catch((error) => {
+          this.streamUrl = ''
+          this.liveFallback = true
           this.snapshotUrl = ''
           this.videoText = error.message || '当前摄像头暂未返回实时画面'
           if (showToast) {
@@ -248,10 +271,37 @@ export default {
       this.videoText = '当前摄像头暂未返回实时画面'
     },
 
+    handleLiveStateChange(event) {
+      const code = Number(event?.detail?.code || 0)
+      if (code === 2004) {
+        this.liveFallback = false
+        this.videoText = '实时视频已连接'
+      } else if (code === 2103) {
+        this.videoText = '实时视频正在重连'
+      } else if (code < 0) {
+        this.enableSnapshotFallback('实时视频中断，已切换快照预览')
+      }
+    },
+
+    handleLiveError() {
+      this.enableSnapshotFallback('实时视频播放失败，已切换快照预览')
+    },
+
+    enableSnapshotFallback(message) {
+      this.liveFallback = true
+      this.videoText = message
+      if (this.selectedCamera.id) {
+        this.snapshotUrl = `${absoluteUrl(`/api/miniprogram/v1/cameras/${encodeURIComponent(this.selectedCamera.id)}/snapshot.jpg`)}?t=${Date.now()}`
+      }
+      this.startLiveRefresh()
+    },
+
     startLiveRefresh() {
       this.stopLiveRefresh()
       this.liveTimer = setInterval(() => {
-        this.refreshCameraSnapshot(false)
+        if (this.liveFallback && this.selectedCamera.id) {
+          this.snapshotUrl = `${absoluteUrl(`/api/miniprogram/v1/cameras/${encodeURIComponent(this.selectedCamera.id)}/snapshot.jpg`)}?t=${Date.now()}`
+        }
       }, 2500)
     },
 
@@ -263,7 +313,7 @@ export default {
     },
 
     handleCameraBroadcast() {
-      const cameraId = this.selectedCamera.camera_id
+      const cameraId = this.selectedCamera.id
       if (!cameraId || this.cameraBroadcasting) return
       if (this.recordingBroadcast) {
         this.broadcastRecorder?.stop()
@@ -281,8 +331,11 @@ export default {
       this.broadcastRecorder.onStop(({ tempFilePath }) => {
         this.recordingBroadcast = false
         this.cameraBroadcasting = true
-        uploadBroadcastAudio({ filePath: tempFilePath, cameraId: this.selectedCamera.camera_id })
-          .then(() => uni.showToast({ title: '喊话已播放', icon: 'success' }))
+        uploadBroadcastAudio({ filePath: tempFilePath, cameraId: this.selectedCamera.id })
+          .then((result) => uni.showToast({
+            title: result.result === 'PARTIAL_SUCCESS' ? '部分设备播放成功' : '喊话已播放',
+            icon: result.result === 'PARTIAL_SUCCESS' ? 'none' : 'success'
+          }))
           .catch((error) => uni.showToast({ title: error.message, icon: 'none' }))
           .finally(() => { this.cameraBroadcasting = false })
       })
@@ -294,7 +347,7 @@ export default {
     },
 
     openMapNavigation() {
-      const cameraId = this.selectedCamera.camera_id || ''
+      const cameraId = this.selectedCamera.id || ''
       uni.navigateTo({
         url: `/pages/map/index?camera_id=${encodeURIComponent(cameraId)}`
       })
