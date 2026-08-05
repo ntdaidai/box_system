@@ -7,17 +7,99 @@
 - cloud_llm：云端大模型（qwen35B，最终报告，一定存在）
 """
 import logging
-from typing import Dict, Optional, List
+from typing import Any, Dict, Optional, List
 from sqlalchemy.orm import Session
 
 from src.dam_workflow.state import DamState
 from src.core.config import settings
 from src.core.models import (
     ModelEventMapping, ModelRegistry, ModelDeployBinding, ModelIOSchema,
-    ModelEvaluationTemplate,
+    ModelEvaluationTemplate, ActorLibrary,
 )
 
 logger = logging.getLogger(__name__)
+
+
+DEFAULT_ACTOR_NAME = "自然灾害分析专家"
+ACTOR_RULES = (
+    ("自然灾害分析专家", ("自然灾害", "泥石流", "滑坡", "洪水", "地震", "landslide", "debris", "flood", "earthquake", "natural_disaster")),
+    ("人员行为分析专家", ("人员", "入侵", "滩涂", "游玩", "电鱼", "捕鱼", "船只", "行为", "intrusion", "person", "people", "fishing", "behavior")),
+    ("极端天气分析专家", ("极端天气", "台风", "暴雨", "高温", "低温", "风速", "雨量", "气象", "typhoon", "rainstorm", "weather", "temperature")),
+)
+
+
+def _first_text(*values: Any) -> Optional[str]:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def infer_actor_name(
+    event_type: str,
+    sensor_data: Optional[Dict[str, Any]] = None,
+    explicit_actor_name: Optional[str] = None,
+) -> str:
+    """根据显式配置或事件上下文推断角色名。"""
+    sensor_data = sensor_data or {}
+    explicit = _first_text(
+        explicit_actor_name,
+        sensor_data.get("actor_name"),
+        sensor_data.get("actor"),
+        sensor_data.get("actor_role"),
+        sensor_data.get("role_prompt_name"),
+    )
+    if explicit:
+        return explicit
+
+    text = " ".join(
+        str(value or "")
+        for value in (
+            event_type,
+            sensor_data.get("event_type"),
+            sensor_data.get("event_name"),
+            sensor_data.get("event_category"),
+            sensor_data.get("summary"),
+            sensor_data.get("description"),
+        )
+    )
+    for actor_name, keywords in ACTOR_RULES:
+        if any(keyword in text for keyword in keywords):
+            return actor_name
+    return DEFAULT_ACTOR_NAME
+
+
+def fetch_actor_prompt(
+    db: Session,
+    actor_name: str,
+    model_category: str,
+) -> Optional[Dict[str, str]]:
+    """从 actor_library 读取本地或云端模型 system prompt。"""
+    if not db:
+        return None
+
+    actor = db.query(ActorLibrary).filter(ActorLibrary.actor_name == actor_name).first()
+    if not actor and actor_name != DEFAULT_ACTOR_NAME:
+        actor = db.query(ActorLibrary).filter(ActorLibrary.actor_name == DEFAULT_ACTOR_NAME).first()
+    if not actor:
+        return None
+
+    if model_category == "local_llm":
+        prompt = actor.local_system_prompt
+        source = "actor_library.local_system_prompt"
+    elif model_category == "cloud_llm":
+        prompt = actor.cloud_system_prompt
+        source = "actor_library.cloud_system_prompt"
+    else:
+        return None
+
+    if not prompt:
+        return None
+    return {
+        "actor_name": actor.actor_name,
+        "system_prompt": prompt,
+        "system_prompt_source": source,
+    }
 
 
 def query_event_model_mapping(db: Session, event_type: str, task_type: str, model_category: str) -> List[Dict]:
@@ -258,7 +340,14 @@ def select_model_for_action(node: Dict, event_type: str, db: Session = None) -> 
     }
 
 
-def configure_action_node(node: Dict, event_type: str, user_prompt: str, db: Session = None) -> Dict:
+def configure_action_node(
+    node: Dict,
+    event_type: str,
+    user_prompt: str,
+    db: Session = None,
+    sensor_data: Optional[Dict[str, Any]] = None,
+    actor_name: Optional[str] = None,
+) -> Dict:
     """为 ACTION 节点注入配置
 
     Args:
@@ -266,6 +355,8 @@ def configure_action_node(node: Dict, event_type: str, user_prompt: str, db: Ses
         event_type: 事件类型
         user_prompt: 用户 prompt
         db: SQLAlchemy Session
+        sensor_data: 事件上下文
+        actor_name: 指定角色名
 
     Returns:
         配置后的节点
@@ -274,6 +365,16 @@ def configure_action_node(node: Dict, event_type: str, user_prompt: str, db: Ses
 
     # 为 local_llm 和 cloud_llm 节点注入 prompt 模板
     if model_category in ["local_llm", "cloud_llm"]:
+        inferred_actor_name = infer_actor_name(event_type, sensor_data, actor_name)
+        actor_prompt = fetch_actor_prompt(db, inferred_actor_name, model_category) if db else None
+        if actor_prompt:
+            node["actor_name"] = actor_prompt["actor_name"]
+            node["system_prompt"] = actor_prompt["system_prompt"]
+            node["system_prompt_source"] = actor_prompt["system_prompt_source"]
+        else:
+            node["actor_name"] = inferred_actor_name
+            node["system_prompt_source"] = "default_model_service_prompt"
+
         template = None
         if db:
             template = fetch_evaluation_template(db, event_type=event_type)
@@ -306,10 +407,23 @@ def configure_action_node(node: Dict, event_type: str, user_prompt: str, db: Ses
                 "sensor_data": {"type": "object", "required": False, "description": "传感器数据"},
                 "user_prompt": {"type": "string", "required": True, "description": "用户原始需求"},
                 "event_type": {"type": "string", "required": True, "description": "事件类型"},
+                "images": {"type": "array", "required": False, "description": "图片路径列表"},
+                "videos": {"type": "array", "required": False, "description": "视频路径列表"},
+                "media_objects": {"type": "array", "required": False, "description": "媒体对象引用"},
+                "system_prompt": {"type": "string", "required": False, "description": "角色 system prompt"},
             },
             "outputs": {
                 "report": {"type": "string", "description": "分析报告"},
+                "preliminary_report": {"type": "string", "description": "初步分析报告"},
+                "final_report": {"type": "object", "description": "结构化分析报告"},
                 "risk_level": {"type": "string", "description": "风险等级"},
+                "template_id": {"type": "string", "description": "OnlyOffice 模板 ID"},
+                "template_data": {"type": "object", "description": "OnlyOffice/docxtpl 模板上下文"},
+                "template_fields": {"type": "object", "description": "扁平模板字段"},
+                "template_tables": {"type": "object", "description": "模板表格数据"},
+                "docx_context": {"type": "object", "description": "DOCX 渲染上下文"},
+                "media_objects": {"type": "array", "description": "传递给下游模型的媒体对象引用"},
+                "cloud_media_objects": {"type": "array", "description": "已上传到云端 MinIO 的媒体对象引用"},
             },
         }
 
@@ -329,6 +443,8 @@ def populate_models(dam_state: DamState, db: Session = None) -> Dict:
     draft_dag = dam_state.get("draft_dag")
     event_type = dam_state.get("event_type")
     user_prompt = dam_state.get("user_prompt", "")
+    sensor_data = dam_state.get("sensor_data") or {}
+    actor_name = dam_state.get("actor_name")
 
     if not draft_dag:
         raise ValueError("draft_dag 为空，无法进行模型挂载")
@@ -340,7 +456,14 @@ def populate_models(dam_state: DamState, db: Session = None) -> Dict:
 
         if node_class == "ACTION":
             # 先注入配置
-            configure_action_node(node, event_type, user_prompt, db)
+            configure_action_node(
+                node,
+                event_type,
+                user_prompt,
+                db,
+                sensor_data=sensor_data,
+                actor_name=actor_name,
+            )
 
             # 再选择模型
             model_info = select_model_for_action(node, event_type, db)

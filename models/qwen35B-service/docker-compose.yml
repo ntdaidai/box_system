@@ -6,6 +6,6 @@ services:
     ports:
       - "9900:9457"
     environment:
-      - CLOUD_URL=http://10.196.85.11:9457
-      - INFERENCE_PATH=/api/v1/cloud-inference
+      - CLOUD_URL=http://10.196.85.11:9458
+      - INFERENCE_PATH=/infer
     restart: unless-stopped

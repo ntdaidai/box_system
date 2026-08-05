@@ -14,8 +14,11 @@ router = APIRouter(prefix="/api/dam", tags=["DAM 工作流"])
 class AnalyzeRequest(BaseModel):
     """分析请求"""
     prompt: str = Field(..., description="完整的系统 prompt")
-    images: List[str] = Field(..., description="现场图片路径列表")
+    images: List[str] = Field(default_factory=list, description="现场图片路径列表")
+    videos: List[str] = Field(default_factory=list, description="现场视频路径列表")
+    media_objects: List[dict] = Field(default_factory=list, description="媒体对象引用")
     sensor_data: Optional[dict] = Field(None, description="传感器数据（可选）")
+    actor_name: Optional[str] = Field(None, description="指定角色名（可选）")
 
 
 class AnalyzeResponse(BaseModel):
@@ -40,7 +43,10 @@ def analyze(request: AnalyzeRequest, db: Session = Depends(get_db)):
     result = run_dam_workflow(
         user_prompt=request.prompt,
         images=request.images,
+        videos=request.videos,
+        media_objects=request.media_objects,
         sensor_data=request.sensor_data,
+        actor_name=request.actor_name,
         db=db,
     )
 

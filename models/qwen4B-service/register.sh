@@ -38,13 +38,26 @@ curl -s -X POST "${MODEL_REGISTRY_URL}/api/model-registry/${MODEL_ID}/bind-image
     "image_name": "qwen4b-local:latest",
     "container_port": 9901,
     "host_port": 9901,
-    "inference_path": "/api/v1/local-inference",
-    "health_path": "/health",
-    "env_vars": {
+    "inference_path": "/infer",
+    "health_check_url": "/health",
+    "extra_env": {
       "VLLM_BASE_URL": "http://localhost:8001",
       "MODEL_NAME": "qwen4B",
       "MAX_TOKENS": "2048",
-      "TEMPERATURE": "0.15"
+      "TEMPERATURE": "0.15",
+      "UPLOAD_MEDIA_TO_CLOUD": "true",
+      "STRICT_MEDIA_UPLOAD": "false",
+      "EDGE_MINIO_ENDPOINT": "localhost:9000",
+      "EDGE_MINIO_ACCESS_KEY": "minioadmin",
+      "EDGE_MINIO_SECRET_KEY": "minioadmin",
+      "EDGE_MINIO_SECURE": "false",
+      "EDGE_MINIO_BUCKET": "dam",
+      "CLOUD_MINIO_ENDPOINT": "10.196.85.11:9469",
+      "CLOUD_MINIO_ACCESS_KEY": "minioadmin",
+      "CLOUD_MINIO_SECRET_KEY": "minioadmin",
+      "CLOUD_MINIO_SECURE": "false",
+      "CLOUD_MINIO_BUCKET": "cloud-tasks",
+      "CLOUD_MEDIA_PREFIX": "workflow-media"
     }
   }'
 
@@ -55,5 +68,5 @@ echo "========================================="
 echo "模型 ID:     ${MODEL_ID}"
 echo "服务地址:    http://localhost:9901"
 echo "健康检查:    http://localhost:9901/health"
-echo "推理接口:    POST http://localhost:9901/api/v1/local-inference"
+echo "推理接口:    POST http://localhost:9901/infer"
 echo "========================================="

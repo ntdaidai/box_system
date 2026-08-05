@@ -81,7 +81,19 @@ def test_input_parser():
     result = parse_dam_input("滑坡事件分析", ["img.jpg"])
     assert result["event_type"] == "滑坡"
     assert result["images"] == ["img.jpg"]
+    assert result["videos"] == []
+    assert result["media_objects"] == []
     print("PASS: input parser")
+
+
+def test_actor_inference():
+    """角色推断"""
+    from src.dam_workflow.model_selector import infer_actor_name
+    assert infer_actor_name("滑坡", {"event_name": "滑坡事件"}) == "自然灾害分析专家"
+    assert infer_actor_name("人员入侵", {"event_category": "behavior"}) == "人员行为分析专家"
+    assert infer_actor_name("暴雨", {"event_name": "暴雨预警"}) == "极端天气分析专家"
+    assert infer_actor_name("滑坡", {"actor_name": "人员行为分析专家"}) == "人员行为分析专家"
+    print("PASS: actor inference")
 
 
 def test_rule_io_matcher():
@@ -98,5 +110,6 @@ if __name__ == "__main__":
     test_event_templates()
     test_dag_generation_template_path()
     test_input_parser()
+    test_actor_inference()
     test_rule_io_matcher()
     print("\nAll smoke tests passed!")

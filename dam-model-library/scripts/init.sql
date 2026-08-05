@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS `model_deploy_binding` (
   `host_ip`           VARCHAR(64)   NOT NULL DEFAULT '127.0.0.1' COMMENT '宿主机 IP',
   `host_port`         INT           DEFAULT NULL COMMENT '宿主机映射端口',
   `container_port`    INT           DEFAULT NULL COMMENT '容器内部端口',
-  `inference_path`    VARCHAR(256)  DEFAULT NULL COMMENT '推理接口路径（如 /predict）',
+  `inference_path`    VARCHAR(256)  DEFAULT '/infer' COMMENT '推理接口路径（默认 /infer）',
   `health_check_url`  VARCHAR(512)  DEFAULT NULL COMMENT '健康检查路径（如 /health）',
   `gpu_device`        VARCHAR(64)   DEFAULT NULL COMMENT 'GPU 设备映射（已废弃，请使用 container_config.gpus）',
   `extra_mounts`      JSON          DEFAULT NULL COMMENT '挂载卷 [{"host":"...","container":"..."}]',

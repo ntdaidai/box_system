@@ -6,8 +6,11 @@ from typing import List, Dict, Optional, TypedDict, Any
 class DamInput(TypedDict):
     """DAM 系统标准输入"""
     event_type: str                # 已确定的事件类型（如 "滑坡"、"裂缝"、"渗漏"）
-    images: List[str]              # 现场图片路径列表（1张或多张，必需）
+    images: List[str]              # 现场图片路径列表
+    videos: List[str]              # 现场视频路径列表
+    media_objects: List[Dict[str, Any]]  # 现场媒体对象引用
     sensor_data: Optional[dict]    # 传感器信息、设备信息等辅助数据（可选，内容由用户自行填写）
+    actor_name: Optional[str]      # 指定角色名（可选，未指定时按事件推断）
     user_prompt: str               # 完整的系统 prompt（包含事件描述和任务要求）
 
 
@@ -23,8 +26,11 @@ class DamState(TypedDict, total=False):
     """DAM 轻量工作流状态"""
     # --- 输入 ---
     event_type: str                        # 已确定的事件类型
-    images: List[str]                      # 现场图片路径列表（必需）
+    images: List[str]                      # 现场图片路径列表
+    videos: List[str]                      # 现场视频路径列表
+    media_objects: List[Dict[str, Any]]    # 媒体对象引用
     sensor_data: Optional[dict]            # 传感器信息、设备信息（可选，内容由用户自行填写）
+    actor_name: Optional[str]              # 指定角色名
     user_prompt: str                       # 完整系统 prompt
 
     # --- 中间产物（内部使用，不对外暴露） ---

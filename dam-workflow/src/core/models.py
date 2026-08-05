@@ -59,6 +59,24 @@ class ModelEvaluationTemplate(Base):
     )
 
 
+class ActorLibrary(Base):
+    """角色库表：为边缘/云端多模态模型提供 system prompt。"""
+    __tablename__ = "actor_library"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
+    actor_name = Column(String(128), nullable=False, comment="角色名称")
+    description = Column(String(512), nullable=True, comment="角色描述")
+    local_system_prompt = Column(Text, nullable=True, comment="边缘模型系统提示词")
+    cloud_system_prompt = Column(Text, nullable=True, comment="云端模型系统提示词")
+    create_time = Column(DateTime, nullable=False, default=datetime.now, comment="创建时间")
+    update_time = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now, comment="更新时间")
+
+    __table_args__ = (
+        UniqueConstraint("actor_name", name="uk_actor_name"),
+        {"mysql_charset": "utf8mb4", "comment": "角色库"},
+    )
+
+
 class ModelIOTemplate(Base):
     """IO 配对模板表"""
     __tablename__ = "model_io_template"
@@ -93,7 +111,6 @@ class ModelRegistry(Base):
     model_type = Column(String(64), nullable=True, comment="模型类型")
     framework = Column(String(64), nullable=True, comment="推理框架")
     description = Column(Text, nullable=True, comment="模型描述")
-    tags = Column(JSON, nullable=True, comment="标签列表")
     runtime_status = Column(String(32), nullable=True, comment="运行状态")
 
     __table_args__ = (
@@ -110,7 +127,6 @@ class ModelDeployBinding(Base):
     host_ip = Column(String(64), nullable=True, comment="部署主机 IP")
     host_port = Column(Integer, nullable=True, comment="部署主机端口")
     inference_path = Column(String(256), nullable=True, comment="推理接口路径")
-    deploy_status = Column(String(32), nullable=True, comment="部署状态")
 
     __table_args__ = (
         Index("idx_model_id", "model_id"),

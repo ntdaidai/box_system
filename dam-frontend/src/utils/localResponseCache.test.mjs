@@ -9,8 +9,8 @@ import {
 
 {
   assert.equal(isCacheableRequest({ method: 'get', url: '/v1/sensor/history/temp' }), true)
-  assert.equal(isCacheableRequest({ method: 'post', url: '/device' }), false)
-  assert.equal(isCacheableRequest({ method: 'get', url: '/device', localCache: false }), false)
+  assert.equal(isCacheableRequest({ method: 'post', url: '/alarm/list' }), false)
+  assert.equal(isCacheableRequest({ method: 'get', url: '/alarm/list', localCache: false }), false)
 }
 
 {

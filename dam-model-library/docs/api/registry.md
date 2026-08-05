@@ -281,10 +281,10 @@ print(response.json())
       "host_ip": "127.0.0.1",
       "host_port": 8000,
       "container_port": 8000,
-      "inference_path": "/v1/chat/completions",
+      "inference_path": "/infer",
       "health_check_url": "/health"
     },
-    "inference_url": "http://127.0.0.1:8000/v1/chat/completions"
+    "inference_url": "http://127.0.0.1:8000/infer"
   }
 }
 ```

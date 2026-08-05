@@ -16,7 +16,10 @@ logger = logging.getLogger(__name__)
 def run_dam_workflow(
     user_prompt: str,
     images: list,
+    videos: list = None,
+    media_objects: list = None,
     sensor_data: dict = None,
+    actor_name: str = None,
     db: Session = None,
 ) -> Dict[str, Any]:
     """运行 DAM 工作流生成
@@ -24,7 +27,10 @@ def run_dam_workflow(
     Args:
         user_prompt: 用户输入的完整 prompt
         images: 现场图片路径列表
+        videos: 现场视频路径列表
+        media_objects: 媒体对象引用
         sensor_data: 传感器数据（可选）
+        actor_name: 指定角色名（可选）
         db: SQLAlchemy Session（可选）
 
     Returns:
@@ -38,13 +44,23 @@ def run_dam_workflow(
     """
     try:
         # 阶段 0：输入解析
-        dam_input = parse_dam_input(user_prompt, images, sensor_data)
+        dam_input = parse_dam_input(
+            user_prompt,
+            images,
+            sensor_data,
+            videos=videos,
+            media_objects=media_objects,
+            actor_name=actor_name,
+        )
 
         # 构建初始状态
         state: DamState = {
             "event_type": dam_input["event_type"],
             "images": dam_input["images"],
+            "videos": dam_input["videos"],
+            "media_objects": dam_input["media_objects"],
             "sensor_data": dam_input.get("sensor_data"),
+            "actor_name": dam_input.get("actor_name"),
             "user_prompt": dam_input["user_prompt"],
             "retry_count": 0,
         }

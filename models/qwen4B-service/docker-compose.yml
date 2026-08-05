@@ -13,4 +13,18 @@ services:
       - MAX_TOKENS=2048
       - TEMPERATURE=0.15
       - TIMEOUT=60
+      # 媒体转存：AGX 本地 MinIO -> A100 云端 MinIO
+      - UPLOAD_MEDIA_TO_CLOUD=true
+      - STRICT_MEDIA_UPLOAD=false
+      - EDGE_MINIO_ENDPOINT=${MINIO_ENDPOINT:-localhost:9000}
+      - EDGE_MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
+      - EDGE_MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
+      - EDGE_MINIO_SECURE=${MINIO_SECURE:-false}
+      - EDGE_MINIO_BUCKET=${EDGE_MINIO_BUCKET:-dam}
+      - CLOUD_MINIO_ENDPOINT=${A100_MINIO_ENDPOINT:-10.196.85.11:9469}
+      - CLOUD_MINIO_ACCESS_KEY=${A100_MINIO_ACCESS_KEY:-minioadmin}
+      - CLOUD_MINIO_SECRET_KEY=${A100_MINIO_SECRET_KEY:-minioadmin}
+      - CLOUD_MINIO_SECURE=${A100_MINIO_SECURE:-false}
+      - CLOUD_MINIO_BUCKET=${A100_MINIO_BUCKET:-cloud-tasks}
+      - CLOUD_MEDIA_PREFIX=${CLOUD_MEDIA_PREFIX:-workflow-media}
     restart: unless-stopped

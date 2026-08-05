@@ -57,7 +57,7 @@ const routes = [
           {
             path: 'config',
             name: 'MonitorInformationConfig',
-            component: () => import('@/components/DevelopmentPlaceholder.vue'),
+            component: () => import('@/views/Monitor/InformationConfig.vue'),
             meta: { title: '信息配置' }
           },
           {
@@ -142,7 +142,7 @@ const routes = [
           {
             path: 'knowledge',
             name: 'KnowledgeBase',
-            component: () => import('@/components/DevelopmentPlaceholder.vue'),
+            component: () => import('@/views/KnowledgeBase.vue'),
             meta: { title: '知识库' }
           },
           {

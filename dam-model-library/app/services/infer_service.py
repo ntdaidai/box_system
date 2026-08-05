@@ -20,6 +20,9 @@ from app.services.docker_service import docker_service
 from app.services.lifecycle_service import lifecycle_service
 
 
+DEFAULT_INFERENCE_PATH = "/infer"
+
+
 class InferService:
     """推理服务"""
 
@@ -68,7 +71,8 @@ class InferService:
             request_data = self._validate_and_fill_defaults(db, model_id, request_data)
 
         # 构建推理 URL
-        inference_url = f"http://{binding.host_ip}:{binding.host_port}{binding.inference_path}"
+        inference_path = binding.inference_path or DEFAULT_INFERENCE_PATH
+        inference_url = f"http://{binding.host_ip}:{binding.host_port}{inference_path}"
 
         # 发送推理请求
         try:
@@ -135,7 +139,8 @@ class InferService:
                 raise HTTPException(status_code=504, detail="模型启动超时，推理服务未就绪")
 
             # 执行推理
-            inference_url = f"http://{binding.host_ip}:{binding.host_port}{binding.inference_path}"
+            inference_path = binding.inference_path or DEFAULT_INFERENCE_PATH
+            inference_url = f"http://{binding.host_ip}:{binding.host_port}{inference_path}"
             response = self.client.post(inference_url, json=request_data)
             response.raise_for_status()
             inference_result = response.json()

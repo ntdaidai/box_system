@@ -38,6 +38,26 @@ class Settings:
     LOCAL_LLM_MAX_TOKENS: int = int(_get_env("LOCAL_LLM_MAX_TOKENS", "2048"))
     LOCAL_LLM_TEMPERATURE: float = float(_get_env("LOCAL_LLM_TEMPERATURE", "0.15"))
 
+    # ── DAM 智能路由工作流服务 ───────────────────────────────
+    DAM_WORKFLOW_ENABLED: bool = _get_env("DAM_WORKFLOW_ENABLED", "true").lower() == "true"
+    DAM_WORKFLOW_BASE_URL: str = _get_env(
+        "DAM_WORKFLOW_BASE_URL", "http://localhost:5002"
+    ).rstrip("/")
+    DAM_WORKFLOW_TIMEOUT: float = float(_get_env("DAM_WORKFLOW_TIMEOUT", "30"))
+    DAM_WORKFLOW_PLACEHOLDER_IMAGE: str = _get_env(
+        "DAM_WORKFLOW_PLACEHOLDER_IMAGE", "NO_IMAGE_REQUIRED"
+    )
+    DAM_MODEL_LIBRARY_BASE_URL: str = _get_env(
+        "DAM_MODEL_LIBRARY_BASE_URL", "http://localhost:5001"
+    ).rstrip("/")
+    DAM_MODEL_LIBRARY_TIMEOUT: float = float(_get_env("DAM_MODEL_LIBRARY_TIMEOUT", "300"))
+    DAM_MODEL_LIBRARY_WORKFLOW_EXECUTE_ENABLED: bool = (
+        _get_env("DAM_MODEL_LIBRARY_WORKFLOW_EXECUTE_ENABLED", "true").lower() == "true"
+    )
+    DAM_MODEL_LIBRARY_WORKFLOW_MODE: str = _get_env(
+        "DAM_MODEL_LIBRARY_WORKFLOW_MODE", "infer"
+    )
+
     # ── CORS ───────────────────────────────────────────────────
     CORS_ORIGINS: List[str] = _get_env("CORS_ORIGINS", "*").split(",")
 

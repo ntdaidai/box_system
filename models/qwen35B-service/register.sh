@@ -43,8 +43,12 @@ curl -s -X POST "$MODEL_LIBRARY_URL/api/model-registry/$MODEL_ID/bind-image" \
     "image_name": "qwen35b-proxy:latest",
     "container_port": 9457,
     "host_port": 9457,
-    "inference_path": "/api/v1/cloud-inference",
+    "inference_path": "/infer",
     "health_check_url": "/health",
+    "extra_env": {
+      "CLOUD_URL": "http://10.196.85.11:9458",
+      "INFERENCE_PATH": "/infer"
+    },
     "container_config": {
       "network_mode": "host"
     }

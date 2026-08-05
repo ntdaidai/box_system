@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
 from app.database import engine, Base
-from app.routers import health, registry, docker, binding, lifecycle, logs, io_schema, infer
+from app.routers import health, registry, docker, binding, lifecycle, logs, io_schema, infer, workflow
 from app.tasks.status_sync import start_sync_task, stop_sync_task
 
 # 导入所有模型，确保 SQLAlchemy 能发现它们并创建对应的表
@@ -53,3 +53,4 @@ app.include_router(lifecycle.router, prefix="/api/model-registry", tags=["容器
 app.include_router(logs.router, prefix="/api/model-registry", tags=["容器日志"])
 app.include_router(io_schema.router, prefix="/api/model-registry", tags=["IO Schema"])
 app.include_router(infer.router, prefix="/api/model-registry", tags=["模型推理"])
+app.include_router(workflow.router, prefix="/api/workflow", tags=["工作流执行"])

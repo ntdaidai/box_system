@@ -12,6 +12,9 @@ from app.schemas.binding import BindContainerRequest, BindImageRequest, BindBoth
 from app.services.docker_service import docker_service
 
 
+DEFAULT_INFERENCE_PATH = "/infer"
+
+
 class BindingService:
     """部署绑定服务"""
 
@@ -52,7 +55,7 @@ class BindingService:
             host_ip=data.host_ip or "127.0.0.1",
             host_port=host_port,
             container_port=data.container_port,
-            inference_path=data.inference_path,
+            inference_path=data.inference_path or DEFAULT_INFERENCE_PATH,
             health_check_url=data.health_check_url,
             gpu_device=data.gpu_device,
             container_config=data.container_config.model_dump() if data.container_config else None,
@@ -101,7 +104,7 @@ class BindingService:
             host_ip=data.host_ip or "127.0.0.1",
             host_port=host_port,
             container_port=data.container_port,
-            inference_path=data.inference_path,
+            inference_path=data.inference_path or DEFAULT_INFERENCE_PATH,
             health_check_url=data.health_check_url,
             gpu_device=data.gpu_device,
             extra_mounts=data.extra_mounts,
@@ -155,7 +158,7 @@ class BindingService:
             host_ip=data.host_ip or "127.0.0.1",
             host_port=host_port,
             container_port=data.container_port,
-            inference_path=data.inference_path,
+            inference_path=data.inference_path or DEFAULT_INFERENCE_PATH,
             health_check_url=data.health_check_url,
             gpu_device=data.gpu_device,
             container_config=data.container_config.model_dump() if data.container_config else None,

@@ -86,14 +86,14 @@ sudo docker compose logs -f mysql
 sudo docker exec mysql-server mysqldump -uroot -p --all-databases > backup_$(date +%Y%m%d).sql
 
 # 备份指定数据库
-sudo docker exec mysql-server mysqldump -uroot -p mydb > mydb_backup_$(date +%Y%m%d).sql
+sudo docker exec mysql-server mysqldump -uroot -p dam_system > dam_system_backup_$(date +%Y%m%d).sql
 ```
 
 ### 数据恢复
 
 ```bash
 # 恢复数据库
-sudo docker exec -i mysql-server mysql -uroot -p mydb < backup.sql
+sudo docker exec -i mysql-server mysql -uroot -p dam_system < backup.sql
 ```
 
 ### 修改配置

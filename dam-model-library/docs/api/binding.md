@@ -41,7 +41,7 @@
 | container_id | string | 是 | 容器 ID 或名称 |
 | container_port | int | 否 | 容器内部端口，默认 8000 |
 | host_port | int | 否 | 宿主机端口，默认自动分配 |
-| inference_path | string | 否 | 推理路径，默认 `/v1/chat/completions` |
+| inference_path | string | 否 | 推理路径，默认 `/infer` |
 | health_check_url | string | 否 | 健康检查路径，默认 `/health` |
 | container_config | object | 否 | Docker 容器运行时配置 |
 | remark | string | 否 | 备注 |
@@ -74,7 +74,7 @@ curl -X POST http://localhost:5001/api/model-registry/1/bind-container \
     "container_id": "my-vllm-container",
     "container_port": 8000,
     "host_port": 8000,
-    "inference_path": "/v1/chat/completions",
+    "inference_path": "/infer",
     "health_check_url": "/health",
     "remark": "绑定已有 vLLM 容器"
   }'
@@ -88,7 +88,7 @@ data = {
     "container_id": "my-vllm-container",
     "container_port": 8000,
     "host_port": 8000,
-    "inference_path": "/v1/chat/completions",
+    "inference_path": "/infer",
     "health_check_url": "/health",
     "remark": "绑定已有 vLLM 容器"
 }
@@ -116,7 +116,7 @@ print(response.json())
     "host_ip": "127.0.0.1",
     "host_port": 8000,
     "container_port": 8000,
-    "inference_path": "/v1/chat/completions",
+    "inference_path": "/infer",
     "health_check_url": "/health",
     "remark": "绑定已有 vLLM 容器",
     "create_time": "2026-07-13T10:00:00",
@@ -152,7 +152,7 @@ print(response.json())
 | image_name | string | 是 | 镜像全名（如 `vllm/vllm-openai:latest`） |
 | container_port | int | 否 | 容器内部端口，默认 8000 |
 | host_port | int | 否 | 宿主机端口，默认自动分配 |
-| inference_path | string | 否 | 推理路径，默认 `/v1/chat/completions` |
+| inference_path | string | 否 | 推理路径，默认 `/infer` |
 | health_check_url | string | 否 | 健康检查路径，默认 `/health` |
 | extra_mounts | array | 否 | 挂载卷列表 |
 | extra_env | object | 否 | 环境变量 |
@@ -177,7 +177,7 @@ curl -X POST http://localhost:5001/api/model-registry/1/bind-image \
   -d '{
     "image_name": "vllm/vllm-openai:latest",
     "container_port": 8000,
-    "inference_path": "/v1/chat/completions",
+    "inference_path": "/infer",
     "health_check_url": "/health",
     "extra_mounts": [
       {"host": "/data/models", "container": "/models"}
@@ -202,7 +202,7 @@ import requests
 data = {
     "image_name": "vllm/vllm-openai:latest",
     "container_port": 8000,
-    "inference_path": "/v1/chat/completions",
+    "inference_path": "/infer",
     "health_check_url": "/health",
     "extra_mounts": [
         {"host": "/data/models", "container": "/models"}
@@ -242,7 +242,7 @@ print(response.json())
     "host_ip": "127.0.0.1",
     "host_port": null,
     "container_port": 8000,
-    "inference_path": "/v1/chat/completions",
+    "inference_path": "/infer",
     "health_check_url": "/health",
     "extra_mounts": [{"host": "/data/models", "container": "/models"}],
     "extra_env": {"MODEL_NAME": "Qwen/Qwen2-7B"},
@@ -296,7 +296,7 @@ curl -X POST http://localhost:5001/api/model-registry/1/bind-both \
     "image_name": "vllm/vllm-openai:latest",
     "container_port": 8000,
     "host_port": 8000,
-    "inference_path": "/v1/chat/completions",
+    "inference_path": "/infer",
     "health_check_url": "/health"
   }'
 ```
@@ -310,7 +310,7 @@ data = {
     "image_name": "vllm/vllm-openai:latest",
     "container_port": 8000,
     "host_port": 8000,
-    "inference_path": "/v1/chat/completions",
+    "inference_path": "/infer",
     "health_check_url": "/health"
 }
 
@@ -337,7 +337,7 @@ print(response.json())
     "host_ip": "127.0.0.1",
     "host_port": 8000,
     "container_port": 8000,
-    "inference_path": "/v1/chat/completions",
+    "inference_path": "/infer",
     "health_check_url": "/health",
     "create_time": "2026-07-13T10:00:00",
     "update_time": "2026-07-13T10:00:00"
@@ -424,7 +424,7 @@ print(response.json())
     "host_ip": "127.0.0.1",
     "host_port": 8001,
     "container_port": 8000,
-    "inference_path": "/v1/chat/completions",
+    "inference_path": "/infer",
     "health_check_url": "/health",
     "remark": "更新端口",
     "create_time": "2026-07-13T10:00:00",

@@ -202,6 +202,10 @@ services:
       MODEL_REGISTRY_DB_NAME: dam_system
       # 模型库 API
       MODEL_REGISTRY_API_BASE: http://127.0.0.1:5001
+      # DAM 工作流默认模型（使用模型库中已适配 /infer 的包装服务）
+      LLM_LOCAL_MODEL_ID: "14"
+      LLM_CLOUD_MODEL_ID: "13"
+      LLM_FALLBACK_MODEL_ID: "9"
       # 服务配置
       HOST: "0.0.0.0"
       PORT: "5002"
@@ -415,7 +419,7 @@ services:
       - "3306:3306"
     environment:
       MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: mydb
+      MYSQL_DATABASE: dam_system
       MYSQL_CHARSET: utf8mb4
       MYSQL_COLLATION: utf8mb4_unicode_ci
     volumes:

@@ -65,6 +65,8 @@ def rule_based_io_match(source_io: Dict, target_io: Dict) -> Dict:
 START_OUTPUTS = {
     "event_type": {"type": "string"},
     "images": {"type": "array"},
+    "videos": {"type": "array"},
+    "media_objects": {"type": "array"},
     "sensor_data": {"type": "object"},
     "user_prompt": {"type": "string"},
 }
@@ -76,10 +78,22 @@ LLM_ACTION_IO = {
         "sensor_data": {"type": "object", "required": False, "description": "传感器数据"},
         "user_prompt": {"type": "string", "required": True, "description": "用户原始需求"},
         "event_type": {"type": "string", "required": True, "description": "事件类型"},
+        "images": {"type": "array", "required": False, "description": "图片路径列表"},
+        "videos": {"type": "array", "required": False, "description": "视频路径列表"},
+        "media_objects": {"type": "array", "required": False, "description": "媒体对象引用"},
     },
     "outputs": {
         "report": {"type": "string", "description": "分析报告"},
+        "preliminary_report": {"type": "string", "description": "初步分析报告"},
+        "final_report": {"type": "object", "description": "结构化分析报告"},
         "risk_level": {"type": "string", "description": "风险等级"},
+        "template_id": {"type": "string", "description": "OnlyOffice 模板 ID"},
+        "template_data": {"type": "object", "description": "OnlyOffice/docxtpl 模板上下文"},
+        "template_fields": {"type": "object", "description": "扁平模板字段"},
+        "template_tables": {"type": "object", "description": "模板表格数据"},
+        "docx_context": {"type": "object", "description": "DOCX 渲染上下文"},
+        "media_objects": {"type": "array", "description": "传递给下游模型的媒体对象引用"},
+        "cloud_media_objects": {"type": "array", "description": "已上传到云端 MinIO 的媒体对象引用"},
     },
 }
 

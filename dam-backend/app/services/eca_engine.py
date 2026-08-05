@@ -20,6 +20,9 @@ from app.models.data_source import DataSource
 from app.models.model_library import ModelLibrary
 from app.models.safety_integration import SafetyEventInstance
 from app.api.health import _get_gpu_info
+from app.core.config import settings
+from app.services.dam_model_library_client import dam_model_library_client
+from app.services.dam_workflow_client import dam_workflow_client
 from app.services.unified_sensor_event_service import unified_sensor_event_service
 from app.services.safety_event_runtime_service import safety_event_runtime_service
 
@@ -154,7 +157,7 @@ class ECAEngine:
         评估条件是否满足（支持时间窗口和持续时间）
 
         Args:
-            condition: 条件对象
+            condition: 条件对象 
             current_data: 当前传感器数据快照
 
         Returns:
@@ -741,6 +744,8 @@ class ECAEngine:
 
             # 获取事件对象（用于判断告警类型）
             event = db.query(EventLibrary).filter(EventLibrary.id == event_id).first()
+            if event:
+                await self.plan_dam_workflow(instance, event, sensor_data, db)
 
             # 获取事件关联的行为流程
             relations = db.query(EventAction).filter(
@@ -796,6 +801,96 @@ class ECAEngine:
                     db.rollback()
         finally:
             db.close()
+
+    async def plan_dam_workflow(
+        self,
+        instance: SafetyEventInstance,
+        event: EventLibrary,
+        sensor_data: Dict[str, Any],
+        db: Session,
+    ) -> Optional[Dict[str, Any]]:
+        """Call dam-workflow and attach the generated DAG to the event timeline."""
+        if not settings.DAM_WORKFLOW_ENABLED:
+            return None
+
+        action_key = f"dam-workflow:{instance.instance_no}"
+        try:
+            result = await dam_workflow_client.analyze_event(
+                event=event,
+                instance=instance,
+                sensor_data=sensor_data,
+            )
+            final_dag = result.get("final_dag") or {}
+            request_payload = dam_workflow_client.build_payload(
+                event=event,
+                instance=instance,
+                sensor_data=sensor_data,
+            )
+            execution_result = None
+            execution_error = None
+            if settings.DAM_MODEL_LIBRARY_WORKFLOW_EXECUTE_ENABLED:
+                try:
+                    execution_result = await dam_model_library_client.execute_workflow(
+                        dag=final_dag,
+                        prompt=request_payload["prompt"],
+                        images=request_payload["images"],
+                        videos=request_payload.get("videos") or [],
+                        media_objects=request_payload.get("media_objects") or [],
+                        sensor_data=request_payload["sensor_data"],
+                        event_type=result.get("event_type"),
+                    )
+                except Exception as execute_error:
+                    execution_error = str(execute_error)
+                    logger.warning(
+                        f"DAM工作流提交模型库执行失败: event={event.event_name}, error={execute_error}"
+                    )
+            node_count = len(final_dag.get("nodes") or [])
+            edge_count = len(final_dag.get("edges") or [])
+            execution_status = (
+                (execution_result or {}).get("status")
+                if execution_result is not None
+                else ("failed" if execution_error else "not_submitted")
+            )
+            safety_event_runtime_service.append_timeline(
+                db,
+                instance,
+                action_key=action_key,
+                log_type="DAM_WORKFLOW",
+                trigger_type="AUTO",
+                status="SUCCESS" if not execution_error else "FAILED",
+                message=(
+                    f"智能路由生成完成：{node_count}个节点，{edge_count}条边；"
+                    f"模型库执行状态 {execution_status}"
+                ),
+                payload={
+                    "instance_no": instance.instance_no,
+                    "event_type": result.get("event_type"),
+                    "visual_tasks": result.get("visual_tasks") or [],
+                    "final_dag": final_dag,
+                    "execution_result": execution_result,
+                    "execution_error": execution_error,
+                },
+            )
+            db.commit()
+            return result
+        except Exception as e:
+            logger.warning(f"DAM智能路由调用失败: event={event.event_name}, error={e}")
+            safety_event_runtime_service.append_timeline(
+                db,
+                instance,
+                action_key=action_key,
+                log_type="DAM_WORKFLOW",
+                trigger_type="AUTO",
+                status="FAILED",
+                message="智能路由生成失败",
+                payload={
+                    "instance_no": instance.instance_no,
+                    "event_name": event.event_name,
+                    "error": str(e),
+                },
+            )
+            db.commit()
+            return None
 
     async def execute_flow(
         self,

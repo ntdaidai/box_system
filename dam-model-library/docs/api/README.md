@@ -21,6 +21,7 @@ dam-model-library 是一个轻量级模型库服务，为其他系统提供模�
 | 容器日志 | [logs.md](logs.md) | 获取容器日志 |
 | IO Schema | [io-schema.md](io-schema.md) | 模型输入输出 Schema 管理 |
 | 模型推理 | [infer.md](infer.md) | 模型推理接口 |
+| 工作流执行 | [workflow.md](workflow.md) | 执行 dam-workflow 生成的 DAG |
 | Docker 测试 | [docker.md](docker.md) | Docker 容器查询测试接口 |
 
 ## 统一响应格式

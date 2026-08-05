@@ -121,6 +121,13 @@ bash register.sh
 | 温度参数      | `TEMPERATURE`   | `0.15`                  | 生成温度，越低越确定      |
 | 请求超时      | `TIMEOUT`       | `60`                    | 请求超时时间（秒）        |
 | 服务端口      | -                 | `9901`                  | 服务监听端口              |
+| 上传媒体到云端 | `UPLOAD_MEDIA_TO_CLOUD` | `true` | `/infer` 是否把图片/视频转存到云端 MinIO |
+| 上传失败是否中断 | `STRICT_MEDIA_UPLOAD` | `false` | `true` 时上传失败直接返回错误 |
+| 边缘 MinIO 地址 | `EDGE_MINIO_ENDPOINT` | `localhost:9000` | AGX 本地 MinIO |
+| 边缘 MinIO 桶 | `EDGE_MINIO_BUCKET` | `dam` | 输入路径未带 bucket 时使用 |
+| 云端 MinIO 地址 | `CLOUD_MINIO_ENDPOINT` | `10.196.85.11:9469` | A100 云端 MinIO |
+| 云端 MinIO 桶 | `CLOUD_MINIO_BUCKET` | `cloud-tasks` | 上传后供 35B 读取的 bucket |
+| 云端对象前缀 | `CLOUD_MEDIA_PREFIX` | `workflow-media` | 上传对象路径前缀 |
 
 ## 接口说明
 
@@ -199,3 +206,114 @@ LOCAL_LLM_MODEL_NAME = "qwen4B"
 ```
 
 如需修改为调用本服务（代理模式），可将 `LOCAL_LLM_URL` 改为 `http://localhost:9901`。
+
+### DAG `/infer` 媒体转存
+
+模型库工作流调用 `POST /infer` 或 `POST /predict` 时，服务会从请求里的
+`images`、`videos`、`media_objects`、`inputs`、`sensor_data` 汇总媒体路径：
+
+- 本地文件路径：直接读取并上传云端 MinIO
+- `bucket/object`：从 AGX 本地 MinIO 下载后上传
+- `minio://bucket/object` 或 `s3://bucket/object`：按指定 bucket/object 下载后上传
+- `http(s)://...`：下载后上传
+
+响应会包含给 35B 使用的云端对象引用：
+
+```json
+{
+  "status": "success",
+  "response": "{\"scene_type\":\"坝区边坡\",\"suspected_event\":\"滑坡\",\"risk_level\":\"high\",\"confidence\":0.88}",
+  "report": "本地初步研判：场景为坝区边坡，疑似事件为滑坡，风险等级高风险，置信度0.88。",
+  "preliminary_report": "本地初步研判：场景为坝区边坡，疑似事件为滑坡，风险等级高风险，置信度0.88。",
+  "final_report": {
+    "disaster_type": "滑坡",
+    "risk_level": "high",
+    "confidence": 0.88,
+    "scene_analysis": "本地初步研判：场景为坝区边坡，疑似事件为滑坡，风险等级高风险，置信度0.88。",
+    "evidence": ["视频显示坡面异常"],
+    "impact_assessment": "本地模型仅完成初步研判，影响范围需结合云端模型或人工复核确认。",
+    "recommendations": ["立即通知值班人员复核现场", "将视频和本地初判结果提交云端增强研判", "持续关注相关传感器变化"],
+    "result_source": "local_qwen4b"
+  },
+  "template_id": "dam_patrol_daily_report",
+  "template_data": {
+    "report_date": "2026-08-04",
+    "generated_at": "2026-08-04 16:30:00",
+    "stats": {
+      "total_events": 1,
+      "low_count": 0,
+      "medium_count": 0,
+      "high_count": 1,
+      "person_event_count": 0,
+      "boat_fishing_event_count": 0,
+      "auto_broadcast_count": 0,
+      "manual_broadcast_count": 0,
+      "closed_count": 0,
+      "unclosed_count": 1,
+      "closed_rate": "0.0%",
+      "avg_response_time": "—",
+      "avg_disposal_time": "—"
+    },
+    "event_rows": [
+      {
+        "occur_time": "16:20:01",
+        "camera_name": "右岸边坡摄像头",
+        "scene_type": "滑坡",
+        "risk_level": "高风险",
+        "broadcast_status": "未触发",
+        "operator": "智能巡检系统",
+        "disposal_result": "本地初步研判：场景为坝区边坡，疑似事件为滑坡，风险等级高风险，置信度0.88。",
+        "completed_at": "—"
+      }
+    ],
+    "high_event_rows": [],
+    "data_sources": "SafetyEventInstance, SafetyEventTimelineLog, SafetyEventEvidence, VisualEventDetail, SensorData, Qwen-VL-4B"
+  },
+  "template_fields": {
+    "report_date": "2026-08-04",
+    "generated_at": "2026-08-04 16:30:00",
+    "stats.total_events": 1
+  },
+  "template_tables": {
+    "event_rows": [],
+    "high_event_rows": []
+  },
+  "docx_context": {},
+  "media_objects": [
+    {
+      "type": "video",
+      "bucket": "cloud-tasks",
+      "object_name": "workflow-media/EVT_001/videos/01_clip.mp4",
+      "object_key": "workflow-media/EVT_001/videos/01_clip.mp4",
+      "path": "cloud-tasks/workflow-media/EVT_001/videos/01_clip.mp4"
+    }
+  ],
+  "cloud_media_objects": [
+    {
+      "type": "video",
+      "bucket": "cloud-tasks",
+      "object_name": "workflow-media/EVT_001/videos/01_clip.mp4",
+      "object_key": "workflow-media/EVT_001/videos/01_clip.mp4",
+      "path": "cloud-tasks/workflow-media/EVT_001/videos/01_clip.mp4"
+    }
+  ],
+  "minio_context": {
+    "endpoint": "http://10.196.85.11:9469",
+    "bucket": "cloud-tasks",
+    "objects": [{"type": "video", "object_name": "workflow-media/EVT_001/videos/01_clip.mp4"}]
+  },
+  "media_upload": {
+    "enabled": true,
+    "bucket": "cloud-tasks",
+    "objects": [],
+    "errors": []
+  }
+}
+```
+
+后续 35B 节点会优先使用上游 qwen4B 输出的 `media_objects/cloud_media_objects`，
+因此它读取的是云端 MinIO 对象，而不是 AGX 本地路径。
+
+`template_data`、`template_fields`、`template_tables`、`docx_context` 与 35B `/infer`
+保持同一响应结构；如果云端模型不可用，后端可以直接使用 qwen4B 的这些字段填充
+OnlyOffice/docxtpl 模板。
