@@ -18,6 +18,61 @@ class DamModelLibraryClient:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        json: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        async with httpx.AsyncClient(timeout=timeout or self.timeout) as client:
+            response = await client.request(
+                method,
+                f"{self.base_url}{path}",
+                params=params,
+                json=json,
+            )
+            response.raise_for_status()
+            result = response.json()
+        if result.get("code") != 200:
+            raise RuntimeError(str(result.get("message") or "模型库服务返回失败"))
+        return result
+
+    async def list_models(
+        self,
+        *,
+        keyword: Optional[str] = None,
+        runtime_status: Optional[str] = None,
+        framework: Optional[str] = None,
+        page_num: int = 1,
+        page_size: int = 100,
+    ) -> Dict[str, Any]:
+        params = {
+            "page_num": page_num,
+            "page_size": page_size,
+        }
+        if keyword:
+            params["keyword"] = keyword
+        if runtime_status:
+            params["runtime_status"] = runtime_status
+        if framework:
+            params["framework"] = framework
+        return await self._request("GET", "/api/model-registry", params=params, timeout=30.0)
+
+    async def get_model(self, model_id: int) -> Dict[str, Any]:
+        result = await self._request("GET", f"/api/model-registry/{model_id}", timeout=30.0)
+        return result.get("data") or {}
+
+    async def get_io_schema(self, model_id: int) -> Optional[Dict[str, Any]]:
+        result = await self._request("GET", f"/api/model-registry/{model_id}/io-schema", timeout=30.0)
+        return result.get("data")
+
+    async def get_status(self, model_id: int) -> Dict[str, Any]:
+        result = await self._request("GET", f"/api/model-registry/{model_id}/status", timeout=30.0)
+        return result.get("data") or {}
+
     async def execute_workflow(
         self,
         *,

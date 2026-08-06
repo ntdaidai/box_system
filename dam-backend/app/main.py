@@ -8,11 +8,11 @@ import asyncio
 from app.api import (
     auth,
     camera,
-    document,
     eca,
     health,
     local_inference,
     miniprogram,
+    model_library,
     onlyoffice,
     patrol_report,
     sensor,
@@ -204,8 +204,8 @@ app.include_router(camera.router, prefix="/api/v1/camera", tags=["摄像头与�
 app.include_router(broadcast.router, prefix="/api/broadcast", tags=["广播联动"])
 app.include_router(integration.router, prefix="/api/v1/integration", tags=["融合业务配置与安全事件"])
 app.include_router(local_inference.router, prefix="/api/v1/local-inference", tags=["边缘侧本地大模型推理"])
+app.include_router(model_library.router, prefix="/api/v1/model-library", tags=["模型库"])
 app.include_router(miniprogram.router, prefix="/api/miniprogram/v1", tags=["微信小程序V1"])
-app.include_router(document.router, tags=["文档管理"])
 app.include_router(onlyoffice.router)
 app.include_router(patrol_report.router)
 

@@ -2,140 +2,111 @@
   <div class="device-admin">
     <header class="admin-header">
       <div class="title-block">
-        <div class="mode-switch" aria-label="设备类型切换">
-          <button
-            v-for="option in modeOptions"
-            :key="option.value"
-            type="button"
-            :class="{ active: deviceMode === option.value }"
-            @click="deviceMode = option.value"
-          >
-            {{ option.label }}
-          </button>
-        </div>
         <div>
-          <p>视频监测 / 设备管理</p>
-          <h2>{{ deviceMode === 'camera' ? '摄像头设备管理' : '广播管理' }}</h2>
+          <p>系统管理 / 数据源管理</p>
+          <h2>数据源管理</h2>
         </div>
       </div>
       <div class="header-actions">
-        <el-button type="primary" :icon="Plus" @click="openCreate">
+        <el-button v-if="deviceMode === 'camera'" type="primary" :icon="Plus" @click="openCreate">
           {{ createButtonText }}
         </el-button>
         <el-button :icon="Refresh" :loading="loading" @click="loadCurrent">刷新</el-button>
       </div>
     </header>
 
-    <template v-if="deviceMode === 'camera'">
-      <section class="data-panel camera-data-panel" v-loading="loading">
-        <el-table :data="cameras" row-key="id" empty-text="暂无摄像头设备" class="camera-table">
-          <el-table-column label="名称" min-width="190">
-            <template #default="{ row }">
-              <div class="name-cell"><strong>{{ row.name }}</strong><small>{{ row.description || '暂无描述' }}</small></div>
-            </template>
-          </el-table-column>
-          <el-table-column label="连接信息" min-width="240">
-            <template #default="{ row }">
-              <div class="connection-cell">
-                <span>IP：{{ row.ip_address }}</span>
-                <span>账户：{{ row.username || '--' }}</span>
-                <span class="password-line">
-                  密码：{{ passwordLabel(row) }}
-                  <el-button
-                    v-if="row.has_password"
-                    link
-                    type="primary"
-                    class="password-toggle"
-                    :icon="passwordVisible[row.id] ? Hide : View"
-                    :loading="passwordLoading[row.id]"
-                    title="显示/隐藏密码"
-                    @click="togglePassword(row)"
-                  />
-                </span>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column label="Web 控制台" min-width="125">
-            <template #default="{ row }">
-              <el-link v-if="row.web_console_url" :href="row.web_console_url" target="_blank" type="primary">打开控制台</el-link>
-              <span v-else>--</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="设备状态" min-width="155">
-            <template #default="{ row }">
-              <div class="status-cell">
-                <div class="status-tags">
-                  <el-tag :type="row.connected ? 'success' : 'danger'">{{ row.connected ? '在线' : '离线' }}</el-tag>
-                  <el-tag :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '停用' }}</el-tag>
+    <el-tabs v-model="deviceMode" class="device-tabs">
+      <el-tab-pane label="摄像头" name="camera">
+        <section class="data-panel camera-data-panel" v-loading="loading">
+          <el-table :data="cameras" row-key="id" empty-text="暂无摄像头设备" class="camera-table">
+            <el-table-column label="名称" min-width="190">
+              <template #default="{ row }">
+                <div class="name-cell"><strong>{{ row.name }}</strong><small>{{ row.description || '暂无描述' }}</small></div>
+              </template>
+            </el-table-column>
+            <el-table-column label="连接信息" min-width="240">
+              <template #default="{ row }">
+                <div class="connection-cell">
+                  <span>IP：{{ row.ip_address }}</span>
+                  <span>账户：{{ row.username || '--' }}</span>
+                  <span class="password-line">
+                    密码：{{ passwordLabel(row) }}
+                    <el-button
+                      v-if="row.has_password"
+                      link
+                      type="primary"
+                      class="password-toggle"
+                      :icon="passwordVisible[row.id] ? Hide : View"
+                      :loading="passwordLoading[row.id]"
+                      title="显示/隐藏密码"
+                      @click="togglePassword(row)"
+                    />
+                  </span>
                 </div>
-                <small v-if="!row.connected && row.last_online_at">最后在线：{{ formatDateTime(row.last_online_at) }}</small>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="112" fixed="right">
-            <template #default="{ row }">
-              <div class="action-buttons">
-                <el-button :icon="Edit" title="编辑" @click="openCameraEdit(row)" />
-                <el-button type="danger" :icon="Delete" title="删除" @click="removeCamera(row)" />
-              </div>
-            </template>
-          </el-table-column>
-        </el-table>
-      </section>
-
-      <section class="map-panel">
-        <header><h3>摄像头点位地图</h3></header>
-        <div class="map-stage">
-          <img src="/dammap.png" alt="大坝摄像头点位地图" />
-        </div>
-      </section>
-    </template>
-
-    <template v-else>
-      <el-tabs v-model="broadcastTab" class="broadcast-tabs" @tab-change="loadBroadcast">
-        <el-tab-pane label="广播设备" name="devices">
-          <section class="data-panel camera-data-panel" v-loading="loading">
-            <el-table :data="broadcastDevices" row-key="id" empty-text="暂无广播设备" class="camera-table broadcast-device-table">
-              <el-table-column label="设备名称" min-width="180">
-                <template #default="{ row }">
-                  <div class="name-cell">
-                    <strong>{{ row.name }}</strong>
-                    <small>广播设备</small>
+              </template>
+            </el-table-column>
+            <el-table-column label="Web 控制台" min-width="125">
+              <template #default="{ row }">
+                <el-link v-if="row.web_console_url" :href="row.web_console_url" target="_blank" type="primary">打开控制台</el-link>
+                <span v-else>--</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="设备状态" min-width="155">
+              <template #default="{ row }">
+                <div class="status-cell">
+                  <div class="status-tags">
+                    <el-tag :type="row.connected ? 'success' : 'danger'">{{ row.connected ? '在线' : '离线' }}</el-tag>
+                    <el-tag :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '停用' }}</el-tag>
                   </div>
-                </template>
-              </el-table-column>
-              <el-table-column label="描述" min-width="260">
-                <template #default="{ row }">
-                  <span class="description-cell">{{ row.description || '暂无描述' }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="状态" width="110"><template #default="{ row }"><el-tag :type="row.status === 'ONLINE' ? 'success' : 'danger'">{{ row.status === 'ONLINE' ? '在线' : '离线' }}</el-tag></template></el-table-column>
-              <el-table-column label="是否启用" width="110"><template #default="{ row }"><el-tag :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '停用' }}</el-tag></template></el-table-column>
-              <el-table-column label="操作" width="112" fixed="right">
-                <template #default="{ row }">
-                  <div class="action-buttons">
-                    <el-button :icon="Edit" title="编辑" aria-label="编辑广播设备" @click="openBroadcastEdit(row)" />
-                    <el-button type="danger" :icon="Delete" title="删除" aria-label="删除广播设备" @click="removeBroadcast(row)" />
-                  </div>
-                </template>
-              </el-table-column>
-            </el-table>
-          </section>
-        </el-tab-pane>
-        <el-tab-pane label="广播模板" name="templates">
-          <section class="data-panel" v-loading="loading">
-            <el-table :data="templates" row-key="id" empty-text="暂无广播模板">
-              <el-table-column prop="name" label="模板名称" min-width="170" />
-              <el-table-column label="场景类型" width="130"><template #default="{ row }">{{ sceneLabel(row.scene_type) }}</template></el-table-column>
-              <el-table-column label="风险等级" width="110"><template #default="{ row }"><el-tag :type="riskTag(row.risk_level)">{{ riskLabel(row.risk_level) }}</el-tag></template></el-table-column>
-              <el-table-column prop="content" label="播报文本" min-width="320" show-overflow-tooltip />
-              <el-table-column label="是否启用" width="100"><template #default="{ row }">{{ row.enabled === false ? '停用' : '启用' }}</template></el-table-column>
-              <el-table-column label="操作" width="120"><template #default="{ row }"><el-button link type="primary" :icon="Edit" title="编辑" @click="openTemplateEdit(row)" /><el-button link type="danger" :icon="Delete" title="删除" @click="removeTemplate(row)" /></template></el-table-column>
-            </el-table>
-          </section>
-        </el-tab-pane>
-      </el-tabs>
-    </template>
+                  <small v-if="!row.connected && row.last_online_at">最后在线：{{ formatDateTime(row.last_online_at) }}</small>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="112" fixed="right">
+              <template #default="{ row }">
+                <div class="action-buttons">
+                  <el-button :icon="Edit" title="编辑" @click="openCameraEdit(row)" />
+                  <el-button type="danger" :icon="Delete" title="删除" @click="removeCamera(row)" />
+                </div>
+              </template>
+            </el-table-column>
+          </el-table>
+        </section>
+
+        <section class="map-panel">
+          <header><h3>摄像头点位地图</h3></header>
+          <div class="map-stage">
+            <img src="/dammap.png" alt="大坝摄像头点位地图" />
+          </div>
+        </section>
+      </el-tab-pane>
+
+      <el-tab-pane label="传感器" name="sensor">
+        <section class="data-panel sensor-data-panel" v-loading="loading">
+          <el-table :data="sensorRows" row-key="key" empty-text="暂无传感器设备状态" class="camera-table">
+            <el-table-column label="传感器" min-width="190">
+              <template #default="{ row }">
+                <div class="name-cell">
+                  <strong>{{ row.name }}</strong>
+                  <small>{{ row.key }}</small>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column label="运行状态" width="130">
+              <template #default="{ row }">
+                <el-tag :type="row.online ? 'success' : 'danger'">{{ row.online ? '在线' : '离线' }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="最近数据" min-width="220">
+              <template #default="{ row }">{{ row.lastSeen || '--' }}</template>
+            </el-table-column>
+            <el-table-column label="说明" min-width="260">
+              <template #default="{ row }">{{ row.description }}</template>
+            </el-table-column>
+          </el-table>
+        </section>
+      </el-tab-pane>
+    </el-tabs>
 
     <el-dialog v-model="cameraDialog" :title="editingCamera ? '编辑摄像头' : '添加摄像头'" width="680px" class="camera-config-dialog" destroy-on-close>
       <el-form label-position="top">
@@ -169,6 +140,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Check, Connection, Delete, Edit, Hide, Plus, Refresh, View } from '@element-plus/icons-vue'
 import { createCameraDevice, deleteCameraDevice, getCameraDevicePassword, getCameraDevices, testCameraDeviceConnection, updateCameraDevice } from '@/api/camera'
+import { getDeviceStatus as getSensorDeviceStatus } from '@/api/sensor'
 import {
   createBroadcastDevice, createBroadcastTemplate,
   deleteBroadcastDevice, deleteBroadcastTemplate, getBroadcastDevices, getBroadcastTemplates,
@@ -176,12 +148,13 @@ import {
 } from '@/api/broadcast'
 
 const deviceMode = ref('camera')
-const modeOptions = [{ label: '摄像头', value: 'camera' }, { label: '广播', value: 'broadcast' }]
+const modeOptions = [{ label: '摄像头', value: 'camera' }, { label: '传感器', value: 'sensor' }]
 const broadcastTab = ref('devices')
 const loading = ref(false)
 const saving = ref(false)
 const testing = ref(false)
 const cameras = ref([])
+const sensorStatus = ref({})
 const broadcastDevices = ref([])
 const templates = ref([])
 const cameraDialog = ref(false)
@@ -198,14 +171,36 @@ const passwordValues = ref({})
 const cameraForm = reactive({ camera_name: '', ip_address: '', username: '', password: '', description: '', install_address: '', latitude: undefined, longitude: undefined, rtsp_port: 554, web_port: 80, enabled: true })
 const broadcastForm = reactive({ name: '', description: '', enabled: true })
 const templateForm = reactive({ name: '', scene_type: 'PERSON', risk_level: 'LOW', content: '', enabled: true })
-const createButtonText = computed(() => deviceMode.value === 'camera' ? '添加摄像头' : (broadcastTab.value === 'devices' ? '添加广播设备' : '添加广播模板'))
+const createButtonText = computed(() => '添加摄像头')
 const connectionKey = computed(() => JSON.stringify([cameraForm.ip_address, cameraForm.rtsp_port, cameraForm.username, cameraForm.password]))
 const connectionVerified = computed(() => !needsTest.value || verifiedKey.value === connectionKey.value)
 const needsTest = computed(() => !editingCamera.value || connectionKey.value !== editingCamera.value.connectionKey)
-
+const sensorNameMap = {
+  temp_humidity: '温湿度传感器',
+  wind: '风速风向传感器',
+  rain: '雨量计',
+  vibration: '振动传感器',
+}
+const sensorDescriptionMap = {
+  temp_humidity: '库区环境温湿度数据源',
+  wind: '坝面风速和风向数据源',
+  rain: '降雨强度和累计雨量数据源',
+  vibration: '结构振动和设备振动数据源',
+}
+const sensorRows = computed(() => Object.entries(sensorStatus.value || {}).map(([key, value]) => {
+  const item = typeof value === 'object' && value !== null ? value : { online: Boolean(value) }
+  return {
+    key,
+    name: sensorNameMap[key] || item.name || key,
+    online: item.online === true || item.status === 'online' || item.status === 'ONLINE',
+    lastSeen: item.last_seen || item.lastSeen || item.updated_at || item.timestamp || '',
+    description: sensorDescriptionMap[key] || '传感器数据源设备',
+  }
+}))
 async function loadCameras() { const res = await getCameraDevices(); cameras.value = res.data?.cameras || [] }
+async function loadSensors() { const res = await getSensorDeviceStatus(); sensorStatus.value = res.data || {} }
 async function loadBroadcast() { const [deviceRes, templateRes] = await Promise.all([getBroadcastDevices(), getBroadcastTemplates()]); broadcastDevices.value = deviceRes.data || []; templates.value = templateRes.data || [] }
-async function loadCurrent() { loading.value = true; try { if (deviceMode.value === 'camera') await Promise.all([loadCameras(), loadBroadcast()]); else await loadBroadcast() } catch (error) { ElMessage.error(error.response?.data?.detail || '数据加载失败') } finally { loading.value = false } }
+async function loadCurrent() { loading.value = true; try { if (deviceMode.value === 'camera') await Promise.all([loadCameras(), loadSensors()]); else await loadSensors() } catch (error) { ElMessage.error(error.response?.data?.detail || '数据加载失败') } finally { loading.value = false } }
 watch(deviceMode, loadCurrent)
 
 function resetCameraForm() { Object.assign(cameraForm, { camera_name: '', ip_address: '', username: '', password: '', description: '', install_address: '', latitude: undefined, longitude: undefined, rtsp_port: 554, web_port: 80, enabled: true }); verifiedKey.value = '' }
@@ -270,19 +265,25 @@ onMounted(loadCurrent)
 .title-block p { margin: 0 0 5px; color: #79acd0; font-size: 13px; }
 h2, h3 { margin: 0; color: #f3f8fd; letter-spacing: 0; }
 h2 { font-size: 25px; }
+.device-tabs { margin-top: 18px; }
+.device-tabs :deep(.el-tabs__header) { margin-bottom: 0; }
+.device-tabs :deep(.el-tabs__nav-wrap::after) { height: 1px; background: rgba(96, 151, 191, .22); }
+.device-tabs :deep(.el-tabs__item) { height: 44px; color: #9fb8ce; font-size: 16px; font-weight: 700; letter-spacing: 0; }
+.device-tabs :deep(.el-tabs__item.is-active) { color: #74d7ff; }
+.device-tabs :deep(.el-tabs__active-bar) { height: 3px; border-radius: 999px; background: #43c7f4; }
 .mode-switch { display: inline-flex; align-items: center; gap: 4px; padding: 4px; border: 1px solid rgba(84, 148, 193, .34); border-radius: 8px; background: #0d2740; }
 .mode-switch button { min-width: 82px; height: 34px; padding: 0 18px; border: 0; border-radius: 6px; color: #9fbbd3; background: transparent; font-size: 14px; font-weight: 700; cursor: pointer; }
 .mode-switch button.active { color: #061827; background: #38d7de; box-shadow: 0 0 18px rgba(39, 194, 214, .28); }
 .mode-switch button:focus-visible { outline: 2px solid #63e3ff; outline-offset: 2px; }
-.data-panel, .map-panel { margin-top: 18px; padding: 22px 24px; border: 1px solid rgba(96, 151, 191, .24); border-radius: 8px; background: #0b1d30; }
+.data-panel, .map-panel { margin-top: 18px; padding: 20px 22px; border: 1px solid rgba(96, 151, 191, .24); border-radius: 8px; background: #0b1d30; }
 .data-panel { min-height: 310px; }
-.camera-data-panel { min-height: 600px; }
+.camera-data-panel { min-height: 420px; }
 .camera-table { border-radius: 6px; overflow: hidden; background: #0a1d30; }
 .camera-table :deep(.el-table__inner-wrapper::before) { background: rgba(149, 190, 220, .12); }
-.camera-table :deep(th.el-table__cell) { height: 56px; background: #142d49; color: #d6e8f8; font-size: 14px; font-weight: 700; }
+.camera-table :deep(th.el-table__cell) { height: 52px; background: #122b45; color: #d6e8f8; font-size: 14px; font-weight: 700; }
 .camera-table :deep(tr), .camera-table :deep(td.el-table__cell) { background: #0a1d30; color: #d7e8f8; }
 .camera-table :deep(th.el-table__cell), .camera-table :deep(td.el-table__cell) { border-bottom-color: rgba(149, 190, 220, .12); }
-.camera-table :deep(td.el-table__cell) { height: 122px; border-bottom-width: 1px; }
+.camera-table :deep(td.el-table__cell) { height: 82px; border-bottom-width: 1px; }
 .camera-table :deep(.el-table__row:hover > td.el-table__cell) { background: #102940; }
 .name-cell, .connection-cell, .status-cell { display: grid; gap: 7px; }
 .name-cell strong { color: #f3f8fd; font-size: 15px; }

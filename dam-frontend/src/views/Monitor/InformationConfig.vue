@@ -1,9 +1,9 @@
 <template>
-  <div class="config-page">
-    <header class="page-header">
+  <div class="config-page" :class="{ embedded }">
+    <header v-if="!embedded" class="page-header">
       <div>
-        <p>实时监控 / 信息配置</p>
-        <h2>监测与处置参数</h2>
+        <p>系统管理 / 联动规则</p>
+        <h2>联动规则配置</h2>
       </div>
       <el-button :icon="Refresh" :loading="loading" @click="loadConfig">刷新</el-button>
     </header>
@@ -151,6 +151,13 @@ import {
   updateEventConfig,
 } from '@/api/integration'
 
+const props = defineProps({
+  embedded: {
+    type: Boolean,
+    default: false,
+  },
+})
+const { embedded } = props
 const activeTab = ref('conditions')
 const loading = ref(false)
 const savingId = ref('')
@@ -289,15 +296,17 @@ onMounted(loadConfig)
 
 <style scoped>
 .config-page { min-height: 100%; padding: 20px; color: #d9e8f8; background: #071422; }
+.config-page.embedded { min-height: auto; padding: 0; background: transparent; }
 .page-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .page-header p { margin: 0 0 5px; color: #79acd0; font-size: 13px; }
 .page-header h2 { margin: 0; color: #f3f8fd; font-size: 25px; letter-spacing: 0; }
 .config-tabs { margin-top: 16px; }
+.config-page.embedded .config-tabs { margin-top: 0; }
 .panel { padding: 14px; border: 1px solid rgba(96,151,191,.24); border-radius: 8px; background: #0b1d30; }
 .config-list,
 .action-event-list { display: grid; gap: 12px; }
 .config-row {
-  min-height: 68px;
+  min-height: 72px;
   padding: 12px 14px;
   display: grid;
   grid-template-columns: minmax(220px, 1.4fr) auto auto auto;
@@ -305,7 +314,7 @@ onMounted(loadConfig)
   gap: 16px;
   border: 1px solid rgba(96,151,191,.16);
   border-radius: 6px;
-  background: rgba(5,18,31,.55);
+  background: rgba(7,24,40,.72);
 }
 .row-title,
 .event-card header div,
@@ -333,7 +342,7 @@ onMounted(loadConfig)
 .step-row {
   border: 1px solid rgba(96,151,191,.18);
   border-radius: 8px;
-  background: rgba(5,18,31,.55);
+  background: rgba(7,24,40,.72);
 }
 .event-card { padding: 14px; display: grid; gap: 14px; }
 .event-card header,
@@ -355,16 +364,18 @@ onMounted(loadConfig)
 .step-line { display: grid; grid-template-columns: repeat(2, minmax(160px, 1fr)); gap: 10px; }
 .step-line.compact { grid-template-columns: repeat(3, minmax(150px, auto)); justify-content: start; }
 .step-actions { display: flex; align-items: center; gap: 10px; }
-.config-page :deep(.el-tabs__item) { color: #9fb8ce; font-size: 15px; }
+.config-page :deep(.el-tabs__header) { margin-bottom: 14px; }
+.config-page :deep(.el-tabs__nav-wrap::after) { height: 1px; background: rgba(96,151,191,.2); }
+.config-page :deep(.el-tabs__item) { color: #9fb8ce; font-size: 15px; font-weight: 700; }
 .config-page :deep(.el-tabs__item.is-active) { color: #74d7ff; font-weight: 700; }
-.config-page :deep(.el-tabs__active-bar) { background-color: #43c7f4; }
+.config-page :deep(.el-tabs__active-bar) { height: 3px; border-radius: 999px; background-color: #43c7f4; }
 .config-page :deep(.el-input-number) { width: 132px; }
 .config-page :deep(.number-field.compact .el-input-number) { width: 112px; }
 .config-page :deep(.el-input-number .el-input__wrapper),
 .config-page :deep(.el-select .el-input__wrapper),
 .config-page :deep(.el-input .el-input__wrapper) {
   min-height: 38px;
-  background: #f8fbff;
+  background: #eef6fb;
   box-shadow: 0 0 0 1px rgba(139, 167, 188, .32) inset;
 }
 .config-page :deep(.el-input-number .el-input__inner) {

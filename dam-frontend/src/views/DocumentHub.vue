@@ -630,61 +630,6 @@ const exportMonthDocuments = async () => {
   })
 }
 
-const showUploadDialog = () => {
-  uploadFileList.value = []
-  uploadDialogVisible.value = true
-}
-
-const handleFileChange = (file, fileList) => {
-  uploadFileList.value = fileList
-}
-
-const beforeUpload = (file) => {
-  const maxSize = 50 * 1024 * 1024
-  if (file.size > maxSize) {
-    ElMessage.error('文件大小不能超过 50MB')
-    return false
-  }
-  return true
-}
-
-const handleUpload = async () => {
-  if (uploadFileList.value.length === 0) {
-    ElMessage.warning('请选择要上传的文档')
-    return
-  }
-
-  try {
-    uploading.value = true
-
-    for (const file of uploadFileList.value) {
-      const formData = new FormData()
-      formData.append('file', file.raw)
-      formData.append('user_id', currentUser.value.id)
-      formData.append('user_name', currentUser.value.name)
-
-      const response = await axios.post('/api/onlyoffice/upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      })
-
-      if (!response.data.success) {
-        throw new Error(response.data.detail || response.data.message || `${file.name} 上传失败`)
-      }
-    }
-
-    ElMessage.success('上传成功')
-    uploadDialogVisible.value = false
-    currentPage.value = 1
-    await loadDocuments()
-  } catch (error) {
-    console.error('上传失败:', error)
-    const message = error.response?.data?.detail || error.response?.data?.message || error.message || '上传失败'
-    ElMessage.error(message)
-  } finally {
-    uploading.value = false
-  }
-}
-
 const previewDoc = async (doc) => {
   try {
     const response = await axios.get(`/api/onlyoffice/editor-config/${doc.document_id}`, {
@@ -912,12 +857,23 @@ onActivated(() => {
   white-space: nowrap;
 }
 
-.upload-button {
+.export-selected-button {
   height: 48px;
-  min-width: 150px;
+  min-width: 174px;
   padding: 0 24px;
   font-size: 15px;
   font-weight: 700;
+  color: #d9eeff;
+  background: rgba(9, 75, 117, 0.92);
+  border-color: rgba(68, 164, 224, 0.62);
+  border-radius: 6px;
+}
+
+.export-selected-button:hover,
+.export-selected-button:focus {
+  color: #fff;
+  background: rgba(13, 96, 148, 0.98);
+  border-color: rgba(96, 188, 242, 0.9);
 }
 
 .batch-toolbar {
@@ -1291,38 +1247,6 @@ onActivated(() => {
   color: #a9bfdc;
   font-size: 13px;
   line-height: 1.45;
-}
-
-.upload-area {
-  width: 100%;
-}
-
-.upload-area :deep(.el-upload-dragger) {
-  min-height: 220px;
-  background: rgba(10, 30, 48, 0.88);
-  border: 1px dashed rgba(0, 200, 255, 0.45);
-  border-radius: 8px;
-}
-
-.upload-area :deep(.el-upload-dragger:hover) {
-  border-color: var(--accent-color);
-  background: rgba(12, 39, 65, 0.94);
-}
-
-.upload-area :deep(.el-icon--upload) {
-  color: rgba(174, 202, 245, 0.78);
-}
-
-.upload-area :deep(.el-upload__text) {
-  color: var(--text-secondary);
-}
-
-.upload-area :deep(.el-upload__text em) {
-  color: var(--accent-color);
-}
-
-.upload-area :deep(.el-upload__tip) {
-  color: var(--text-secondary);
 }
 
 .document-list :deep(.el-loading-mask) {

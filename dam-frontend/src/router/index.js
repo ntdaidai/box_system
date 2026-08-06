@@ -16,14 +16,20 @@ const routes = [
         path: 'dashboard',
         name: 'Dashboard',
         component: () => import('@/views/Dashboard/index.vue'),
-        meta: { title: '系统概览' }
+        meta: { title: '综合态势' }
       },
       // ========== 实时监控模块 ==========
       {
         path: 'monitor',
         redirect: '/monitor/overview',
-        meta: { title: '实时监控' },
+        meta: { title: '感知监测' },
         children: [
+          {
+            path: 'system',
+            name: 'SystemMonitor',
+            component: () => import('@/views/Monitor/SystemMonitor.vue'),
+            meta: { title: '系统监测' }
+          },
           {
             path: 'overview',
             name: 'MonitorOverview',
@@ -64,7 +70,7 @@ const routes = [
             path: 'config',
             name: 'MonitorInformationConfig',
             component: () => import('@/views/Monitor/InformationConfig.vue'),
-            meta: { title: '信息配置' }
+            meta: { title: '联动规则' }
           },
           {
             path: 'camera',
@@ -76,7 +82,7 @@ const routes = [
             path: 'camera/devices',
             name: 'CameraDeviceManagement',
             component: () => import('@/views/Monitor/DeviceManagement.vue'),
-            meta: { title: '设备管理' }
+            meta: { title: '数据源管理' }
           },
           {
             path: 'camera/zones',
@@ -140,13 +146,19 @@ const routes = [
             path: 'devices',
             name: 'SystemDeviceManagement',
             component: () => import('@/views/Monitor/DeviceManagement.vue'),
-            meta: { title: '设备管理' }
+            meta: { title: '数据源管理' }
           },
           {
             path: 'config',
             name: 'SystemInformationConfig',
-            component: () => import('@/views/Monitor/InformationConfig.vue'),
-            meta: { title: '信息配置' }
+            redirect: '/system/linkage',
+            meta: { title: '联动系统' }
+          },
+          {
+            path: 'linkage',
+            name: 'SystemLinkageManagement',
+            component: () => import('@/views/System/LinkageManagement.vue'),
+            meta: { title: '联动系统' }
           },
           {
             path: 'drone',
@@ -201,7 +213,7 @@ const routes = [
           {
             path: 'test',
             name: 'DocumentTest',
-            component: () => import('@/views/DocumentTest.vue'),
+            redirect: '/document/hub',
             meta: { title: '文档测试' }
           },
         ],

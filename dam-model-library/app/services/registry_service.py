@@ -18,6 +18,7 @@ class RegistryService:
         model = ModelRegistry(
             name=data.name,
             description=data.description,
+            tags=data.tags,
             framework=data.framework,
             architecture=data.architecture,
             model_type=data.model_type,

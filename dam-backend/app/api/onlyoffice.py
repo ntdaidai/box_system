@@ -11,7 +11,6 @@ import os
 import re
 import subprocess
 import tempfile
-import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,11 +18,10 @@ from typing import Literal, Optional
 from urllib.parse import quote, unquote
 
 import httpx
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from jose import jwt
 from minio import Minio
-from minio.error import S3Error
 from pydantic import BaseModel
 
 from app.core.config import settings
@@ -259,61 +257,8 @@ def convert_document_to_pdf(content: bytes, title: str, extension: str) -> tuple
 
 
 @router.post("/upload")
-async def upload_document(
-    file: UploadFile = File(...),
-    user_id: str = Form("user_001"),
-    user_name: str = Form("用户"),
-):
-    ext = get_file_extension(file.filename or "")
-    allowed_extensions = {
-        "docx", "doc", "odt", "rtf", "txt",
-        "xlsx", "xls", "ods", "csv",
-        "pptx", "ppt", "odp",
-        "pdf",
-    }
-    if ext not in allowed_extensions:
-        raise HTTPException(status_code=400, detail=f"不支持的文件类型: {ext}")
-
-    content = await file.read()
-    document_id = f"doc_{user_id}_{int(time.time() * 1000)}"
-    object_name = build_object_name(user_id, document_id, ext)
-    now = datetime.now(timezone.utc).isoformat()
-
-    try:
-        get_minio_client().put_object(
-            BUCKET_NAME,
-            object_name,
-            io.BytesIO(content),
-            len(content),
-            content_type=get_content_type(ext),
-            metadata={
-                "original-name": encode_metadata_value(file.filename or f"{document_id}.{ext}"),
-                "owner-id": encode_metadata_value(user_id),
-                "owner-name": encode_metadata_value(user_name),
-                "created-at": encode_metadata_value(now),
-            },
-        )
-    except S3Error as exc:
-        raise HTTPException(status_code=500, detail=f"上传到 MinIO 失败: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"上传到 MinIO 失败: {exc}") from exc
-
-    return {
-        "success": True,
-        "data": {
-            "document_id": document_id,
-            "document_key": document_key(document_id),
-            "title": file.filename,
-            "url": f"{BACKEND_PUBLIC_URL}/api/onlyoffice/document/{document_id}",
-            "file_type": ext,
-            "file_size": len(content),
-            "document_type": get_document_type(ext),
-            "created_at": now,
-            "updated_at": now,
-            "owner_id": user_id,
-            "owner_name": user_name,
-        },
-    }
+async def upload_document():
+    raise HTTPException(status_code=403, detail="文档中心不开放用户上传")
 
 
 @router.get("/document/{document_id}")

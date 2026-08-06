@@ -28,8 +28,8 @@ export function deleteActionConfig(id) {
   return request.delete(`/v1/integration/config/actions/${id}`)
 }
 
-export function getUnifiedSafetyEvents(params = {}) {
-  return request.get('/v1/integration/safety-events', { params, localCache: false })
+export function getUnifiedSafetyEvents(params = {}, config = {}) {
+  return request.get('/v1/integration/safety-events', { params, localCache: false, ...config })
 }
 
 export function getUnifiedSafetyEventStatistics() {

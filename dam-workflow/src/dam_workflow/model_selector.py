@@ -246,6 +246,9 @@ def fetch_evaluation_template(db: Session, event_type: str = None, template_type
     """
     query = db.query(ModelEvaluationTemplate).filter(ModelEvaluationTemplate.is_active == 1)
 
+    if template_type:
+        query = query.filter(ModelEvaluationTemplate.template_type == template_type)
+
     if event_type:
         template = query.filter(ModelEvaluationTemplate.event_type == event_type).first()
         if template:

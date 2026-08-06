@@ -46,6 +46,7 @@ class ModelEvaluationTemplate(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True, comment="主键")
     template_name = Column(String(128), nullable=False, unique=True, comment="模板名称")
     event_type = Column(String(64), nullable=True, comment="适用事件类型（NULL 表示通用）")
+    template_type = Column(String(32), nullable=True, comment="模板类型：reasoning/report")
     prompt_template = Column(Text, nullable=False, comment="prompt 模板")
     input_schema = Column(JSON, nullable=False, comment="输入 schema")
     output_schema = Column(JSON, nullable=False, comment="输出 schema")
@@ -108,6 +109,7 @@ class ModelRegistry(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True, comment="主键")
     name = Column(String(128), nullable=False, comment="模型名称")
+    tags = Column(JSON, nullable=True, comment="模型标签")
     model_type = Column(String(64), nullable=True, comment="模型类型")
     framework = Column(String(64), nullable=True, comment="推理框架")
     description = Column(Text, nullable=True, comment="模型描述")

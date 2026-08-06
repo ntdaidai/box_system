@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS `model_registry` (
   `id`              BIGINT        NOT NULL AUTO_INCREMENT COMMENT '主键',
   `name`            VARCHAR(128)  NOT NULL COMMENT '模型名称',
   `description`     VARCHAR(512)  DEFAULT NULL COMMENT '模型描述',
+  `tags`            JSON          DEFAULT NULL COMMENT '模型标签',
   `framework`       VARCHAR(64)   DEFAULT NULL COMMENT '框架（PyTorch/TensorFlow/ONNX等）',
   `architecture`    VARCHAR(64)   DEFAULT NULL COMMENT '架构（CNN/Transformer等）',
   `model_type`      VARCHAR(64)   DEFAULT NULL COMMENT '模型类型（目标检测/图像分类/LLM等）',

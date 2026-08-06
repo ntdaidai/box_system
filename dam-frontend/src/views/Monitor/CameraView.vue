@@ -1575,8 +1575,12 @@ function taskTypeLabel(taskType) {
 }
 
 async function fetchModelStatus() {
-  const response = await getModelStatus()
-  modelStatus.value = response.data || { loaded: false, models: {} }
+  try {
+    const response = await getModelStatus({ silentError: true })
+    modelStatus.value = response.data || { loaded: false, models: {} }
+  } catch {
+    modelStatus.value = { loaded: false, models: {} }
+  }
 }
 
 function applyCameraList(nextCameras) {
@@ -1597,7 +1601,7 @@ function notifyCameraListFallback(message) {
 
 async function fetchCameras(options = {}) {
   try {
-    const response = await getCameraList()
+    const response = await getCameraList({ silentError: true })
     const nextCameras = camerasFromPayload(response.data)
     applyCameraList(nextCameras)
     writeCameraListSnapshot(nextCameras)
@@ -1609,7 +1613,7 @@ async function fetchCameras(options = {}) {
       if (!options.silent) notifyCameraListFallback('后端暂时不可达，已保留上次摄像头列表')
       return false
     }
-    if (!options.silent) ElMessage.error(error.response?.data?.detail || error.message || '摄像头列表加载失败')
+    if (!options.silent) ElMessage.error('摄像头列表暂时不可达，请检查后端服务')
     return false
   }
 }
@@ -1650,7 +1654,7 @@ async function fetchCameraZones(cameraId = currentCameraId.value) {
     detectionZones.value = []
     return
   }
-  const response = await getCameraZones(cameraId)
+  const response = await getCameraZones(cameraId, { silentError: true })
   const zones = normalizeZones(response.data)
   gridCameraZones.value = {
     ...gridCameraZones.value,
@@ -1785,7 +1789,7 @@ function gridSlotHasStream(slot) {
 async function ensureGridCameraZones(cameraId) {
   if (!cameraId || Object.prototype.hasOwnProperty.call(gridCameraZones.value, cameraId)) return
   try {
-    const response = await getCameraZones(cameraId)
+    const response = await getCameraZones(cameraId, { silentError: true })
     gridCameraZones.value = {
       ...gridCameraZones.value,
       [cameraId]: normalizeZones(response.data),

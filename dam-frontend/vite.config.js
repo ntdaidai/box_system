@@ -6,6 +6,7 @@ import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 import path from 'path'
 
 export default defineConfig({
+  cacheDir: process.env.VITE_CACHE_DIR || 'node_modules/.vite',
   plugins: [
     vue(),
     AutoImport({

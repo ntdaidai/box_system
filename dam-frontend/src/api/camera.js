@@ -5,8 +5,8 @@
 import request from '@/utils/request'
 
 // 获取摄像头列表
-export function getCameraList() {
-  return request.get('/v1/camera/devices', { localCache: false })
+export function getCameraList(config = {}) {
+  return request.get('/v1/camera/devices', { localCache: false, ...config })
 }
 
 // 获取摄像头状态
@@ -104,8 +104,8 @@ export function deleteVideoDetectionJob(jobId) {
 }
 
 // 获取模型状态
-export function getModelStatus() {
-  return request.get('/v1/camera/model/status', { localCache: false })
+export function getModelStatus(config = {}) {
+  return request.get('/v1/camera/model/status', { localCache: false, ...config })
 }
 
 // 重新加载模型
@@ -161,9 +161,10 @@ export function closeWebRtcSession(cameraId, peerId) {
   )
 }
 
-export function getCameraZones(cameraId) {
+export function getCameraZones(cameraId, config = {}) {
   return request.get(`/v1/camera/${encodeURIComponent(cameraId)}/zones`, {
     localCache: false,
+    ...config,
   })
 }
 

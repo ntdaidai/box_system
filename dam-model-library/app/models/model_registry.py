@@ -1,7 +1,7 @@
 """模型注册表"""
 
 from datetime import datetime
-from sqlalchemy import BigInteger, String, DateTime
+from sqlalchemy import BigInteger, String, DateTime, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -13,6 +13,7 @@ class ModelRegistry(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键")
     name: Mapped[str] = mapped_column(String(128), nullable=False, comment="模型名称")
     description: Mapped[str | None] = mapped_column(String(512), default=None, comment="模型描述")
+    tags: Mapped[dict | None] = mapped_column(JSON, default=None, comment="模型标签")
     framework: Mapped[str | None] = mapped_column(String(64), default=None, comment="框架")
     architecture: Mapped[str | None] = mapped_column(String(64), default=None, comment="架构")
     model_type: Mapped[str | None] = mapped_column(String(64), default=None, comment="模型类型")
@@ -32,6 +33,7 @@ class ModelRegistry(Base):
             "id": self.id,
             "name": self.name,
             "description": self.description,
+            "tags": self.tags,
             "framework": self.framework,
             "architecture": self.architecture,
             "model_type": self.model_type,

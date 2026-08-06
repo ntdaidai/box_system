@@ -108,8 +108,8 @@ function getCustomIcon(iconKey) {
 
 // 顶部导航配置
 const navList = [
-  { name: '系统概览', path: '/dashboard', icon: SystemOverviewIcon },
-  { name: '实时监控', path: '/monitor', icon: RealtimeMonitorIcon },
+  { name: '综合态势', path: '/dashboard', icon: SystemOverviewIcon },
+  { name: '感知监测', path: '/monitor', icon: RealtimeMonitorIcon },
   { name: '告警管理', path: '/alarm', icon: AlarmTriangleIcon },
   { name: '数据管理', path: '/document', icon: DocumentSheetIcon },
   { name: '系统管理', path: '/system', icon: Setting },
@@ -136,6 +136,11 @@ const menuMap = {
       path: '/monitor/camera',
       icon: VideoMonitorIcon,
     },
+    {
+      name: '系统监测',
+      path: '/monitor/system',
+      icon: SystemOverviewIcon,
+    },
   ],
   '/alarm': [
     {
@@ -145,8 +150,8 @@ const menuMap = {
     },
   ],
   '/system': [
-    { name: '设备管理', path: '/system/devices', icon: Setting },
-    { name: '信息配置', path: '/system/config', icon: Setting },
+    { name: '数据源管理', path: '/system/devices', icon: Setting },
+    { name: '联动系统', path: '/system/linkage', icon: Setting },
     { name: '无人机监测', path: '/system/drone', icon: 'drone-custom-icon' },
     { name: '模型管理', path: '/system/models', icon: DataAnalysis },
   ],
