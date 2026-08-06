@@ -72,15 +72,6 @@
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="绑定扬声器" min-width="190">
-            <template #default="{ row }">
-              <div class="speaker-cell">
-                <span v-if="row.broadcast_devices?.length">{{ row.broadcast_devices.map(item => item.name).join('、') }}</span>
-                <span v-else class="muted">未绑定</span>
-                <el-button size="small" :icon="Link" title="绑定扬声器" @click="openBinding(row)">绑定</el-button>
-              </div>
-            </template>
-          </el-table-column>
           <el-table-column label="操作" width="112" fixed="right">
             <template #default="{ row }">
               <div class="action-buttons">
@@ -161,14 +152,6 @@
       <template #footer><el-button @click="cameraDialog = false">取消</el-button><el-button :icon="Connection" :loading="testing" @click="testConnection">测试连接</el-button><el-button type="primary" :icon="Check" :loading="saving" :disabled="!connectionVerified" @click="saveCamera">保存</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="bindingDialog" title="绑定扬声器" width="500px">
-      <el-checkbox-group v-model="selectedDeviceIds" class="binding-list">
-        <el-checkbox v-for="device in enabledBroadcastDevices" :key="device.id" :value="device.id">{{ device.name }}<small>{{ device.description || 'USB/本地播放设备' }}</small></el-checkbox>
-      </el-checkbox-group>
-      <el-empty v-if="!enabledBroadcastDevices.length" description="暂无可用广播设备" :image-size="64" />
-      <template #footer><el-button @click="bindingDialog = false">取消</el-button><el-button type="primary" :loading="saving" @click="saveBinding">保存绑定</el-button></template>
-    </el-dialog>
-
     <el-dialog v-model="broadcastDialog" :title="editingBroadcast ? '编辑广播设备' : '添加广播设备'" width="520px">
       <el-form label-position="top"><el-form-item label="名称"><el-input v-model.trim="broadcastForm.name" maxlength="128" /></el-form-item><el-form-item label="描述"><el-input v-model.trim="broadcastForm.description" type="textarea" :rows="3" maxlength="500" /></el-form-item><el-form-item><el-checkbox v-model="broadcastForm.enabled">启用设备</el-checkbox></el-form-item></el-form>
       <template #footer><el-button @click="broadcastDialog = false">取消</el-button><el-button type="primary" :loading="saving" @click="saveBroadcast">保存</el-button></template>
@@ -184,10 +167,10 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Check, Connection, Delete, Edit, Hide, Link, Plus, Refresh, View } from '@element-plus/icons-vue'
+import { Check, Connection, Delete, Edit, Hide, Plus, Refresh, View } from '@element-plus/icons-vue'
 import { createCameraDevice, deleteCameraDevice, getCameraDevicePassword, getCameraDevices, testCameraDeviceConnection, updateCameraDevice } from '@/api/camera'
 import {
-  bindCameraBroadcastDevices, createBroadcastDevice, createBroadcastTemplate,
+  createBroadcastDevice, createBroadcastTemplate,
   deleteBroadcastDevice, deleteBroadcastTemplate, getBroadcastDevices, getBroadcastTemplates,
   updateBroadcastDevice, updateBroadcastTemplate,
 } from '@/api/broadcast'
@@ -204,12 +187,9 @@ const templates = ref([])
 const cameraDialog = ref(false)
 const broadcastDialog = ref(false)
 const templateDialog = ref(false)
-const bindingDialog = ref(false)
 const editingCamera = ref(null)
 const editingBroadcast = ref(null)
 const editingTemplate = ref(null)
-const bindingCamera = ref(null)
-const selectedDeviceIds = ref([])
 const verifiedKey = ref('')
 const passwordVisible = ref({})
 const passwordLoading = ref({})
@@ -219,7 +199,6 @@ const cameraForm = reactive({ camera_name: '', ip_address: '', username: '', pas
 const broadcastForm = reactive({ name: '', description: '', enabled: true })
 const templateForm = reactive({ name: '', scene_type: 'PERSON', risk_level: 'LOW', content: '', enabled: true })
 const createButtonText = computed(() => deviceMode.value === 'camera' ? '添加摄像头' : (broadcastTab.value === 'devices' ? '添加广播设备' : '添加广播模板'))
-const enabledBroadcastDevices = computed(() => broadcastDevices.value.filter(item => item.enabled))
 const connectionKey = computed(() => JSON.stringify([cameraForm.ip_address, cameraForm.rtsp_port, cameraForm.username, cameraForm.password]))
 const connectionVerified = computed(() => !needsTest.value || verifiedKey.value === connectionKey.value)
 const needsTest = computed(() => !editingCamera.value || connectionKey.value !== editingCamera.value.connectionKey)
@@ -235,9 +214,6 @@ function openCameraEdit(row) { editingCamera.value = { ...row, connectionKey: JS
 async function testConnection() { if (!cameraForm.ip_address || !cameraForm.username || (!editingCamera.value && !cameraForm.password)) return ElMessage.warning('请完整填写 IP、账号和密码'); testing.value = true; try { const res = await testCameraDeviceConnection({ camera_id: editingCamera.value ? String(editingCamera.value.id) : undefined, ip_address: cameraForm.ip_address, rtsp_port: cameraForm.rtsp_port, username: cameraForm.username, password: cameraForm.password }); if (res.data?.connected) { verifiedKey.value = connectionKey.value; ElMessage.success(`连接成功，已识别为${res.data.brand === 'hikvision' ? '海康' : '大华'}设备`) } else ElMessage.error(res.data?.message || '连接失败') } catch (error) { ElMessage.error(error.response?.data?.detail || '连接失败') } finally { testing.value = false } }
 async function saveCamera() { if (!cameraForm.camera_name || !cameraForm.ip_address || !cameraForm.username) return ElMessage.warning('请填写名称、IP 和账号'); if (!connectionVerified.value) return ElMessage.warning('请先测试连接'); saving.value = true; try { const payload = { ...cameraForm }; if (editingCamera.value && !payload.password) delete payload.password; if (editingCamera.value) await updateCameraDevice(String(editingCamera.value.id), payload); else await createCameraDevice(payload); cameraDialog.value = false; ElMessage.success('摄像头已保存'); await loadCurrent() } catch (error) { ElMessage.error(error.response?.data?.detail || '保存失败') } finally { saving.value = false } }
 async function removeCamera(row) { try { await ElMessageBox.confirm(`确认删除“${row.name}”？`, '删除摄像头', { type: 'warning' }); await deleteCameraDevice(String(row.id)); ElMessage.success('摄像头已删除'); await loadCurrent() } catch (error) { if (error !== 'cancel') ElMessage.error(error.response?.data?.detail || '删除失败') } }
-
-async function openBinding(row) { bindingCamera.value = row; if (!broadcastDevices.value.length) await loadBroadcast(); selectedDeviceIds.value = (row.broadcast_devices || []).map(item => item.id); bindingDialog.value = true }
-async function saveBinding() { saving.value = true; try { await bindCameraBroadcastDevices(String(bindingCamera.value.id), selectedDeviceIds.value); bindingDialog.value = false; ElMessage.success('绑定已保存'); await loadCameras() } catch (error) { ElMessage.error(error.response?.data?.detail || '绑定失败') } finally { saving.value = false } }
 
 function passwordLabel(row) {
   if (!row.has_password) return '--'
@@ -343,6 +319,5 @@ h2 { font-size: 25px; }
 .advanced-collapse :deep(.el-collapse-item__content) { padding: 16px 14px 18px; color: #d7e8f8; }
 .advanced-collapse :deep(.el-input-number) { width: 100%; }
 .advanced-collapse :deep(.el-input-number__decrease), .advanced-collapse :deep(.el-input-number__increase) { border-color: rgba(70, 145, 190, .45); color: #d7e8f8; background: #173a59; }
-.binding-list { display: grid; gap: 10px; }.binding-list :deep(.el-checkbox) { height: auto; margin: 0; padding: 12px; border: 1px solid rgba(96, 151, 191, .22); border-radius: 6px; }.binding-list small { display: block; margin-top: 3px; color: #839cb4; }
 @media (max-width: 900px) { .admin-header { align-items: flex-start; flex-direction: column; }.title-block { align-items: flex-start; flex-direction: column; }.form-grid.two { grid-template-columns: 1fr; }.device-admin { padding: 12px; }.camera-data-panel { min-height: 460px; } }
 </style>

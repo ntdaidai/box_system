@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 from loguru import logger
 
 from app.core.database import SessionLocal
-from app.models.event_action import EventAction
+from app.models.event_action_config import EventActionConfig
 from app.services.safety_event_runtime_service import safety_event_runtime_service
 
 
@@ -98,24 +98,21 @@ class DroneDispatchService:
 
     @staticmethod
     def _configured_targets(db, event_id: str, camera_id: str) -> tuple[Optional[str], Optional[str]]:
-        from app.models.action_step import ActionStep
         from app.models.camera import Camera
-        from app.models.safety_integration import EventActionStepConfig, SafetyEventInstance
+        from app.models.safety_integration import SafetyEventInstance
 
         instance = db.query(SafetyEventInstance).filter(SafetyEventInstance.instance_no == event_id).first()
         camera = db.query(Camera).filter(Camera.id == int(camera_id)).first() if camera_id.isdigit() else None
         if not instance or not camera:
             raise ValueError("无人机派飞关联的事件实例或摄像头不存在")
         config = (
-            db.query(EventActionStepConfig)
-            .join(EventAction, EventAction.id == EventActionStepConfig.event_action_id)
-            .join(ActionStep, ActionStep.id == EventActionStepConfig.step_id)
+            db.query(EventActionConfig)
             .filter(
-                EventAction.event_id == instance.current_event_id,
-                EventActionStepConfig.camera_device_id == camera.id,
-                ActionStep.action_type == "drone_dispatch",
-                EventActionStepConfig.enabled.is_(True),
+                EventActionConfig.event_id == instance.current_event_id,
+                EventActionConfig.action_type == "drone_dispatch",
+                EventActionConfig.is_activate.is_(True),
             )
+            .order_by(EventActionConfig.step_order.asc(), EventActionConfig.id.asc())
             .first()
         )
         if not config:

@@ -5,10 +5,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
-from app.models.action_flow import ActionFlow
 from app.models.condition_library import ConditionLibrary
 from app.models.data_source import DataSource
-from app.models.event_action import EventAction
 from app.models.event_condition import EventCondition
 from app.models.event_library import EventLibrary
 from app.models.safety_integration import SafetyEventInstance, SafetyEventTimelineLog
@@ -29,8 +27,6 @@ class UnifiedSensorEventServiceTests(unittest.TestCase):
                 ConditionLibrary.__table__,
                 EventLibrary.__table__,
                 EventCondition.__table__,
-                ActionFlow.__table__,
-                EventAction.__table__,
                 SafetyEventInstance.__table__,
                 SafetyEventTimelineLog.__table__,
             ],
@@ -66,14 +62,11 @@ class UnifiedSensorEventServiceTests(unittest.TestCase):
             recovery_duration=0,
             is_activate=True,
         )
-        flow = ActionFlow(id=1, flow_name="高温处理", flow_code="TEMP_HIGH_TEST_FLOW")
         self.db.add_all([
             source,
             condition,
             event,
-            flow,
             EventCondition(id=1, event_id=1, condition_id=1),
-            EventAction(id=1, event_id=1, flow_id=1, is_activate=True),
         ])
         self.db.commit()
 

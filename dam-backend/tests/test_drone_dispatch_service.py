@@ -9,13 +9,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base
-from app.models.action_flow import ActionFlow
-from app.models.action_step import ActionStep
 from app.models.camera import Camera
 from app.models.data_source import DataSource
-from app.models.event_action import EventAction
+from app.models.event_action_config import EventActionConfig
 from app.models.event_library import EventLibrary
-from app.models.safety_integration import EventActionStepConfig, SafetyEventInstance
+from app.models.safety_integration import SafetyEventInstance
 from app.services.drone_adapter import DroneDispatchService, MockDroneAdapter
 
 
@@ -50,15 +48,6 @@ class DroneDispatchServiceTests(unittest.TestCase):
             risk_level=2,
             is_activate=True,
         )
-        flow = ActionFlow(id=1, flow_name="Drone flow", flow_code="DRONE_FLOW")
-        step = ActionStep(
-            id=1,
-            flow_id=flow.id,
-            step_order=1,
-            step_name="Dispatch drone",
-            action_type="drone_dispatch",
-        )
-        relation = EventAction(id=1, event_id=event.id, flow_id=flow.id, is_activate=True)
         instance = SafetyEventInstance(
             id=1,
             instance_no="evt_drone",
@@ -75,7 +64,7 @@ class DroneDispatchServiceTests(unittest.TestCase):
             last_observed_at=dt.datetime.now(),
             summary="Test drone event",
         )
-        self.db.add_all([self.camera, source, event, flow, step, relation, instance])
+        self.db.add_all([self.camera, source, event, instance])
         self.db.commit()
 
     def tearDown(self):
@@ -87,14 +76,15 @@ class DroneDispatchServiceTests(unittest.TestCase):
             DroneDispatchService._configured_targets(self.db, "evt_drone", "1")
 
     def test_dispatch_uses_concrete_drone_and_route(self):
-        self.db.add(EventActionStepConfig(
+        self.db.add(EventActionConfig(
             id=1,
-            event_action_id=1,
-            camera_device_id=1,
-            step_id=1,
+            event_id=1,
+            step_order=1,
+            action_type="drone_dispatch",
+            action_name="Dispatch drone",
             drone_id="drone-01",
             route_id="route-a",
-            enabled=True,
+            is_activate=True,
         ))
         self.db.commit()
 

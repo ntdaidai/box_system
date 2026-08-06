@@ -68,8 +68,9 @@ class SafetyEventRuntimeService:
         action_key: Optional[str] = None,
         event_id: Optional[int] = None,
         condition_id: Optional[int] = None,
-        flow_id: Optional[int] = None,
-        step_id: Optional[int] = None,
+        action_config_id: Optional[int] = None,
+        stage: Optional[str] = None,
+        title: Optional[str] = None,
         risk_level: Optional[str] = None,
         payload: Optional[Dict[str, Any]] = None,
         create_time: Optional[dt.datetime] = None,
@@ -89,13 +90,14 @@ class SafetyEventRuntimeService:
             event_instance_id=instance.id,
             event_id=event_id or instance.current_event_id,
             condition_id=condition_id,
-            flow_id=flow_id,
-            step_id=step_id,
+            action_config_id=action_config_id,
             action_key=action_key,
+            stage=stage or self.stage_for_log_type(log_type),
             log_type=log_type.upper(),
             trigger_type=trigger_type.upper(),
             risk_level=risk_level or instance.risk_level,
             status=status.upper(),
+            title=title,
             message=message[:500],
             operator=operator,
             payload=payload or {},
@@ -211,6 +213,7 @@ class SafetyEventRuntimeService:
             "event_id": instance.instance_no,
             "instance_no": instance.instance_no,
             "definition_event_id": instance.current_event_id,
+            "analysis_report_id": instance.analysis_report_id,
             "event_name": event.event_name if event else instance.summary,
             "event_category": instance.event_category,
             "event_type": event.event_name if event else instance.event_category,
@@ -264,10 +267,12 @@ class SafetyEventRuntimeService:
             "action_id": row.action_key or f"timeline:{row.id}",
             "event_id": payload.get("instance_no"),
             "action_type": payload.get("action_type") or row.log_type,
+            "stage": row.stage,
             "log_type": row.log_type,
             "trigger_type": row.trigger_type,
             "risk_level": row.risk_level,
             "status": row.status.lower(),
+            "title": row.title,
             "message": row.message,
             "operator": row.operator,
             "payload": payload,
@@ -275,6 +280,21 @@ class SafetyEventRuntimeService:
             "create_time": row.create_time.isoformat() if row.create_time else None,
             "source": "safety_event_timeline_log",
         }
+
+    @staticmethod
+    def stage_for_log_type(log_type: str) -> str:
+        normalized = (log_type or "").upper()
+        if normalized == "TRIGGER":
+            return "TRIGGER"
+        if normalized in {"ACTION", "RISK_CHANGE", "DAM_WORKFLOW", "SYSTEM"}:
+            return "DISPATCH"
+        if normalized == "MANUAL":
+            return "PROCESSING"
+        if normalized == "REPORT":
+            return "REPORT"
+        if normalized == "RESOLVE":
+            return "CLOSE"
+        return "PROCESSING"
 
     @staticmethod
     def new_action_key(prefix: str) -> str:

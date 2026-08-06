@@ -23,8 +23,9 @@ from app.models.camera import Camera
 from app.models.safety_event_task import SafetyEventTask
 from app.models.safety_integration import SafetyEventEvidence, SafetyEventInstance, SafetyEventTimelineLog
 from app.services.broadcast_service import BroadcastException, broadcast_service
-from app.services.camera_stream import camera_manager
 from app.services.camera_live_relay import camera_live_relay_manager
+from app.services.camera_snapshot import camera_snapshot_service
+from app.services.camera_source import camera_source_from_row
 from app.services.minio_service import minio_service
 from app.services.safety_event_engine import (
     DISPOSAL_AUTO_HANDLING,
@@ -321,16 +322,11 @@ async def _broadcast_updates(db: Session, event: SafetyEventInstance, *timeline_
 async def list_cameras():
     db = SessionLocal()
     try:
-        statuses = {
-            item.get("camera_id"): item
-            for item in camera_manager.list_cameras()
-            if item.get("camera_id")
-        }
         rows = db.query(Camera).filter(Camera.enabled == True).order_by(Camera.id.asc()).all()  # noqa: E712
         cameras = []
         for row in rows:
             camera_id = str(row.id)
-            item = _mini_camera(row, statuses.get(camera_id))
+            item = _mini_camera(row, {"connected": row.enabled, "running": row.enabled})
             devices = broadcast_service.list_devices_for_camera(db, camera_id)
             item["broadcast_devices"] = devices
             item["broadcast_device_count"] = len(devices)
@@ -342,15 +338,22 @@ async def list_cameras():
 
 @router.get("/cameras/{camera_id}/snapshot.jpg", summary="小程序摄像头实时快照")
 async def get_camera_snapshot(camera_id: str):
-    camera = camera_manager.get_camera(camera_id)
-    if not camera:
-        raise HTTPException(status_code=404, detail="摄像头不存在")
-    if not camera.running:
-        camera.start()
-    camera.wait_for_frame(-1, timeout=1.0)
-    jpeg = camera.get_jpeg(quality=settings.CAMERA_JPEG_QUALITY)
-    if not jpeg:
-        raise HTTPException(status_code=503, detail="暂无实时画面")
+    db = SessionLocal()
+    try:
+        row = db.query(Camera).filter(Camera.id == int(camera_id), Camera.enabled == True).first() if str(camera_id).isdigit() else None  # noqa: E712
+        if not row:
+            raise HTTPException(status_code=404, detail="摄像头不存在")
+        try:
+            jpeg = await asyncio.to_thread(
+                camera_snapshot_service.capture_jpeg,
+                camera_source_from_row(row),
+                quality=settings.CAMERA_JPEG_QUALITY,
+                timeout_seconds=8,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+    finally:
+        db.close()
     return Response(
         content=jpeg,
         media_type="image/jpeg",
@@ -360,14 +363,17 @@ async def get_camera_snapshot(camera_id: str):
 
 @router.get("/cameras/{camera_id}/video", response_model=MiniResponse, summary="小程序摄像头实时视频")
 async def get_camera_video(camera_id: str):
-    camera = camera_manager.get_camera(camera_id)
-    if not camera:
-        raise HTTPException(status_code=404, detail="摄像头不存在")
-    if not camera.running:
-        camera.start()
+    db = SessionLocal()
+    try:
+        row = db.query(Camera).filter(Camera.id == int(camera_id), Camera.enabled == True).first() if str(camera_id).isdigit() else None  # noqa: E712
+        if not row:
+            raise HTTPException(status_code=404, detail="摄像头不存在")
+        source = camera_source_from_row(row)
+    finally:
+        db.close()
     try:
         relay = await asyncio.to_thread(
-            camera_live_relay_manager.ensure, camera_id, camera.source
+            camera_live_relay_manager.ensure, camera_id, source
         )
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -457,15 +463,19 @@ async def get_event_snapshot(event_id: str):
     try:
         event = _get_event_or_404(db, event_id)
         event_data = safety_event_runtime_service.event_dict(db, event)
-        camera = camera_manager.get_camera(event_data.get("camera_id"))
+        camera_id = str(event_data.get("camera_id") or "")
+        camera = db.query(Camera).filter(Camera.id == int(camera_id), Camera.enabled == True).first() if camera_id.isdigit() else None  # noqa: E712
         if not camera:
             raise HTTPException(status_code=404, detail="摄像头不存在")
-        if not camera.running:
-            camera.start()
-        camera.wait_for_frame(-1, timeout=1.0)
-        jpeg = camera.get_jpeg(quality=settings.CAMERA_JPEG_QUALITY)
-        if not jpeg:
-            raise HTTPException(status_code=503, detail="暂无实时画面")
+        try:
+            jpeg = await asyncio.to_thread(
+                camera_snapshot_service.capture_jpeg,
+                camera_source_from_row(camera),
+                quality=settings.CAMERA_JPEG_QUALITY,
+                timeout_seconds=8,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         return Response(
             content=jpeg,
             media_type="image/jpeg",
@@ -500,14 +510,12 @@ async def get_event_video(event_id: str):
         event = _get_event_or_404(db, event_id)
         event_data = safety_event_runtime_service.event_dict(db, event)
         camera_id = str(event_data.get("camera_id") or "")
-        camera = camera_manager.get_camera(camera_id)
+        camera = db.query(Camera).filter(Camera.id == int(camera_id), Camera.enabled == True).first() if camera_id.isdigit() else None  # noqa: E712
         if not camera:
             raise HTTPException(status_code=404, detail="摄像头不存在")
-        if not camera.running:
-            camera.start()
         try:
             relay = await asyncio.to_thread(
-                camera_live_relay_manager.ensure, camera_id, camera.source
+                camera_live_relay_manager.ensure, camera_id, camera_source_from_row(camera)
             )
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc

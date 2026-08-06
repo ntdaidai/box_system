@@ -14,6 +14,7 @@ class EventLibrary(Base):
     risk_level = Column(Integer, default=1, comment="风险等级: 1=低 2=中 3=高")
     trigger_mode = Column(String(20), default="single", comment="触发模式: single/multi")
     recovery_duration = Column(Integer, default=60, comment="条件持续恢复后自动闭环的秒数")
+    route_role_id = Column(String(64), nullable=True, index=True, comment="智能路由角色逻辑ID")
     description = Column(Text, comment="事件描述")
     is_activate = Column(Boolean, default=True, comment="是否启用")
     create_time = Column(DateTime, server_default=func.now(), comment="创建时间")
@@ -28,6 +29,7 @@ class EventLibrary(Base):
             "risk_level": self.risk_level,
             "trigger_mode": self.trigger_mode,
             "recovery_duration": self.recovery_duration,
+            "route_role_id": self.route_role_id,
             "description": self.description,
             "is_activate": self.is_activate,
             "create_time": self.create_time.isoformat() if self.create_time else None,

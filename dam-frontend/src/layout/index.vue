@@ -80,7 +80,7 @@ import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores'
 import {
-  ArrowDown, Bell, Cloudy, DataAnalysis, Odometer, Setting, Sunny, WindPower,
+  ArrowDown, Bell, DataAnalysis, Setting,
 } from '@element-plus/icons-vue'
 import {
   AlarmTriangleIcon,
@@ -127,14 +127,8 @@ const menuMap = {
     },
     {
       name: '传感器监测',
+      path: '/monitor/sensors',
       icon: SensorChipIcon,
-      children: [
-        { name: '综合传感器页', path: '/monitor/sensors', icon: SensorChipIcon },
-        { name: '温湿度传感器', path: '/monitor/temp', icon: Sunny },
-        { name: '风速风向传感器', path: '/monitor/wind', icon: WindPower },
-        { name: '雨量传感器', path: '/monitor/rain', icon: Cloudy },
-        { name: '振动传感器', path: '/monitor/vibration', icon: Odometer },
-      ],
     },
     {
       name: '视频监测',
@@ -142,7 +136,6 @@ const menuMap = {
       children: [
         { name: '视频监控', path: '/monitor/camera', icon: VideoMonitorIcon },
         { name: '设备管理', path: '/monitor/camera/devices', icon: Setting },
-        { name: '图片/视频分析', path: '/monitor/camera/image', icon: DataAnalysis },
         { name: '信息配置', path: '/monitor/config', icon: Setting },
       ],
     },
@@ -157,7 +150,6 @@ const menuMap = {
       name: '告警管理',
       icon: AlarmTriangleIcon,
       children: [
-        { name: '告警列表', path: '/alarm/list', icon: AlarmTriangleIcon },
         { name: '安全事件', path: '/alarm/safety-events', icon: Bell },
       ],
     },

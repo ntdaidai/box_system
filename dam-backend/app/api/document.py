@@ -3,6 +3,7 @@
 """
 
 import os
+import re
 import uuid
 from datetime import datetime
 from typing import Optional, List
@@ -104,6 +105,15 @@ def get_content_type(extension: str) -> str:
     return content_types.get(extension, "application/octet-stream")
 
 
+def build_document_object_name(category: str, file_type: str, extension: str, file_id: str) -> str:
+    """按文档分类/日期组织对象路径."""
+    type_folder = (category or file_type or "other").strip()
+    type_folder = re.sub(r"[\\/]+", "_", type_folder)
+    type_folder = re.sub(r"\s+", "_", type_folder).strip("._") or "other"
+    date_folder = datetime.now().strftime("%Y-%m-%d")
+    return f"{type_folder}/{date_folder}/{file_id}.{extension}"
+
+
 # ========== API 路由 ==========
 
 @router.post("/upload")
@@ -121,9 +131,9 @@ async def upload_document(
         file_type = get_file_type(extension)
         file_id = str(uuid.uuid4())
 
-        # 构建存储路径：documents/{年}/{月}/{文件ID}.{扩展名}
+        # 构建存储路径：{文档分类或文件类型}/{日期}/{文件ID}.{扩展名}
         now = datetime.now()
-        object_name = f"{now.year}/{now.month:02d}/{file_id}.{extension}"
+        object_name = build_document_object_name(category, file_type, extension, file_id)
 
         # 读取文件内容
         content = await file.read()

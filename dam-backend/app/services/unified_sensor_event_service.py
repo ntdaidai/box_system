@@ -8,9 +8,7 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
 
-from app.models.action_flow import ActionFlow
 from app.models.data_source import DataSource
-from app.models.event_action import EventAction
 from app.models.event_condition import EventCondition
 from app.models.event_library import EventLibrary
 from app.models.safety_integration import SafetyEventInstance, SafetyEventTimelineLog
@@ -69,11 +67,10 @@ class UnifiedSensorEventService:
                 )
                 db.add(instance)
                 db.flush()
-                flow_id = self._flow_id(db, event.id)
                 db.add(SafetyEventTimelineLog(
                     event_instance_id=instance.id,
                     event_id=event.id,
-                    flow_id=flow_id,
+                    stage="TRIGGER",
                     action_key=f"sensor-trigger:{instance.instance_no}",
                     log_type="TRIGGER",
                     trigger_type="AUTO",
@@ -116,7 +113,7 @@ class UnifiedSensorEventService:
         db.add(SafetyEventTimelineLog(
             event_instance_id=instance.id,
             event_id=event.id,
-            flow_id=self._flow_id(db, event.id),
+            stage="CLOSE",
             action_key=f"sensor-resolve:{instance.instance_no}",
             log_type="RESOLVE",
             trigger_type="AUTO",
@@ -141,16 +138,5 @@ class UnifiedSensorEventService:
             .first()
         )
         return relation.condition.source if relation and relation.condition else None
-
-    @staticmethod
-    def _flow_id(db: Session, event_id: int) -> Optional[int]:
-        relation = db.query(EventAction).filter(
-            EventAction.event_id == event_id,
-            EventAction.is_activate.is_(True),
-        ).order_by(EventAction.priority.asc(), EventAction.id.asc()).first()
-        if not relation:
-            return None
-        return db.query(ActionFlow.id).filter(ActionFlow.id == relation.flow_id).scalar()
-
 
 unified_sensor_event_service = UnifiedSensorEventService()

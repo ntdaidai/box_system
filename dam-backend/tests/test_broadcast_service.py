@@ -15,15 +15,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base
-from app.models.broadcast import BroadcastDevice, BroadcastTemplate, CameraBroadcastDevice
+from app.models.broadcast import BroadcastDevice, BroadcastTemplate
 from app.models.camera import Camera
-from app.models.event_action import EventAction
+from app.models.event_action_config import EventActionConfig
 from app.models.event_library import EventLibrary
 from app.models.data_source import DataSource
 from app.models.safety_integration import SafetyEventInstance, SafetyEventTimelineLog
-from app.models.action_flow import ActionFlow
-from app.models.action_step import ActionStep
-from app.models.safety_integration import EventActionStepConfig
 from app.core.config import settings
 from app.services.broadcast_service import (
     BroadcastAudioFile,
@@ -101,7 +98,7 @@ class BroadcastServiceTests(unittest.TestCase):
         self.db.flush()
         return camera
 
-    def test_manual_play_uses_bound_devices_and_records_timeline(self):
+    def test_manual_play_uses_selected_devices_and_records_timeline(self):
         instance = self.add_event("evt_1")
         device = BroadcastDevice(
             id=1,
@@ -114,7 +111,6 @@ class BroadcastServiceTests(unittest.TestCase):
         self.db.add(device)
         self.db.flush()
         camera = self.add_camera(101)
-        self.db.add(CameraBroadcastDevice(id=1, camera_device_id=camera.id, broadcast_device_id=device.id))
         self.db.commit()
 
         response = self.service.play(
@@ -122,6 +118,7 @@ class BroadcastServiceTests(unittest.TestCase):
             {
                 "event_id": "evt_1",
                 "camera_id": str(camera.id),
+                "device_ids": [device.id],
                 "template_id": "PERSON_HIGH",
                 "trigger_type": "MANUAL",
                 "operator": "tester",
@@ -136,7 +133,7 @@ class BroadcastServiceTests(unittest.TestCase):
         self.assertEqual(action.status, "SUCCESS")
         self.assertEqual(action.operator, "tester")
         self.assertEqual(action.payload["devices"][0]["device_id"], device.id)
-        self.assertEqual(self.db.query(EventAction).count(), 0)
+        self.assertEqual(self.db.query(EventActionConfig).count(), 0)
 
     def test_failed_device_is_recorded_without_blocking_other_devices(self):
         instance = self.add_event("evt_2")
@@ -188,7 +185,6 @@ class BroadcastServiceTests(unittest.TestCase):
         self.db.add(device)
         self.db.flush()
         camera = self.add_camera(102)
-        self.db.add(CameraBroadcastDevice(id=1, camera_device_id=camera.id, broadcast_device_id=device.id))
         self.db.commit()
         with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as handle:
             handle.write(b"temporary voice")
@@ -199,6 +195,7 @@ class BroadcastServiceTests(unittest.TestCase):
             {
                 "event_id": instance.instance_no,
                 "camera_id": str(camera.id),
+                "device_ids": [device.id],
                 "trigger_type": "MANUAL",
                 "operator": "tester",
             },
@@ -231,7 +228,6 @@ class BroadcastServiceTests(unittest.TestCase):
         self.db.add(device)
         self.db.flush()
         camera = self.add_camera(104)
-        self.db.add(CameraBroadcastDevice(id=1, camera_device_id=camera.id, broadcast_device_id=device.id))
         self.db.commit()
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as handle:
             handle.write(b"temporary voice")
@@ -243,6 +239,7 @@ class BroadcastServiceTests(unittest.TestCase):
                 {
                     "event_id": instance.instance_no,
                     "camera_id": str(camera.id),
+                    "device_ids": [device.id],
                     "trigger_type": "MANUAL",
                     "operator": "tester",
                 },
@@ -335,7 +332,7 @@ class BroadcastServiceTests(unittest.TestCase):
         finally:
             Path(audio_path).unlink(missing_ok=True)
 
-    def test_real_device_takes_precedence_over_local_test_device(self):
+    def test_explicit_real_device_can_be_selected_without_camera_binding(self):
         local = BroadcastDevice(
             id=1,
             name="Local browser test",
@@ -355,10 +352,6 @@ class BroadcastServiceTests(unittest.TestCase):
         self.db.add_all([local, real])
         self.db.flush()
         camera = self.add_camera(103)
-        self.db.add_all([
-            CameraBroadcastDevice(id=1, camera_device_id=camera.id, broadcast_device_id=local.id),
-            CameraBroadcastDevice(id=2, camera_device_id=camera.id, broadcast_device_id=real.id),
-        ])
         self.db.commit()
 
         response = self.service.play(
@@ -366,6 +359,7 @@ class BroadcastServiceTests(unittest.TestCase):
             {
                 "event_id": "evt_3",
                 "camera_id": str(camera.id),
+                "device_ids": [real.id],
                 "template_id": "PERSON_HIGH",
                 "trigger_type": "AUTO",
             },
@@ -404,7 +398,7 @@ class BroadcastServiceTests(unittest.TestCase):
                 str(camera.id),
             )
 
-    def test_automatic_broadcast_uses_configured_bound_device_and_template(self):
+    def test_automatic_broadcast_uses_configured_device_and_template(self):
         instance = self.add_event("evt_auto_configured")
         camera = self.add_camera(106)
         device = BroadcastDevice(
@@ -415,33 +409,17 @@ class BroadcastServiceTests(unittest.TestCase):
             status="ONLINE",
             enabled=True,
         )
-        flow = ActionFlow(id=20, flow_name="Configured flow", flow_code="CONFIGURED_FLOW")
-        step = ActionStep(
+        action = EventActionConfig(
             id=20,
-            flow_id=flow.id,
+            event_id=instance.current_event_id,
             step_order=1,
-            step_name="Configured broadcast",
             action_type="broadcast",
+            action_name="Configured broadcast",
+            broadcast_device_id=device.id,
+            template_id="PERSON_HIGH",
+            is_activate=True,
         )
-        relation = EventAction(id=20, event_id=instance.current_event_id, flow_id=flow.id, is_activate=True)
-        self.db.add_all([device, flow, step, relation])
-        self.db.flush()
-        self.db.add_all([
-            CameraBroadcastDevice(
-                id=20,
-                camera_device_id=camera.id,
-                broadcast_device_id=device.id,
-            ),
-            EventActionStepConfig(
-                id=20,
-                event_action_id=relation.id,
-                camera_device_id=camera.id,
-                step_id=step.id,
-                broadcast_device_id=device.id,
-                template_id="PERSON_HIGH",
-                enabled=True,
-            ),
-        ])
+        self.db.add_all([device, action])
         self.db.commit()
 
         template_id, device_ids = self.service._configured_action_targets(
@@ -453,7 +431,7 @@ class BroadcastServiceTests(unittest.TestCase):
         self.assertEqual(template_id, "PERSON_HIGH")
         self.assertEqual(device_ids, [device.id])
 
-    def test_explicit_device_must_be_bound_to_camera(self):
+    def test_explicit_device_does_not_require_camera_binding(self):
         camera = self.add_camera(107)
         device = BroadcastDevice(
             id=21,
@@ -466,8 +444,8 @@ class BroadcastServiceTests(unittest.TestCase):
         self.db.add(device)
         self.db.commit()
 
-        with self.assertRaisesRegex(BroadcastException, "未绑定"):
-            self.service._resolve_devices(self.db, str(camera.id), [device.id])
+        devices = self.service._resolve_devices(self.db, str(camera.id), [device.id])
+        self.assertEqual([row.id for row in devices], [device.id])
 
 
 if __name__ == "__main__":

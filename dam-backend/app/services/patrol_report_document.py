@@ -129,6 +129,15 @@ def _crop_picture(paragraph, image_path, *, width, height, crop):
     blip_fill.insert(1, src_rect)
 
 
+def _asset_path(board_image: Path, filename: str) -> Path | None:
+    candidate = board_image.with_name(filename)
+    return candidate if candidate.is_file() else None
+
+
+def _insert_picture(paragraph, image_path: Path, *, width, height=None):
+    return paragraph.add_run().add_picture(str(image_path), width=width, height=height)
+
+
 def _field(paragraph, instruction, result="1"):
     run = paragraph.add_run()
     begin = OxmlElement("w:fldChar")
@@ -183,16 +192,20 @@ def _header(section, board_image, report_date):
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     _clear_borders(table)
     left = table.cell(0, 0).paragraphs[0]
-    _crop_picture(
-        left,
-        board_image,
-        width=Mm(33),
-        height=Mm(13.5),
-        crop={"l": 1900, "t": 4700, "r": 85600, "b": 86800},
-    )
+    logo_image = _asset_path(board_image, "report_logo.png")
+    if logo_image:
+        _insert_picture(left, logo_image, width=Mm(33), height=Mm(13.5))
+    else:
+        _crop_picture(
+            left,
+            board_image,
+            width=Mm(33),
+            height=Mm(13.5),
+            crop={"l": 1900, "t": 4700, "r": 85600, "b": 86800},
+        )
     right = table.cell(0, 1).paragraphs[0]
     _paragraph(right, align=WD_ALIGN_PARAGRAPH.RIGHT, before=0, after=0, line=1)
-    _text(right, "大藤峡空地联动每日巡检报告", size=8, color=MUTED)
+    _text(right, "大藤峡工程空地联动每日巡检报告", size=8, color=MUTED)
     _text(right, f"   {report_date}", size=8, color=BLUE, bold=True)
     for cell in table.rows[0].cells:
         cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.BOTTOM
@@ -234,16 +247,20 @@ def _cover(document, context, board_image):
 
     logo = document.add_paragraph()
     _paragraph(logo, align=WD_ALIGN_PARAGRAPH.LEFT, after=28)
-    _crop_picture(
-        logo,
-        board_image,
-        width=Mm(52),
-        height=Mm(21.3),
-        crop={"l": 1900, "t": 4700, "r": 85600, "b": 86800},
-    )
+    logo_image = _asset_path(board_image, "report_logo.png")
+    if logo_image:
+        _insert_picture(logo, logo_image, width=Mm(52), height=Mm(21.7))
+    else:
+        _crop_picture(
+            logo,
+            board_image,
+            width=Mm(52),
+            height=Mm(21.3),
+            crop={"l": 1900, "t": 4700, "r": 85600, "b": 86800},
+        )
     title = document.add_paragraph()
     _paragraph(title, align=WD_ALIGN_PARAGRAPH.CENTER, after=8)
-    _text(title, "大藤峡空地联动每日巡检报告", name=SERIF, size=24, color=BLUE, bold=True)
+    _text(title, "大藤峡工程空地联动每日巡检报告", name=SERIF, size=24, color=BLUE, bold=True)
 
     rule = document.add_paragraph()
     _paragraph(rule, align=WD_ALIGN_PARAGRAPH.CENTER, after=18)
@@ -256,13 +273,17 @@ def _cover(document, context, board_image):
 
     photo = document.add_paragraph()
     _paragraph(photo, align=WD_ALIGN_PARAGRAPH.CENTER, after=22)
-    _crop_picture(
-        photo,
-        board_image,
-        width=Mm(166),
-        height=Mm(86),
-        crop={"l": 780, "t": 33860, "r": 74300, "b": 28800},
-    )
+    cover_image = _asset_path(board_image, "report_cover_photo.png")
+    if cover_image:
+        _insert_picture(photo, cover_image, width=Mm(166), height=Mm(86))
+    else:
+        _crop_picture(
+            photo,
+            board_image,
+            width=Mm(166),
+            height=Mm(86),
+            crop={"l": 780, "t": 33860, "r": 74300, "b": 28800},
+        )
 
     info = document.add_table(rows=1, cols=2)
     info.alignment = WD_TABLE_ALIGNMENT.CENTER

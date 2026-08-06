@@ -11,16 +11,13 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.security import require_auth
-from app.models.action_flow import ActionFlow
-from app.models.action_step import ActionStep
-from app.models.broadcast import BroadcastDevice, BroadcastTemplate, CameraBroadcastDevice
+from app.models.broadcast import BroadcastDevice, BroadcastTemplate
 from app.models.camera import Camera
 from app.models.condition_library import ConditionLibrary
-from app.models.event_action import EventAction
+from app.models.event_action_config import EventActionConfig
 from app.models.event_library import EventLibrary
 from app.models.safety_event_task import SafetyEventTask
 from app.models.safety_integration import (
-    EventActionStepConfig,
     SafetyEventEvidence,
     SafetyEventInstance,
     SafetyEventTimelineLog,
@@ -50,6 +47,7 @@ class ConditionConfigUpdate(BaseModel):
 class EventConfigUpdate(BaseModel):
     enabled: Optional[bool] = None
     recovery_duration: Optional[int] = Field(None, ge=0, le=3600)
+    route_role_id: Optional[str] = Field(None, max_length=64)
 
 
 class FlowConfigUpdate(BaseModel):
@@ -59,12 +57,24 @@ class FlowConfigUpdate(BaseModel):
 
 class ActionConfigUpdate(BaseModel):
     enabled: Optional[bool] = None
+    step_order: Optional[int] = Field(None, ge=1, le=100)
+    action_type: Optional[str] = Field(None, max_length=50)
+    action_name: Optional[str] = Field(None, max_length=100)
+    timeout_seconds: Optional[int] = Field(None, ge=1, le=86400)
+    failure_strategy: Optional[str] = Field(None, pattern="^(continue|abort)$")
+    retry_count: Optional[int] = Field(None, ge=0, le=20)
     broadcast_device_id: Optional[int] = None
     template_id: Optional[str] = Field(None, max_length=64)
     drone_id: Optional[str] = Field(None, max_length=64)
     route_id: Optional[str] = Field(None, max_length=64)
     repeat_interval_seconds: Optional[int] = Field(None, ge=0, le=86400)
     max_executions: Optional[int] = Field(None, ge=1, le=100)
+
+
+class ActionConfigCreate(ActionConfigUpdate):
+    event_id: int
+    step_order: int = Field(..., ge=1, le=100)
+    action_type: str = Field(..., max_length=50)
 
 
 class SafetyEventOperation(BaseModel):
@@ -85,6 +95,7 @@ def _event_dict(row: SafetyEventInstance, event: Optional[EventLibrary] = None) 
         "id": row.id,
         "instance_no": row.instance_no,
         "event_id": row.current_event_id,
+        "analysis_report_id": row.analysis_report_id,
         "event_name": event.event_name if event else row.summary,
         "event_category": row.event_category,
         "source_type": row.source_type,
@@ -120,21 +131,14 @@ def get_integration_config(
         .all()
     )
     event_ids = [row.id for row in events]
-    relations = db.query(EventAction).filter(
-        EventAction.event_id.in_(event_ids), EventAction.flow_id.isnot(None)
-    ).all() if event_ids else []
-    relation_ids = [row.id for row in relations]
-    configs = db.query(EventActionStepConfig).filter(
-        EventActionStepConfig.event_action_id.in_(relation_ids)
-    ).order_by(EventActionStepConfig.id.asc()).all() if relation_ids else []
-
     event_map = {row.id: row for row in events}
-    relation_map = {row.id: row for row in relations}
-    flow_ids = {row.flow_id for row in relations}
-    flows = {row.id: row for row in db.query(ActionFlow).filter(ActionFlow.id.in_(flow_ids)).all()} if flow_ids else {}
-    step_ids = {row.step_id for row in configs}
-    steps = {row.id: row for row in db.query(ActionStep).filter(ActionStep.id.in_(step_ids)).all()} if step_ids else {}
-    cameras = {row.id: row for row in db.query(Camera).all()}
+    configs = (
+        db.query(EventActionConfig)
+        .filter(EventActionConfig.event_id.in_(event_ids))
+        .order_by(EventActionConfig.event_id.asc(), EventActionConfig.step_order.asc(), EventActionConfig.id.asc())
+        .all()
+        if event_ids else []
+    )
     devices = {row.id: row for row in db.query(BroadcastDevice).all()}
     templates = {row.id: row for row in db.query(BroadcastTemplate).all()}
 
@@ -157,31 +161,33 @@ def get_integration_config(
                 "risk_level": row.risk_level,
                 "risk_label": RISK_LABELS.get(row.risk_level, "未知"),
                 "recovery_duration": row.recovery_duration,
+                "route_role_id": row.route_role_id,
                 "enabled": bool(row.is_activate),
                 "description": row.description,
             } for row in events],
-            "flows": [{
-                "id": row.id, "name": row.flow_name, "timeout_seconds": row.timeout_seconds,
-                "enabled": bool(row.is_activate), "failure_strategy": row.failure_strategy,
-            } for row in flows.values()],
+            "flows": [],
             "action_configs": [{
                 "id": config.id,
-                "event_name": event_map.get(relation_map[config.event_action_id].event_id).event_name,
-                "flow_name": flows.get(relation_map[config.event_action_id].flow_id).flow_name,
-                "step_name": steps.get(config.step_id).step_name,
-                "action_type": steps.get(config.step_id).action_type,
-                "action_label": ACTION_LABELS.get(steps.get(config.step_id).action_type, steps.get(config.step_id).step_name),
-                "camera_device_id": config.camera_device_id,
-                "camera_name": cameras.get(config.camera_device_id).camera_name if cameras.get(config.camera_device_id) else "全部摄像头",
+                "event_id": config.event_id,
+                "event_name": event_map.get(config.event_id).event_name if event_map.get(config.event_id) else "未知事件",
+                "event_code": event_map.get(config.event_id).event_code if event_map.get(config.event_id) else None,
+                "step_order": config.step_order,
+                "step_name": config.action_name or ACTION_LABELS.get(config.action_type, config.action_type),
+                "action_type": config.action_type,
+                "action_name": config.action_name,
+                "action_label": ACTION_LABELS.get(config.action_type, config.action_name or config.action_type),
+                "timeout_seconds": config.timeout_seconds,
+                "failure_strategy": config.failure_strategy,
+                "retry_count": config.retry_count,
                 "broadcast_device_id": config.broadcast_device_id,
                 "broadcast_device_name": devices.get(config.broadcast_device_id).name if devices.get(config.broadcast_device_id) else None,
                 "template_id": config.template_id,
                 "template_name": templates.get(config.template_id).name if templates.get(config.template_id) else None,
                 "drone_id": config.drone_id,
                 "route_id": config.route_id,
-                "repeat_interval_seconds": (config.config_json or {}).get("repeat_interval_seconds", 60),
-                "max_executions": (config.config_json or {}).get("max_executions", 1),
-                "enabled": bool(config.enabled),
+                "repeat_interval_seconds": config.repeat_interval_seconds,
+                "max_executions": config.max_executions,
+                "enabled": bool(config.is_activate),
             } for config in configs],
             "broadcast_devices": [{"id": row.id, "name": row.name, "enabled": bool(row.enabled)} for row in devices.values()],
             "broadcast_templates": [{"id": row.id, "name": row.name, "risk_level": row.risk_level, "enabled": bool(row.enabled)} for row in templates.values()],
@@ -225,6 +231,8 @@ def update_event_config(
         row.is_activate = payload.enabled
     if payload.recovery_duration is not None:
         row.recovery_duration = payload.recovery_duration
+    if payload.route_role_id is not None:
+        row.route_role_id = payload.route_role_id or None
     db.commit()
     return {"code": 200, "message": "事件配置已保存"}
 
@@ -236,13 +244,10 @@ def update_action_config(
     db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    row = db.query(EventActionStepConfig).filter(EventActionStepConfig.id == config_id).first()
+    row = db.query(EventActionConfig).filter(EventActionConfig.id == config_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="动作配置不存在")
     data = payload.model_dump(exclude_unset=True)
-    step = db.query(ActionStep).filter(ActionStep.id == row.step_id).first()
-    if not step:
-        raise HTTPException(status_code=409, detail="动作步骤不存在")
     if data.get("broadcast_device_id") is not None:
         device = db.query(BroadcastDevice).filter(
             BroadcastDevice.id == data["broadcast_device_id"],
@@ -250,33 +255,80 @@ def update_action_config(
         ).first()
         if not device:
             raise HTTPException(status_code=400, detail="广播设备不存在或未启用")
-        if row.camera_device_id and not db.query(CameraBroadcastDevice.id).filter(
-            CameraBroadcastDevice.camera_device_id == row.camera_device_id,
-            CameraBroadcastDevice.broadcast_device_id == device.id,
-        ).first():
-            raise HTTPException(status_code=400, detail="该广播设备尚未绑定当前摄像头")
     if data.get("template_id") is not None and not db.query(BroadcastTemplate.id).filter(
         BroadcastTemplate.id == data["template_id"],
         BroadcastTemplate.enabled.is_(True),
     ).first():
         raise HTTPException(status_code=400, detail="广播模板不存在或未启用")
-    for field in ("enabled", "broadcast_device_id", "template_id", "drone_id", "route_id"):
+    if data.get("action_type") is not None and data["action_type"] not in ACTION_LABELS:
+        raise HTTPException(status_code=400, detail="动作类型不支持")
+    for field in (
+        "step_order", "action_type", "action_name", "timeout_seconds", "failure_strategy",
+        "retry_count", "broadcast_device_id", "template_id", "drone_id", "route_id",
+        "repeat_interval_seconds", "max_executions",
+    ):
         if field in data:
             setattr(row, field, data[field])
-    will_be_enabled = data.get("enabled", row.enabled)
-    if will_be_enabled and step.action_type == "broadcast":
+    if "enabled" in data:
+        row.is_activate = data["enabled"]
+    will_be_enabled = data.get("enabled", row.is_activate)
+    action_type = data.get("action_type", row.action_type)
+    if will_be_enabled and action_type == "broadcast":
         if not row.broadcast_device_id or not row.template_id:
             raise HTTPException(status_code=400, detail="自动广播必须配置广播设备和模板")
-    if will_be_enabled and step.action_type == "drone_dispatch":
+    if will_be_enabled and action_type == "drone_dispatch":
         if not row.drone_id or not row.route_id:
             raise HTTPException(status_code=400, detail="无人机派飞必须配置无人机和航线")
-    config = dict(row.config_json or {})
-    for field in ("repeat_interval_seconds", "max_executions"):
-        if field in data:
-            config[field] = data[field]
-    row.config_json = config
     db.commit()
     return {"code": 200, "message": "动作配置已保存"}
+
+
+@router.post("/config/actions", summary="新增事件动作配置")
+def create_action_config(
+    payload: ActionConfigCreate,
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_auth),
+):
+    event = db.query(EventLibrary).filter(EventLibrary.id == payload.event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="事件不存在")
+    if payload.action_type not in ACTION_LABELS:
+        raise HTTPException(status_code=400, detail="动作类型不支持")
+    data = payload.model_dump(exclude_unset=True)
+    row = EventActionConfig(
+        event_id=payload.event_id,
+        step_order=payload.step_order,
+        action_type=payload.action_type,
+        action_name=data.get("action_name") or ACTION_LABELS.get(payload.action_type, payload.action_type),
+        timeout_seconds=data.get("timeout_seconds") or 60,
+        failure_strategy=data.get("failure_strategy") or "continue",
+        retry_count=data.get("retry_count") or 0,
+        broadcast_device_id=data.get("broadcast_device_id"),
+        template_id=data.get("template_id"),
+        drone_id=data.get("drone_id"),
+        route_id=data.get("route_id"),
+        repeat_interval_seconds=data.get("repeat_interval_seconds") or 60,
+        max_executions=data.get("max_executions") or 1,
+        is_activate=data.get("enabled", True),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"code": 200, "data": row.to_dict(), "message": "动作配置已新增"}
+
+
+@router.delete("/config/actions/{config_id}", summary="删除事件动作配置")
+def delete_action_config(
+    config_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_auth),
+):
+    row = db.query(EventActionConfig).filter(EventActionConfig.id == config_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="动作配置不存在")
+    db.delete(row)
+    db.commit()
+    return {"code": 200, "message": "动作配置已删除"}
 
 
 @router.put("/config/flows/{flow_id}", summary="更新行为流程参数")
@@ -286,15 +338,7 @@ def update_flow_config(
     db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    row = db.query(ActionFlow).filter(ActionFlow.id == flow_id).first()
-    if not row or not (row.flow_code or "").endswith("_FLOW"):
-        raise HTTPException(status_code=404, detail="视觉处置流程不存在")
-    if payload.enabled is not None:
-        row.is_activate = payload.enabled
-    if payload.timeout_seconds is not None:
-        row.timeout_seconds = payload.timeout_seconds
-    db.commit()
-    return {"code": 200, "message": "流程配置已保存"}
+    raise HTTPException(status_code=410, detail="行为流程已合并到事件动作配置")
 
 
 @router.get("/safety-events", summary="获取统一安全事件实例")
@@ -366,7 +410,8 @@ def get_safety_event_detail(
             "confidence": float(visual.confidence) if visual.confidence is not None else None,
         },
         "timeline": [{
-            "id": row.id, "log_type": row.log_type, "trigger_type": row.trigger_type,
+            "id": row.id, "stage": row.stage, "title": row.title,
+            "log_type": row.log_type, "trigger_type": row.trigger_type,
             "risk_level": row.risk_level, "status": row.status, "message": row.message,
             "operator": row.operator, "create_time": row.create_time.isoformat() if row.create_time else None,
             "has_evidence": any(item.timeline_log_id == row.id for item in evidence),

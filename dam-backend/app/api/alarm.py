@@ -1,134 +1,66 @@
-"""告警管理接口"""
+"""Legacy alarm API backed by unified safety-event instances."""
 
 from datetime import datetime
-import re
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from loguru import logger
 
+from fastapi import APIRouter, Depends, HTTPException
+from loguru import logger
+from sqlalchemy.orm import Session
+
+from app.core.cache import cached, invalidate_cache
 from app.core.database import get_db
 from app.core.security import require_auth
-from app.core.cache import cached, invalidate_cache
-from app.models.action_step import ActionStep
-from app.models.alarm import Alarm
-from app.models.event_action import EventAction
 from app.models.event_library import EventLibrary
+from app.models.safety_integration import SafetyEventInstance
 from app.models.user import User
-from app.schemas.common import Result, PageResult, PageQuery
 from app.schemas.alarm import AlarmHandleRequest
+from app.schemas.common import PageQuery, PageResult, Result
+from app.services.safety_event_runtime_service import safety_event_runtime_service
 
 router = APIRouter()
 
 
-_EVENT_ALARM_CODE = re.compile(r"^ECA_EVT_(\d+)_(\d+)_\d+$")
-_LEGACY_ALARM_CODE = re.compile(r"^ECA_(\d+)_\d+$")
-_ALARM_TYPE_NAMES = {
-    "threshold": "阈值告警",
-    "ai": "AI检测告警",
-    "manual": "手动告警",
-}
+RISK_ALARM_LEVEL = {"LOW": 1, "MEDIUM": 2, "HIGH": 3}
+RESOLVED_STATUSES = {"COMPLETED", "FALSE_ALARM", "RESOLVED"}
 
 
-def _content_event_name(content: str) -> str | None:
-    """Extract the short title used by legacy alert templates."""
-    first_line = next((line.strip() for line in (content or "").splitlines() if line.strip()), "")
-    for separator in ("：", ":"):
-        if separator not in first_line:
-            continue
-        candidate = first_line.split(separator, 1)[0].strip(" -—")
-        if 1 <= len(candidate) <= 40:
-            return candidate
-    return None
+def _handle_status(instance: SafetyEventInstance) -> int:
+    if instance.state == "RESOLVED" or instance.status in RESOLVED_STATUSES:
+        return 1
+    return 0
 
 
-def _infer_alarm_event_name(
-    alarm: Alarm,
-    explicit_name: str | None = None,
-    legacy_candidates: tuple[str, ...] = (),
-) -> str:
-    """Resolve an event name for both current and pre-event-id alarm records."""
-    if explicit_name:
-        return explicit_name
-
-    content = alarm.alarm_content or ""
-    for candidate in legacy_candidates:
-        if candidate and candidate in content:
-            return candidate
-    if len(legacy_candidates) == 1:
-        return legacy_candidates[0]
-
-    return _content_event_name(content) or _ALARM_TYPE_NAMES.get(alarm.alarm_type, "系统告警")
-
-
-def _alarm_event_names(db: Session, alarms: list[Alarm]) -> dict[int, str]:
-    """Batch-resolve names without issuing one database query per alarm."""
-    parsed_codes: dict[int, tuple[int | None, int | None]] = {}
-    event_ids: set[int] = set()
-    legacy_step_ids: set[int] = set()
-
-    for alarm in alarms:
-        code = alarm.alarm_code or ""
-        current = _EVENT_ALARM_CODE.match(code)
-        legacy = _LEGACY_ALARM_CODE.match(code)
-        if current:
-            event_id, step_id = int(current.group(1)), int(current.group(2))
-            parsed_codes[alarm.id] = (event_id, step_id)
-            event_ids.add(event_id)
-        elif legacy:
-            step_id = int(legacy.group(1))
-            parsed_codes[alarm.id] = (None, step_id)
-            legacy_step_ids.add(step_id)
-        else:
-            parsed_codes[alarm.id] = (None, None)
-
-    event_names = {}
-    if event_ids:
-        event_names = dict(
-            db.query(EventLibrary.id, EventLibrary.event_name)
-            .filter(EventLibrary.id.in_(event_ids))
-            .all()
-        )
-
-    candidates_by_step: dict[int, list[str]] = {}
-    if legacy_step_ids:
-        rows = (
-            db.query(ActionStep.id, EventLibrary.event_name)
-            .join(EventAction, EventAction.flow_id == ActionStep.flow_id)
-            .join(EventLibrary, EventLibrary.id == EventAction.event_id)
-            .filter(ActionStep.id.in_(legacy_step_ids))
-            .all()
-        )
-        for step_id, event_name in rows:
-            names = candidates_by_step.setdefault(step_id, [])
-            if event_name not in names:
-                names.append(event_name)
-
-    resolved = {}
-    for alarm in alarms:
-        event_id, step_id = parsed_codes[alarm.id]
-        resolved[alarm.id] = _infer_alarm_event_name(
-            alarm,
-            explicit_name=event_names.get(event_id),
-            legacy_candidates=tuple(candidates_by_step.get(step_id, ())),
-        )
-    return resolved
-
-
-def _alarm_to_dict(a: Alarm, event_name: str | None = None) -> dict:
+def _instance_to_alarm_dict(
+    instance: SafetyEventInstance,
+    event: EventLibrary | None = None,
+) -> dict:
+    observation = dict(instance.latest_observation or {})
+    runtime = dict(observation.get("runtime") or {})
+    alarm_level = RISK_ALARM_LEVEL.get(str(instance.max_risk_level or instance.risk_level).upper(), 1)
+    handled = _handle_status(instance)
+    event_name = event.event_name if event else instance.summary
+    alarm_content = instance.summary or event_name or "安全事件"
+    if instance.resolve_reason:
+        alarm_content = f"{alarm_content}\n处置说明：{instance.resolve_reason}"
     return {
-        "id": a.id,
-        "alarm_code": a.alarm_code,
-        "event_name": event_name or _infer_alarm_event_name(a),
-        "device_id": a.device_id,
-        "alarm_type": a.alarm_type,
-        "alarm_level": a.alarm_level,
-        "alarm_content": a.alarm_content,
-        "alarm_time": a.alarm_time.isoformat() if a.alarm_time else None,
-        "handle_status": a.handle_status,
-        "handle_user": a.handle_user,
-        "handle_time": a.handle_time.isoformat() if a.handle_time else None,
-        "handle_remark": a.handle_remark,
-        "create_time": a.create_time.isoformat() if a.create_time else None,
+        "id": instance.id,
+        "alarm_code": instance.instance_no,
+        "event_name": event_name,
+        "device_id": instance.source_id,
+        "alarm_type": "ai" if instance.source_type == "camera" else "threshold",
+        "alarm_level": alarm_level,
+        "alarm_content": alarm_content,
+        "alarm_time": instance.started_at.isoformat() if instance.started_at else None,
+        "handle_status": handled,
+        "handle_user": runtime.get("handle_user") if handled else None,
+        "handle_time": instance.resolved_at.isoformat() if instance.resolved_at else None,
+        "handle_remark": instance.resolve_reason,
+        "create_time": instance.create_time.isoformat() if instance.create_time else None,
+        "event_instance_id": instance.id,
+        "instance_no": instance.instance_no,
+        "status": instance.status,
+        "state": instance.state,
+        "risk_level": instance.risk_level,
+        "max_risk_level": instance.max_risk_level,
     }
 
 
@@ -138,22 +70,18 @@ async def list_alarms(
     query: PageQuery = Depends(),
     db: Session = Depends(get_db),
 ):
-    """获取告警列表（分页，按时间倒序）
-
-    注：免鉴权，用于系统概览大屏展示
-    """
-    total = db.query(Alarm).count()
-    # MySQL 不支持 NULLS LAST：用 isnull() 把 NULL 排到最后（升序 = NULL 在末尾）
-    records = (
-        db.query(Alarm)
-        .order_by(Alarm.alarm_time.is_(None), Alarm.alarm_time.desc(), Alarm.id.desc())
+    """获取告警列表（兼容旧页面，数据源为统一事件实例）"""
+    total = db.query(SafetyEventInstance).count()
+    rows = (
+        db.query(SafetyEventInstance, EventLibrary)
+        .join(EventLibrary, EventLibrary.id == SafetyEventInstance.current_event_id)
+        .order_by(SafetyEventInstance.started_at.desc(), SafetyEventInstance.id.desc())
         .offset((query.page_num - 1) * query.page_size)
         .limit(query.page_size)
         .all()
     )
-    event_names = _alarm_event_names(db, records)
     return PageResult.from_page(
-        records=[_alarm_to_dict(a, event_names.get(a.id)) for a in records],
+        records=[_instance_to_alarm_dict(instance, event) for instance, event in rows],
         total=total,
         page_num=query.page_num,
         page_size=query.page_size,
@@ -165,14 +93,15 @@ async def list_alarms(
 async def alarm_statistics(
     db: Session = Depends(get_db),
 ):
-    """获取告警统计数据（免鉴权，用于系统概览大屏）"""
-    total = db.query(Alarm).count()
-    unhandled = db.query(Alarm).filter(Alarm.handle_status == 0).count()
-    handled = db.query(Alarm).filter(Alarm.handle_status == 1).count()
-    high_level = db.query(Alarm).filter(Alarm.alarm_level == 3).count()
+    """获取告警统计数据（兼容旧大屏，数据源为统一事件实例）"""
+    total = db.query(SafetyEventInstance).count()
+    resolved = db.query(SafetyEventInstance).filter(SafetyEventInstance.state == "RESOLVED").count()
+    handled_status = db.query(SafetyEventInstance).filter(SafetyEventInstance.status.in_(RESOLVED_STATUSES)).count()
+    handled = max(resolved, handled_status)
+    high_level = db.query(SafetyEventInstance).filter(SafetyEventInstance.max_risk_level == "HIGH").count()
     return Result.success({
         "total": total,
-        "unhandled": unhandled,
+        "unhandled": max(total - handled, 0),
         "handled": handled,
         "high_level": high_level,
     })
@@ -185,12 +114,17 @@ async def get_alarm(
     db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    """获取告警详情"""
-    alarm = db.query(Alarm).filter(Alarm.id == alarm_id).first()
-    if not alarm:
+    """获取告警详情（alarm_id 即统一事件实例 ID）"""
+    row = (
+        db.query(SafetyEventInstance, EventLibrary)
+        .join(EventLibrary, EventLibrary.id == SafetyEventInstance.current_event_id)
+        .filter(SafetyEventInstance.id == alarm_id)
+        .first()
+    )
+    if not row:
         raise HTTPException(status_code=404, detail="告警不存在")
-    event_names = _alarm_event_names(db, [alarm])
-    return Result.success(_alarm_to_dict(alarm, event_names.get(alarm.id)))
+    instance, event = row
+    return Result.success(_instance_to_alarm_dict(instance, event))
 
 
 @router.put("/{alarm_id}/handle", response_model=Result)
@@ -199,21 +133,49 @@ async def handle_alarm(
     req: AlarmHandleRequest,
     db: Session = Depends(get_db),
 ):
-    """处理告警（免鉴权，处理人默认为"系统"）"""
-    alarm = db.query(Alarm).filter(Alarm.id == alarm_id).first()
-    if not alarm:
+    """处理告警（兼容旧页面，实际闭环统一事件实例）"""
+    row = (
+        db.query(SafetyEventInstance, EventLibrary)
+        .join(EventLibrary, EventLibrary.id == SafetyEventInstance.current_event_id)
+        .filter(SafetyEventInstance.id == alarm_id)
+        .first()
+    )
+    if not row:
         raise HTTPException(status_code=404, detail="告警不存在")
+    instance, event = row
+    operator = req.handle_user or "系统"
 
-    alarm.handle_status = req.handle_status
-    alarm.handle_user = req.handle_user or "系统"
-    alarm.handle_remark = req.handle_remark
-    alarm.handle_time = datetime.now()
+    if req.handle_status == 1:
+        instance.state = "RESOLVED"
+        instance.status = "COMPLETED"
+        instance.resolved_at = datetime.now()
+        instance.resolve_reason = req.handle_remark or "人工复核完成"
+    else:
+        instance.state = "ACTIVE"
+        instance.status = "PENDING"
+        instance.resolved_at = None
+        instance.resolve_reason = req.handle_remark
 
+    observation = dict(instance.latest_observation or {})
+    runtime = dict(observation.get("runtime") or {})
+    runtime["handle_user"] = operator
+    observation["runtime"] = runtime
+    instance.latest_observation = observation
+    instance.update_time = datetime.now()
+
+    safety_event_runtime_service.append_timeline(
+        db,
+        instance,
+        log_type="MANUAL",
+        status="SUCCESS",
+        trigger_type="MANUAL",
+        stage="PROCESSING",
+        title="人工复核",
+        message=req.handle_remark or ("告警已处理" if req.handle_status == 1 else "告警重新打开"),
+        operator=operator,
+    )
     db.commit()
-    logger.info(f"告警 #{alarm_id} 已处理，处理人: {alarm.handle_user}")
+    logger.info(f"统一事件 #{alarm_id} 已通过旧告警接口更新，处理人: {operator}")
 
-    # 清除告警相关缓存
     await invalidate_cache("alarm:*")
-
-    event_names = _alarm_event_names(db, [alarm])
-    return Result.success(_alarm_to_dict(alarm, event_names.get(alarm.id)), "告警处理成功")
+    return Result.success(_instance_to_alarm_dict(instance, event), "告警处理成功")

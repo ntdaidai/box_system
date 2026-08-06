@@ -366,30 +366,24 @@ class CameraHttpFlowTests(unittest.TestCase):
         ok, encoded = cv2.imencode(".jpg", image)
         self.assertTrue(ok)
         payload = base64.b64encode(encoded.tobytes()).decode("ascii")
-        fake_minio_module = types.ModuleType("app.services.minio_service")
-        fake_minio_module.minio_service = types.SimpleNamespace(
-            upload_image=lambda *_args, **_kwargs: "mock://result.jpg"
+        detected = self.client.post(
+            "/api/v1/camera/detect/image",
+            json={"image": payload, "confidence": 0.5},
         )
-        with patch.dict(sys.modules, {"app.services.minio_service": fake_minio_module}):
-            detected = self.client.post(
-                "/api/v1/camera/detect/image",
-                json={"image": payload, "confidence": 0.5},
-            )
         self.assertEqual(detected.status_code, 200)
         body = detected.json()["data"]
         self.assertEqual(body["count"], 1)
         self.assertTrue(body["result_image_base64"])
-        self.assertEqual(body["minio_url"], "mock://result.jpg")
+        self.assertIsNone(body["minio_url"])
 
-        with patch.dict(sys.modules, {"app.services.minio_service": fake_minio_module}):
-            classified = self.client.post(
-                "/api/v1/camera/detect/image",
-                json={
-                    "image": payload,
-                    "confidence": 0.5,
-                    "task_type": "classify",
-                },
-            )
+        classified = self.client.post(
+            "/api/v1/camera/detect/image",
+            json={
+                "image": payload,
+                "confidence": 0.5,
+                "task_type": "classify",
+            },
+        )
         self.assertEqual(classified.status_code, 200)
         classification = classified.json()["data"]
         self.assertEqual(classification["task_type"], "classify")

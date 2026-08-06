@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo
 
 from app.core.cache import invalidate_cache
 from app.core.database import SessionLocal
-from app.models.alarm import Alarm
 from app.models.camera import Camera
 from app.models.data_source import DataSource
 from app.models.event_library import EventLibrary
@@ -209,21 +208,6 @@ def seed() -> int:
                 metadata={"demo": True, "risk_level": risk_level, "confidence": confidence},
                 captured_at=captured_at,
             )
-
-        alarm_code = f"ECA_EVT_{event.id}_0_20260803001"
-        alarm = db.query(Alarm).filter(Alarm.alarm_code == alarm_code).first()
-        if not alarm:
-            alarm = Alarm(alarm_code=alarm_code)
-            db.add(alarm)
-        alarm.device_id = camera.id
-        alarm.alarm_type = "ai"
-        alarm.alarm_level = 3
-        alarm.alarm_content = "人员涉水：一号点高风险涉水区检测到人员持续涉水，已升级为高风险并派发人工处置任务"
-        alarm.alarm_time = high_at
-        alarm.handle_status = 0
-        alarm.handle_user = None
-        alarm.handle_time = None
-        alarm.handle_remark = None
 
         db.commit()
         asyncio.run(invalidate_cache("alarm:*"))

@@ -564,6 +564,63 @@ class CameraStream:
                 self._raw_jpeg_quality = quality
         return jpeg
 
+    def get_recent_jpegs(
+        self,
+        *,
+        window_seconds: float = 10.0,
+        count: int = 4,
+        quality: int = 80,
+        max_side: Optional[int] = None,
+    ) -> List[Tuple[float, bytes]]:
+        """Return evenly spaced JPEG keyframes from the recent frame buffer."""
+        count = max(1, min(int(count), 12))
+        quality = max(20, min(int(quality), 100))
+        max_side_value = max(0, int(max_side or 0))
+        cutoff = time.time() - max(0.1, float(window_seconds))
+        with self.lock:
+            frames = [
+                (timestamp, frame.copy())
+                for timestamp, frame in self._evidence_frames
+                if timestamp >= cutoff
+            ]
+            if not frames and self.current_frame is not None:
+                frames = [(self.frame_timestamp or time.time(), self.current_frame.copy())]
+
+        if not frames:
+            return []
+
+        if len(frames) <= count:
+            selected = frames
+        else:
+            step = (len(frames) - 1) / max(count - 1, 1)
+            indices = []
+            for item in range(count):
+                index = round(item * step)
+                if index not in indices:
+                    indices.append(index)
+            selected = [frames[index] for index in indices]
+
+        encoded: List[Tuple[float, bytes]] = []
+        for timestamp, frame in selected:
+            if max_side_value > 0:
+                height, width = frame.shape[:2]
+                longest = max(height, width)
+                if longest > max_side_value:
+                    scale = max_side_value / longest
+                    frame = cv2.resize(
+                        frame,
+                        (max(1, int(width * scale)), max(1, int(height * scale))),
+                        interpolation=cv2.INTER_AREA,
+                    )
+            success, buffer = cv2.imencode(
+                ".jpg",
+                frame,
+                [int(cv2.IMWRITE_JPEG_QUALITY), quality],
+            )
+            if success:
+                encoded.append((timestamp, buffer.tobytes()))
+        return encoded
+
     def enable_detection(
         self,
         model: Any,

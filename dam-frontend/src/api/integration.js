@@ -20,6 +20,14 @@ export function updateActionConfig(id, data) {
   return request.put(`/v1/integration/config/actions/${id}`, data)
 }
 
+export function createActionConfig(data) {
+  return request.post('/v1/integration/config/actions', data)
+}
+
+export function deleteActionConfig(id) {
+  return request.delete(`/v1/integration/config/actions/${id}`)
+}
+
 export function getUnifiedSafetyEvents(params = {}) {
   return request.get('/v1/integration/safety-events', { params, localCache: false })
 }

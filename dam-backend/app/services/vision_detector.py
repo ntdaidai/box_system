@@ -30,6 +30,36 @@ class VisionDetector:
 
         # 检测类型定义
         self.detection_types = {
+            "mudslide": {
+                "name": "泥石流灾害初筛",
+                "model": "Qwen3.5-0.8B",
+                "variable": "mudslide_detected",
+            },
+            "landslide": {
+                "name": "滑坡灾害初筛",
+                "model": "Qwen3.5-0.8B",
+                "variable": "landslide_detected",
+            },
+            "earthquake": {
+                "name": "地震灾害初筛",
+                "model": "Qwen3.5-0.8B",
+                "variable": "earthquake_detected",
+            },
+            "flood": {
+                "name": "洪水灾害初筛",
+                "model": "Qwen3.5-0.8B",
+                "variable": "flood_detected",
+            },
+            "person": {
+                "name": "人员出现初筛",
+                "model": "Qwen3.5-0.8B",
+                "variable": "person_present",
+            },
+            "boat": {
+                "name": "船只出现初筛",
+                "model": "Qwen3.5-0.8B",
+                "variable": "boat_present",
+            },
             "crack": {
                 "name": "裂缝检测",
                 "model": "CrackDetection-v1",
@@ -135,6 +165,85 @@ class VisionDetector:
             f"detected={detected}, confidence={confidence:.2f}"
         )
 
+    def update_qwen_screening_result(
+        self,
+        camera_id: str,
+        screening: Dict[str, Any],
+        *,
+        image_urls: List[str] = None,
+        raw_response: str = "",
+    ):
+        """Update all ECA-facing variables produced by Qwen camera screening."""
+        scene = screening.get("scene") or {}
+        confidence = screening.get("confidence") or {}
+        mapping = {
+            "mudslide": ("mudslide_detected", "mudslide_confidence"),
+            "landslide": ("landslide_detected", "landslide_confidence"),
+            "earthquake": ("earthquake_detected", "earthquake_confidence"),
+            "flood": ("flood_detected", "flood_confidence"),
+            "person": ("person_present", "person_confidence"),
+            "boat": ("boat_present", "boat_confidence"),
+        }
+        now = time.time()
+        batch_result = {
+            "detected": False,
+            "confidence": 0.0,
+            "details": {
+                "screening": screening,
+                "image_urls": image_urls or [],
+                "raw_response": raw_response[:4000],
+            },
+            "timestamp": now,
+            "datetime": datetime.now().isoformat(),
+        }
+
+        with self.lock:
+            if camera_id not in self.latest_results:
+                self.latest_results[camera_id] = {}
+            for detection_type, (detected_key, confidence_key) in mapping.items():
+                detected = bool(int(scene.get(detected_key, 0) or 0))
+                try:
+                    score = float(confidence.get(confidence_key, 1.0 if detected else 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    score = 0.0
+                result = {
+                    "detected": detected,
+                    "confidence": max(0.0, min(score, 1.0)),
+                    "details": {
+                        "summary": screening.get("summary"),
+                        "risk_level": screening.get("risk_level"),
+                        "evidence": screening.get("evidence") or [],
+                        "uncertainties": screening.get("uncertainties") or [],
+                        "window_seconds": screening.get("window_seconds"),
+                        "image_urls": image_urls or [],
+                    },
+                    "timestamp": now,
+                    "datetime": batch_result["datetime"],
+                }
+                self.latest_results[camera_id][detection_type] = result
+                self.history.append({
+                    "camera_id": camera_id,
+                    "detection_type": detection_type,
+                    **result,
+                })
+                if detected:
+                    batch_result["detected"] = True
+                    batch_result["confidence"] = max(batch_result["confidence"], result["confidence"])
+
+            self.history.append({
+                "camera_id": camera_id,
+                "detection_type": "qwen_camera_screening",
+                **batch_result,
+            })
+            if len(self.history) > self.max_history:
+                self.history = self.history[-self.max_history:]
+
+        self._notify_detection(camera_id, "qwen_camera_screening", batch_result)
+        logger.info(
+            f"Qwen摄像头初筛结果更新: camera={camera_id}, "
+            f"detected={batch_result['detected']}, confidence={batch_result['confidence']:.2f}"
+        )
+
     def get_latest_result(self, camera_id: str = None, detection_type: str = None) -> Dict[str, Any]:
         """
         获取最新检测结果
@@ -159,7 +268,7 @@ class VisionDetector:
                 # 获取所有结果
                 return self.latest_results.copy()
 
-    def get_detection_snapshot(self) -> Dict[str, Any]:
+    def get_detection_snapshot(self, camera_id: str = None) -> Dict[str, Any]:
         """
         获取检测结果快照（供ECA引擎使用）
 
@@ -178,7 +287,12 @@ class VisionDetector:
 
         with self.lock:
             # 遍历所有摄像头的最新结果
-            for camera_id, results in self.latest_results.items():
+            selected_results = (
+                {camera_id: self.latest_results.get(camera_id, {})}
+                if camera_id
+                else self.latest_results
+            )
+            for _camera_id, results in selected_results.items():
                 for detection_type, result in results.items():
                     type_info = self.detection_types.get(detection_type, {})
                     variable = type_info.get("variable", f"{detection_type}_detected")
@@ -202,6 +316,34 @@ class VisionDetector:
                 snapshot[variable] = 0
 
         return snapshot
+
+    def get_history_snapshot(
+        self,
+        camera_id: str,
+        *,
+        time_window_minutes: int,
+    ) -> List[Dict[str, Any]]:
+        """Return ECA-compatible camera snapshots from recent Qwen updates."""
+        cutoff = time.time() - max(1, int(time_window_minutes)) * 60
+        with self.lock:
+            records = [
+                dict(record)
+                for record in self.history
+                if record.get("camera_id") == camera_id
+                and record.get("detection_type") == "qwen_camera_screening"
+                and float(record.get("timestamp") or 0) >= cutoff
+            ]
+        snapshots = []
+        for record in records:
+            screening = ((record.get("details") or {}).get("screening") or {})
+            scene = screening.get("scene") or {}
+            confidence = screening.get("confidence") or {}
+            flattened = {**scene, **confidence}
+            snapshots.append({
+                "timestamp": record.get("timestamp"),
+                "data": flattened,
+            })
+        return snapshots
 
     def get_history(
         self,

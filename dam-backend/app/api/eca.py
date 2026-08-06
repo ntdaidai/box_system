@@ -15,9 +15,7 @@ from app.models.data_source import DataSource
 from app.models.condition_library import ConditionLibrary
 from app.models.event_library import EventLibrary
 from app.models.event_condition import EventCondition
-from app.models.action_flow import ActionFlow
-from app.models.action_step import ActionStep
-from app.models.event_action import EventAction
+from app.models.event_action_config import EventActionConfig
 
 router = APIRouter(tags=["ECA规则引擎"])
 
@@ -209,34 +207,30 @@ def get_flows(
     db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    """获取行为流程列表"""
-    query = db.query(ActionFlow)
+    """旧流程表已合并到事件动作配置。"""
+    query = db.query(EventActionConfig)
     if is_activate is not None:
-        query = query.filter(ActionFlow.is_activate == is_activate)
-    flows = query.all()
-    return {"code": 200, "data": [f.to_dict() for f in flows]}
+        query = query.filter(EventActionConfig.is_activate == is_activate)
+    rows = query.order_by(EventActionConfig.event_id.asc(), EventActionConfig.step_order.asc()).all()
+    return {"code": 200, "data": [row.to_dict() for row in rows]}
 
 
 @router.get("/flows/{flow_id}", summary="获取行为流程详情")
 @cached(ttl=600, prefix="eca:flow")
 def get_flow(flow_id: int, db: Session = Depends(get_db), _user: User = Depends(require_auth)):
-    """获取行为流程详情"""
-    flow = db.query(ActionFlow).filter(ActionFlow.id == flow_id).first()
-    if not flow:
-        raise HTTPException(status_code=404, detail="行为流程不存在")
-    return {"code": 200, "data": flow.to_dict()}
+    """兼容旧入口：按动作配置ID查询。"""
+    row = db.query(EventActionConfig).filter(EventActionConfig.id == flow_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="动作配置不存在")
+    return {"code": 200, "data": row.to_dict()}
 
 
 @router.get("/flows/{flow_id}/steps", summary="获取流程步骤")
 @cached(ttl=300, prefix="eca:flow-steps")
 def get_flow_steps(flow_id: int, db: Session = Depends(get_db), _user: User = Depends(require_auth)):
-    """获取流程步骤"""
-    flow = db.query(ActionFlow).filter(ActionFlow.id == flow_id).first()
-    if not flow:
-        raise HTTPException(status_code=404, detail="行为流程不存在")
-
-    steps = db.query(ActionStep).filter(ActionStep.flow_id == flow_id).order_by(ActionStep.step_order).all()
-    return {"code": 200, "data": [s.to_dict() for s in steps]}
+    """兼容旧入口：返回指定动作配置。"""
+    row = db.query(EventActionConfig).filter(EventActionConfig.id == flow_id).first()
+    return {"code": 200, "data": [] if not row else [row.to_dict()]}
 
 
 # ==================== 事件-行为关系管理 ====================
@@ -249,17 +243,18 @@ def get_event_actions(event_id: int, db: Session = Depends(get_db), _user: User 
     if not event:
         raise HTTPException(status_code=404, detail="事件不存在")
 
-    relations = db.query(EventAction).filter(EventAction.event_id == event_id).order_by(EventAction.priority).all()
-    actions = []
-    for rel in relations:
-        flow = db.query(ActionFlow).filter(ActionFlow.id == rel.flow_id).first()
-        if flow:
-            actions.append({
-                "relation_id": rel.id,
-                "priority": rel.priority,
-                "is_activate": rel.is_activate,
-                "flow": flow.to_dict()
-            })
+    rows = (
+        db.query(EventActionConfig)
+        .filter(EventActionConfig.event_id == event_id)
+        .order_by(EventActionConfig.step_order.asc(), EventActionConfig.id.asc())
+        .all()
+    )
+    actions = [{
+        "config_id": row.id,
+        "step_order": row.step_order,
+        "is_activate": row.is_activate,
+        "action": row.to_dict(),
+    } for row in rows]
     return {"code": 200, "data": actions}
 
 

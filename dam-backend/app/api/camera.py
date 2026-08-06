@@ -8,6 +8,8 @@ import base64
 import datetime as dt
 import json
 import re
+import shutil
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -31,6 +33,8 @@ from app.models.camera import Camera
 from app.models.user import User
 from app.services.camera_stream import CameraStream, camera_manager
 from app.services.camera_live_relay import camera_live_relay_manager, camera_preview_source
+from app.services.camera_snapshot import camera_snapshot_service
+from app.services.camera_source import camera_rtsp_path, camera_source_from_row
 from app.services.camera_web_proxy import camera_web_proxy_manager
 from app.services.camera_zone_store import get_camera_zone_store
 from app.services.stream_ticket import stream_ticket_store
@@ -185,6 +189,19 @@ def _persist_video(upload_file, target: Path, max_bytes: int) -> int:
     return written
 
 
+def _get_camera_row_or_404(camera_id: str, db: Optional[Session] = None) -> Camera:
+    owns_session = db is None
+    session = db or SessionLocal()
+    try:
+        row = _camera_device_row(session, str(camera_id))
+        if not row:
+            raise HTTPException(status_code=404, detail="摄像头不存在")
+        return row
+    finally:
+        if owns_session:
+            session.close()
+
+
 def _get_camera_or_404(camera_id: str) -> CameraStream:
     runtime_id = str(camera_id)
     camera = camera_manager.get_camera(runtime_id)
@@ -198,6 +215,34 @@ def _get_camera_or_404(camera_id: str) -> CameraStream:
             db.close()
     if not camera:
         raise HTTPException(status_code=404, detail="摄像头不存在")
+    return camera
+
+
+def _ensure_camera_runtime(row: Camera, *, auto_start: bool = True) -> CameraStream:
+    runtime_id = str(row.id)
+    camera = camera_manager.get_camera(runtime_id)
+    source = camera_source_from_row(row)
+    if camera:
+        camera_manager.update_camera(
+            runtime_id,
+            source=source,
+            name=row.camera_name,
+            auto_start=auto_start,
+        )
+        camera = camera_manager.get_camera(runtime_id)
+    else:
+        camera_manager.add_camera(
+            camera_id=runtime_id,
+            source=source,
+            name=row.camera_name,
+            auto_start=auto_start,
+        )
+        camera = camera_manager.get_camera(runtime_id)
+        stored_zones = get_camera_zone_store().get(runtime_id)
+        if camera and stored_zones:
+            camera.set_detection_zones(stored_zones)
+    if not camera:
+        raise HTTPException(status_code=503, detail="摄像头运行时启动失败")
     return camera
 
 
@@ -225,28 +270,23 @@ def _validate_stream_ticket(ticket: str, camera_id: str, detected: bool) -> None
         raise HTTPException(status_code=401, detail="视频流凭证无效或已过期")
 
 
-def _validate_webrtc_camera(camera_id: str) -> CameraStream:
-    camera = _get_camera_or_404(camera_id)
-    if not camera.source.lower().startswith(("rtsp://", "rtsps://")):
+def _validate_webrtc_camera(camera_id: str, db: Optional[Session] = None) -> Camera:
+    row = _get_camera_row_or_404(camera_id, db)
+    source = camera_source_from_row(row)
+    if not source.lower().startswith(("rtsp://", "rtsps://")):
         raise HTTPException(
             status_code=409,
             detail="WebRTC 实时播放目前仅支持 RTSP/RTSPS 视频源",
         )
-    return camera
+    return row
 
 
-def _camera_web_origin(camera: CameraStream) -> str:
-    parsed = urlparse(camera.source)
-    if parsed.scheme not in {"rtsp", "rtsps"} or not parsed.hostname:
-        raise HTTPException(status_code=409, detail="该视频源没有可打开的 Web 控制台")
-    host = parsed.hostname
-    return f"http://{host}"
+def _camera_web_origin(row: Camera) -> str:
+    return _camera_web_console_url(row)
 
 
 def _camera_rtsp_path(brand: str) -> str:
-    if brand == "hikvision":
-        return "Streaming/Channels/101"
-    return "cam/realmonitor?channel=1&subtype=0"
+    return camera_rtsp_path(brand)
 
 
 def _camera_source_from_parts(
@@ -295,14 +335,7 @@ def _camera_device_row(db: Session, identifier: str) -> Optional[Camera]:
 
 
 def _camera_source_from_row(row: Camera) -> str:
-    path = row.rtsp_path or _camera_rtsp_path(row.brand)
-    auth = ""
-    if row.username:
-        auth = quote(row.username, safe="")
-        if row.password:
-            auth = f"{auth}:{quote(row.password, safe='')}"
-        auth = f"{auth}@"
-    return f"rtsp://{auth}{row.ip_address}:{row.rtsp_port}/{path}"
+    return camera_source_from_row(row)
 
 
 def _camera_web_console_url(row: Camera) -> str:
@@ -356,8 +389,8 @@ def _camera_row_response(
         "web_proxy_url": _camera_web_proxy_url(row),
         "web_proxy_running": bool(camera_web_proxy_manager.status(str(row.id))),
         "configured": True,
-        "running": bool(status.get("running")),
-        "connected": bool(status.get("connected")),
+        "running": bool(status.get("running")) or bool(row.enabled),
+        "connected": bool(status.get("connected")) or bool(row.enabled),
         "fps": status.get("fps", 0),
         "detection_enabled": bool(status.get("detection_enabled")),
         "detection_running": bool(status.get("detection_running")),
@@ -366,7 +399,7 @@ def _camera_row_response(
     }
 
 
-def _sync_camera_runtime(row: Camera) -> Optional[dict]:
+def _sync_camera_runtime(row: Camera, *, auto_start: bool = False) -> Optional[dict]:
     source = _camera_source_from_row(row)
     runtime_id = str(row.id)
     existing = camera_manager.get_camera(runtime_id)
@@ -379,13 +412,15 @@ def _sync_camera_runtime(row: Camera) -> Optional[dict]:
             runtime_id,
             source=source,
             name=row.camera_name,
-            auto_start=True,
+            auto_start=auto_start,
         )
+    if not auto_start:
+        return None
     if camera_manager.add_camera(
         camera_id=runtime_id,
         source=source,
         name=row.camera_name,
-        auto_start=True,
+        auto_start=auto_start,
     ):
         camera = camera_manager.get_camera(runtime_id)
         if camera:
@@ -478,21 +513,21 @@ async def _request_webrtc_streamer(
 
 async def _mjpeg_response(
     request: Request,
-    camera: CameraStream,
+    source: str,
     detected: bool,
 ) -> StreamingResponse:
-    if not camera.running:
-        camera.start()
+    if detected:
+        camera_id = request.path_params.get("camera_id")
+        camera = _get_camera_or_404(str(camera_id))
+        if not camera.running:
+            camera.start()
 
-    async def generator():
-        boundary = "frame"
-        last_sequence = -1
-        last_detection_version = -1
-        while True:
-            if await request.is_disconnected():
-                break
-
-            if detected:
+        async def detected_generator():
+            boundary = "frame"
+            last_detection_version = -1
+            while True:
+                if await request.is_disconnected():
+                    break
                 version, payload = await asyncio.to_thread(
                     camera.wait_for_detection_update,
                     last_detection_version,
@@ -504,24 +539,79 @@ async def _mjpeg_response(
                 if not payload.get("enabled"):
                     break
                 jpeg_data = camera.get_detected_jpeg()
-            else:
-                sequence = await asyncio.to_thread(
-                    camera.wait_for_frame,
-                    last_sequence,
-                    1.0,
-                )
-                if sequence == last_sequence:
+                if not jpeg_data:
                     continue
-                last_sequence = sequence
-                jpeg_data = camera.get_jpeg(quality=settings.CAMERA_JPEG_QUALITY)
+                yield (
+                    f"--{boundary}\r\n"
+                    "Content-Type: image/jpeg\r\n"
+                    f"Content-Length: {len(jpeg_data)}\r\n\r\n"
+                ).encode("ascii") + jpeg_data + b"\r\n"
 
-            if not jpeg_data:
-                continue
-            yield (
-                f"--{boundary}\r\n"
-                "Content-Type: image/jpeg\r\n"
-                f"Content-Length: {len(jpeg_data)}\r\n\r\n"
-            ).encode("ascii") + jpeg_data + b"\r\n"
+        return StreamingResponse(
+            detected_generator(),
+            media_type="multipart/x-mixed-replace; boundary=frame",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    async def generator():
+        boundary = "frame"
+        ffmpeg = shutil.which(settings.FFMPEG_BIN) or shutil.which("ffmpeg")
+        if not ffmpeg:
+            raise HTTPException(status_code=503, detail="未找到 FFmpeg，无法转发 MJPEG")
+        process = subprocess.Popen(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel", "error",
+                "-rtsp_transport", "tcp",
+                "-fflags", "nobuffer",
+                "-flags", "low_delay",
+                "-i", camera_preview_source(source),
+                "-an",
+                "-f", "mjpeg",
+                "-q:v", "5",
+                "pipe:1",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+        buffer = b""
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                chunk = await asyncio.to_thread(process.stdout.read, 65536)
+                if not chunk:
+                    break
+                buffer += chunk
+                while True:
+                    start = buffer.find(b"\xff\xd8")
+                    end = buffer.find(b"\xff\xd9", start + 2)
+                    if start < 0 or end < 0:
+                        if len(buffer) > 2 * 1024 * 1024:
+                            buffer = buffer[-1024:]
+                        break
+                    jpeg_data = buffer[start:end + 2]
+                    buffer = buffer[end + 2:]
+                    yield (
+                        f"--{boundary}\r\n"
+                        "Content-Type: image/jpeg\r\n"
+                        f"Content-Length: {len(jpeg_data)}\r\n\r\n"
+                    ).encode("ascii") + jpeg_data + b"\r\n"
+        finally:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
 
     return StreamingResponse(
         generator(),
@@ -805,29 +895,13 @@ async def detect_uploaded_image(
 
     jpeg_bytes = _encode_jpeg(drawn_image)
     result_image_base64 = base64.b64encode(jpeg_bytes).decode("utf-8")
-    minio_url = None
-    try:
-        from app.services.minio_service import minio_service
-
-        filename = (
-            f"{payload.task_type}_{time.strftime('%Y%m%d_%H%M%S')}_"
-            f"{time.time_ns()}.jpg"
-        )
-        minio_url = minio_service.upload_image(
-            jpeg_bytes,
-            "image/jpeg",
-            filename,
-            folder="media-analysis/images",
-        )
-    except Exception as exc:
-        logger.warning(f"检测结果上传 MinIO 失败: {exc}")
 
     return DetectResponse(
         code=200,
         data={
             **result,
             "result_image_base64": result_image_base64,
-            "minio_url": minio_url,
+            "minio_url": None,
         },
     )
 
@@ -871,22 +945,6 @@ async def create_video_detection_job(
             settings.MAX_VIDEO_SIZE_MB * 1024 * 1024,
         )
         source_video_url = None
-        try:
-            from app.services.minio_service import minio_service
-
-            date_str = time.strftime("%Y-%m-%d")
-            clean_stem = re.sub(r"[^A-Za-z0-9_-]+", "_", Path(safe_name).stem)[:80] or "video"
-            object_name = (
-                f"media-analysis/videos/{date_str}/"
-                f"{clean_stem}_{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns()}{suffix}"
-            )
-            source_video_url = minio_service.upload_file(
-                str(target),
-                object_name=object_name,
-                content_type=file.content_type or "application/octet-stream",
-            )
-        except Exception as exc:
-            logger.warning(f"上传视频到 MinIO 失败: {exc}")
         job = video_detection_service.submit(
             file_path=str(target),
             filename=safe_name,
@@ -966,11 +1024,14 @@ async def delete_video_detection_job(
 async def create_stream_ticket(
     camera_id: str,
     payload: StreamTicketRequest,
+    db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    camera = _get_camera_or_404(camera_id)
-    if payload.detected and not camera.detection_enabled:
-        raise HTTPException(status_code=409, detail="实时检测尚未开启")
+    row = _get_camera_row_or_404(camera_id, db)
+    camera = camera_manager.get_camera(str(row.id))
+    if payload.detected:
+        if not camera or not camera.detection_enabled:
+            raise HTTPException(status_code=409, detail="实时检测尚未开启")
     ticket, expires_at = stream_ticket_store.issue(camera_id, payload.detected)
     return DetectResponse(
         code=200,
@@ -992,7 +1053,8 @@ async def get_video_stream(
     ticket: str = Query(..., min_length=20, max_length=128),
 ):
     _validate_stream_ticket(ticket, camera_id, False)
-    return await _mjpeg_response(request, _get_camera_or_404(camera_id), False)
+    row = _get_camera_row_or_404(camera_id)
+    return await _mjpeg_response(request, camera_source_from_row(row), False)
 
 
 @router.get("/stream/{camera_id}/detected", summary="获取服务端标框视频流")
@@ -1016,16 +1078,15 @@ async def get_detected_stream(
 @cached(ttl=300, prefix="camera:zones")
 async def get_detection_zones(
     camera_id: str,
+    db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    camera = _get_camera_or_404(camera_id)
-    camera_device_id = camera.camera_id
+    row = _get_camera_row_or_404(camera_id, db)
+    camera_device_id = str(row.id)
     stored_zones = get_camera_zone_store().get(camera_device_id)
-    if stored_zones:
-        camera.set_detection_zones(stored_zones)
     return DetectResponse(
         code=200,
-        data={"camera_device_id": int(camera_device_id), "zones": stored_zones or camera.get_detection_zones()},
+        data={"camera_device_id": int(camera_device_id), "zones": stored_zones or []},
     )
 
 
@@ -1037,23 +1098,24 @@ async def get_detection_zones(
 async def save_detection_zones(
     camera_id: str,
     payload: DetectionZonesRequest,
+    db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    camera = _get_camera_or_404(camera_id)
-    camera_device_id = camera.camera_id
+    row = _get_camera_row_or_404(camera_id, db)
+    camera_device_id = str(row.id)
     try:
-        zones = camera.set_detection_zones(
-            [
-                {
-                    **zone.model_dump(exclude_none=True),
-                }
-                for zone in payload.zones
-            ]
-        )
+        from app.services.camera_stream import normalize_detection_zone
+
+        zones = [
+            normalize_detection_zone(zone.model_dump(exclude_none=True), f"zone_{index + 1}")
+            for index, zone in enumerate(payload.zones)
+        ]
         get_camera_zone_store().save(camera_device_id, zones)
         zones = get_camera_zone_store().get(camera_device_id)
+        camera = camera_manager.get_camera(camera_device_id)
         if zones:
-            camera.set_detection_zones(zones)
+            if camera:
+                camera.set_detection_zones(zones)
         await invalidate_cache("camera:zones*")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1071,9 +1133,10 @@ async def save_detection_zones(
 async def get_webrtc_ice_config(
     request: Request,
     camera_id: str,
+    db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    _validate_webrtc_camera(camera_id)
+    _validate_webrtc_camera(camera_id, db)
     ice_config = await _request_webrtc_streamer(
         request, "GET", "/api/getIceServers"
     )
@@ -1089,13 +1152,14 @@ async def create_webrtc_session(
     request: Request,
     camera_id: str,
     payload: WebRtcSessionRequest,
+    db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    camera = _validate_webrtc_camera(camera_id)
+    row = _validate_webrtc_camera(camera_id, db)
     params = {
         "peerid": payload.peer_id,
         # 只在后端到本机回环服务的请求中携带 RTSP 地址；API 响应不回传。
-        "url": camera_preview_source(camera.source),
+        "url": camera_preview_source(camera_source_from_row(row)),
     }
     if settings.WEBRTC_STREAM_OPTIONS:
         params["options"] = settings.WEBRTC_STREAM_OPTIONS
@@ -1122,9 +1186,10 @@ async def add_webrtc_ice_candidate(
     camera_id: str,
     peer_id: str,
     payload: WebRtcIceCandidateRequest,
+    db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    _validate_webrtc_camera(camera_id)
+    _validate_webrtc_camera(camera_id, db)
     _validate_peer_id(peer_id)
     result = await _request_webrtc_streamer(
         request,
@@ -1145,9 +1210,10 @@ async def get_webrtc_ice_candidates(
     request: Request,
     camera_id: str,
     peer_id: str,
+    db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    _validate_webrtc_camera(camera_id)
+    _validate_webrtc_camera(camera_id, db)
     _validate_peer_id(peer_id)
     candidates = await _request_webrtc_streamer(
         request,
@@ -1170,9 +1236,10 @@ async def close_webrtc_session(
     request: Request,
     camera_id: str,
     peer_id: str,
+    db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    _validate_webrtc_camera(camera_id)
+    _validate_webrtc_camera(camera_id, db)
     _validate_peer_id(peer_id)
     await _request_webrtc_streamer(
         request,
@@ -1246,9 +1313,10 @@ async def get_camera_status(
     row = _camera_device_row(db, camera_id)
     if not row:
         raise HTTPException(status_code=404, detail="摄像头不存在")
+    runtime = camera_manager.get_camera(str(row.id))
     return DetectResponse(
         code=200,
-        data=_camera_row_response(row, _get_camera_or_404(camera_id).get_status()),
+        data=_camera_row_response(row, runtime.get_status() if runtime else None),
     )
 
 
@@ -1263,8 +1331,12 @@ async def proxy_camera_web_console(
     request: Request = None,
     _user: User = Depends(require_auth),
 ):
-    camera = _get_camera_or_404(camera_id)
-    origin = _camera_web_origin(camera)
+    db = SessionLocal()
+    try:
+        row = _get_camera_row_or_404(camera_id, db)
+        origin = _camera_web_origin(row)
+    finally:
+        db.close()
     target_url = urljoin(f"{origin}/", path or "")
     if request.url.query:
         target_url = f"{target_url}?{request.url.query}"
@@ -1332,41 +1404,25 @@ async def proxy_camera_web_console(
 async def toggle_detection(
     camera_id: str,
     payload: DetectionToggleRequest,
+    db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    camera = _get_camera_or_404(camera_id)
-    if payload.enabled:
-        model = _get_model_or_503(payload.task_type)
-        if not camera.running:
-            camera.start()
-        camera.enable_detection(
-            model=model,
-            task_type=payload.task_type,
-            confidence=(
-                payload.confidence
-                if payload.confidence is not None
-                else settings.YOLO_CONFIDENCE
-            ),
-            iou=payload.iou if payload.iou is not None else settings.YOLO_IOU,
-            target_fps=(
-                payload.target_fps
-                if payload.target_fps is not None
-                else settings.CAMERA_DETECTION_FPS
-            ),
-        )
-        message = (
-            "实时目标检测已开启"
-            if payload.task_type == "detect"
-            else "实时图片分类已开启"
-        )
-    else:
+    row = _get_camera_row_or_404(camera_id, db)
+    camera = camera_manager.get_camera(str(row.id))
+    if camera:
         camera.disable_detection()
-        message = "实时 AI 分析已关闭"
+        if camera.running:
+            camera.stop()
 
     await invalidate_cache("camera:*")
     return DetectResponse(
         code=200,
-        data={**camera.get_status(), "message": message},
+        data={
+            **_camera_row_response(row),
+            "detection_enabled": False,
+            "detection_running": False,
+            "message": "实时 AI 检测功能正在重新设计，暂未启用",
+        },
     )
 
 
@@ -1379,11 +1435,21 @@ async def snapshot_detect(
     camera_id: str,
     task_type: AnalysisTask = Query("detect", description="模型任务类型"),
     confidence: float = Query(0.5, ge=0.0, le=1.0),
+    db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    camera = _get_camera_or_404(camera_id)
+    row = _get_camera_row_or_404(camera_id, db)
     model = _get_model_or_503(task_type)
-    frame = camera.get_frame()
+    try:
+        jpeg = await asyncio.to_thread(
+            camera_snapshot_service.capture_jpeg,
+            camera_source_from_row(row),
+            quality=settings.CAMERA_JPEG_QUALITY,
+            timeout_seconds=8,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    frame = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
     if frame is None:
         raise HTTPException(status_code=503, detail="摄像头未连接或暂无画面")
 

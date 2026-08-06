@@ -2,6 +2,12 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 const routes = [
   {
+    path: '/satellite-map-test',
+    name: 'SatelliteMapTest',
+    component: () => import('@/views/SatelliteMapTest.vue'),
+    meta: { title: '平面卫星图测试' }
+  },
+  {
     path: '/',
     component: () => import('@/layout/index.vue'),
     redirect: '/dashboard',
@@ -75,10 +81,7 @@ const routes = [
           {
             path: 'camera/zones',
             name: 'CameraZoneConfig',
-            redirect: (to) => ({
-              path: '/monitor/camera',
-              query: { ...to.query, drawer: 'zones' },
-            }),
+            redirect: '/monitor/camera',
             meta: { title: '区域配置' }
           },
           {
@@ -110,7 +113,7 @@ const routes = [
       // ========== 告警管理 ==========
       {
         path: 'alarm',
-        redirect: '/alarm/list',
+        redirect: '/alarm/safety-events',
         meta: { title: '告警管理' },
         children: [
           {

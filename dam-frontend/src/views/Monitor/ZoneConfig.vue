@@ -128,7 +128,6 @@
           <div class="zone-table-head">
             <span>区域名</span>
             <span>区域类型</span>
-            <span>触发时间</span>
             <span>启用状态</span>
             <span>配置时间</span>
             <span>操作</span>
@@ -145,18 +144,6 @@
               {{ zone.zone_name || zoneTypeLabel(zone.zone_type) }}
             </strong>
             <span>{{ zoneTypeLabel(zone.zone_type) }}</span>
-            <div class="trigger-cell" @click.stop>
-              <span v-if="zone.zone_type === 'FISHING'">多条件</span>
-              <el-input-number
-                v-else
-                v-model="zone.trigger_seconds"
-                :min="0"
-                :max="3600"
-                :step="1"
-                :controls="false"
-                size="small"
-              />
-            </div>
             <span>
               <button
                 type="button"
@@ -203,11 +190,6 @@
               <el-option label="捕鱼区" value="FISHING" />
             </el-select>
           </el-form-item>
-          <div v-if="selectedZone.zone_type === 'FISHING'" class="fishing-duration-grid">
-            <el-form-item label="船只闯入（秒）"><el-input-number v-model="selectedZone.condition_durations.BOAT_INTRUSION" :min="0" :max="3600" /></el-form-item>
-            <el-form-item label="船只停留（秒）"><el-input-number v-model="selectedZone.condition_durations.BOAT_STAY" :min="0" :max="3600" /></el-form-item>
-            <el-form-item label="船只偷捕（秒）"><el-input-number v-model="selectedZone.condition_durations.BOAT_ILLEGAL_FISHING" :min="0" :max="3600" /></el-form-item>
-          </div>
           <section class="ros-panel">
             <div class="ros-heading">
               <strong>区域顶点 (ROS)</strong>
@@ -292,7 +274,7 @@ import {
   createStreamTicket, getCameraList, getCameraZones, saveCameraZones,
 } from '@/api/camera'
 import {
-  defaultTriggerSeconds, normalizeZones, zoneTypeLabel,
+  normalizeZones, zoneTypeLabel,
 } from '@/utils/cameraDetectionView'
 
 const route = useRoute()
@@ -314,12 +296,6 @@ const selectedZone = computed(() => zones.value.find((zone) => zone.id === selec
 const zoneLabelFontSize = computed(() => Math.max(16, Math.min(64, overlayWidth.value * 0.022)))
 const vertexAnchorRadius = computed(() => Math.max(6, Math.min(28, overlayWidth.value * 0.007)))
 const vertexIndexFontSize = computed(() => Math.max(13, Math.min(42, overlayWidth.value * 0.016)))
-
-function formatTriggerSeconds(value) {
-  const seconds = Number(value)
-  if (!Number.isFinite(seconds)) return '--'
-  return `${Number(seconds.toFixed(3))} 秒`
-}
 
 function formatZoneTime(zone) {
   const value = zone?.update_time
@@ -415,8 +391,6 @@ function createZone() {
     zone_type: zoneType,
     type: zoneType,
     polygon_points: [],
-    trigger_seconds: defaultTriggerSeconds(zoneType),
-    condition_durations: {},
     enabled: true,
   }
   zones.value = [...zones.value, zone]
@@ -505,10 +479,6 @@ function appendVertex() {
 function applyTypeDefaults(zoneType) {
   if (!selectedZone.value) return
   selectedZone.value.type = zoneType
-  selectedZone.value.trigger_seconds = defaultTriggerSeconds(zoneType)
-  selectedZone.value.condition_durations = zoneType === 'FISHING'
-    ? { BOAT_INTRUSION: 0, BOAT_STAY: 30, BOAT_ILLEGAL_FISHING: 120 }
-    : {}
   if (!selectedZone.value.zone_name) selectedZone.value.zone_name = zoneTypeLabel(zoneType)
 }
 
@@ -620,8 +590,6 @@ async function saveZones() {
       zone_name: zone.zone_name,
       zone_type: zone.zone_type,
       polygon_points: zone.polygon_points,
-      trigger_seconds: zone.trigger_seconds,
-      condition_durations: zone.condition_durations,
       enabled: zone.enabled,
     }))
     const response = await saveCameraZones(currentCameraId.value, payload)
@@ -896,27 +864,6 @@ onMounted(async () => {
 .risk-cell {
   color: #8ddcf0;
   font-weight: 900;
-}
-.trigger-cell {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-}
-.trigger-cell > span {
-  color: #8ddcf0;
-  font-size: 12px;
-  font-weight: 900;
-}
-.trigger-cell :deep(.el-input-number) { width: 86px; }
-.trigger-cell :deep(.el-input__wrapper) {
-  min-height: 30px;
-  border-radius: 7px;
-  background: rgba(3, 18, 29, 0.66);
-  box-shadow: 0 0 0 1px rgba(72, 216, 255, 0.18) inset;
-}
-.trigger-cell :deep(.el-input__inner) {
-  color: #dff5ff;
-  font-weight: 800;
 }
 .zone-enable-toggle {
   min-width: 84px;

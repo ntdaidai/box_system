@@ -20,10 +20,9 @@ from app.core.database import SessionLocal
 from app.models.broadcast import (
     BroadcastDevice,
     BroadcastTemplate,
-    CameraBroadcastDevice,
 )
-from app.models.event_action import EventAction
 from app.models.camera import Camera
+from app.models.event_action_config import EventActionConfig
 from app.services.safety_event_runtime_service import safety_event_runtime_service
 
 
@@ -536,35 +535,26 @@ class BroadcastService:
 
     @staticmethod
     def _configured_action_targets(db: Session, event_id: str, camera_id: str) -> tuple[Optional[str], List[int]]:
-        from app.models.action_step import ActionStep
-        from app.models.camera import Camera
-        from app.models.safety_integration import EventActionStepConfig, SafetyEventInstance
+        from app.models.safety_integration import SafetyEventInstance
 
         instance = db.query(SafetyEventInstance).filter(SafetyEventInstance.instance_no == event_id).first()
         camera = db.query(Camera).filter(Camera.id == int(camera_id)).first() if str(camera_id).isdigit() else None
         if not instance or not camera:
             raise BroadcastException("自动广播关联的事件实例或摄像头不存在")
         config = (
-            db.query(EventActionStepConfig)
-            .join(EventAction, EventAction.id == EventActionStepConfig.event_action_id)
-            .join(ActionStep, ActionStep.id == EventActionStepConfig.step_id)
+            db.query(EventActionConfig)
             .filter(
-                EventAction.event_id == instance.current_event_id,
-                EventActionStepConfig.camera_device_id == camera.id,
-                ActionStep.action_type == "broadcast",
-                EventActionStepConfig.enabled.is_(True),
+                EventActionConfig.event_id == instance.current_event_id,
+                EventActionConfig.action_type == "broadcast",
+                EventActionConfig.is_activate.is_(True),
             )
+            .order_by(EventActionConfig.step_order.asc(), EventActionConfig.id.asc())
             .first()
         )
         if not config:
             raise BroadcastException("未配置自动广播动作")
         if not config.template_id or not config.broadcast_device_id:
             raise BroadcastException("自动广播未配置广播设备或模板")
-        if not db.query(CameraBroadcastDevice.id).filter(
-            CameraBroadcastDevice.camera_device_id == camera.id,
-            CameraBroadcastDevice.broadcast_device_id == config.broadcast_device_id,
-        ).first():
-            raise BroadcastException("动作配置中的广播设备未绑定当前摄像头")
         return config.template_id, [config.broadcast_device_id]
 
     @staticmethod
@@ -601,21 +591,14 @@ class BroadcastService:
         return template.content
 
     def _resolve_devices(self, db: Session, camera_id: Optional[str], device_ids: Optional[List[int]]) -> List[BroadcastDevice]:
-        if camera_id:
-            bound_devices = self._devices_for_camera(db, camera_id)
-            if not device_ids:
-                return bound_devices
-            requested_ids = {int(value) for value in device_ids}
-            selected = [device for device in bound_devices if device.id in requested_ids]
-            if {device.id for device in selected} != requested_ids:
-                raise BroadcastException("选择的广播设备未绑定当前摄像头")
-            return selected
         if device_ids:
             return (
                 db.query(BroadcastDevice)
                 .filter(BroadcastDevice.id.in_(device_ids), BroadcastDevice.enabled == True)  # noqa: E712
                 .all()
             )
+        if camera_id:
+            return self._devices_for_camera(db, camera_id)
         return []
 
     @staticmethod
@@ -640,20 +623,12 @@ class BroadcastService:
             camera = db.query(Camera).filter(Camera.id == int(camera_id)).first()
         if camera is None:
             return []
-        rows = (
+        return (
             db.query(BroadcastDevice)
-            .join(CameraBroadcastDevice, CameraBroadcastDevice.broadcast_device_id == BroadcastDevice.id)
-            .filter(
-                CameraBroadcastDevice.camera_device_id == camera.id,
-                BroadcastDevice.enabled == True,  # noqa: E712
-            )
+            .filter(BroadcastDevice.enabled == True)  # noqa: E712
             .order_by(BroadcastDevice.id.asc())
             .all()
         )
-        return [
-            row for row in rows
-            if (row.vendor_type or "").upper() != "LOCAL_AUDIO"
-        ]
 
     @staticmethod
     def _record_execution(

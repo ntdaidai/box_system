@@ -82,6 +82,7 @@ services:
     environment:
       # vLLM 视觉模型
       VLLM_QWEN3VL_URL: "${VLLM_QWEN3VL_URL:-http://localhost:8003}"
+      QWEN_CAMERA_SCREENING_ENABLED: "${QWEN_CAMERA_SCREENING_ENABLED:-true}"
       # IoTDB
       IOTDB_HOST: 127.0.0.1
       IOTDB_PORT: 6667

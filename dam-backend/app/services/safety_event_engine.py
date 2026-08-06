@@ -936,11 +936,9 @@ class SafetyEventEngine:
         if self.store.__class__.__name__ != "JsonSafetyEventStore":
             try:
                 from app.core.database import SessionLocal
-                from app.models.action_step import ActionStep
                 from app.models.camera import Camera
-                from app.models.event_action import EventAction
+                from app.models.event_action_config import EventActionConfig
                 from app.models.event_library import EventLibrary
-                from app.models.safety_integration import EventActionStepConfig
 
                 event_code = self._unified_event_code(track.entity_type, risk_level)
                 db = SessionLocal()
@@ -949,22 +947,19 @@ class SafetyEventEngine:
                     definition = db.query(EventLibrary).filter(EventLibrary.event_code == event_code).first()
                     if camera and definition:
                         config = (
-                            db.query(EventActionStepConfig)
-                            .join(EventAction, EventAction.id == EventActionStepConfig.event_action_id)
-                            .join(ActionStep, ActionStep.id == EventActionStepConfig.step_id)
+                            db.query(EventActionConfig)
                             .filter(
-                                EventAction.event_id == definition.id,
-                                EventActionStepConfig.camera_device_id == camera.id,
-                                ActionStep.action_type == "broadcast",
-                                EventActionStepConfig.enabled.is_(True),
+                                EventActionConfig.event_id == definition.id,
+                                EventActionConfig.action_type == "broadcast",
+                                EventActionConfig.is_activate.is_(True),
                             )
+                            .order_by(EventActionConfig.step_order.asc(), EventActionConfig.id.asc())
                             .first()
                         )
                         if config:
-                            values = config.config_json or {}
                             policy = (
-                                max(0, int(values.get("repeat_interval_seconds", 60))),
-                                max(1, int(values.get("max_executions", 3))),
+                                max(0, int(config.repeat_interval_seconds or 60)),
+                                max(1, int(config.max_executions or 3)),
                             )
                 finally:
                     db.close()

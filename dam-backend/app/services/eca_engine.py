@@ -4,6 +4,7 @@ import re
 import json
 import asyncio
 import operator
+import uuid
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 from sqlalchemy.orm import Session
@@ -13,12 +14,15 @@ from app.core.database import SessionLocal
 from app.models.condition_library import ConditionLibrary
 from app.models.event_library import EventLibrary
 from app.models.event_condition import EventCondition
-from app.models.event_action import EventAction
-from app.models.action_flow import ActionFlow
-from app.models.action_step import ActionStep
+from app.models.event_action_config import EventActionConfig
 from app.models.data_source import DataSource
 from app.models.model_library import ModelLibrary
-from app.models.safety_integration import SafetyEventInstance
+from app.models.camera import Camera
+from app.models.safety_integration import (
+    SafetyEventInstance,
+    SafetyEventTimelineLog,
+    VisualEventDetail,
+)
 from app.api.health import _get_gpu_info
 from app.core.config import settings
 from app.services.dam_model_library_client import dam_model_library_client
@@ -121,6 +125,26 @@ class ECAEngine:
 
         return filtered
 
+    def get_camera_history(self, source_id: int, time_window_minutes: int) -> List[Dict]:
+        """Get recent ECA-compatible Qwen camera snapshots."""
+        from app.services.vision_detector import vision_detector
+
+        db = SessionLocal()
+        try:
+            source = db.query(DataSource).filter(DataSource.id == source_id).first()
+            if not source or str(source.source_type).lower() != "camera":
+                return []
+            camera_id = str(source.device_id or source.id)
+            return vision_detector.get_history_snapshot(
+                camera_id,
+                time_window_minutes=time_window_minutes,
+            )
+        except Exception as exc:
+            logger.warning(f"获取摄像头历史快照失败: source={source_id}, error={exc}")
+            return []
+        finally:
+            db.close()
+
     def get_latest_sensor_value(self, source_id: int, variable_name: str = None) -> Optional[float]:
         """
         获取传感器最新值
@@ -183,7 +207,13 @@ class ECAEngine:
                 return True, True
 
             # 3. 获取时间窗口内的历史数据
-            history = self.get_sensor_history(source_id, time_window)
+            source_type = None
+            if getattr(condition, "source", None):
+                source_type = str(condition.source.source_type or "").lower()
+            if source_type == "camera":
+                history = self.get_camera_history(source_id, time_window)
+            else:
+                history = self.get_sensor_history(source_id, time_window)
 
             if not history:
                 # 没有历史数据，用当前数据开始计时
@@ -196,11 +226,13 @@ class ECAEngine:
             variable_name = self.SOURCE_VARIABLE_MAP.get(source_id, "value")
             all_met = True
             for point in history:
-                value = point["data"].get(variable_name)
-                if value is None:
-                    all_met = False
-                    break
-                test_data = {variable_name: value}
+                test_data = point.get("data") or {}
+                if source_type != "camera":
+                    value = test_data.get(variable_name)
+                    if value is None:
+                        all_met = False
+                        break
+                    test_data = {variable_name: value}
                 if not self._evaluate_expression(expression, test_data):
                     all_met = False
                     break
@@ -500,9 +532,9 @@ class ECAEngine:
 
     def filter_steps_by_resource(
         self,
-        steps: List[ActionStep],
+        steps: List[EventActionConfig],
         gpu_status: Dict[str, Any]
-    ) -> List[ActionStep]:
+    ) -> List[EventActionConfig]:
         """
         根据GPU资源状态过滤执行步骤
 
@@ -521,7 +553,7 @@ class ECAEngine:
             gpu_status: GPU状态信息
 
         Returns:
-            List[ActionStep]: 过滤后的步骤列表
+            List[EventActionConfig]: 过滤后的步骤列表
         """
         load_level = gpu_status.get("load_level", "low")
 
@@ -560,7 +592,7 @@ class ECAEngine:
         )
         return filtered_steps
 
-    def _get_step_priority(self, step: ActionStep) -> int:
+    def _get_step_priority(self, step: EventActionConfig) -> int:
         """
         获取步骤优先级
 
@@ -747,27 +779,9 @@ class ECAEngine:
             if event:
                 await self.plan_dam_workflow(instance, event, sensor_data, db)
 
-            # 获取事件关联的行为流程
-            relations = db.query(EventAction).filter(
-                EventAction.event_id == event_id,
-                EventAction.is_activate == True
-            ).order_by(EventAction.priority).all()
-
-            results = []
-            for rel in relations:
-                flow = db.query(ActionFlow).filter(ActionFlow.id == rel.flow_id).first()
-                if not flow or not flow.is_activate:
-                    continue
-
-                # 执行流程（传递 event 对象）
-                flow_result = await self.execute_flow(
-                    flow.id, sensor_data, db, event, event_instance=instance
-                )
-                results.append({
-                    "flow_id": flow.id,
-                    "flow_name": flow.flow_name,
-                    "result": flow_result
-                })
+            action_result = await self.execute_configured_actions(
+                event_id, sensor_data, db, event, event_instance=instance
+            )
 
             safety_event_runtime_service.append_timeline(
                 db,
@@ -776,8 +790,8 @@ class ECAEngine:
                 log_type="ACTION",
                 trigger_type="AUTO",
                 status="SUCCESS",
-                message="ECA行为流程执行完成",
-                payload={"instance_no": instance.instance_no, "flows": results},
+                message="ECA事件动作执行完成",
+                payload={"instance_no": instance.instance_no, "actions": action_result},
             )
             db.commit()
 
@@ -892,16 +906,16 @@ class ECAEngine:
             db.commit()
             return None
 
-    async def execute_flow(
+    async def execute_configured_actions(
         self,
-        flow_id: int,
+        event_id: int,
         sensor_data: Dict[str, Any],
         db: Session,
         event: EventLibrary = None,
         event_instance: SafetyEventInstance = None,
     ) -> Dict[str, Any]:
         """
-        执行行为流程（支持资源感知调度）
+        执行事件动作配置（支持资源感知调度）
 
         执行流程：
         1. 获取 GPU 资源状态
@@ -909,7 +923,7 @@ class ECAEngine:
         3. 依次执行过滤后的步骤
 
         Args:
-            flow_id: 流程ID
+            event_id: 事件ID
             sensor_data: 传感器数据
             db: 数据库会话
             event: 触发的事件对象（用于判断告警类型）
@@ -917,14 +931,15 @@ class ECAEngine:
         Returns:
             Dict: 执行结果，包含 gpu_status 和 original_steps_count
         """
-        flow = db.query(ActionFlow).filter(ActionFlow.id == flow_id).first()
-        if not flow:
-            return {"success": False, "error": "流程不存在"}
-
-        # 获取流程步骤
-        steps = db.query(ActionStep).filter(
-            ActionStep.flow_id == flow_id
-        ).order_by(ActionStep.step_order).all()
+        steps = (
+            db.query(EventActionConfig)
+            .filter(
+                EventActionConfig.event_id == event_id,
+                EventActionConfig.is_activate.is_(True),
+            )
+            .order_by(EventActionConfig.step_order.asc(), EventActionConfig.id.asc())
+            .all()
+        )
 
         # 资源感知调度：根据 GPU 状态过滤步骤
         gpu_status = self.get_gpu_status()
@@ -972,8 +987,7 @@ class ECAEngine:
                         trigger_type="AUTO",
                         status="SUCCESS",
                         message=f"{step.step_name}执行完成",
-                        flow_id=flow.id,
-                        step_id=step.id,
+                        action_config_id=step.id,
                         payload={
                             "instance_no": event_instance.instance_no,
                             "action_type": step.action_type,
@@ -999,8 +1013,7 @@ class ECAEngine:
                         trigger_type="AUTO",
                         status="FAILED",
                         message=f"{step.step_name}执行失败",
-                        flow_id=flow.id,
-                        step_id=step.id,
+                        action_config_id=step.id,
                         payload={
                             "instance_no": event_instance.instance_no,
                             "action_type": step.action_type,
@@ -1010,7 +1023,7 @@ class ECAEngine:
                     db.commit()
 
                 # 根据失败策略决定是否继续
-                if flow.failure_strategy == "abort":
+                if step.failure_strategy == "abort":
                     break
 
         return {
@@ -1026,7 +1039,7 @@ class ECAEngine:
 
     async def execute_step(
         self,
-        step: ActionStep,
+        step: EventActionConfig,
         sensor_data: Dict[str, Any],
         db: Session,
         alarm_type: str = "threshold",
@@ -1067,7 +1080,7 @@ class ECAEngine:
         else:
             raise ValueError(f"未知的动作类型: {step.action_type}")
 
-    async def execute_llm_step(self, step: ActionStep, sensor_data: Dict[str, Any], db: Session) -> Dict[str, Any]:
+    async def execute_llm_step(self, step: EventActionConfig, sensor_data: Dict[str, Any], db: Session) -> Dict[str, Any]:
         """执行LLM推理步骤（调用模型服务）
 
         支持纯文本和图像输入：
@@ -1266,14 +1279,14 @@ class ECAEngine:
 
     async def execute_alert_step(
         self,
-        step: ActionStep,
+        step: EventActionConfig,
         sensor_data: Dict[str, Any],
         alarm_type: str = "threshold",
         device_id: int = None,
         step_context: Dict = None,
         event: EventLibrary = None,
     ) -> Dict[str, Any]:
-        """执行告警步骤（写入 alarm 表，前端可展示）
+        """执行告警步骤（记录到统一事件时间线，兼容旧动作返回）
 
         Args:
             step: 步骤对象
@@ -1289,8 +1302,6 @@ class ECAEngine:
 
         注意：此方法使用独立的数据库会话，确保事务隔离
         """
-        from app.models.alarm import Alarm
-
         params = json.loads(step.parameter) if step.parameter else {}
         level = params.get("level", 1)
         channels = params.get("channels", ["app"])
@@ -1322,31 +1333,38 @@ class ECAEngine:
         if not alert_content:
             alert_content = f"ECA事件触发告警 (级别: {level})"
 
-        # 写入 alarm 表（使用独立会话）
+        # 写入统一事件时间线（使用独立会话）；没有实例上下文时只返回动作结果。
         db = SessionLocal()
         try:
-            alarm_code = (
-                f"ECA_EVT_{event.id}_{step.id}_{int(datetime.now().timestamp())}"
-                if event
-                else f"ECA_{step.id}_{int(datetime.now().timestamp())}"
-            )
-            alarm = Alarm(
-                alarm_code=alarm_code,
-                device_id=device_id,
-                alarm_type=alarm_type,
-                alarm_level=level,
-                alarm_content=alert_content,
-                alarm_time=datetime.now(),
-                handle_status=0,  # 未处理
-            )
-            db.add(alarm)
-            db.commit()
-            db.refresh(alarm)
+            instance_id = sensor_data.get("event_instance_id") or sensor_data.get("instance_id")
+            timeline_id = None
+            if instance_id:
+                from app.models.safety_integration import SafetyEventInstance
+                from app.services.safety_event_runtime_service import safety_event_runtime_service
 
-            logger.info(f"告警已写入数据库: id={alarm.id}, 设备={device_id}, 类型={alarm_type}, 级别={level}, 内容={alert_content[:100]}...")
+                instance = db.query(SafetyEventInstance).filter(SafetyEventInstance.id == int(instance_id)).first()
+                if instance:
+                    timeline = safety_event_runtime_service.append_timeline(
+                        db,
+                        instance,
+                        log_type="ACTION",
+                        status="SUCCESS",
+                        trigger_type="AUTO",
+                        stage="DISPATCH",
+                        title="告警通知",
+                        message=alert_content,
+                        operator="SYSTEM",
+                        event_id=event.id if event else instance.current_event_id,
+                        action_config_id=step.id,
+                        payload={"level": level, "channels": channels, "alarm_type": alarm_type},
+                    )
+                    timeline_id = timeline.id
+            db.commit()
+
+            logger.info(f"告警动作已记录: timeline={timeline_id}, 设备={device_id}, 类型={alarm_type}, 级别={level}, 内容={alert_content[:100]}...")
 
             return {
-                "alarm_id": alarm.id,
+                "timeline_id": timeline_id,
                 "level": level,
                 "channels": channels,
                 "content": alert_content,
@@ -1391,7 +1409,9 @@ class ECAEngine:
         # 视觉检测变量
         vision_variables = {
             "crack_detected", "seepage_detected",
-            "slope_damage_detected", "gate_deform_detected"
+            "slope_damage_detected", "gate_deform_detected",
+            "mudslide_detected", "landslide_detected", "earthquake_detected",
+            "flood_detected", "person_present", "boat_present",
         }
 
         # 检查是否有视觉检测异常
@@ -1437,7 +1457,7 @@ class ECAEngine:
 
         return None
 
-    async def execute_script_step(self, step: ActionStep, sensor_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute_script_step(self, step: EventActionConfig, sensor_data: Dict[str, Any]) -> Dict[str, Any]:
         """执行脚本步骤"""
         params = json.loads(step.parameter) if step.parameter else {}
 
@@ -1450,7 +1470,7 @@ class ECAEngine:
             "executed": True
         }
 
-    async def execute_http_step(self, step: ActionStep, sensor_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute_http_step(self, step: EventActionConfig, sensor_data: Dict[str, Any]) -> Dict[str, Any]:
         """执行HTTP请求步骤"""
         params = json.loads(step.parameter) if step.parameter else {}
         url = params.get("url", "")
@@ -1469,6 +1489,235 @@ class ECAEngine:
     async def on_sensor_data_updated(self, sensor_name: str, data: Dict[str, Any]):
         """Schedule blocking sensor ECA evaluation outside the HTTP event loop."""
         await asyncio.to_thread(self._process_sensor_data_updated, sensor_name, data)
+
+    async def on_vision_detection_updated(
+        self,
+        camera_id: str,
+        detection_type: str,
+        result: Dict[str, Any],
+    ):
+        """Schedule camera ECA evaluation when Qwen screening updates."""
+        if detection_type != "qwen_camera_screening":
+            return
+        await asyncio.to_thread(self._process_camera_data_updated, str(camera_id), result)
+
+    def _process_camera_data_updated(self, camera_id: str, result: Dict[str, Any]):
+        """
+        摄像头初筛结果更新回调。
+
+        Qwen 初筛写入 VisionDetector 后，按 camera 数据源查找 ECA 事件，
+        使用最新摄像头快照评估条件，并创建/更新统一安全事件实例。
+        """
+        from app.services.vision_detector import vision_detector
+
+        db = SessionLocal()
+        try:
+            if not camera_id.isdigit():
+                return
+            source = db.query(DataSource).filter(
+                DataSource.source_type == "camera",
+                DataSource.is_activate == True,
+                DataSource.device_id == int(camera_id),
+            ).first()
+            if not source:
+                return
+
+            events = self._get_events_by_source(source.id, db)
+            if not events:
+                return
+
+            camera_data = vision_detector.get_detection_snapshot(camera_id)
+            details = (result.get("details") or {}) if isinstance(result, dict) else {}
+            screening = details.get("screening") or {}
+            if screening:
+                camera_data["qwen_summary"] = screening.get("summary")
+                camera_data["qwen_risk_level"] = screening.get("risk_level")
+                camera_data["qwen_image_urls"] = screening.get("image_urls") or details.get("image_urls") or []
+
+            for event in events:
+                try:
+                    conditions_met = self.check_event_conditions(event.id, camera_data, db)
+                    if conditions_met:
+                        instance = self.trigger_camera_event(event, source, camera_data, db)
+                        if instance:
+                            logger.info(
+                                f"[摄像头触发] 事件: {event.event_name} "
+                                f"(风险等级: {event.risk_level}, camera={camera_id})"
+                            )
+                    else:
+                        self.resolve_camera_event_if_recovered(event, source, camera_data, db)
+                except Exception as exc:
+                    logger.error(f"检查摄像头事件 {event.event_name} 失败: {exc}")
+        except Exception as exc:
+            logger.error(f"摄像头触发处理异常: {exc}")
+        finally:
+            db.close()
+
+    def trigger_camera_event(
+        self,
+        event: EventLibrary,
+        source: DataSource,
+        camera_data: Dict[str, Any],
+        db: Session,
+    ) -> Optional[SafetyEventInstance]:
+        """Create or update a unified camera safety event, then run ECA actions."""
+        if not event or not event.is_activate:
+            return None
+
+        now = datetime.now()
+        active = db.query(SafetyEventInstance).filter(
+            SafetyEventInstance.current_event_id == event.id,
+            SafetyEventInstance.data_source_id == source.id,
+            SafetyEventInstance.source_type == "camera",
+            SafetyEventInstance.source_id == source.device_id,
+            SafetyEventInstance.state == "ACTIVE",
+        ).order_by(SafetyEventInstance.id.desc()).first()
+
+        risk = {1: "LOW", 2: "MEDIUM", 3: "HIGH"}.get(int(event.risk_level or 1), "LOW")
+        observation = dict(camera_data or {})
+
+        risk_rank = {"LOW": 1, "MEDIUM": 2, "HIGH": 3}
+        if active:
+            active.last_observed_at = now
+            active.latest_observation = observation
+            active.risk_level = risk
+            if risk_rank.get(risk, 0) > risk_rank.get(active.max_risk_level, 0):
+                active.max_risk_level = risk
+            active.status = "PROCESSING"
+            db.commit()
+            return active
+
+        instance = SafetyEventInstance(
+            instance_no=f"EVT_{now:%Y%m%d}_{uuid.uuid4().hex[:12]}",
+            current_event_id=event.id,
+            event_category=event.event_category or "CAMERA",
+            data_source_id=source.id,
+            source_type="camera",
+            source_id=source.device_id,
+            risk_level=risk,
+            max_risk_level=risk,
+            state="ACTIVE",
+            status="PROCESSING",
+            started_at=now,
+            last_observed_at=now,
+            summary=f"{source.source_name} - {event.event_name}",
+            latest_observation=observation,
+        )
+        db.add(instance)
+        db.flush()
+
+        camera = None
+        if source.device_id:
+            camera = db.query(Camera).filter(Camera.id == source.device_id).first()
+        db.add(VisualEventDetail(
+            event_instance_id=instance.id,
+            camera_id=source.device_id or 0,
+            camera_name=(camera.camera_name if camera else source.source_name),
+            target_type="qwen_camera_screening",
+            target_id=None,
+            confidence=self._max_camera_confidence(observation),
+            extra={
+                "screening": observation,
+                "source_id": source.id,
+            },
+        ))
+        db.add(SafetyEventTimelineLog(
+            event_instance_id=instance.id,
+            event_id=event.id,
+            stage="TRIGGER",
+            action_key=f"camera-trigger:{instance.instance_no}",
+            log_type="TRIGGER",
+            trigger_type="AUTO",
+            risk_level=risk,
+            status="SUCCESS",
+            message=f"{event.event_name}已由Qwen摄像头初筛触发",
+            operator="SYSTEM",
+            payload={
+                "instance_no": instance.instance_no,
+                "observation": observation,
+            },
+            create_time=now,
+        ))
+        db.commit()
+
+        global _main_event_loop
+        if _main_event_loop and _main_event_loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(
+                self.execute_event_actions(event.id, instance.id, camera_data),
+                _main_event_loop,
+            )
+            future.add_done_callback(self._handle_async_exception)
+        else:
+            logger.warning(
+                f"无法异步执行摄像头事件行为：主事件循环未设置或未运行。事件 {event.id}"
+            )
+        return instance
+
+    def resolve_camera_event_if_recovered(
+        self,
+        event: EventLibrary,
+        source: DataSource,
+        camera_data: Dict[str, Any],
+        db: Session,
+    ) -> Optional[SafetyEventInstance]:
+        instance = db.query(SafetyEventInstance).filter(
+            SafetyEventInstance.current_event_id == event.id,
+            SafetyEventInstance.data_source_id == source.id,
+            SafetyEventInstance.source_type == "camera",
+            SafetyEventInstance.source_id == source.device_id,
+            SafetyEventInstance.state == "ACTIVE",
+        ).order_by(SafetyEventInstance.id.desc()).first()
+        if not instance:
+            return None
+        now = datetime.now()
+        latest = dict(instance.latest_observation or {})
+        recovery_started_at = latest.get("recovery_started_at")
+        if not recovery_started_at:
+            latest["recovery_started_at"] = now.isoformat()
+            latest["recovery_observation"] = camera_data
+            instance.latest_observation = latest
+            db.commit()
+            return instance
+        try:
+            recovery_started = datetime.fromisoformat(str(recovery_started_at))
+        except ValueError:
+            recovery_started = now
+        if (now - recovery_started).total_seconds() < max(int(event.recovery_duration or 0), 0):
+            return instance
+
+        instance.state = "RESOLVED"
+        instance.status = "COMPLETED"
+        instance.resolved_at = now
+        instance.resolve_reason = "camera_condition_recovered"
+        instance.latest_observation = {"recovery_observation": camera_data}
+        db.add(SafetyEventTimelineLog(
+            event_instance_id=instance.id,
+            event_id=event.id,
+            stage="CLOSE",
+            action_key=f"camera-resolve:{instance.instance_no}",
+            log_type="RESOLVE",
+            trigger_type="AUTO",
+            risk_level=instance.risk_level,
+            status="SUCCESS",
+            message=f"{event.event_name}摄像头条件已恢复，事件自动闭环",
+            operator="SYSTEM",
+            payload={"reason": "camera_condition_recovered", "observation": camera_data},
+            create_time=now,
+        ))
+        db.commit()
+        return instance
+
+    @staticmethod
+    def _max_camera_confidence(camera_data: Dict[str, Any]) -> Optional[float]:
+        values = []
+        for key, value in (camera_data or {}).items():
+            if not str(key).endswith("_confidence"):
+                continue
+            try:
+                values.append(float(value))
+            except (TypeError, ValueError):
+                continue
+        return max(values) if values else None
 
     def _process_sensor_data_updated(self, sensor_name: str, data: Dict[str, Any]):
         """

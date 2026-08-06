@@ -38,6 +38,53 @@ class Settings:
     LOCAL_LLM_MAX_TOKENS: int = int(_get_env("LOCAL_LLM_MAX_TOKENS", "2048"))
     LOCAL_LLM_TEMPERATURE: float = float(_get_env("LOCAL_LLM_TEMPERATURE", "0.15"))
 
+    # ── Qwen 摄像头初筛 ─────────────────────────────────────
+    QWEN_CAMERA_SCREENING_LLM_URL: str = _get_env(
+        "QWEN_CAMERA_SCREENING_LLM_URL", "http://localhost:8003"
+    )
+    QWEN_CAMERA_SCREENING_MODEL_NAME: str = _get_env(
+        "QWEN_CAMERA_SCREENING_MODEL_NAME", "qwen0.8B"
+    )
+    QWEN_CAMERA_SCREENING_ENABLED: bool = (
+        _get_env("QWEN_CAMERA_SCREENING_ENABLED", "true").lower() == "true"
+    )
+    QWEN_CAMERA_SCREENING_INTERVAL_SECONDS: float = float(
+        _get_env("QWEN_CAMERA_SCREENING_INTERVAL_SECONDS", "15")
+    )
+    QWEN_CAMERA_SCREENING_WINDOW_SECONDS: float = float(
+        _get_env("QWEN_CAMERA_SCREENING_WINDOW_SECONDS", "10")
+    )
+    QWEN_CAMERA_SCREENING_FRAME_COUNT: int = int(
+        _get_env("QWEN_CAMERA_SCREENING_FRAME_COUNT", "4")
+    )
+    QWEN_CAMERA_SCREENING_JPEG_QUALITY: int = int(
+        _get_env("QWEN_CAMERA_SCREENING_JPEG_QUALITY", "45")
+    )
+    QWEN_CAMERA_SCREENING_MAX_IMAGE_SIDE: int = int(
+        _get_env("QWEN_CAMERA_SCREENING_MAX_IMAGE_SIDE", "384")
+    )
+    QWEN_CAMERA_SCREENING_MIN_CONFIDENCE: float = float(
+        _get_env("QWEN_CAMERA_SCREENING_MIN_CONFIDENCE", "0.65")
+    )
+    QWEN_CAMERA_SCREENING_USE_MINIO_URL: bool = (
+        _get_env("QWEN_CAMERA_SCREENING_USE_MINIO_URL", "true").lower() == "true"
+    )
+    QWEN_CAMERA_SCREENING_MINIO_ENDPOINT: str = _get_env(
+        "QWEN_CAMERA_SCREENING_MINIO_ENDPOINT", "172.17.0.1:9000"
+    )
+    QWEN_CAMERA_SCREENING_URL_EXPIRES_SECONDS: int = int(
+        _get_env("QWEN_CAMERA_SCREENING_URL_EXPIRES_SECONDS", "600")
+    )
+    QWEN_CAMERA_SCREENING_OBJECT_PREFIX: str = _get_env(
+        "QWEN_CAMERA_SCREENING_OBJECT_PREFIX", "camera"
+    ).strip("/")
+    QWEN_CAMERA_SCREENING_RETENTION_MINUTES: int = int(
+        _get_env("QWEN_CAMERA_SCREENING_RETENTION_MINUTES", "60")
+    )
+    QWEN_CAMERA_SCREENING_CLEANUP_INTERVAL_MINUTES: int = int(
+        _get_env("QWEN_CAMERA_SCREENING_CLEANUP_INTERVAL_MINUTES", "10")
+    )
+
     # ── DAM 智能路由工作流服务 ───────────────────────────────
     DAM_WORKFLOW_ENABLED: bool = _get_env("DAM_WORKFLOW_ENABLED", "true").lower() == "true"
     DAM_WORKFLOW_BASE_URL: str = _get_env(

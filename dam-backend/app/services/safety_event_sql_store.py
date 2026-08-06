@@ -295,6 +295,21 @@ class SqlSafetyEventStore:
         return "success"
 
     @staticmethod
+    def _stage_for_log_type(log_type: str) -> str:
+        normalized = (log_type or "").upper()
+        if normalized == "TRIGGER":
+            return "TRIGGER"
+        if normalized in {"ACTION", "RISK_CHANGE", "SYSTEM"}:
+            return "DISPATCH"
+        if normalized == "MANUAL":
+            return "PROCESSING"
+        if normalized == "REPORT":
+            return "REPORT"
+        if normalized == "RESOLVE":
+            return "CLOSE"
+        return "PROCESSING"
+
+    @staticmethod
     def _action_message(action: Dict[str, Any]) -> str:
         names = {
             "event_created": "安全事件已创建",
@@ -451,8 +466,7 @@ class SqlSafetyEventStore:
             ))
 
     def _sync_unified_action(self, db: Any, action: Dict[str, Any]) -> None:
-        from app.models.action_step import ActionStep
-        from app.models.event_action import EventAction
+        from app.models.event_action_config import EventActionConfig
         from app.models.safety_integration import SafetyEventEvidence, SafetyEventInstance, SafetyEventTimelineLog
 
         instance = db.query(SafetyEventInstance).filter(
@@ -489,24 +503,23 @@ class SqlSafetyEventStore:
             "STAFF_DISPATCH": "staff_task",
             "staff_task_requested": "staff_task",
         }.get(action_type)
-        relation = None
-        step = None
+        action_config = None
         if action_step_type:
-            relation = db.query(EventAction).filter(
-                EventAction.event_id == instance.current_event_id,
-                EventAction.flow_id.isnot(None),
-                EventAction.is_activate.is_(True),
-            ).order_by(EventAction.priority.asc(), EventAction.id.asc()).first()
-            if relation:
-                step = db.query(ActionStep).filter(
-                    ActionStep.flow_id == relation.flow_id,
-                    ActionStep.action_type == action_step_type,
-                ).order_by(ActionStep.step_order.asc(), ActionStep.id.asc()).first()
+            action_config = (
+                db.query(EventActionConfig)
+                .filter(
+                    EventActionConfig.event_id == instance.current_event_id,
+                    EventActionConfig.action_type == action_step_type,
+                    EventActionConfig.is_activate.is_(True),
+                )
+                .order_by(EventActionConfig.step_order.asc(), EventActionConfig.id.asc())
+                .first()
+            )
         timeline = SafetyEventTimelineLog(
             event_instance_id=instance.id,
             event_id=instance.current_event_id,
-            flow_id=relation.flow_id if relation else None,
-            step_id=step.id if step else None,
+            action_config_id=action_config.id if action_config else None,
+            stage=self._stage_for_log_type(log_type),
             action_key=action_key,
             log_type=log_type,
             trigger_type=str(payload.get("trigger_type") or "AUTO"),

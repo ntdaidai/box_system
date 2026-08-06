@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, JSON, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, JSON, String, Text
 
 from app.core.database import Base
 
@@ -20,28 +20,6 @@ class BroadcastDevice(Base):
     config_json = Column(JSON)
     create_time = Column(DateTime, default=datetime.now)
     update_time = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-
-
-class CameraBroadcastDevice(Base):
-    __tablename__ = "camera_broadcast_device"
-    __table_args__ = (
-        UniqueConstraint("camera_device_id", "broadcast_device_id", name="uq_camera_broadcast_device"),
-    )
-
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    camera_device_id = Column(
-        BigInteger,
-        ForeignKey("camera_device.id", ondelete="CASCADE", onupdate="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    broadcast_device_id = Column(
-        BigInteger,
-        ForeignKey("broadcast_device.id", ondelete="CASCADE", onupdate="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    create_time = Column(DateTime, default=datetime.now)
 
 
 class BroadcastTemplate(Base):

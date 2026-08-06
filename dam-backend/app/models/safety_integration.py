@@ -4,7 +4,6 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
-    Boolean,
     Column,
     DateTime,
     ForeignKey,
@@ -13,7 +12,6 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
-    UniqueConstraint,
 )
 
 from app.core.database import Base
@@ -22,56 +20,13 @@ from app.core.database import Base
 SQLITE_PK = BigInteger().with_variant(Integer, "sqlite")
 
 
-class CameraZoneCondition(Base):
-    __tablename__ = "camera_zone_condition"
-    __table_args__ = (
-        UniqueConstraint("zone_id", "condition_id", name="uq_zone_condition"),
-    )
-
-    id = Column(SQLITE_PK, primary_key=True, autoincrement=True)
-    zone_id = Column(BigInteger, ForeignKey("camera_detection_zone.id", ondelete="CASCADE"), nullable=False, index=True)
-    condition_id = Column(BigInteger, ForeignKey("condition_library.id", ondelete="CASCADE"), nullable=False, index=True)
-    enabled = Column(Boolean, nullable=False, default=True, index=True)
-    create_time = Column(DateTime, default=datetime.now)
-    update_time = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-
-
-class EventActionStepConfig(Base):
-    __tablename__ = "event_action_step_config"
-    __table_args__ = (
-        UniqueConstraint(
-            "event_action_id",
-            "camera_device_id",
-            "step_id",
-            name="uq_event_camera_device_step_config",
-        ),
-    )
-
-    id = Column(SQLITE_PK, primary_key=True, autoincrement=True)
-    event_action_id = Column(BigInteger, ForeignKey("event_action.id", ondelete="CASCADE"), nullable=False, index=True)
-    camera_device_id = Column(
-        BigInteger,
-        ForeignKey("camera_device.id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-    )
-    step_id = Column(BigInteger, ForeignKey("action_step.id", ondelete="CASCADE"), nullable=False, index=True)
-    broadcast_device_id = Column(BigInteger, ForeignKey("broadcast_device.id", ondelete="SET NULL"), nullable=True)
-    template_id = Column(String(64), ForeignKey("broadcast_template.id", ondelete="SET NULL"), nullable=True)
-    drone_id = Column(String(64), nullable=True)
-    route_id = Column(String(64), nullable=True)
-    config_json = Column(JSON, nullable=True)
-    enabled = Column(Boolean, nullable=False, default=True, index=True)
-    create_time = Column(DateTime, default=datetime.now)
-    update_time = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-
-
 class SafetyEventInstance(Base):
     __tablename__ = "safety_event_instance"
 
     id = Column(SQLITE_PK, primary_key=True, autoincrement=True)
     instance_no = Column(String(64), nullable=False, unique=True, index=True)
     current_event_id = Column(BigInteger, ForeignKey("event_library.id", ondelete="RESTRICT"), nullable=False, index=True)
+    analysis_report_id = Column(Integer, ForeignKey("analysis_report.id", ondelete="SET NULL"), nullable=True, index=True)
     event_category = Column(String(64), nullable=False, index=True)
     data_source_id = Column(BigInteger, ForeignKey("data_source.id", ondelete="RESTRICT"), nullable=False, index=True)
     source_type = Column(String(32), nullable=False, index=True)
@@ -116,13 +71,14 @@ class SafetyEventTimelineLog(Base):
     event_instance_id = Column(BigInteger, ForeignKey("safety_event_instance.id", ondelete="CASCADE"), nullable=False, index=True)
     event_id = Column(BigInteger, ForeignKey("event_library.id", ondelete="SET NULL"), nullable=True, index=True)
     condition_id = Column(BigInteger, ForeignKey("condition_library.id", ondelete="SET NULL"), nullable=True)
-    flow_id = Column(BigInteger, ForeignKey("action_flow.id", ondelete="SET NULL"), nullable=True)
-    step_id = Column(BigInteger, ForeignKey("action_step.id", ondelete="SET NULL"), nullable=True)
+    action_config_id = Column(BigInteger, ForeignKey("event_action_config.id", ondelete="SET NULL"), nullable=True)
     action_key = Column(String(160), nullable=True, unique=True)
+    stage = Column(String(32), nullable=True, index=True)
     log_type = Column(String(24), nullable=False, index=True)
     trigger_type = Column(String(16), nullable=False, default="AUTO")
     risk_level = Column(String(16), nullable=False, index=True)
     status = Column(String(16), nullable=False, index=True)
+    title = Column(String(200), nullable=True)
     message = Column(String(500), nullable=False)
     operator = Column(String(128), nullable=False, default="SYSTEM")
     payload = Column(JSON, nullable=True)

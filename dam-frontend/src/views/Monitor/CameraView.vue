@@ -124,25 +124,16 @@
         <div class="ops-header-actions">
           <el-button
             class="ops-ghost-button"
+            @click="openMediaAnalysisPage"
+          >
+            <el-icon><DataAnalysis /></el-icon>模拟检测
+          </el-button>
+          <el-button
+            class="ops-ghost-button"
             :disabled="!emergencyBroadcastCamera"
             @click="openEmergencyBroadcast"
           >
             <el-icon><Connection /></el-icon>应急喊话
-          </el-button>
-          <el-button
-            class="ops-ghost-button"
-            :loading="reportLoading"
-            @click="openPatrolReport(false)"
-          >
-            <el-icon><Files /></el-icon>巡查报告
-          </el-button>
-          <el-button
-            class="ops-ghost-button"
-            :class="{ active: zoneConfigVisible }"
-            :disabled="!currentCameraId"
-            @click="toggleZoneConfigPanel"
-          >
-            <el-icon><Crop /></el-icon>区域配置
           </el-button>
           <el-button
             class="ops-ghost-button"
@@ -423,214 +414,6 @@
             </div>
           </div>
         </article>
-
-        <section v-if="zoneConfigVisible" class="zone-config-panel inline-zone-config">
-          <header class="zone-config-panel-header">
-            <div>
-              <span class="section-kicker">当前摄像头区域列表</span>
-              <h2>区域配置</h2>
-            </div>
-            <div class="zone-config-header-actions">
-              <span class="zone-total-pill">共 {{ detectionZones.length }} 个区域</span>
-              <el-button class="drawer-tool-button" :class="{ active: zoneDrawing }" @click="zoneDrawing ? exitZoneDrawing() : startNewConfigZone()">
-                <el-icon><EditPen /></el-icon>{{ zoneDrawing ? '退出新增' : '新增区域' }}
-              </el-button>
-              <el-button class="drawer-save-button" :loading="zoneSaving" @click="saveZoneConfig">
-                <el-icon><Check /></el-icon>保存配置
-              </el-button>
-            </div>
-          </header>
-          <div class="zone-origin-note">坐标以视频画面左下角为原点，选中区域后可在视频画面拖动顶点微调位置。</div>
-
-          <div class="inline-zone-layout">
-            <section class="inline-zone-list">
-              <div class="inline-zone-table-head">
-                <span>区域名</span>
-                <span>区域类型</span>
-                <span>触发时间</span>
-                <span>启用状态</span>
-                <span>配置时间</span>
-                <span>操作</span>
-              </div>
-              <article
-                v-for="zone in detectionZones"
-                :key="zone.id"
-                class="inline-zone-row"
-                :class="{ selected: zone.id === selectedZoneId, disabled: !zone.enabled }"
-                @click="selectConfigZone(zone.id)"
-              >
-                <strong><i :style="{ background: zoneStroke(zone) }"></i>{{ zone.zone_name || zoneTypeLabel(zone.zone_type) }}</strong>
-                <span>{{ zoneTypeLabel(zone.zone_type) }}</span>
-                <div class="drawer-zone-row-control compact" @click.stop>
-                  <em v-if="zone.zone_type === 'FISHING'">多条件</em>
-                  <el-input-number
-                    v-else
-                    v-model="zone.trigger_seconds"
-                    :min="0"
-                    :max="3600"
-                    :step="1"
-                    :controls="false"
-                    size="small"
-                  />
-                </div>
-                <button
-                  type="button"
-                  class="drawer-enable-toggle"
-                  :class="{ active: zone.enabled }"
-                  @click.stop="zone.enabled = !zone.enabled"
-                >
-                  <i></i>{{ zone.enabled ? '启用' : '未启用' }}
-                </button>
-                <span>{{ formatZoneTime(zone) }}</span>
-                <div class="inline-zone-actions">
-                  <button type="button" @click.stop="selectConfigZone(zone.id)">编辑</button>
-                  <button type="button" class="danger" @click.stop="deleteConfigZone(zone.id)">删除</button>
-                </div>
-              </article>
-              <div v-if="!detectionZones.length" class="drawer-zone-empty">暂无区域配置</div>
-            </section>
-
-            <section v-if="selectedZone" class="drawer-point-panel inline-point-panel">
-              <div class="point-panel-heading">
-                <strong>点位配置</strong>
-                <b>顶点 {{ selectedZone.polygon_points.length }}</b>
-              </div>
-              <el-form label-position="top" class="drawer-zone-form">
-                <el-form-item label="区域名称">
-                  <el-input v-model="selectedZone.zone_name" maxlength="80" placeholder="请输入区域名称" />
-                </el-form-item>
-                <el-form-item label="区域类型">
-                  <el-select
-                    v-model="selectedZone.zone_type"
-                    class="drawer-zone-select"
-                    popper-class="vision-select-popper"
-                    @change="applyConfigZoneTypeDefaults"
-                  >
-                    <el-option label="低风险区" value="PERSON_LOW" />
-                    <el-option label="中风险区" value="PERSON_MEDIUM" />
-                    <el-option label="高风险区" value="PERSON_HIGH" />
-                    <el-option label="捕鱼区" value="FISHING" />
-                  </el-select>
-                </el-form-item>
-              </el-form>
-              <div class="drawer-point-table">
-                <div class="drawer-point-head">
-                  <span>序号</span>
-                  <span>X</span>
-                  <span>Y</span>
-                  <span></span>
-                </div>
-                <div
-                  v-for="(point, index) in selectedZone.polygon_points"
-                  :key="`${selectedZone.id}-inline-point-${index}`"
-                  class="drawer-point-row"
-                >
-                  <strong>#{{ index + 1 }}</strong>
-                  <el-input-number
-                    :model-value="pointCoordinateX(point)"
-                    :controls="false"
-                    :precision="3"
-                    :step="0.1"
-                    :min="0"
-                    :max="overlayWidth"
-                    size="small"
-                    @update:model-value="updatePointCoordinate(index, 'x', $event)"
-                  />
-                  <el-input-number
-                    :model-value="pointCoordinateY(point)"
-                    :controls="false"
-                    :precision="3"
-                    :step="0.1"
-                    :min="0"
-                    :max="overlayHeight"
-                    size="small"
-                    @update:model-value="updatePointCoordinate(index, 'y', $event)"
-                  />
-                  <button type="button" @click="deleteConfigPoint(index)">删除</button>
-                </div>
-                <div v-if="!selectedZone.polygon_points.length" class="drawer-point-empty">在视频画面上点击添加顶点</div>
-              </div>
-              <button
-                type="button"
-                class="drawer-add-point"
-                :disabled="selectedZone.polygon_points.length >= 15"
-                @click="appendConfigVertex"
-              >
-                <el-icon><Plus /></el-icon>新增顶点
-              </button>
-            </section>
-            <div v-else class="drawer-zone-empty large">请选择或新增一个区域</div>
-          </div>
-        </section>
-
-        <aside v-else class="risk-panel risk-overview-panel">
-          <header class="risk-status-bar" :class="riskThemeClass(overallRiskLevel)">
-            <div class="risk-status-main">
-              <span>当前风险</span>
-              <strong>{{ activeRiskEvents.length ? `${activeRiskEvents.length} 起待处置` : '运行正常' }}</strong>
-            </div>
-            <b>{{ overallRiskText }}</b>
-          </header>
-
-          <section class="risk-summary-strip">
-            <article
-              v-for="item in riskSummaryItems"
-              :key="item.label"
-              class="risk-summary-item"
-              :class="item.tone"
-            >
-              <span>{{ item.label }}</span>
-              <strong>{{ item.value }}</strong>
-              <small>{{ item.hint }}</small>
-            </article>
-          </section>
-
-          <section class="risk-latest-target">
-            <span>最近目标</span>
-            <strong>{{ latestDetectionClasses }}</strong>
-            <em>{{ latestDetectionTimeText }}</em>
-          </section>
-
-          <div v-if="activeRiskEvents.length" class="risk-event-list compact-events">
-            <article
-              v-for="event in activeRiskEvents"
-              :key="event.event_id"
-              class="risk-event-card"
-              :class="riskThemeClass(event.risk_level)"
-            >
-              <header class="event-card-header">
-                <span>{{ event.event_id }}</span>
-                <b>{{ riskLevelText(event.risk_level) }}</b>
-              </header>
-              <div class="event-main">
-                <div class="event-copy">
-                  <strong>{{ event.event_type }}</strong>
-                  <small>{{ event.camera_name }} / {{ event.camera_id }}</small>
-                  <small>发生 {{ formatEventTime(event.started_at) }} · 持续 {{ formatDuration(event.duration_seconds) }}</small>
-                </div>
-              </div>
-              <div class="event-actions">
-                <el-button class="action-button" @click="viewEvent(event)">
-                  <el-icon><DataAnalysis /></el-icon>查看事件
-                </el-button>
-                <template v-if="requiresManual(event)">
-                  <el-button class="action-button warn" @click="manualBroadcast(event)">
-                    <el-icon><Connection /></el-icon>一键喊话
-                  </el-button>
-                  <el-button class="action-button danger" @click="closeEvent(event)">
-                    <el-icon><Delete /></el-icon>关闭事件
-                  </el-button>
-                </template>
-              </div>
-            </article>
-          </div>
-
-          <div v-else class="risk-quiet-line">
-            <el-icon><Monitor /></el-icon>
-            <span>暂无安全风险事件</span>
-            <strong>持续监测人员停留、区域命中和船只靠近</strong>
-          </div>
-        </aside>
       </main>
     </section>
 
@@ -894,6 +677,9 @@
 
     <section v-if="isMediaAnalysisRoute" class="media-lab surface-card">
       <div class="lab-heading">
+        <el-button class="media-back-button" @click="backToCameraView">
+          <el-icon><ArrowLeft /></el-icon>返回
+        </el-button>
         <div>
           <h2>{{ mediaHeadingTitle }}</h2>
           <p>{{ mediaHeadingDescription }}</p>
@@ -1181,21 +967,21 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  Aim, Camera, Check, Connection, Crop, DataAnalysis, Delete, EditPen, Files, Loading, Monitor,
-  Hide, Picture, Plus, UploadFilled, VideoCamera, VideoPlay, View,
+  Aim, ArrowLeft, Camera, Connection, Crop, DataAnalysis, Delete, Files, Loading, Monitor,
+  Hide, Picture, UploadFilled, VideoCamera, VideoPlay, View,
 } from '@element-plus/icons-vue'
 import {
   createStreamTicket, createVideoDetection, deleteVideoDetectionJob,
   detectImage, getCameraList, getCameraStatus, getCameraZones, getModelStatus,
   getTodaySafetyReport,
   getVideoDetectionResult, getVideoDetectionStatus, saveCameraZones,
-  setDetectionEnabled, snapshotDetect,
+  snapshotDetect,
 } from '@/api/camera'
 import {
   classColor as getClassColor, confidencePercent, detectionName,
   detectionInZone, findVideoSample, formatDeviceCommTime, isValidDetection,
   normalizeClassifications, normalizeDetections, normalizeZones, primaryClassification,
-  defaultTriggerSeconds, shouldStartLiveStreamOnStatus, zoneTypeLabel,
+  shouldStartLiveStreamOnStatus, zoneTypeLabel,
 } from '@/utils/cameraDetectionView'
 import { operateUnifiedSafetyEvent } from '@/api/integration'
 import { camerasFromPayload, readCameraListSnapshot, writeCameraListSnapshot } from '@/utils/cameraSnapshots'
@@ -1304,14 +1090,14 @@ const editableZoneOverlayVisible = computed(() => (
   || zoneDrawing.value
   || streamZoneOverlayVisible.value
 ))
-const assistOverlayLabel = computed(() => assistOverlayVisible.value ? '已显示辅助框' : '未显示辅助框')
+const assistOverlayLabel = computed(() => assistOverlayVisible.value ? '隐藏区域辅助框' : '显示区域辅助框')
 const selectedZone = computed(() => detectionZones.value.find((zone) => zone.id === selectedZoneId.value) || null)
 const zoneVertexAnchorRadius = computed(() => Math.max(6, Math.min(24, overlayWidth.value * 0.006)))
 const zoneVertexFontSize = computed(() => Math.max(12, Math.min(34, overlayWidth.value * 0.014)))
 const singleCameraSelectValue = computed(() => (singleCameraHidden.value ? '' : currentCameraId.value))
 const analysisTaskLabel = computed(() => taskTypeLabel(analysisTask.value))
 const selectedModelReady = computed(() => Boolean(modelStatus.value.models?.[analysisTask.value]?.loaded))
-const canToggleDetection = computed(() => Boolean(currentCamera.value?.connected && selectedModelReady.value))
+const canToggleDetection = computed(() => Boolean(currentCamera.value?.configured || currentCamera.value?.connected))
 const canRenderCurrentStream = computed(() => Boolean(currentCamera.value?.configured || currentCamera.value?.connected))
 const emergencyBroadcastCamera = computed(() => currentCamera.value || cameras.value[0] || null)
 const isMultiCameraMode = computed(() => cameraViewMode.value !== 'single')
@@ -1457,6 +1243,14 @@ const mediaHeadingDescription = computed(() => (
     ? '上传视频仅用于本次分析；结果为临时时间轴，不进入历史或告警流程。'
     : '上传图片仅用于本次分析；检测或分类结果不进入历史或告警流程。'
 ))
+
+function openMediaAnalysisPage() {
+  router.push('/monitor/camera/image')
+}
+
+function backToCameraView() {
+  router.push('/monitor/camera')
+}
 
 function riskRank(level) {
   return ({ NONE: 0, LOW: 1, MEDIUM: 2, HIGH: 3 })[level] || 0
@@ -1994,10 +1788,8 @@ async function activateCamera(cameraId) {
   selectedZoneId.value = ''
   zoneVertexDragging.value = null
   currentCamera.value = cameras.value.find((camera) => camera.id === cameraId) || null
-  detectionEnabled.value = Boolean(currentCamera.value?.detection_enabled)
-  if (detectionEnabled.value && currentCamera.value?.analysis_task) {
-    analysisTask.value = currentCamera.value.analysis_task
-  }
+  detectionEnabled.value = false
+  stopDetectionSubscription()
   await fetchCameraZones(cameraId).catch(() => {
     const zones = normalizeZones({ zones: currentCamera.value?.detection_zones || [] })
     detectionZones.value = zones
@@ -2011,7 +1803,6 @@ async function activateCamera(cameraId) {
   if (isMediaAnalysisRoute.value) return
   if (cameraViewMode.value === 'single') {
     if (canRenderCurrentStream.value) startLiveStream().catch(() => null)
-    if (detectionEnabled.value) startDetectionSubscription()
   } else {
     await refreshGridStreams(true)
   }
@@ -2162,17 +1953,17 @@ async function toggleLiveDetection() {
   detectionToggling.value = true
   cameraMutationRevision += 1
   try {
-    const response = await setDetectionEnabled(currentCameraId.value, !detectionEnabled.value, {
-      task_type: analysisTask.value,
-    })
-    currentCamera.value = { ...currentCamera.value, ...response.data }
-    detectionEnabled.value = Boolean(response.data.detection_enabled)
+    detectionEnabled.value = false
+    currentCamera.value = {
+      ...currentCamera.value,
+      detection_enabled: false,
+      detection_running: false,
+    }
     updateCameraInList(currentCamera.value)
     latestDetection.value = { detections: [], count: 0 }
     detections.value = []
-    if (detectionEnabled.value) startDetectionSubscription()
-    else stopDetectionSubscription()
-    ElMessage.success(response.data.message)
+    stopDetectionSubscription()
+    ElMessage.info('实时 AI 检测功能正在重新设计，暂未启用')
   } finally {
     cameraMutationRevision += 1
     detectionToggling.value = false
@@ -2194,12 +1985,15 @@ async function handleAnalysisTaskChange(taskType) {
     uploadResult.value = null
     await clearVideoJob()
     if (!detectionEnabled.value || !currentCameraId.value) return
-    const response = await setDetectionEnabled(currentCameraId.value, true, {
-      task_type: taskType,
-    })
-    currentCamera.value = { ...currentCamera.value, ...response.data }
+    detectionEnabled.value = false
+    currentCamera.value = {
+      ...currentCamera.value,
+      detection_enabled: false,
+      detection_running: false,
+    }
+    stopDetectionSubscription()
     updateCameraInList(currentCamera.value)
-    ElMessage.success(`实时分析已切换为${taskTypeLabel(taskType)}`)
+    ElMessage.info('实时 AI 检测功能正在重新设计，暂未启用')
   } catch {
     analysisTask.value = previousTask
     ElMessage.error('分析方式切换失败，已恢复原模型')
@@ -2237,14 +2031,9 @@ async function refreshCameraStatus() {
     })) startLiveStream().catch(() => null)
     if (cameraViewMode.value === 'single' && previousConnected && !response.data.connected && !canRenderCurrentStream.value) stopLiveStream()
     if (isMultiCameraMode.value) refreshGridStreams()
-    if (backendDetectionEnabled !== detectionEnabled.value) {
-      detectionEnabled.value = backendDetectionEnabled
-      if (!isMediaAnalysisRoute.value && backendDetectionEnabled) startDetectionSubscription()
-      else { stopDetectionSubscription(); detections.value = [] }
-    }
-    if (backendDetectionEnabled && response.data.analysis_task !== analysisTask.value) {
-      analysisTask.value = response.data.analysis_task || 'detect'
-      latestDetection.value = { task_type: analysisTask.value, detections: [], classifications: [] }
+    if (backendDetectionEnabled || detectionEnabled.value) {
+      detectionEnabled.value = false
+      stopDetectionSubscription()
       detections.value = []
     }
   } catch {
@@ -2479,8 +2268,6 @@ function createConfigZone() {
     zone_type: zoneType,
     type: zoneType,
     polygon_points: [],
-    trigger_seconds: defaultTriggerSeconds(zoneType),
-    condition_durations: {},
     enabled: true,
   }
   detectionZones.value = [...detectionZones.value, zone]
@@ -2582,10 +2369,6 @@ function applyConfigZoneTypeDefaults(zoneType) {
   if (!selectedZone.value) return
   selectedZone.value.type = zoneType
   selectedZone.value.name = selectedZone.value.zone_name || zoneTypeLabel(zoneType)
-  selectedZone.value.trigger_seconds = defaultTriggerSeconds(zoneType)
-  selectedZone.value.condition_durations = zoneType === 'FISHING'
-    ? { BOAT_INTRUSION: 0, BOAT_STAY: 30, BOAT_ILLEGAL_FISHING: 120 }
-    : {}
 }
 
 function pointCoordinateX(point) {
@@ -2637,8 +2420,6 @@ async function saveZoneConfig() {
       zone_name: zone.zone_name,
       zone_type: zone.zone_type,
       polygon_points: zone.polygon_points,
-      trigger_seconds: zone.trigger_seconds,
-      condition_durations: zone.condition_durations,
       enabled: zone.enabled,
     }))
     const response = await saveCameraZones(currentCameraId.value, payload)
@@ -2809,7 +2590,6 @@ onMounted(async () => {
   try {
     await Promise.allSettled([fetchModelStatus(), fetchCameras()])
     if (currentCameraId.value) await activateCamera(currentCameraId.value)
-    if (route.query.drawer === 'zones' && !isMediaAnalysisRoute.value) await openZoneConfigPanel()
   } catch {
     // Authentication interceptor handles an expired login and redirects once.
   }
@@ -2827,10 +2607,6 @@ watch(isMediaAnalysisRoute, async (mediaMode) => {
     return
   }
   if (currentCameraId.value) await activateCamera(currentCameraId.value)
-})
-
-watch(() => route.query.drawer, async (drawer) => {
-  if (drawer === 'zones' && !isMediaAnalysisRoute.value) await openZoneConfigPanel()
 })
 
 onBeforeUnmount(() => {
@@ -4027,6 +3803,15 @@ h1, h2, h3, p { margin-top: 0; }
 .media-lab { margin-top: 12px; padding: 18px; }
 .lab-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; border-bottom: 1px solid rgba(83, 159, 191, 0.13); }
 .lab-heading > div > p:last-child { margin: 6px 0 14px; color: #6e8ba0; font-size: 11px; }
+.media-back-button {
+  flex: 0 0 auto;
+  align-self: center;
+  margin-bottom: 12px;
+  color: #c7d8dc;
+  border-color: rgba(137, 174, 184, 0.2);
+  border-radius: 7px;
+  background: rgba(16, 45, 49, 0.62);
+}
 .media-mode-switch { display: flex; gap: 6px; margin-bottom: 12px; padding: 4px; border: 1px solid rgba(72, 187, 225, 0.18); border-radius: 10px; background: rgba(3, 20, 33, 0.58); }
 .media-mode-switch button {
   height: 34px;

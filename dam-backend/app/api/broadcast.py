@@ -11,9 +11,9 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import require_auth
 from app.models.user import User
-from app.models.broadcast import BroadcastDevice, BroadcastTemplate, CameraBroadcastDevice
+from app.models.broadcast import BroadcastDevice, BroadcastTemplate
 from app.models.camera import Camera
-from app.models.safety_integration import EventActionStepConfig
+from app.models.event_action_config import EventActionConfig
 from app.schemas.common import Result
 from app.services.broadcast_service import BroadcastException, broadcast_service
 
@@ -143,8 +143,8 @@ async def delete_device(device_id: int, db: Session = Depends(get_db), _user: Us
     row = db.query(BroadcastDevice).filter(BroadcastDevice.id == device_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="广播设备不存在")
-    if db.query(CameraBroadcastDevice.id).filter(CameraBroadcastDevice.broadcast_device_id == device_id).first() or db.query(EventActionStepConfig.id).filter(EventActionStepConfig.broadcast_device_id == device_id).first():
-        raise HTTPException(status_code=409, detail="设备仍被摄像头或动作配置使用，请先解除关联")
+    if db.query(EventActionConfig.id).filter(EventActionConfig.broadcast_device_id == device_id).first():
+        raise HTTPException(status_code=409, detail="设备仍被动作配置使用，请先解除关联")
     db.delete(row)
     db.commit()
     return Result.success({"id": device_id}, "广播设备已删除")
@@ -181,7 +181,7 @@ async def delete_template(template_id: str, db: Session = Depends(get_db), _user
     row = db.query(BroadcastTemplate).filter(BroadcastTemplate.id == template_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="广播模板不存在")
-    if db.query(EventActionStepConfig.id).filter(EventActionStepConfig.template_id == template_id).first():
+    if db.query(EventActionConfig.id).filter(EventActionConfig.template_id == template_id).first():
         raise HTTPException(status_code=409, detail="模板仍被动作配置使用，请先解除关联")
     db.delete(row)
     db.commit()
@@ -199,30 +199,8 @@ async def list_camera_devices(
 
 @router.put("/camera/{camera_id}/devices", response_model=Result)
 async def bind_camera_devices(camera_id: str, payload: CameraBindingPayload, db: Session = Depends(get_db), _user: User = Depends(require_auth)):
-    camera = _camera_row(db, camera_id)
-    valid_ids = {row.id for row in db.query(BroadcastDevice).filter(BroadcastDevice.id.in_(payload.device_ids)).all()} if payload.device_ids else set()
-    if len(valid_ids) != len(set(payload.device_ids)):
-        raise HTTPException(status_code=422, detail="包含不存在的广播设备")
-    configured_ids = {
-        value for (value,) in db.query(EventActionStepConfig.broadcast_device_id).filter(
-            EventActionStepConfig.camera_device_id == camera.id,
-            EventActionStepConfig.enabled.is_(True),
-            EventActionStepConfig.broadcast_device_id.isnot(None),
-        ).all()
-    }
-    removed_configured_ids = configured_ids - valid_ids
-    if removed_configured_ids:
-        raise HTTPException(
-            status_code=409,
-            detail="广播设备仍被启用的动作配置使用，请先修改动作配置",
-        )
-    db.query(CameraBroadcastDevice).filter(
-        CameraBroadcastDevice.camera_device_id == camera.id
-    ).delete(synchronize_session=False)
-    for device_id in sorted(valid_ids):
-        db.add(CameraBroadcastDevice(camera_device_id=camera.id, broadcast_device_id=device_id))
-    db.commit()
-    return Result.success(broadcast_service.list_devices_for_camera(db, str(camera.id)), "摄像头广播绑定已保存")
+    _camera_row(db, camera_id)
+    raise HTTPException(status_code=410, detail="摄像头广播绑定已取消，请在事件动作配置中选择广播设备")
 
 
 @router.post("/preview", response_model=Result)

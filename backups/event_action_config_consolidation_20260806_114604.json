@@ -1,0 +1,835 @@
+{
+  "migration_id": "20260806_event_action_config_consolidation_v1",
+  "audit": {
+    "migration_applied": false,
+    "tables": {
+      "camera_broadcast_device": true,
+      "event_action_step_config": true,
+      "event_action": true,
+      "action_step": true,
+      "action_flow": true,
+      "event_action_config": true
+    },
+    "counts": {
+      "camera_broadcast_device": 1,
+      "event_action_step_config": 15,
+      "event_action": 22,
+      "action_step": 15,
+      "action_flow": 18,
+      "event_action_config": 0
+    },
+    "timeline_columns": [
+      "id",
+      "event_instance_id",
+      "event_id",
+      "condition_id",
+      "flow_id",
+      "step_id",
+      "action_key",
+      "log_type",
+      "trigger_type",
+      "risk_level",
+      "status",
+      "message",
+      "operator",
+      "payload",
+      "create_time",
+      "update_time"
+    ],
+    "event_library_columns": [
+      "id",
+      "event_name",
+      "event_code",
+      "event_category",
+      "risk_level",
+      "trigger_mode",
+      "description",
+      "is_activate",
+      "create_time",
+      "update_time",
+      "recovery_duration"
+    ]
+  },
+  "tables": {
+    "camera_broadcast_device": [
+      {
+        "id": 2,
+        "broadcast_device_id": 2,
+        "create_time": "2026-07-30T06:26:14",
+        "camera_device_id": 1
+      }
+    ],
+    "event_action_step_config": [
+      {
+        "id": 1,
+        "event_action_id": 115,
+        "camera_device_id": 1,
+        "step_id": 41,
+        "broadcast_device_id": null,
+        "template_id": null,
+        "drone_id": null,
+        "route_id": null,
+        "config_json": "{\"max_executions\": 1, \"capture_on_resolve\": true, \"repeat_interval_seconds\": 60}",
+        "enabled": 1,
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 2,
+        "event_action_id": 115,
+        "camera_device_id": 1,
+        "step_id": 42,
+        "broadcast_device_id": 2,
+        "template_id": "PERSON_LOW",
+        "drone_id": null,
+        "route_id": null,
+        "config_json": "{\"max_executions\": 3, \"capture_on_resolve\": false, \"repeat_interval_seconds\": 60}",
+        "enabled": 1,
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 4,
+        "event_action_id": 116,
+        "camera_device_id": 1,
+        "step_id": 44,
+        "broadcast_device_id": 2,
+        "template_id": "PERSON_MEDIUM",
+        "drone_id": null,
+        "route_id": null,
+        "config_json": "{\"max_executions\": 3, \"capture_on_resolve\": false, \"repeat_interval_seconds\": 60}",
+        "enabled": 1,
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 5,
+        "event_action_id": 116,
+        "camera_device_id": 1,
+        "step_id": 45,
+        "broadcast_device_id": null,
+        "template_id": null,
+        "drone_id": "mock-drone-1",
+        "route_id": "AUTO_PATROL",
+        "config_json": "{\"max_executions\": 1, \"capture_on_resolve\": false, \"repeat_interval_seconds\": 60}",
+        "enabled": 1,
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 6,
+        "event_action_id": 117,
+        "camera_device_id": 1,
+        "step_id": 46,
+        "broadcast_device_id": null,
+        "template_id": null,
+        "drone_id": null,
+        "route_id": null,
+        "config_json": "{\"max_executions\": 1, \"capture_on_resolve\": true, \"repeat_interval_seconds\": 60}",
+        "enabled": 1,
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 7,
+        "event_action_id": 117,
+        "camera_device_id": 1,
+        "step_id": 47,
+        "broadcast_device_id": 2,
+        "template_id": "PERSON_HIGH",
+        "drone_id": null,
+        "route_id": null,
+        "config_json": "{\"max_executions\": 3, \"capture_on_resolve\": false, \"repeat_interval_seconds\": 60}",
+        "enabled": 1,
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 8,
+        "event_action_id": 117,
+        "camera_device_id": 1,
+        "step_id": 48,
+        "broadcast_device_id": null,
+        "template_id": null,
+        "drone_id": null,
+        "route_id": null,
+        "config_json": "{\"max_executions\": 1, \"capture_on_resolve\": false, \"repeat_interval_seconds\": 60}",
+        "enabled": 1,
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 9,
+        "event_action_id": 118,
+        "camera_device_id": 1,
+        "step_id": 49,
+        "broadcast_device_id": null,
+        "template_id": null,
+        "drone_id": null,
+        "route_id": null,
+        "config_json": "{\"max_executions\": 1, \"capture_on_resolve\": true, \"repeat_interval_seconds\": 60}",
+        "enabled": 1,
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 10,
+        "event_action_id": 118,
+        "camera_device_id": 1,
+        "step_id": 50,
+        "broadcast_device_id": 2,
+        "template_id": "FISHING",
+        "drone_id": null,
+        "route_id": null,
+        "config_json": "{\"max_executions\": 3, \"capture_on_resolve\": false, \"repeat_interval_seconds\": 60}",
+        "enabled": 1,
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 11,
+        "event_action_id": 119,
+        "camera_device_id": 1,
+        "step_id": 51,
+        "broadcast_device_id": null,
+        "template_id": null,
+        "drone_id": null,
+        "route_id": null,
+        "config_json": "{\"max_executions\": 1, \"capture_on_resolve\": true, \"repeat_interval_seconds\": 60}",
+        "enabled": 1,
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 12,
+        "event_action_id": 119,
+        "camera_device_id": 1,
+        "step_id": 52,
+        "broadcast_device_id": 2,
+        "template_id": "FISHING",
+        "drone_id": null,
+        "route_id": null,
+        "config_json": "{\"max_executions\": 3, \"capture_on_resolve\": false, \"repeat_interval_seconds\": 60}",
+        "enabled": 1,
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 13,
+        "event_action_id": 119,
+        "camera_device_id": 1,
+        "step_id": 53,
+        "broadcast_device_id": null,
+        "template_id": null,
+        "drone_id": "mock-drone-1",
+        "route_id": "AUTO_PATROL",
+        "config_json": "{\"max_executions\": 1, \"capture_on_resolve\": false, \"repeat_interval_seconds\": 60}",
+        "enabled": 1,
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 14,
+        "event_action_id": 120,
+        "camera_device_id": 1,
+        "step_id": 54,
+        "broadcast_device_id": null,
+        "template_id": null,
+        "drone_id": null,
+        "route_id": null,
+        "config_json": "{\"max_executions\": 1, \"capture_on_resolve\": true, \"repeat_interval_seconds\": 60}",
+        "enabled": 1,
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 15,
+        "event_action_id": 120,
+        "camera_device_id": 1,
+        "step_id": 55,
+        "broadcast_device_id": 2,
+        "template_id": "FISHING",
+        "drone_id": null,
+        "route_id": null,
+        "config_json": "{\"max_executions\": 3, \"capture_on_resolve\": false, \"repeat_interval_seconds\": 60}",
+        "enabled": 1,
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 16,
+        "event_action_id": 120,
+        "camera_device_id": 1,
+        "step_id": 56,
+        "broadcast_device_id": null,
+        "template_id": null,
+        "drone_id": null,
+        "route_id": null,
+        "config_json": "{\"max_executions\": 1, \"capture_on_resolve\": false, \"repeat_interval_seconds\": 60}",
+        "enabled": 1,
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      }
+    ],
+    "event_action": [
+      {
+        "id": 54,
+        "event_id": 22,
+        "flow_id": 9,
+        "priority": 1,
+        "is_activate": 1,
+        "create_time": "2026-07-07T10:23:37"
+      },
+      {
+        "id": 55,
+        "event_id": 23,
+        "flow_id": 9,
+        "priority": 1,
+        "is_activate": 1,
+        "create_time": "2026-07-07T10:23:37"
+      },
+      {
+        "id": 57,
+        "event_id": 24,
+        "flow_id": 10,
+        "priority": 1,
+        "is_activate": 1,
+        "create_time": "2026-07-07T10:23:37"
+      },
+      {
+        "id": 58,
+        "event_id": 25,
+        "flow_id": 10,
+        "priority": 1,
+        "is_activate": 1,
+        "create_time": "2026-07-07T10:23:37"
+      },
+      {
+        "id": 60,
+        "event_id": 26,
+        "flow_id": 11,
+        "priority": 1,
+        "is_activate": 1,
+        "create_time": "2026-07-07T10:23:37"
+      },
+      {
+        "id": 61,
+        "event_id": 27,
+        "flow_id": 11,
+        "priority": 1,
+        "is_activate": 1,
+        "create_time": "2026-07-07T10:23:37"
+      },
+      {
+        "id": 62,
+        "event_id": 28,
+        "flow_id": 11,
+        "priority": 1,
+        "is_activate": 1,
+        "create_time": "2026-07-07T10:23:37"
+      },
+      {
+        "id": 66,
+        "event_id": 38,
+        "flow_id": 16,
+        "priority": 1,
+        "is_activate": 1,
+        "create_time": "2026-07-08T15:51:14"
+      },
+      {
+        "id": 67,
+        "event_id": 36,
+        "flow_id": 16,
+        "priority": 1,
+        "is_activate": 1,
+        "create_time": "2026-07-08T15:51:14"
+      },
+      {
+        "id": 68,
+        "event_id": 33,
+        "flow_id": 16,
+        "priority": 1,
+        "is_activate": 1,
+        "create_time": "2026-07-08T15:51:14"
+      },
+      {
+        "id": 69,
+        "event_id": 35,
+        "flow_id": 16,
+        "priority": 1,
+        "is_activate": 1,
+        "create_time": "2026-07-08T15:51:14"
+      },
+      {
+        "id": 70,
+        "event_id": 34,
+        "flow_id": 16,
+        "priority": 1,
+        "is_activate": 1,
+        "create_time": "2026-07-08T15:51:14"
+      },
+      {
+        "id": 72,
+        "event_id": 40,
+        "flow_id": 17,
+        "priority": 1,
+        "is_activate": 1,
+        "create_time": "2026-07-08T16:51:39"
+      },
+      {
+        "id": 73,
+        "event_id": 41,
+        "flow_id": 17,
+        "priority": 1,
+        "is_activate": 1,
+        "create_time": "2026-07-08T16:51:39"
+      },
+      {
+        "id": 74,
+        "event_id": 39,
+        "flow_id": 17,
+        "priority": 1,
+        "is_activate": 1,
+        "create_time": "2026-07-08T16:51:39"
+      },
+      {
+        "id": 75,
+        "event_id": 42,
+        "flow_id": 17,
+        "priority": 1,
+        "is_activate": 1,
+        "create_time": "2026-07-08T16:51:39"
+      },
+      {
+        "id": 115,
+        "event_id": 48,
+        "flow_id": 19,
+        "priority": 1,
+        "is_activate": 1,
+        "create_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 116,
+        "event_id": 49,
+        "flow_id": 20,
+        "priority": 1,
+        "is_activate": 1,
+        "create_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 117,
+        "event_id": 50,
+        "flow_id": 21,
+        "priority": 1,
+        "is_activate": 1,
+        "create_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 118,
+        "event_id": 51,
+        "flow_id": 22,
+        "priority": 1,
+        "is_activate": 1,
+        "create_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 119,
+        "event_id": 52,
+        "flow_id": 23,
+        "priority": 1,
+        "is_activate": 1,
+        "create_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 120,
+        "event_id": 53,
+        "flow_id": 24,
+        "priority": 1,
+        "is_activate": 1,
+        "create_time": "2026-08-02T19:33:03"
+      }
+    ],
+    "action_step": [
+      {
+        "id": 41,
+        "flow_id": 19,
+        "step_order": 1,
+        "step_name": "摄像头抓拍",
+        "action_type": "camera_snapshot",
+        "parameter": null,
+        "retry_count": 0,
+        "description": "人员闯入预警处理流程 - 摄像头抓拍",
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 42,
+        "flow_id": 19,
+        "step_order": 2,
+        "step_name": "自动广播",
+        "action_type": "broadcast",
+        "parameter": null,
+        "retry_count": 0,
+        "description": "人员闯入预警处理流程 - 自动广播",
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 44,
+        "flow_id": 20,
+        "step_order": 2,
+        "step_name": "自动广播",
+        "action_type": "broadcast",
+        "parameter": null,
+        "retry_count": 0,
+        "description": "人员亲水预警处理流程 - 自动广播",
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 45,
+        "flow_id": 20,
+        "step_order": 3,
+        "step_name": "无人机派飞取证驱离",
+        "action_type": "drone_dispatch",
+        "parameter": null,
+        "retry_count": 1,
+        "description": "人员亲水预警处理流程 - 无人机派飞取证驱离",
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 46,
+        "flow_id": 21,
+        "step_order": 1,
+        "step_name": "摄像头抓拍",
+        "action_type": "camera_snapshot",
+        "parameter": null,
+        "retry_count": 0,
+        "description": "人员涉水预警处理流程 - 摄像头抓拍",
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 47,
+        "flow_id": 21,
+        "step_order": 2,
+        "step_name": "自动广播",
+        "action_type": "broadcast",
+        "parameter": null,
+        "retry_count": 0,
+        "description": "人员涉水预警处理流程 - 自动广播",
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 48,
+        "flow_id": 21,
+        "step_order": 3,
+        "step_name": "生成人工处置任务",
+        "action_type": "staff_task",
+        "parameter": null,
+        "retry_count": 0,
+        "description": "人员涉水预警处理流程 - 生成人工处置任务",
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 49,
+        "flow_id": 22,
+        "step_order": 1,
+        "step_name": "摄像头抓拍",
+        "action_type": "camera_snapshot",
+        "parameter": null,
+        "retry_count": 0,
+        "description": "船只闯入预警处理流程 - 摄像头抓拍",
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 50,
+        "flow_id": 22,
+        "step_order": 2,
+        "step_name": "自动广播",
+        "action_type": "broadcast",
+        "parameter": null,
+        "retry_count": 0,
+        "description": "船只闯入预警处理流程 - 自动广播",
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 51,
+        "flow_id": 23,
+        "step_order": 1,
+        "step_name": "摄像头抓拍",
+        "action_type": "camera_snapshot",
+        "parameter": null,
+        "retry_count": 0,
+        "description": "船只停留预警处理流程 - 摄像头抓拍",
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 52,
+        "flow_id": 23,
+        "step_order": 2,
+        "step_name": "自动广播",
+        "action_type": "broadcast",
+        "parameter": null,
+        "retry_count": 0,
+        "description": "船只停留预警处理流程 - 自动广播",
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 53,
+        "flow_id": 23,
+        "step_order": 3,
+        "step_name": "无人机派飞取证驱离",
+        "action_type": "drone_dispatch",
+        "parameter": null,
+        "retry_count": 1,
+        "description": "船只停留预警处理流程 - 无人机派飞取证驱离",
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 54,
+        "flow_id": 24,
+        "step_order": 1,
+        "step_name": "摄像头抓拍",
+        "action_type": "camera_snapshot",
+        "parameter": null,
+        "retry_count": 0,
+        "description": "船只偷捕预警处理流程 - 摄像头抓拍",
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 55,
+        "flow_id": 24,
+        "step_order": 2,
+        "step_name": "自动广播",
+        "action_type": "broadcast",
+        "parameter": null,
+        "retry_count": 0,
+        "description": "船只偷捕预警处理流程 - 自动广播",
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 56,
+        "flow_id": 24,
+        "step_order": 3,
+        "step_name": "生成人工处置任务",
+        "action_type": "staff_task",
+        "parameter": null,
+        "retry_count": 0,
+        "description": "船只偷捕预警处理流程 - 生成人工处置任务",
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      }
+    ],
+    "action_flow": [
+      {
+        "id": 5,
+        "flow_name": "一般预警处理流程",
+        "flow_code": "GENERAL_ALERT",
+        "timeout_seconds": 120,
+        "failure_strategy": "skip",
+        "description": "一般预警事件的处理流程",
+        "is_activate": 1,
+        "create_time": "2026-07-04T16:25:01",
+        "update_time": "2026-07-04T16:25:01"
+      },
+      {
+        "id": 6,
+        "flow_name": "紧急告警处理流程",
+        "flow_code": "EMERGENCY_ALERT",
+        "timeout_seconds": 60,
+        "failure_strategy": "abort",
+        "description": "紧急告警事件的处理流程",
+        "is_activate": 1,
+        "create_time": "2026-07-04T16:25:01",
+        "update_time": "2026-07-04T16:25:01"
+      },
+      {
+        "id": 9,
+        "flow_name": "风灾预警响应流程",
+        "flow_code": "WIND_WARNING",
+        "timeout_seconds": 120,
+        "failure_strategy": "continue",
+        "description": "6-7级风预警，只做监测记录",
+        "is_activate": 1,
+        "create_time": "2026-07-07T10:23:37",
+        "update_time": "2026-07-07T10:23:37"
+      },
+      {
+        "id": 10,
+        "flow_name": "风灾警报响应流程",
+        "flow_code": "WIND_ALERT",
+        "timeout_seconds": 180,
+        "failure_strategy": "continue",
+        "description": "8-9级风警报，YOLO检测+告警",
+        "is_activate": 1,
+        "create_time": "2026-07-07T10:23:37",
+        "update_time": "2026-07-07T10:23:37"
+      },
+      {
+        "id": 11,
+        "flow_name": "风灾紧急响应流程",
+        "flow_code": "WIND_EMERGENCY",
+        "timeout_seconds": 300,
+        "failure_strategy": "continue",
+        "description": "10级以上风灾，全模型分析+紧急告警",
+        "is_activate": 1,
+        "create_time": "2026-07-07T10:23:37",
+        "update_time": "2026-07-07T10:23:37"
+      },
+      {
+        "id": 12,
+        "flow_name": "风灾裂缝响应流程",
+        "flow_code": "WIND_CRACK_RESPONSE",
+        "timeout_seconds": 300,
+        "failure_strategy": "continue",
+        "description": "风灾导致裂缝的应急响应",
+        "is_activate": 1,
+        "create_time": "2026-07-07T10:47:26",
+        "update_time": "2026-07-07T10:47:26"
+      },
+      {
+        "id": 13,
+        "flow_name": "风灾渗水响应流程",
+        "flow_code": "WIND_SEEPAGE_RESPONSE",
+        "timeout_seconds": 300,
+        "failure_strategy": "continue",
+        "description": "风灾导致渗水的应急响应",
+        "is_activate": 1,
+        "create_time": "2026-07-07T10:47:26",
+        "update_time": "2026-07-07T10:47:26"
+      },
+      {
+        "id": 14,
+        "flow_name": "风灾护坡损坏响应流程",
+        "flow_code": "WIND_SLOPE_RESPONSE",
+        "timeout_seconds": 300,
+        "failure_strategy": "continue",
+        "description": "风灾导致护坡损坏的应急响应",
+        "is_activate": 1,
+        "create_time": "2026-07-07T10:47:26",
+        "update_time": "2026-07-07T10:47:26"
+      },
+      {
+        "id": 15,
+        "flow_name": "风灾闸门变形响应流程",
+        "flow_code": "WIND_GATE_RESPONSE",
+        "timeout_seconds": 300,
+        "failure_strategy": "continue",
+        "description": "风灾导致闸门变形的应急响应",
+        "is_activate": 1,
+        "create_time": "2026-07-07T10:47:26",
+        "update_time": "2026-07-07T10:47:26"
+      },
+      {
+        "id": 16,
+        "flow_name": "温度告警响应流程",
+        "flow_code": "TEMP_ALERT",
+        "timeout_seconds": 120,
+        "failure_strategy": "continue",
+        "description": "温度异常告警响应",
+        "is_activate": 1,
+        "create_time": "2026-07-08T15:51:14",
+        "update_time": "2026-07-08T15:51:14"
+      },
+      {
+        "id": 17,
+        "flow_name": "湿度告警流程",
+        "flow_code": "HUMIDITY_ALERT",
+        "timeout_seconds": 120,
+        "failure_strategy": "continue",
+        "description": "湿度异常告警",
+        "is_activate": 1,
+        "create_time": "2026-07-08T16:51:18",
+        "update_time": "2026-07-08T16:51:18"
+      },
+      {
+        "id": 18,
+        "flow_name": "测试Qwen流程",
+        "flow_code": "TEST_QWEN_FLOW",
+        "timeout_seconds": 300,
+        "failure_strategy": "continue",
+        "description": "测试Qwen模型调用",
+        "is_activate": 1,
+        "create_time": "2026-07-09T10:05:31",
+        "update_time": "2026-07-09T10:05:31"
+      },
+      {
+        "id": 19,
+        "flow_name": "人员闯入预警处理流程",
+        "flow_code": "PERSON_INTRUSION_FLOW",
+        "timeout_seconds": 60,
+        "failure_strategy": "continue",
+        "description": "视觉事件统一安全闭环流程",
+        "is_activate": 1,
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 20,
+        "flow_name": "人员亲水预警处理流程",
+        "flow_code": "PERSON_WATERFRONT_FLOW",
+        "timeout_seconds": 120,
+        "failure_strategy": "continue",
+        "description": "视觉事件统一安全闭环流程",
+        "is_activate": 1,
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 21,
+        "flow_name": "人员涉水预警处理流程",
+        "flow_code": "PERSON_WADING_FLOW",
+        "timeout_seconds": 60,
+        "failure_strategy": "continue",
+        "description": "视觉事件统一安全闭环流程",
+        "is_activate": 1,
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 22,
+        "flow_name": "船只闯入预警处理流程",
+        "flow_code": "BOAT_INTRUSION_FLOW",
+        "timeout_seconds": 60,
+        "failure_strategy": "continue",
+        "description": "视觉事件统一安全闭环流程",
+        "is_activate": 1,
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 23,
+        "flow_name": "船只停留预警处理流程",
+        "flow_code": "BOAT_STAY_FLOW",
+        "timeout_seconds": 120,
+        "failure_strategy": "continue",
+        "description": "视觉事件统一安全闭环流程",
+        "is_activate": 1,
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      },
+      {
+        "id": 24,
+        "flow_name": "船只偷捕预警处理流程",
+        "flow_code": "BOAT_ILLEGAL_FISHING_FLOW",
+        "timeout_seconds": 60,
+        "failure_strategy": "continue",
+        "description": "视觉事件统一安全闭环流程",
+        "is_activate": 1,
+        "create_time": "2026-08-02T19:33:03",
+        "update_time": "2026-08-02T19:33:03"
+      }
+    ]
+  }
+}
