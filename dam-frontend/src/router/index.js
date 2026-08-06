@@ -98,8 +98,8 @@ const routes = [
           },
           {
             path: 'drone',
-            name: 'DroneView',
-            component: () => import('@/views/Monitor/DroneView.vue'),
+            name: 'MonitorDroneRedirect',
+            redirect: '/system/drone',
             meta: { title: '无人机监测' }
           },
           {
@@ -114,19 +114,51 @@ const routes = [
       {
         path: 'alarm',
         redirect: '/alarm/safety-events',
-        meta: { title: '告警管理' },
+        meta: {},
         children: [
           {
             path: 'list',
-            name: 'AlarmList',
-            component: () => import('@/views/Alarm/AlarmList.vue'),
+            name: 'AlarmListRedirect',
+            redirect: '/alarm/safety-events',
             meta: {}
           },
           {
             path: 'safety-events',
             name: 'AlarmSafetyEvents',
             component: () => import('@/views/Alarm/SafetyEvents.vue'),
-            meta: { title: '安全事件' }
+            meta: { title: '告警管理' }
+          },
+        ],
+      },
+      // ========== 系统管理 ==========
+      {
+        path: 'system',
+        redirect: '/system/devices',
+        meta: { title: '系统管理' },
+        children: [
+          {
+            path: 'devices',
+            name: 'SystemDeviceManagement',
+            component: () => import('@/views/Monitor/DeviceManagement.vue'),
+            meta: { title: '设备管理' }
+          },
+          {
+            path: 'config',
+            name: 'SystemInformationConfig',
+            component: () => import('@/views/Monitor/InformationConfig.vue'),
+            meta: { title: '信息配置' }
+          },
+          {
+            path: 'drone',
+            name: 'SystemDroneView',
+            component: () => import('@/views/Monitor/DroneView.vue'),
+            meta: { title: '无人机监测' }
+          },
+          {
+            path: 'models',
+            name: 'SystemModelManagement',
+            component: () => import('@/views/System/ModelManagement.vue'),
+            meta: { title: '模型管理' }
           },
         ],
       },

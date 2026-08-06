@@ -25,7 +25,7 @@
               <em :class="{ offline: device.status === 'OFFLINE' }">{{ device.status }}</em>
             </el-checkbox>
           </el-checkbox-group>
-          <el-empty v-if="!playableDevices.length" description="当前摄像头未绑定USB外放设备" :image-size="72" />
+          <el-empty v-if="!playableDevices.length" description="暂无可用USB外放设备" :image-size="72" />
         </el-form-item>
 
         <el-form-item label="人工录音">
@@ -66,7 +66,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
-  getCameraBroadcastDevices,
+  getBroadcastDevices,
   playRecordedBroadcast,
 } from '@/api/broadcast'
 
@@ -142,7 +142,7 @@ async function loadOptions() {
   stopRecording()
   clearRecording()
   selectedDeviceIds.value = []
-  const deviceResponse = await getCameraBroadcastDevices(props.event.camera_id)
+  const deviceResponse = await getBroadcastDevices()
   devices.value = deviceResponse.data || []
   selectedDeviceIds.value = playableDevices.value
     .filter((device) => device.status !== 'OFFLINE' && String(device.vendor_type || '').toUpperCase() === 'USB_AUDIO')

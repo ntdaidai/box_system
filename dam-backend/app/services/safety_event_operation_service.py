@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.cache import invalidate_cache
 from app.models.event_library import EventLibrary
 from app.models.safety_event_task import SafetyEventTask
-from app.models.safety_integration import SafetyEventEvidence, SafetyEventInstance, VisualEventDetail
+from app.models.safety_integration import SafetyEventEvidence, SafetyEventInstance
 from app.services.safety_event_engine import RISK_HIGH, get_safety_event_engine
 from app.services.safety_event_runtime_service import safety_event_runtime_service
 from app.services.safety_event_ws import safety_event_ws_manager
@@ -68,13 +68,13 @@ def _closed(event: SafetyEventInstance) -> bool:
 
 
 def _upgrade_definition(db: Session, instance: SafetyEventInstance, risk_level: str) -> None:
-    visual = db.query(VisualEventDetail).filter(
-        VisualEventDetail.event_instance_id == instance.id
-    ).first()
+    current = db.query(EventLibrary).filter(EventLibrary.id == instance.current_event_id).first()
+    current_code = str(getattr(current, "event_code", "") or "").upper()
+    category = str(instance.event_category or "").upper()
     code = None
-    if visual and visual.target_type == "boat":
+    if current_code.startswith("BOAT_") or "FISH" in category:
         code = {"MEDIUM": "BOAT_STAY", "HIGH": "BOAT_ILLEGAL_FISHING"}.get(risk_level)
-    elif visual:
+    elif current_code.startswith("PERSON_") or "PERSON" in category:
         code = {"MEDIUM": "PERSON_WATERFRONT", "HIGH": "PERSON_WADING"}.get(risk_level)
     definition = db.query(EventLibrary).filter(EventLibrary.event_code == code).first() if code else None
     if definition:
@@ -221,7 +221,7 @@ async def operate_safety_event(
             now=now.timestamp(),
             emit_action=False,
         )
-    await invalidate_cache("alarm:*")
+    await invalidate_cache("safety_event:*")
     response_event = event_dict(safety_event_runtime_service.event_dict(db, event))
     response_timeline = timeline_dict(log)
     await safety_event_ws_manager.broadcast({"type": "EVENT_UPDATED", "data": response_event})

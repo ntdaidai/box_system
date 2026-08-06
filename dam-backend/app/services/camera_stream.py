@@ -1070,7 +1070,7 @@ class CameraStream:
             captured_day = datetime.fromtimestamp(event_time).strftime("%Y-%m-%d")
             return minio_service.upload_file(
                 str(local_path),
-                object_name=f"safety-events/videos/{captured_day}/{event_id}.mp4",
+                object_name=f"safety-events/evidence-videos/{captured_day}/{event_id}.mp4",
                 content_type="video/mp4",
             )
         except ImportError:

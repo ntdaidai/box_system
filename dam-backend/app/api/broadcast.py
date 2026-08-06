@@ -12,8 +12,7 @@ from app.core.database import get_db
 from app.core.security import require_auth
 from app.models.user import User
 from app.models.broadcast import BroadcastDevice, BroadcastTemplate
-from app.models.camera import Camera
-from app.models.event_action_config import EventActionConfig
+from app.models.event_action import EventActionConfig
 from app.schemas.common import Result
 from app.services.broadcast_service import BroadcastException, broadcast_service
 
@@ -48,17 +47,6 @@ class BroadcastTemplatePayload(BaseModel):
     risk_level: Literal["LOW", "MEDIUM", "HIGH"]
     content: str = Field(..., min_length=1, max_length=500)
     enabled: bool = True
-
-
-class CameraBindingPayload(BaseModel):
-    device_ids: List[int] = Field(default_factory=list, max_length=32)
-
-
-def _camera_row(db: Session, identifier: str) -> Camera:
-    row = db.query(Camera).filter(Camera.id == int(identifier)).first() if identifier.isdigit() else None
-    if not row:
-        raise HTTPException(status_code=404, detail="摄像头不存在")
-    return row
 
 
 def _device_dict(row: BroadcastDevice) -> dict:
@@ -186,21 +174,6 @@ async def delete_template(template_id: str, db: Session = Depends(get_db), _user
     db.delete(row)
     db.commit()
     return Result.success({"id": template_id}, "广播模板已删除")
-
-
-@router.get("/camera/{camera_id}/devices", response_model=Result)
-async def list_camera_devices(
-    camera_id: str,
-    db: Session = Depends(get_db),
-    _user: User = Depends(require_auth),
-):
-    return Result.success(broadcast_service.list_devices_for_camera(db, camera_id))
-
-
-@router.put("/camera/{camera_id}/devices", response_model=Result)
-async def bind_camera_devices(camera_id: str, payload: CameraBindingPayload, db: Session = Depends(get_db), _user: User = Depends(require_auth)):
-    _camera_row(db, camera_id)
-    raise HTTPException(status_code=410, detail="摄像头广播绑定已取消，请在事件动作配置中选择广播设备")
 
 
 @router.post("/preview", response_model=Result)

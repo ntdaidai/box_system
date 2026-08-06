@@ -212,15 +212,7 @@ class SqlSafetyEventStore:
                 SafetyEventInstance.source_type == "camera"
             )
             if camera_id:
-                from app.models.camera import Camera
-                from app.models.safety_integration import VisualEventDetail
-
-                query = query.join(
-                    VisualEventDetail,
-                    VisualEventDetail.event_instance_id == SafetyEventInstance.id,
-                ).join(Camera, Camera.id == VisualEventDetail.camera_id).filter(
-                    Camera.id == int(camera_id)
-                )
+                query = query.filter(SafetyEventInstance.source_id == int(camera_id))
             if since is not None:
                 query = query.filter(SafetyEventInstance.started_at >= _to_datetime(since))
             if until is not None:
@@ -340,7 +332,7 @@ class SqlSafetyEventStore:
         from app.models.camera_detection_zone import CameraDetectionZone
         from app.models.data_source import DataSource
         from app.models.event_library import EventLibrary
-        from app.models.safety_integration import SafetyEventEvidence, SafetyEventInstance, VisualEventDetail
+        from app.models.safety_integration import SafetyEventEvidence, SafetyEventInstance
 
         risk = event.get("risk_level")
         event_code = self._unified_event_code(str(event.get("entity_type")), str(risk))
@@ -412,32 +404,30 @@ class SqlSafetyEventStore:
             "video_created_at": event.get("video_created_at"),
             "video_expires_at": event.get("video_expires_at"),
         }
-        instance.latest_observation = observation
-        instance.version = int(event.get("version") or instance.version or 0)
-        event["instance_id"] = instance.id
-
-        visual = db.query(VisualEventDetail).filter(VisualEventDetail.event_instance_id == instance.id).first()
         zone_ids = event.get("zone_ids") or observation.get("zone_ids") or []
         zone_db_id = int(zone_ids[0]) if zone_ids and str(zone_ids[0]).isdigit() else None
         zone = db.query(CameraDetectionZone).filter(
             CameraDetectionZone.camera_device_id == camera.id,
             CameraDetectionZone.id == zone_db_id,
         ).first() if zone_db_id is not None else None
-        if not visual:
-            visual = VisualEventDetail(
-                event_instance_id=instance.id, camera_id=camera.id, camera_name=camera.camera_name,
-                target_type=str(event.get("entity_type")), target_id=str(event.get("track_id") or "") or None,
-            )
-            db.add(visual)
-        visual.zone_id = zone.id if zone else visual.zone_id
-        visual.zone_name = event.get("zone_name") or visual.zone_name
-        visual.zone_type = event.get("zone_type") or visual.zone_type
-        visual.confidence = observation.get("confidence")
-        visual.extra = {
-            **(visual.extra or {}),
+        instance.zone_id = zone.id if zone else instance.zone_id
+        visual_snapshot = dict(observation.get("visual") or {})
+        visual_snapshot.update({
+            "camera_id": camera.id,
+            "camera_name": camera.camera_name,
+            "target_type": str(event.get("entity_type") or visual_snapshot.get("target_type") or ""),
+            "target_id": str(event.get("track_id") or "") or visual_snapshot.get("target_id"),
+            "zone_id": zone.id if zone else zone_db_id or visual_snapshot.get("zone_id"),
+            "zone_name": event.get("zone_name") or (zone.zone_name if zone else visual_snapshot.get("zone_name")),
+            "zone_type": event.get("zone_type") or (zone.zone_type if zone else visual_snapshot.get("zone_type")),
+            "confidence": observation.get("confidence", visual_snapshot.get("confidence")),
             "bbox": event.get("latest_bbox"),
             "class_name": observation.get("class_name"),
-        }
+        })
+        observation["visual"] = {key: value for key, value in visual_snapshot.items() if value is not None}
+        instance.latest_observation = observation
+        instance.version = int(event.get("version") or instance.version or 0)
+        event["instance_id"] = instance.id
 
         snapshot_url = event.get("snapshot_path")
         if snapshot_url and not db.query(SafetyEventEvidence.id).filter(
@@ -466,7 +456,7 @@ class SqlSafetyEventStore:
             ))
 
     def _sync_unified_action(self, db: Any, action: Dict[str, Any]) -> None:
-        from app.models.event_action_config import EventActionConfig
+        from app.models.event_action import EventActionConfig
         from app.models.safety_integration import SafetyEventEvidence, SafetyEventInstance, SafetyEventTimelineLog
 
         instance = db.query(SafetyEventInstance).filter(

@@ -187,7 +187,7 @@ class QwenCameraScreeningService:
         captured_day = datetime.now().strftime("%Y-%m-%d")
         batch_ts = int(time.time() * 1000)
         for index, (_timestamp, data) in enumerate(frames):
-            prefix = settings.QWEN_CAMERA_SCREENING_OBJECT_PREFIX or "camera"
+            prefix = settings.QWEN_CAMERA_SCREENING_OBJECT_PREFIX or "safety-events/qwen-temp-frames"
             object_name = (
                 f"{prefix}/{captured_day}/camera_{camera_id}/"
                 f"{batch_ts}/frame_{index + 1}.jpg"
@@ -249,7 +249,8 @@ class QwenCameraScreeningService:
         deleted = 0
         try:
             prefixes = {
-                f"{settings.QWEN_CAMERA_SCREENING_OBJECT_PREFIX or 'camera'}/",
+                f"{settings.QWEN_CAMERA_SCREENING_OBJECT_PREFIX or 'safety-events/qwen-temp-frames'}/",
+                "camera/",
                 "qwen-screening/",
             }
             for prefix in prefixes:

@@ -6,13 +6,11 @@ from contextlib import asynccontextmanager
 import asyncio
 
 from app.api import (
-    alarm,
     auth,
     camera,
     document,
     eca,
     health,
-    image,
     local_inference,
     miniprogram,
     onlyoffice,
@@ -200,10 +198,8 @@ app.include_router(sensor.router, prefix="/api/v1/sensor", tags=["传感器数�
 
 # 业务管理接口（替代原 Java 后端）
 app.include_router(auth.router, prefix="/api/auth", tags=["认证与用户管理"])
-app.include_router(alarm.router, prefix="/api/alarm", tags=["告警管理"])
 app.include_router(eca.router, prefix="/api/v1/eca", tags=["ECA规则引擎"])
 app.include_router(vision_detect.router, prefix="/api/v1/vision/detect", tags=["视觉检测结果"])
-app.include_router(image.router, prefix="/api/v1/image", tags=["图片管理"])
 app.include_router(camera.router, prefix="/api/v1/camera", tags=["摄像头与检测"])
 app.include_router(broadcast.router, prefix="/api/broadcast", tags=["广播联动"])
 app.include_router(integration.router, prefix="/api/v1/integration", tags=["融合业务配置与安全事件"])

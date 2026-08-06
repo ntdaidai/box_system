@@ -51,7 +51,7 @@ class CameraApiContractTests(unittest.TestCase):
         paths = [route.path for route in camera_api.router.routes]
         self.assertLess(paths.index("/model/status"), paths.index("/{camera_id}/status"))
 
-    def test_toggle_preserves_zero_threshold_and_stops_cleanly(self):
+    def test_toggle_returns_disabled_while_redesigning_and_stops_cleanly(self):
         manager = CameraManager()
         manager.add_camera(
             "camera_api",
@@ -79,10 +79,9 @@ class CameraApiContractTests(unittest.TestCase):
                     )
                 )
                 camera = manager.get_camera("camera_api")
-                self.assertTrue(enabled.data["detection_enabled"])
-                self.assertEqual(camera.detection_confidence, 0.0)
-                self.assertEqual(camera.detection_iou, 0.0)
-                self.assertEqual(camera.detection_target_fps, 2.0)
+                self.assertFalse(enabled.data["detection_enabled"])
+                self.assertFalse(enabled.data["detection_running"])
+                self.assertIn("暂未启用", enabled.data["message"])
 
                 disabled = asyncio.run(
                     camera_api.toggle_detection(

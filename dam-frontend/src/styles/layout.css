@@ -108,10 +108,10 @@
 
 /* ========== 左侧菜单 ========== */
 .siderBox {
-  width: 220px;
-  min-width: 220px;
+  width: 260px;
+  min-width: 260px;
   height: 100%;
-  padding: 16px 12px;
+  padding: 22px 16px;
   background: linear-gradient(180deg, rgba(30, 58, 95, 0.6) 0%, rgba(26, 45, 74, 0.8) 100%);
   overflow-y: auto;
   border-right: 1px solid rgba(0, 200, 255, 0.1);
@@ -126,19 +126,26 @@
 
 .siderBox .el-menu-item,
 .siderBox .el-sub-menu__title {
-  height: 44px !important;
-  line-height: 44px !important;
+  height: 58px !important;
+  line-height: 58px !important;
   color: var(--text-secondary) !important;
-  border-radius: 6px;
-  margin-bottom: 4px;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  padding: 0 22px !important;
+  font-size: 18px;
+  font-weight: 600;
 }
 
 .siderBox .el-menu-item .el-icon,
 .siderBox .el-sub-menu__title .el-icon {
   color: var(--text-muted);
-  margin-right: 10px;
+  margin-right: 16px;
   flex-shrink: 0;
-  font-size: 18px;
+  font-size: 22px;
+}
+
+.siderBox .menu-text {
+  line-height: 1.25;
 }
 
 .siderBox .el-menu-item:hover,
@@ -153,17 +160,18 @@
 .siderBox .el-menu-item.is-active {
   background: rgba(0, 200, 255, 0.15) !important;
   color: var(--accent-color) !important;
-  border-left: 3px solid var(--accent-color);
+  border-left: 4px solid var(--accent-color);
 }
 .siderBox .el-menu-item.is-active .el-icon {
   color: var(--accent-color);
 }
 
 .siderBox .el-sub-menu .el-menu-item {
-  padding-left: 42px !important;
-  height: 42px !important;
-  line-height: 42px !important;
-  font-size: 14px;
+  padding-left: 54px !important;
+  height: 52px !important;
+  line-height: 52px !important;
+  font-size: 16px;
+  margin-bottom: 8px;
 }
 
 .siderBox .el-sub-menu .el-menu-item.is-active {

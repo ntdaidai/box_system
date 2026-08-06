@@ -177,8 +177,21 @@
             </span>
           </header>
           <div class="tile-video-box">
+            <video
+              v-if="slot.camera && gridStreamModes[slot.camera.id] === 'webrtc'"
+              :ref="(el) => setGridVideoRef(slot.camera.id, el)"
+              class="tile-video"
+              autoplay
+              muted
+              playsinline
+              :controls="false"
+              disablepictureinpicture
+              controlslist="nodownload noplaybackrate noremoteplayback nofullscreen"
+              @loadedmetadata="handleGridVideoLoad(slot.camera.id, $event)"
+              @playing="handleGridVideoLoad(slot.camera.id, $event)"
+            ></video>
             <img
-              v-if="slot.camera && gridStreamUrls[slot.camera.id]"
+              v-if="slot.camera && gridStreamModes[slot.camera.id] === 'mjpeg' && gridStreamUrls[slot.camera.id]"
               :src="gridStreamUrls[slot.camera.id]"
               :alt="`${slot.camera.name || slot.camera.id}实时画面`"
               class="tile-video"
@@ -209,7 +222,7 @@
                 </text>
               </g>
             </svg>
-            <div v-if="!(slot.camera && gridStreamUrls[slot.camera.id])" class="tile-empty">
+            <div v-if="!gridSlotHasStream(slot)" class="tile-empty">
               <el-icon><VideoCamera /></el-icon>
               <span>{{ gridSlotEmptyText(slot) }}</span>
             </div>
@@ -1032,6 +1045,8 @@ const streamUrl = ref('')
 const streamLoading = ref(false)
 const cameraViewMode = ref('single')
 const gridStreamUrls = ref({})
+const gridStreamModes = ref({})
+const gridStreamStates = ref({})
 const gridSlotCameraIds = ref([])
 const gridCameraZones = ref({})
 const gridImageMetrics = ref({})
@@ -1057,6 +1072,8 @@ let streamRequestGeneration = 0
 let cameraMutationRevision = 0
 let statusRefreshing = false
 let webRtcPlayer = null
+const gridVideoRefs = new Map()
+const gridWebRtcPlayers = new Map()
 let gridStreamRefreshAt = 0
 let cameraFallbackNoticeAt = 0
 
@@ -1687,8 +1704,34 @@ function stopLiveStream() {
 }
 
 function stopGridStreams() {
+  gridWebRtcPlayers.forEach((player) => player.close())
+  gridWebRtcPlayers.clear()
+  gridVideoRefs.clear()
   gridStreamUrls.value = {}
+  gridStreamModes.value = {}
+  gridStreamStates.value = {}
   gridStreamRefreshAt = 0
+}
+
+function stopGridCameraStream(cameraId) {
+  const player = gridWebRtcPlayers.get(cameraId)
+  if (player) {
+    player.close()
+    gridWebRtcPlayers.delete(cameraId)
+  }
+  gridVideoRefs.delete(cameraId)
+  const { [cameraId]: _url, ...nextUrls } = gridStreamUrls.value
+  const { [cameraId]: _mode, ...nextModes } = gridStreamModes.value
+  const { [cameraId]: _state, ...nextStates } = gridStreamStates.value
+  gridStreamUrls.value = nextUrls
+  gridStreamModes.value = nextModes
+  gridStreamStates.value = nextStates
+}
+
+function setGridVideoRef(cameraId, element) {
+  if (!cameraId) return
+  if (element) gridVideoRefs.set(cameraId, element)
+  else gridVideoRefs.delete(cameraId)
 }
 
 function handleGridImageLoad(cameraId, event) {
@@ -1698,6 +1741,17 @@ function handleGridImageLoad(cameraId, event) {
     [cameraId]: {
       width: Number(image?.naturalWidth) || 1920,
       height: Number(image?.naturalHeight) || 1080,
+    },
+  }
+}
+
+function handleGridVideoLoad(cameraId, event) {
+  const video = event.target
+  gridImageMetrics.value = {
+    ...gridImageMetrics.value,
+    [cameraId]: {
+      width: Number(video?.videoWidth) || 1920,
+      height: Number(video?.videoHeight) || 1080,
     },
   }
 }
@@ -1715,9 +1769,17 @@ function gridZoneOverlayVisible(camera) {
   return Boolean(
     assistOverlayVisible.value
     && camera?.id
-    && gridStreamUrls.value[camera.id]
+    && gridSlotHasStream({ camera })
     && gridZonesForCamera(camera.id).length,
   )
+}
+
+function gridSlotHasStream(slot) {
+  const cameraId = slot.camera?.id
+  if (!cameraId) return false
+  const mode = gridStreamModes.value[cameraId]
+  if (mode === 'webrtc') return gridStreamStates.value[cameraId] !== 'failed'
+  return mode === 'mjpeg' && Boolean(gridStreamUrls.value[cameraId])
 }
 
 async function ensureGridCameraZones(cameraId) {
@@ -1736,7 +1798,105 @@ async function ensureGridCameraZones(cameraId) {
   }
 }
 
-async function startMjpegFallback(error = null, notify = true) {
+async function startGridMjpegStream(cameraId) {
+  const player = gridWebRtcPlayers.get(cameraId)
+  if (player) {
+    player.close()
+    gridWebRtcPlayers.delete(cameraId)
+  }
+  gridStreamModes.value = {
+    ...gridStreamModes.value,
+    [cameraId]: 'mjpeg',
+  }
+  gridStreamStates.value = {
+    ...gridStreamStates.value,
+    [cameraId]: 'connecting',
+  }
+  try {
+    const response = await createStreamTicket(cameraId, false)
+    if (!isMultiCameraMode.value) return
+    gridStreamUrls.value = {
+      ...gridStreamUrls.value,
+      [cameraId]: response.data.stream_url,
+    }
+    gridStreamStates.value = {
+      ...gridStreamStates.value,
+      [cameraId]: 'connected',
+    }
+  } catch {
+    gridStreamStates.value = {
+      ...gridStreamStates.value,
+      [cameraId]: 'failed',
+    }
+  }
+}
+
+function handleGridWebRtcStreamFailure(cameraId) {
+  const player = gridWebRtcPlayers.get(cameraId)
+  if (player) {
+    player.close()
+    gridWebRtcPlayers.delete(cameraId)
+  }
+  gridStreamModes.value = {
+    ...gridStreamModes.value,
+    [cameraId]: 'webrtc',
+  }
+  gridStreamStates.value = {
+    ...gridStreamStates.value,
+    [cameraId]: 'failed',
+  }
+}
+
+async function startGridWebRtcStream(camera) {
+  const cameraId = camera?.id
+  if (!cameraId || !camera.connected) return
+  if (camera.source_type !== 'rtsp') {
+    await startGridMjpegStream(cameraId)
+    return
+  }
+  if (gridWebRtcPlayers.has(cameraId) && gridStreamModes.value[cameraId] === 'webrtc') return
+
+  stopGridCameraStream(cameraId)
+  gridStreamModes.value = {
+    ...gridStreamModes.value,
+    [cameraId]: 'webrtc',
+  }
+  gridStreamStates.value = {
+    ...gridStreamStates.value,
+    [cameraId]: 'connecting',
+  }
+  await nextTick()
+
+  const videoElement = gridVideoRefs.get(cameraId)
+  if (!videoElement) {
+    handleGridWebRtcStreamFailure(cameraId)
+    return
+  }
+
+  const player = new CameraWebRtcPlayer(videoElement, cameraId, {
+    onConnected() {
+      if (gridWebRtcPlayers.get(cameraId) !== player || !isMultiCameraMode.value) return
+      gridStreamStates.value = {
+        ...gridStreamStates.value,
+        [cameraId]: 'connected',
+      }
+    },
+    onError() {
+      if (gridWebRtcPlayers.get(cameraId) !== player || !isMultiCameraMode.value) return
+      handleGridWebRtcStreamFailure(cameraId)
+    },
+  })
+  gridWebRtcPlayers.set(cameraId, player)
+  try {
+    await player.connect()
+  } catch {
+    if (gridWebRtcPlayers.get(cameraId) === player && isMultiCameraMode.value) {
+      handleGridWebRtcStreamFailure(cameraId)
+    }
+  }
+}
+
+async function startMjpegStream() {
   const player = webRtcPlayer
   webRtcPlayer = null
   player?.close()
@@ -1746,11 +1906,21 @@ async function startMjpegFallback(error = null, notify = true) {
   await refreshStreamTicket()
 }
 
+function handleWebRtcStreamFailure(error) {
+  const player = webRtcPlayer
+  webRtcPlayer = null
+  player?.close()
+  streamMode.value = 'webrtc'
+  streamUrl.value = ''
+  streamLoading.value = false
+  ElMessage.error(error?.message || 'WebRTC 实时视频连接失败')
+}
+
 async function startLiveStream() {
   const cameraId = currentCameraId.value
   if (!cameraId || !canRenderCurrentStream.value) return
   if (currentCamera.value.source_type !== 'rtsp') {
-    await startMjpegFallback(null, false)
+    await startMjpegStream()
     return
   }
 
@@ -1764,7 +1934,7 @@ async function startLiveStream() {
     },
     onError(error) {
       if (webRtcPlayer !== player || cameraId !== currentCameraId.value) return
-      startMjpegFallback(error).catch(() => null)
+      handleWebRtcStreamFailure(error)
     },
   })
   webRtcPlayer = player
@@ -1772,7 +1942,7 @@ async function startLiveStream() {
     await player.connect()
   } catch (error) {
     if (webRtcPlayer === player && cameraId === currentCameraId.value) {
-      await startMjpegFallback(error)
+      handleWebRtcStreamFailure(error)
     }
   }
 }
@@ -1840,16 +2010,21 @@ async function refreshGridStreams(force = false) {
     .map((slot) => slot.camera)
     .filter((camera, index, list) => camera && list.findIndex((item) => item?.id === camera.id) === index)
   const visibleCameraIds = new Set(gridCameras.map((camera) => camera.id))
-  const urls = Object.fromEntries(
-    Object.entries(gridStreamUrls.value).filter(([cameraId]) => visibleCameraIds.has(cameraId)),
-  )
+  Array.from(gridWebRtcPlayers.keys()).forEach((cameraId) => {
+    if (!visibleCameraIds.has(cameraId)) stopGridCameraStream(cameraId)
+  })
+  Object.keys(gridStreamModes.value).forEach((cameraId) => {
+    if (!visibleCameraIds.has(cameraId)) stopGridCameraStream(cameraId)
+  })
   await Promise.allSettled(gridCameras.map(async (camera) => {
     await ensureGridCameraZones(camera.id)
-    if (!camera.id || !camera.connected) return
-    const response = await createStreamTicket(camera.id, false)
-    urls[camera.id] = response.data.stream_url
+    if (!camera.id || !camera.connected) {
+      stopGridCameraStream(camera.id)
+      return
+    }
+    if (force && gridStreamModes.value[camera.id] === 'mjpeg') stopGridCameraStream(camera.id)
+    await startGridWebRtcStream(camera)
   }))
-  if (isMultiCameraMode.value) gridStreamUrls.value = urls
 }
 
 function handleGridStreamError(cameraId) {
@@ -1857,8 +2032,13 @@ function handleGridStreamError(cameraId) {
     ...gridStreamUrls.value,
     [cameraId]: '',
   }
+  gridStreamStates.value = {
+    ...gridStreamStates.value,
+    [cameraId]: 'failed',
+  }
   setTimeout(() => {
-    if (isMultiCameraMode.value) refreshGridStreams(true)
+    const camera = cameras.value.find((item) => item.id === cameraId)
+    if (isMultiCameraMode.value && camera?.source_type !== 'rtsp') startGridMjpegStream(cameraId).catch(() => null)
   }, 1200)
 }
 
@@ -1886,6 +2066,9 @@ async function handleSingleCameraSelection(cameraId) {
 
 function gridSlotEmptyText(slot) {
   if (!slot.camera) return '不展示摄像头'
+  if (gridStreamStates.value[slot.camera.id] === 'failed') {
+    return gridStreamModes.value[slot.camera.id] === 'webrtc' ? 'WebRTC 连接失败' : '视频连接失败'
+  }
   if (slot.camera.connected) return '正在建立视频链路'
   return slot.camera.last_error || '无视频接入'
 }
@@ -2037,7 +2220,7 @@ async function refreshCameraStatus() {
       detections.value = []
     }
   } catch {
-    // Keep the active MJPEG connection during a transient status request failure.
+    // Keep the active video connection during a transient status request failure.
   } finally {
     statusRefreshing = false
   }

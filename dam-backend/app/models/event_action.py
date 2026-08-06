@@ -1,6 +1,6 @@
-"""Event action configuration model.
+"""Event action model.
 
-One row represents one executable step for an event definition.
+One row represents one executable action step for an event definition.
 """
 
 from datetime import datetime
@@ -25,9 +25,9 @@ SQLITE_PK = BigInteger().with_variant(Integer, "sqlite")
 
 
 class EventActionConfig(Base):
-    __tablename__ = "event_action_config"
+    __tablename__ = "event_action"
     __table_args__ = (
-        UniqueConstraint("event_id", "step_order", name="uq_event_action_config_order"),
+        UniqueConstraint("event_id", "step_order", name="uq_event_action_order"),
     )
 
     id = Column(SQLITE_PK, primary_key=True, autoincrement=True, comment="动作配置ID")

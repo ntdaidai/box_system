@@ -103,73 +103,134 @@ FROM event_library e, condition_library c
 WHERE e.event_code = 'WIND_LEVEL_12' AND c.condition_name = '12级飓风';
 
 
--- 6. 插入行为流程（风灾响应）
-INSERT INTO action_flow (flow_name, flow_code, timeout_seconds, failure_strategy, description, is_activate)
-VALUES
-('风灾预警响应流程', 'WIND_WARNING', 120, 'continue', '6-7级风预警，只做监测记录', 1),
-('风灾警报响应流程', 'WIND_ALERT', 180, 'continue', '8-9级风警报，YOLO检测+告警', 1),
-('风灾紧急响应流程', 'WIND_EMERGENCY', 300, 'continue', '10级以上风灾，全模型分析+紧急告警', 1);
+-- 6. 插入事件动作配置
+-- 当前动作表为 event_action，一行表示一个事件的一个动作步骤。
 
+-- 6-7级：只记录日志
+INSERT INTO event_action (
+    event_id, step_order, action_type, action_name, parameter,
+    timeout_seconds, failure_strategy, is_activate
+)
+SELECT e.id, 1, 'script', '记录风速日志',
+       '{"priority": 1, "action": "log", "message": "风速预警: {wind_speed_ms}m/s"}',
+       120, 'continue', 1
+FROM event_library e
+WHERE e.event_code IN ('WIND_LEVEL_6', 'WIND_LEVEL_7')
+ON DUPLICATE KEY UPDATE
+    action_type = VALUES(action_type),
+    action_name = VALUES(action_name),
+    parameter = VALUES(parameter),
+    timeout_seconds = VALUES(timeout_seconds),
+    failure_strategy = VALUES(failure_strategy),
+    is_activate = VALUES(is_activate);
 
--- 7. 插入行为步骤（带优先级）
+-- 8-9级：YOLO检测 + 告警
+INSERT INTO event_action (
+    event_id, step_order, action_type, action_name, model_id, parameter,
+    timeout_seconds, failure_strategy, is_activate
+)
+SELECT e.id, 1, 'llm', 'YOLO检测风灾损害', m.id,
+       '{"priority": 1, "prompt": "检测大风导致的树木倒塌、建筑损坏等异常"}',
+       180, 'continue', 1
+FROM event_library e, model_library m
+WHERE e.event_code IN ('WIND_LEVEL_8', 'WIND_LEVEL_9') AND m.model_name = 'YOLOv8'
+ON DUPLICATE KEY UPDATE
+    action_type = VALUES(action_type),
+    action_name = VALUES(action_name),
+    model_id = VALUES(model_id),
+    parameter = VALUES(parameter),
+    timeout_seconds = VALUES(timeout_seconds),
+    failure_strategy = VALUES(failure_strategy),
+    is_activate = VALUES(is_activate);
 
--- 风灾预警响应：只记录日志（低优先级）
-INSERT INTO action_step (flow_id, step_order, action_type, parameter, description)
-SELECT f.id, 1, 'script', '{"priority": 1, "action": "log", "message": "风速预警: {wind_speed_ms}m/s"}', '记录风速日志'
-FROM action_flow f WHERE f.flow_code = 'WIND_WARNING';
+INSERT INTO event_action (
+    event_id, step_order, action_type, action_name, parameter,
+    timeout_seconds, failure_strategy, is_activate
+)
+SELECT e.id, 2, 'alert', '发送风灾警报',
+       '{"priority": 1, "level": 2, "channels": ["app", "sms"], "template": "风灾警报：当前风速{wind_speed_ms}m/s，请注意安全"}',
+       180, 'continue', 1
+FROM event_library e
+WHERE e.event_code IN ('WIND_LEVEL_8', 'WIND_LEVEL_9')
+ON DUPLICATE KEY UPDATE
+    action_type = VALUES(action_type),
+    action_name = VALUES(action_name),
+    parameter = VALUES(parameter),
+    timeout_seconds = VALUES(timeout_seconds),
+    failure_strategy = VALUES(failure_strategy),
+    is_activate = VALUES(is_activate);
 
+-- 10-12级：YOLO + SAM + Qwen + 紧急告警
+INSERT INTO event_action (
+    event_id, step_order, action_type, action_name, model_id, parameter,
+    timeout_seconds, failure_strategy, is_activate
+)
+SELECT e.id, 1, 'llm', 'YOLO检测风灾损害', m.id,
+       '{"priority": 1, "prompt": "检测大风导致的严重损害：树木拔起、建筑倒塌、道路阻断"}',
+       300, 'continue', 1
+FROM event_library e, model_library m
+WHERE e.event_code IN ('WIND_LEVEL_10', 'WIND_LEVEL_11', 'WIND_LEVEL_12') AND m.model_name = 'YOLOv8'
+ON DUPLICATE KEY UPDATE
+    action_type = VALUES(action_type),
+    action_name = VALUES(action_name),
+    model_id = VALUES(model_id),
+    parameter = VALUES(parameter),
+    timeout_seconds = VALUES(timeout_seconds),
+    failure_strategy = VALUES(failure_strategy),
+    is_activate = VALUES(is_activate);
 
--- 风灾警报响应：YOLO检测 + 告警
-INSERT INTO action_step (flow_id, step_order, action_type, model_id, parameter, description)
-SELECT f.id, 1, 'llm', m.id, '{"priority": 1, "prompt": "检测大风导致的树木倒塌、建筑损坏等异常"}', 'YOLO检测风灾损害'
-FROM action_flow f, model_library m
-WHERE f.flow_code = 'WIND_ALERT' AND m.model_name = 'YOLOv8';
+INSERT INTO event_action (
+    event_id, step_order, action_type, action_name, model_id, parameter,
+    timeout_seconds, failure_strategy, is_activate
+)
+SELECT e.id, 2, 'llm', 'SAM分割受损区域', m.id,
+       '{"priority": 2, "prompt": "分割受损区域，评估影响范围"}',
+       300, 'continue', 1
+FROM event_library e, model_library m
+WHERE e.event_code IN ('WIND_LEVEL_10', 'WIND_LEVEL_11', 'WIND_LEVEL_12') AND m.model_name = 'SAM'
+ON DUPLICATE KEY UPDATE
+    action_type = VALUES(action_type),
+    action_name = VALUES(action_name),
+    model_id = VALUES(model_id),
+    parameter = VALUES(parameter),
+    timeout_seconds = VALUES(timeout_seconds),
+    failure_strategy = VALUES(failure_strategy),
+    is_activate = VALUES(is_activate);
 
-INSERT INTO action_step (flow_id, step_order, action_type, parameter, description)
-SELECT f.id, 2, 'alert', '{"priority": 1, "level": 2, "channels": ["app", "sms"], "template": "风灾警报：当前风速{wind_speed_ms}m/s，请注意安全"}', '发送风灾警报'
-FROM action_flow f WHERE f.flow_code = 'WIND_ALERT';
+INSERT INTO event_action (
+    event_id, step_order, action_type, action_name, model_id, parameter,
+    timeout_seconds, failure_strategy, is_activate
+)
+SELECT e.id, 3, 'llm', 'Qwen综合分析', m.id,
+       '{"priority": 3, "prompt": "综合分析风灾影响，评估大坝安全风险，生成应急建议"}',
+       300, 'continue', 1
+FROM event_library e, model_library m
+WHERE e.event_code IN ('WIND_LEVEL_10', 'WIND_LEVEL_11', 'WIND_LEVEL_12') AND m.model_name = 'Qwen3-VL-8B'
+ON DUPLICATE KEY UPDATE
+    action_type = VALUES(action_type),
+    action_name = VALUES(action_name),
+    model_id = VALUES(model_id),
+    parameter = VALUES(parameter),
+    timeout_seconds = VALUES(timeout_seconds),
+    failure_strategy = VALUES(failure_strategy),
+    is_activate = VALUES(is_activate);
 
-
--- 风灾紧急响应：YOLO + SAM + Qwen + 紧急告警
-INSERT INTO action_step (flow_id, step_order, action_type, model_id, parameter, description)
-SELECT f.id, 1, 'llm', m.id, '{"priority": 1, "prompt": "检测大风导致的严重损害：树木拔起、建筑倒塌、道路阻断"}', 'YOLO检测风灾损害'
-FROM action_flow f, model_library m
-WHERE f.flow_code = 'WIND_EMERGENCY' AND m.model_name = 'YOLOv8';
-
-INSERT INTO action_step (flow_id, step_order, action_type, model_id, parameter, description)
-SELECT f.id, 2, 'llm', m.id, '{"priority": 2, "prompt": "分割受损区域，评估影响范围"}', 'SAM分割受损区域'
-FROM action_flow f, model_library m
-WHERE f.flow_code = 'WIND_EMERGENCY' AND m.model_name = 'SAM';
-
-INSERT INTO action_step (flow_id, step_order, action_type, model_id, parameter, description)
-SELECT f.id, 3, 'llm', m.id, '{"priority": 3, "prompt": "综合分析风灾影响，评估大坝安全风险，生成应急建议"}', 'Qwen综合分析'
-FROM action_flow f, model_library m
-WHERE f.flow_code = 'WIND_EMERGENCY' AND m.model_name = 'Qwen3-VL-8B';
-
-INSERT INTO action_step (flow_id, step_order, action_type, parameter, description)
-SELECT f.id, 4, 'alert', '{"priority": 1, "level": 3, "channels": ["app", "sms", "phone"], "template": "紧急风灾警报：当前风速{wind_speed_ms}m/s，已达{wind_level}级，立即撤离危险区域！"}', '发送紧急风灾警报'
-FROM action_flow f WHERE f.flow_code = 'WIND_EMERGENCY';
-
-
--- 8. 关联事件和行为流程
-
--- 6-7级 → 预警响应
-INSERT INTO event_action (event_id, flow_id, priority, is_activate)
-SELECT e.id, f.id, 1, 1
-FROM event_library e, action_flow f
-WHERE e.event_code IN ('WIND_LEVEL_6', 'WIND_LEVEL_7') AND f.flow_code = 'WIND_WARNING';
-
--- 8-9级 → 警报响应
-INSERT INTO event_action (event_id, flow_id, priority, is_activate)
-SELECT e.id, f.id, 1, 1
-FROM event_library e, action_flow f
-WHERE e.event_code IN ('WIND_LEVEL_8', 'WIND_LEVEL_9') AND f.flow_code = 'WIND_ALERT';
-
--- 10-12级 → 紧急响应
-INSERT INTO event_action (event_id, flow_id, priority, is_activate)
-SELECT e.id, f.id, 1, 1
-FROM event_library e, action_flow f
-WHERE e.event_code IN ('WIND_LEVEL_10', 'WIND_LEVEL_11', 'WIND_LEVEL_12') AND f.flow_code = 'WIND_EMERGENCY';
+INSERT INTO event_action (
+    event_id, step_order, action_type, action_name, parameter,
+    timeout_seconds, failure_strategy, is_activate
+)
+SELECT e.id, 4, 'alert', '发送紧急风灾警报',
+       '{"priority": 1, "level": 3, "channels": ["app", "sms", "phone"], "template": "紧急风灾警报：当前风速{wind_speed_ms}m/s，已达{wind_level}级，立即撤离危险区域！"}',
+       300, 'continue', 1
+FROM event_library e
+WHERE e.event_code IN ('WIND_LEVEL_10', 'WIND_LEVEL_11', 'WIND_LEVEL_12')
+ON DUPLICATE KEY UPDATE
+    action_type = VALUES(action_type),
+    action_name = VALUES(action_name),
+    parameter = VALUES(parameter),
+    timeout_seconds = VALUES(timeout_seconds),
+    failure_strategy = VALUES(failure_strategy),
+    is_activate = VALUES(is_activate);
 
 
 -- 完成

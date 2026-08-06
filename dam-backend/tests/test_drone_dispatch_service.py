@@ -11,7 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.database import Base
 from app.models.camera import Camera
 from app.models.data_source import DataSource
-from app.models.event_action_config import EventActionConfig
+from app.models.event_action import EventActionConfig
 from app.models.event_library import EventLibrary
 from app.models.safety_integration import SafetyEventInstance
 from app.services.drone_adapter import DroneDispatchService, MockDroneAdapter

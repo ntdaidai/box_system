@@ -2,7 +2,7 @@
 
 更新时间：2026-08-06
 
-本文是当前业务数据库融合的最终口径。早期草案中提到的 `alarm`、`camera_broadcast_device`、`camera_zone_condition`、`action_flow`、`action_step`、`event_action`、`event_action_step_config` 已不再作为目标结构使用；实际状态以本文、ORM 和已执行迁移为准。
+本文是当前业务数据库融合的最终口径。早期草案中提到的 `alarm`、`camera_broadcast_device`、`camera_zone_condition`、`action_flow`、`action_step`、旧动作执行 `event_action`、`event_action_step_config` 已不再作为目标结构使用；实际状态以本文、ORM 和已执行迁移为准。
 
 ## 1. 总体链路
 
@@ -10,7 +10,7 @@
 data_source
   -> condition_library
   -> event_condition -> event_library
-  -> event_action_config
+  -> event_action
   -> safety_event_instance
        -> safety_event_timeline_log
        -> safety_event_evidence
@@ -83,7 +83,7 @@ data_source
 - `create_time`
 - `update_time`
 
-模板只保存播报文本和场景信息；具体哪个事件使用哪个模板，由 `event_action_config.template_id` 决定。
+模板只保存播报文本和场景信息；具体哪个事件使用哪个模板，由 `event_action.template_id` 决定。
 
 ### 2.4 `camera_detection_zone`
 
@@ -198,7 +198,7 @@ data_source
 - `sort_order`
 - `create_time`
 
-### 2.9 `event_action_config`
+### 2.9 `event_action`
 
 事件动作配置表，替代旧 `event_action/action_flow/action_step/event_action_step_config` 四表。
 
@@ -243,6 +243,7 @@ data_source
 - `instance_no`
 - `current_event_id`
 - `analysis_report_id`
+- `zone_id`
 - `event_category`
 - `data_source_id`
 - `source_type`
@@ -266,39 +267,11 @@ data_source
 - `state` 表示生命周期：`ACTIVE/RESOLVED`。
 - `status` 表示处置进度：`PENDING/PROCESSING/COMPLETED/FALSE_ALARM`。
 - `analysis_report_id` 可选关联事件闭环分析报告；日报/月报不一定关联事件实例。
+- `zone_id` 可选关联 `camera_detection_zone.id`，用于当前区域查询；历史展示名称仍以快照为准。
 - 摄像头名称可通过 `data_source_id -> data_source -> camera_device` 获取。
-- 区域、对象类型、置信度等视觉运行信息当前仍在 `visual_event_detail` 和 `latest_observation` 中并存，第三阶段准备收敛。
+- 区域名称、对象类型、置信度、bbox 等视觉展示快照保存在 `latest_observation.visual`。
 
-### 2.11 `visual_event_detail`（第三阶段待清理）
-
-当前仍保留，因为运行时详情、巡查报告和人工升级判断还直接读取它。
-
-核心字段：
-
-- `id`
-- `event_instance_id`
-- `camera_id`
-- `camera_name`
-- `target_type`
-- `target_id`
-- `zone_id`
-- `zone_name`
-- `zone_type`
-- `confidence`
-- `extra`
-- `create_time`
-- `update_time`
-
-第三阶段目标不是简单删表，而是先替代调用方：
-
-- `camera_id/camera_name` 改由 `data_source_id/source_id` 推导。
-- `target_type` 尽量由 `event_category/event_code` 推导；必要快照放入 `latest_observation.visual.target_type`。
-- `zone_id` 如需查询可提升到 `safety_event_instance.zone_id`，历史展示快照放 `latest_observation.visual.zone_name/zone_type`。
-- `confidence/bbox/model/frame_time` 放入 `latest_observation.visual`。
-
-完成替代和迁移后再备份并删除本表。
-
-### 2.12 `safety_event_timeline_log`
+### 2.11 `safety_event_timeline_log`
 
 统一事件时间线。
 
@@ -332,7 +305,7 @@ data_source
 
 `payload` 保存当时动作参数、配置快照、设备名、模板名、错误信息等历史信息，避免配置改名影响历史展示。
 
-### 2.13 `safety_event_evidence`
+### 2.12 `safety_event_evidence`
 
 统一证据表。
 
@@ -353,7 +326,7 @@ data_source
 
 摄像头截图、视频、无人机图片、人工现场图片都进入该表。
 
-### 2.14 `safety_event_task`
+### 2.13 `safety_event_task`
 
 人工处置任务表。
 
@@ -373,7 +346,7 @@ data_source
 - `create_time`
 - `update_time`
 
-### 2.15 `analysis_report`
+### 2.14 `analysis_report`
 
 报告归档表，只保存检索和下载需要的信息。
 
@@ -395,12 +368,6 @@ data_source
 
 报告正文、图片、排版文件保存在 MinIO，不写入数据库长文本。
 
-### 2.16 `schema_migration`
-
-手写迁移脚本的幂等记录表。
-
-当前保留。原因是第二阶段仍在连续迁移，直接删除会降低迁移脚本的可重复执行能力。等表结构稳定后，再评估是否把它从业务库中移走或废弃。
-
 ## 3. 已删除结构
 
 已删除或不再使用：
@@ -408,10 +375,13 @@ data_source
 - `alarm`
 - `camera_broadcast_device`
 - `camera_zone_condition`
-- `event_action`
+- 旧版 `event_action`
 - `action_flow`
 - `action_step`
 - `event_action_step_config`
+- `event_action_config`
+- `visual_event_detail`
+- `schema_migration`
 - 旧 `safety_event`
 - 旧 `safety_event_log`
 - 旧 `event_log`
@@ -423,6 +393,8 @@ data_source
 
 - `dam-backend/scripts/migrate_20260806_event_action_config_consolidation.py`
 - `dam-backend/scripts/migrate_20260806_event_runtime_simplification.py`
+- `dam-backend/scripts/migrate_20260806_phase3_cleanup.py`
+- `dam-backend/scripts/drop_schema_migration.py`
 
 迁移脚本执行前必须只读审计，执行时必须备份被删除表和关键数据。
 
@@ -430,19 +402,10 @@ data_source
 
 ### 4.1 已替代
 
-- 旧动作配置接口已切到 `event_action_config`。
-- 摄像头广播绑定接口不再作为业务配置入口。
+- 旧动作配置接口已切到 `event_action`。
+- 摄像头广播绑定接口已删除，广播设备由事件动作配置选择。
 - 区域保存接口不再保存逐区域触发时间。
-
-### 4.2 暂时兼容
-
-`/api/alarm/*` 仍存在，但只是兼容层：
-
-- `/api/alarm/list` 从 `safety_event_instance` 映射旧告警字段。
-- `/api/alarm/statistics` 从 `safety_event_instance` 统计。
-- `/api/alarm/{id}/handle` 更新统一事件实例并写时间线。
-
-第三阶段后半段应把前端 Dashboard、`AlarmList.vue`、`AlarmReport.vue` 和 `src/api/alarm.js` 改为直接使用统一安全事件接口，然后删除该兼容层。
+- 旧 `/api/alarm/*` 后端兼容路由已删除；Dashboard 和告警入口直接读取统一安全事件接口。
 
 ## 5. 视觉业务口径
 
@@ -451,51 +414,35 @@ data_source
 - 人员事件：区域内持续出现人员达到条件时触发。
 - 船只事件：捕鱼区内持续出现船只达到条件时触发或升级。
 - 人和船必须区分，区分依据优先为事件码和事件分类。
-- `condition_library` 不增加 `zone_id/object_type`。
-- 触发时长由信息配置页修改对应事件条件的 `duration`，全局生效。
+- `condition_library` 不增加 `zone_id/object_type`，避免变成“每个摄像头每个区域一套条件”。
+- 触发时长按区域类型背后的事件码配置，例如人员闯入区对应 `PERSON_INTRUSION.duration`。
+- 同一类型区域共用触发时长；如果 1 号摄像头和 2 号摄像头都画了“人员闯入区”，默认使用同一条条件时长。
+- `zone_id` 只进入 `safety_event_instance`，用于事件追溯、筛选和详情展示。
 
 区域删除策略：
 
 - 测试期允许物理删除区域。
 - 历史事件展示不能依赖区域表一定存在；关键展示快照应保存在 `latest_observation.visual` 或时间线 `payload`。
 
-## 6. 第三阶段计划
+## 6. 第三阶段执行结果
 
-第三阶段目标是清理旧残余，同时保证系统完整运行。
+第三阶段已完成以下收口：
 
-### 6.1 第一小阶段：收敛 `visual_event_detail`
+1. `event_action_config` 已重命名为 `event_action`，时间线 `action_config_id` 外键指向 `event_action.id`。
+2. `safety_event_instance` 增加 `zone_id` 外键，视觉详情快照统一放入 `latest_observation.visual`。
+3. `visual_event_detail` 已备份并删除，运行时详情、巡查报告、人工升级判断和列表筛选不再读取该表。
+4. 旧 `/api/alarm/*`、前端 `src/api/alarm.js`、旧告警列表/报告页面已删除；`/alarm/list` 路由重定向到 `/alarm/safety-events`。
+5. 摄像头广播绑定接口已删除；设备管理和小程序只展示全局可用广播设备。
 
-执行顺序：
+已执行迁移：
 
-1. 全局审计 `VisualEventDetail/visual_event_detail` 调用方。
-2. 给 `safety_event_instance` 增加必要的少量字段，优先只考虑 `zone_id`；对象类型尽量通过事件码推导，快照放 `latest_observation.visual`。
-3. 修改运行时写入逻辑：新事件不再创建 `visual_event_detail`，改为写实例字段和 `latest_observation.visual`。
-4. 修改详情接口、巡查报告、人工升级判断、事件列表筛选，全部不再读取 `visual_event_detail`。
-5. 写迁移脚本，将旧 `visual_event_detail` 备份并回填到实例快照。
-6. 只读审计确认无代码引用后，再删除表和 ORM。
-7. 跑后端编译、事件接口导入、相关单测和前端构建。
+- `dam-backend/scripts/migrate_20260806_phase3_cleanup.py --apply`
+- `dam-backend/scripts/drop_schema_migration.py --apply`
+- 备份文件：
+  - `backups/phase3_cleanup_20260806_132743.json`
+  - `backups/schema_migration_drop_20260806_134220.json`
 
-不建议一次性把大量视觉字段都加到实例表。实例表只放查询和关联必要字段；展示快照放 JSON。
-
-### 6.2 第二小阶段：删除旧告警兼容入口
-
-执行顺序：
-
-1. Dashboard 最近告警和统计改用统一安全事件接口。
-2. `/alarm/list` 页面改为重定向或移除，保留 `/alarm/safety-events` 作为主入口。
-3. `AlarmReport.vue` 若仍需要，改为基于 `analysis_report` 或安全事件详情展示。
-4. 删除 `src/api/alarm.js` 和 `/api/alarm` 后端兼容路由。
-5. 清理 `alarm:*` 缓存 key 命名，统一为 `safety_event:*` 或 `integration:*`。
-6. 搜索确认无 `/api/alarm` 调用后再删除后端文件和 schema。
-
-这一步删除的是旧接口，不再涉及已删除的 `alarm` 表。
-
-### 6.3 第三小阶段：复核迁移残余
-
-- 审计旧迁移脚本是否仍需保留。
-- 评估 `schema_migration` 是否继续保留。
-- 清理只用于旧方案的文档草案或标记为历史资料。
-- 保留必要备份文件，不在未确认前删除备份。
+历史迁移脚本仍保留用于审计已发生的结构变化，不作为新库初始化目标。
 
 ## 7. 验证要求
 

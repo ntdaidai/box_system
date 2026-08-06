@@ -15,7 +15,7 @@ from app.models.data_source import DataSource
 from app.models.condition_library import ConditionLibrary
 from app.models.event_library import EventLibrary
 from app.models.event_condition import EventCondition
-from app.models.event_action_config import EventActionConfig
+from app.models.event_action import EventActionConfig
 
 router = APIRouter(tags=["ECA规则引擎"])
 

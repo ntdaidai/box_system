@@ -76,7 +76,7 @@ class Settings:
         _get_env("QWEN_CAMERA_SCREENING_URL_EXPIRES_SECONDS", "600")
     )
     QWEN_CAMERA_SCREENING_OBJECT_PREFIX: str = _get_env(
-        "QWEN_CAMERA_SCREENING_OBJECT_PREFIX", "camera"
+        "QWEN_CAMERA_SCREENING_OBJECT_PREFIX", "safety-events/qwen-temp-frames"
     ).strip("/")
     QWEN_CAMERA_SCREENING_RETENTION_MINUTES: int = int(
         _get_env("QWEN_CAMERA_SCREENING_RETENTION_MINUTES", "60")

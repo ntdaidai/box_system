@@ -193,7 +193,9 @@ def _get_camera_row_or_404(camera_id: str, db: Optional[Session] = None) -> Came
     owns_session = db is None
     session = db or SessionLocal()
     try:
-        row = _camera_device_row(session, str(camera_id))
+        row = _camera_device_row(session, str(camera_id)) if hasattr(session, "query") else None
+        if not row:
+            row = _runtime_camera_row(str(camera_id))
         if not row:
             raise HTTPException(status_code=404, detail="摄像头不存在")
         return row
@@ -332,6 +334,26 @@ def _camera_device_row(db: Session, identifier: str) -> Optional[Camera]:
     if not str(identifier).isdigit():
         return None
     return db.query(Camera).filter(Camera.id == int(identifier)).first()
+
+
+def _runtime_camera_row(identifier: str) -> Optional[Camera]:
+    runtime = camera_manager.get_camera(str(identifier))
+    if not runtime:
+        return None
+    row = Camera(
+        id=int(identifier) if str(identifier).isdigit() else 0,
+        camera_name=getattr(runtime, "name", None) or str(identifier),
+        brand="dahua",
+        ip_address="runtime.local",
+        rtsp_port=554,
+        web_port=80,
+        username=None,
+        password=None,
+        rtsp_path=None,
+        enabled=True,
+    )
+    row.id = int(identifier) if str(identifier).isdigit() else str(identifier)
+    return row
 
 
 def _camera_source_from_row(row: Camera) -> str:
@@ -638,7 +660,7 @@ async def list_camera_devices(
     cameras = []
     for row in rows:
         item = _camera_row_response(row, statuses.get(str(row.id)))
-        item["broadcast_devices"] = broadcast_service.list_devices_for_camera(db, str(row.id))
+        item["broadcast_devices"] = broadcast_service.list_devices(db)
         cameras.append(item)
     db.commit()
     return DetectResponse(code=200, data={"cameras": cameras, "total": len(cameras)})
@@ -1464,19 +1486,7 @@ async def snapshot_detect(
     jpeg_bytes = _encode_jpeg(drawn)
     image_base64 = base64.b64encode(jpeg_bytes).decode("utf-8")
 
-    minio_url = None
-    try:
-        from app.services.minio_service import minio_service
-
-        filename = (
-            f"snapshot_{task_type}_{camera_id}_{time.strftime('%Y%m%d_%H%M%S')}_"
-            f"{time.time_ns()}.jpg"
-        )
-        minio_url = minio_service.upload_image(jpeg_bytes, "image/jpeg", filename)
-    except Exception as exc:
-        logger.warning(f"截图上传 MinIO 失败: {exc}")
-
     return DetectResponse(
         code=200,
-        data={**result, "image_base64": image_base64, "minio_url": minio_url},
+        data={**result, "image_base64": image_base64, "minio_url": None},
     )

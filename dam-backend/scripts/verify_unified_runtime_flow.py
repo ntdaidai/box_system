@@ -8,7 +8,7 @@ import uuid
 from types import SimpleNamespace
 
 from app.core.database import SessionLocal
-from app.models.broadcast import BroadcastDevice, CameraBroadcastDevice
+from app.models.broadcast import BroadcastDevice
 from app.models.camera import Camera
 from app.models.data_source import DataSource
 from app.models.event_library import EventLibrary
@@ -16,7 +16,6 @@ from app.models.safety_event_task import SafetyEventTask
 from app.models.safety_integration import (
     SafetyEventInstance,
     SafetyEventTimelineLog,
-    VisualEventDetail,
 )
 from app.services.broadcast_service import BroadcastAudioFile, broadcast_service
 from app.services.drone_adapter import drone_dispatch_service
@@ -48,20 +47,21 @@ def create_instance(db, *, risk: str, event: EventLibrary, source: DataSource, c
         started_at=now,
         last_observed_at=now,
         summary=f"流程验证-{risk}",
-        latest_observation={"runtime": {"target_status": "IN_DANGER", "zone_ids": []}},
+        latest_observation={
+            "runtime": {"target_status": "IN_DANGER", "zone_ids": []},
+            "visual": {
+                "camera_id": camera.id,
+                "camera_name": camera.camera_name,
+                "target_type": "person",
+                "target_id": f"verify-track-{risk.lower()}",
+                "zone_type": f"PERSON_{risk}",
+                "zone_name": f"验证{risk}区域",
+                "bbox": [10, 10, 50, 80],
+            },
+        },
     )
     db.add(instance)
     db.flush()
-    db.add(VisualEventDetail(
-        event_instance_id=instance.id,
-        camera_id=camera.id,
-        camera_name=camera.camera_name,
-        target_type="person",
-        target_id=f"verify-track-{risk.lower()}",
-        zone_type=f"PERSON_{risk}",
-        zone_name=f"验证{risk}区域",
-        extra={"bbox": [10, 10, 50, 80]},
-    ))
     safety_event_runtime_service.append_timeline(
         db,
         instance,
@@ -79,7 +79,6 @@ async def run() -> None:
     db = SessionLocal()
     instance_ids = []
     device_id = None
-    binding_id = None
     try:
         camera = db.query(Camera).filter(Camera.enabled.is_(True)).order_by(Camera.id.asc()).first()
         if not camera:
@@ -105,14 +104,6 @@ async def run() -> None:
         db.add(mock_device)
         db.flush()
         device_id = mock_device.id
-        binding = CameraBroadcastDevice(
-            camera_device_id=camera.id,
-            broadcast_device_id=mock_device.id,
-        )
-        db.add(binding)
-        db.flush()
-        binding_id = binding.id
-
         instances = {
             risk: create_instance(
                 db, risk=risk, event=definitions[risk], source=source, camera=camera, prefix=prefix
@@ -224,10 +215,6 @@ async def run() -> None:
         db.rollback()
         if instance_ids:
             db.query(SafetyEventInstance).filter(SafetyEventInstance.id.in_(instance_ids)).delete(
-                synchronize_session=False
-            )
-        if binding_id:
-            db.query(CameraBroadcastDevice).filter(CameraBroadcastDevice.id == binding_id).delete(
                 synchronize_session=False
             )
         if device_id:

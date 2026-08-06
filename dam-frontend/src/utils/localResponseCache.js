@@ -6,8 +6,6 @@ const URL_MAX_AGE = [
   [/^\/v1\/sensor\/realtime/, 15 * 1000],
   [/^\/v1\/sensor\/status$/, 30 * 1000],
   [/^\/v1\/system\/info$/, 30 * 1000],
-  [/^\/alarm\/statistics$/, 60 * 1000],
-  [/^\/alarm\/list$/, 2 * 60 * 1000],
   [/^\/v1\/sensor\/history\//, 10 * 60 * 1000],
   [/^\/v1\/sensor\/vibration\/trends$/, 10 * 60 * 1000],
   [/^\/analysis\//, 5 * 60 * 1000],

@@ -22,7 +22,7 @@ from app.models.broadcast import (
     BroadcastTemplate,
 )
 from app.models.camera import Camera
-from app.models.event_action_config import EventActionConfig
+from app.models.event_action import EventActionConfig
 from app.services.safety_event_runtime_service import safety_event_runtime_service
 
 
@@ -269,8 +269,8 @@ class BroadcastService:
         )
         return [self._template_to_dict(row) for row in rows]
 
-    def list_devices_for_camera(self, db: Session, camera_id: str) -> List[Dict[str, Any]]:
-        devices = self._devices_for_camera(db, camera_id)
+    def list_devices(self, db: Session) -> List[Dict[str, Any]]:
+        devices = self._available_devices(db)
         return [self._device_to_dict(device) for device in devices]
 
     def preview(self, db: Session, template_id: Optional[str], custom_text: Optional[str]) -> Dict[str, Any]:
@@ -296,7 +296,7 @@ class BroadcastService:
         devices = self._resolve_devices(db, camera_id, command.get("device_ids"))
 
         if not devices:
-            raise BroadcastException("No broadcast devices are bound to this camera")
+            raise BroadcastException("No broadcast device is selected or enabled")
 
         items = []
         for device in devices:
@@ -377,7 +377,7 @@ class BroadcastService:
         operator = command.get("operator") or "UNKNOWN"
         devices = self._resolve_devices(db, camera_id, command.get("device_ids"))
         if not devices:
-            raise BroadcastException("No broadcast devices are bound to this camera")
+            raise BroadcastException("No broadcast device is selected or enabled")
 
         items = []
         for device in devices:
@@ -598,7 +598,7 @@ class BroadcastService:
                 .all()
             )
         if camera_id:
-            return self._devices_for_camera(db, camera_id)
+            return self._available_devices(db)
         return []
 
     @staticmethod
@@ -616,13 +616,8 @@ class BroadcastService:
             "audio/x-wav": ".wav",
         }.get(content, ".webm")
 
-    def _devices_for_camera(self, db: Session, camera_id: str) -> List[BroadcastDevice]:
+    def _available_devices(self, db: Session) -> List[BroadcastDevice]:
         self.ensure_defaults(db)
-        camera = None
-        if str(camera_id).isdigit():
-            camera = db.query(Camera).filter(Camera.id == int(camera_id)).first()
-        if camera is None:
-            return []
         return (
             db.query(BroadcastDevice)
             .filter(BroadcastDevice.enabled == True)  # noqa: E712

@@ -231,7 +231,7 @@
     <div class="data-panel alarm-recent-row">
       <div class="panel-title">
         最近告警
-        <span class="link-btn" @click="router.push('/alarm/list')">查看全部</span>
+        <span class="link-btn" @click="router.push('/alarm/safety-events')">查看全部</span>
       </div>
       <!-- 列表头 -->
       <div class="alarm-list-header" v-if="recentAlarms.length > 0">
@@ -274,7 +274,7 @@
           </div>
           <div class="col-event"><strong :title="row.event_name || '系统告警'">{{ row.event_name || '系统告警' }}</strong></div>
           <div class="col-content">
-            <span class="report-link" @click="router.push({ path: '/alarm/list', query: { report: row.id } })">查看分析报告</span>
+            <span class="report-link" @click="router.push('/alarm/safety-events')">查看分析报告</span>
           </div>
           <div class="col-status">
             <span class="status-tag" :class="row.handle_status === 1 ? 'handled' : 'unhandled'">
@@ -303,7 +303,8 @@ import {
   PlatformUptimeIcon,
   StorageStackIcon,
 } from '@/components/SystemIcons'
-import { getSystemInfo, getAllSensorRealtime, getDeviceStatus, getAlarmStatistics, getAlarmList } from '@/api/dashboard'
+import { getSystemInfo, getAllSensorRealtime, getDeviceStatus } from '@/api/dashboard'
+import { getUnifiedSafetyEventStatistics, getUnifiedSafetyEvents } from '@/api/integration'
 import { getCameraList } from '@/api/camera'
 import { dijLogin, getBoundDevices, getCurrentWorkspace, getDroneDevices } from '@/api/drone'
 import { getVibrationProcessed } from '@/api/sensor'
@@ -569,7 +570,17 @@ const applyAlarmStats = (data) => {
 }
 
 const applyRecentAlarms = (data) => {
-  if (data?.records) recentAlarms.value = data.records
+  const rows = data?.items || data?.records || []
+  recentAlarms.value = rows.map((row) => ({
+    id: row.id,
+    alarm_code: row.instance_no,
+    event_name: row.event_name,
+    alarm_level: ({ LOW: 1, MEDIUM: 2, HIGH: 3 })[row.max_risk_level || row.risk_level] || 1,
+    alarm_time: row.started_at,
+    handle_status: row.state === 'RESOLVED' || ['COMPLETED', 'FALSE_ALARM'].includes(row.status) ? 1 : 0,
+    status: row.status,
+    risk_level: row.risk_level,
+  }))
 }
 
 const applyVibrationProcessed = (payload) => {
@@ -601,11 +612,11 @@ const hydrateDashboardFromCache = () => {
   const system = readDashboardCache('/v1/system/info')
   if (system?.code === 200) applySystemInfo(system.data)
 
-  const alarmStats = readDashboardCache('/alarm/statistics')
-  if (alarmStats?.code === 200) applyAlarmStats(alarmStats.data)
+  const eventStats = readDashboardCache('/v1/integration/safety-events/statistics')
+  if (eventStats?.code === 200) applyAlarmStats(eventStats.data)
 
-  const alarms = readDashboardCache('/alarm/list', { page_num: 1, page_size: 5 })
-  if (alarms?.code === 200) applyRecentAlarms(alarms.data)
+  const events = readDashboardCache('/v1/integration/safety-events', { page: 1, page_size: 5 })
+  if (events?.code === 200) applyRecentAlarms(events.data)
 }
 
 const applyDashboardCacheUpdate = (event) => {
@@ -615,8 +626,8 @@ const applyDashboardCacheUpdate = (event) => {
   if (url === '/v1/sensor/realtime') applySensorRealtime(data.data)
   if (url === '/v1/sensor/status') applyDeviceStatus(data.data)
   if (url === '/v1/system/info') applySystemInfo(data.data)
-  if (url === '/alarm/statistics') applyAlarmStats(data.data)
-  if (url === '/alarm/list' && params?.page_num === 1 && params?.page_size === 5) {
+  if (url === '/v1/integration/safety-events/statistics') applyAlarmStats(data.data)
+  if (url === '/v1/integration/safety-events' && params?.page === 1 && params?.page_size === 5) {
     applyRecentAlarms(data.data)
   }
 }
@@ -712,7 +723,7 @@ const fetchVibrationProcessed = async () => {
 /** 获取告警统计 */
 const fetchAlarmStats = async () => {
   try {
-    const res = await getAlarmStatistics()
+    const res = await getUnifiedSafetyEventStatistics()
     if (res.code === 200 && res.data) {
       applyAlarmStats(res.data)
     }
@@ -732,8 +743,8 @@ const fetchSystemInfo = async () => {
 /** 获取最近告警列表 */
 const fetchRecentAlarms = async () => {
   try {
-    const res = await getAlarmList({ page_num: 1, page_size: 5 })
-    if (res.code === 200 && res.data?.records) {
+    const res = await getUnifiedSafetyEvents({ page: 1, page_size: 5 })
+    if (res.code === 200 && res.data?.items) {
       applyRecentAlarms(res.data)
     }
   } catch (e) { /* 保持上一次数据 */ }

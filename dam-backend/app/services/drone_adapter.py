@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 from loguru import logger
 
 from app.core.database import SessionLocal
-from app.models.event_action_config import EventActionConfig
+from app.models.event_action import EventActionConfig
 from app.services.safety_event_runtime_service import safety_event_runtime_service
 
 

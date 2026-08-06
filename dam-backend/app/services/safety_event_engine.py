@@ -937,7 +937,7 @@ class SafetyEventEngine:
             try:
                 from app.core.database import SessionLocal
                 from app.models.camera import Camera
-                from app.models.event_action_config import EventActionConfig
+                from app.models.event_action import EventActionConfig
                 from app.models.event_library import EventLibrary
 
                 event_code = self._unified_event_code(track.entity_type, risk_level)
@@ -1023,7 +1023,7 @@ class SafetyEventEngine:
             from app.services.minio_service import minio_service
 
             captured_day = datetime.fromtimestamp(now).strftime("%Y-%m-%d")
-            object_name = f"safety-events/snapshots/{captured_day}/{event_id}.jpg"
+            object_name = f"safety-events/camera-snapshots/{captured_day}/{event_id}.jpg"
             minio_url = minio_service.upload_bytes(
                 snapshot_bytes,
                 object_name=object_name,

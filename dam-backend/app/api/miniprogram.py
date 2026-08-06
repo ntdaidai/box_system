@@ -289,12 +289,12 @@ async def _save_field_photo(event_id: str, photo: UploadFile) -> str:
 
     filename = _safe_filename(photo.filename, photo.content_type)
     content_type = _normalized_photo_type(photo.content_type, photo.filename)
-    folder = f"safety-events/field-results/{event_id}"
-    url = minio_service.upload_image(
-        image_data=content,
+    captured_day = dt.datetime.now().strftime("%Y-%m-%d")
+    object_name = f"safety-events/field-images/{captured_day}/{event_id}/{filename}"
+    url = minio_service.upload_bytes(
+        content,
+        object_name=object_name,
         content_type=content_type,
-        filename=filename,
-        folder=folder,
     )
     if url:
         return url
@@ -325,9 +325,8 @@ async def list_cameras():
         rows = db.query(Camera).filter(Camera.enabled == True).order_by(Camera.id.asc()).all()  # noqa: E712
         cameras = []
         for row in rows:
-            camera_id = str(row.id)
             item = _mini_camera(row, {"connected": row.enabled, "running": row.enabled})
-            devices = broadcast_service.list_devices_for_camera(db, camera_id)
+            devices = broadcast_service.list_devices(db)
             item["broadcast_devices"] = devices
             item["broadcast_device_count"] = len(devices)
             cameras.append(item)
@@ -658,7 +657,7 @@ async def submit_field_result(
             emit_action=False,
         )
         timeline_item = _log_to_timeline(log)
-        await invalidate_cache("alarm:*")
+        await invalidate_cache("safety_event:*")
         await _broadcast_updates(db, event, timeline_item)
         return MiniResponse(data={
             "event": _mini_event(db, event),

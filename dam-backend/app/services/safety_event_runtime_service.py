@@ -15,7 +15,6 @@ from app.models.safety_integration import (
     SafetyEventEvidence,
     SafetyEventInstance,
     SafetyEventTimelineLog,
-    VisualEventDetail,
 )
 
 
@@ -38,12 +37,6 @@ class SafetyEventRuntimeService:
                 return row
         return db.query(SafetyEventInstance).filter(
             SafetyEventInstance.instance_no == str(reference)
-        ).first()
-
-    @staticmethod
-    def visual_detail(db: Session, instance_id: int) -> Optional[VisualEventDetail]:
-        return db.query(VisualEventDetail).filter(
-            VisualEventDetail.event_instance_id == instance_id
         ).first()
 
     @staticmethod
@@ -170,14 +163,35 @@ class SafetyEventRuntimeService:
         db.flush()
         return row
 
+    @staticmethod
+    def visual_snapshot(instance: SafetyEventInstance) -> Dict[str, Any]:
+        observation = dict(instance.latest_observation or {})
+        visual = observation.get("visual")
+        return dict(visual) if isinstance(visual, dict) else {}
+
+    @staticmethod
+    def target_type_for(event: Optional[EventLibrary], instance: SafetyEventInstance, visual: Dict[str, Any]) -> str:
+        target_type = str(visual.get("target_type") or "").strip()
+        if target_type:
+            return target_type
+        code = str(getattr(event, "event_code", "") or "").upper()
+        category = str(instance.event_category or "").upper()
+        if code.startswith("BOAT_") or "FISH" in category:
+            return "boat"
+        if code.startswith("PERSON_") or "PERSON" in category:
+            return "person"
+        return str(instance.source_type or "")
+
     def event_dict(self, db: Session, instance: SafetyEventInstance) -> Dict[str, Any]:
         event = db.query(EventLibrary).filter(
             EventLibrary.id == instance.current_event_id
         ).first()
-        visual = self.visual_detail(db, instance.id)
+        observation = dict(instance.latest_observation or {})
+        visual = self.visual_snapshot(instance)
         camera = None
-        if visual:
-            camera = db.query(Camera).filter(Camera.id == visual.camera_id).first()
+        camera_id = visual.get("camera_id") or instance.source_id
+        if camera_id and str(camera_id).isdigit():
+            camera = db.query(Camera).filter(Camera.id == int(camera_id)).first()
         task = self.latest_task(db, instance.id)
         evidence = (
             db.query(SafetyEventEvidence)
@@ -187,7 +201,6 @@ class SafetyEventRuntimeService:
         )
         snapshot = next((row for row in evidence if row.evidence_type == "IMAGE"), None)
         video = next((row for row in evidence if row.evidence_type == "VIDEO"), None)
-        observation = dict(instance.latest_observation or {})
         runtime = dict(observation.get("runtime") or {})
         task_status = (task.task_status or "").upper() if task else ""
         if instance.state == "RESOLVED" or instance.status in {"COMPLETED", "FALSE_ALARM"}:
@@ -217,11 +230,11 @@ class SafetyEventRuntimeService:
             "event_name": event.event_name if event else instance.summary,
             "event_category": instance.event_category,
             "event_type": event.event_name if event else instance.event_category,
-            "camera_id": str(camera.id) if camera else str(instance.source_id or ""),
-            "camera_device_id": visual.camera_id if visual else instance.source_id,
-            "camera_name": visual.camera_name if visual else (camera.camera_name if camera else None),
-            "entity_type": visual.target_type if visual else instance.source_type,
-            "track_id": visual.target_id if visual else None,
+            "camera_id": str(camera.id) if camera else str(camera_id or ""),
+            "camera_device_id": camera.id if camera else camera_id,
+            "camera_name": visual.get("camera_name") or (camera.camera_name if camera else None),
+            "entity_type": self.target_type_for(event, instance, visual),
+            "track_id": visual.get("target_id"),
             "state": instance.state,
             "status": instance.status,
             "risk_level": instance.risk_level,
@@ -248,10 +261,11 @@ class SafetyEventRuntimeService:
             "video_expires_at": runtime.get("video_expires_at"),
             "duration_seconds": max(0, int((end_at - started_at).total_seconds())) if started_at else 0,
             "version": instance.version or 0,
-            "zone_type": visual.zone_type if visual else None,
-            "zone_name": visual.zone_name if visual else None,
+            "zone_id": instance.zone_id or visual.get("zone_id"),
+            "zone_type": visual.get("zone_type"),
+            "zone_name": visual.get("zone_name"),
             "zone_ids": runtime.get("zone_ids") or [],
-            "latest_bbox": (visual.extra or {}).get("bbox") if visual else None,
+            "latest_bbox": visual.get("bbox"),
             "latest_observation": observation,
             "summary": instance.summary,
             "install_address": getattr(camera, "install_address", None),

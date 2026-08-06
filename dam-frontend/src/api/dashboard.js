@@ -15,8 +15,3 @@ export function getSystemInfo() {
  * 获取所有传感器实时数据（复用 sensor API）
  */
 export { getAllSensorRealtime, getSensorHistory, getDeviceStatus } from './sensor'
-
-/**
- * 获取告警统计和列表（复用 alarm API）
- */
-export { getAlarmStatistics, getAlarmList } from './alarm'

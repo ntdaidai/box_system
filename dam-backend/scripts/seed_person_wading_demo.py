@@ -16,7 +16,6 @@ from app.models.safety_integration import (
     SafetyEventEvidence,
     SafetyEventInstance,
     SafetyEventTimelineLog,
-    VisualEventDetail,
 )
 from app.services.safety_event_runtime_service import safety_event_runtime_service
 
@@ -62,9 +61,6 @@ def seed() -> int:
             db.query(SafetyEventTimelineLog).filter(
                 SafetyEventTimelineLog.event_instance_id == instance.id
             ).delete(synchronize_session=False)
-            db.query(VisualEventDetail).filter(
-                VisualEventDetail.event_instance_id == instance.id
-            ).delete(synchronize_session=False)
             db.flush()
         else:
             instance = SafetyEventInstance(instance_no=INSTANCE_NO)
@@ -87,6 +83,17 @@ def seed() -> int:
         instance.latest_observation = {
             "demo": True,
             "confidence": 0.96,
+            "visual": {
+                "camera_id": camera.id,
+                "camera_name": camera.camera_name,
+                "target_type": "person",
+                "target_id": "demo-person-wading-001",
+                "zone_name": "高风险涉水区",
+                "zone_type": "DANGER",
+                "confidence": 0.96,
+                "bbox": [0.53, 0.35, 0.61, 0.67],
+                "demo": True,
+            },
             "runtime": {
                 "first_seen_at": low_at.timestamp(),
                 "low_entered_at": low_at.timestamp(),
@@ -103,18 +110,6 @@ def seed() -> int:
         }
         instance.version = 3
         db.flush()
-
-        db.add(VisualEventDetail(
-            event_instance_id=instance.id,
-            camera_id=camera.id,
-            camera_name=camera.camera_name,
-            target_type="person",
-            target_id="demo-person-wading-001",
-            zone_name="高风险涉水区",
-            zone_type="DANGER",
-            confidence=0.96,
-            extra={"bbox": [0.53, 0.35, 0.61, 0.67], "demo": True},
-        ))
 
         low_log = safety_event_runtime_service.append_timeline(
             db,
@@ -210,7 +205,7 @@ def seed() -> int:
             )
 
         db.commit()
-        asyncio.run(invalidate_cache("alarm:*"))
+        asyncio.run(invalidate_cache("safety_event:*"))
         return instance.id
     except Exception:
         db.rollback()

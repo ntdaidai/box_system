@@ -32,18 +32,6 @@ export function deleteBroadcastTemplate(id) {
   return request.delete(`/broadcast/templates/${encodeURIComponent(id)}`)
 }
 
-export function getCameraBroadcastDevices(cameraId) {
-  return request.get(`/broadcast/camera/${encodeURIComponent(cameraId)}/devices`, {
-    localCache: false,
-  })
-}
-
-export function bindCameraBroadcastDevices(cameraId, deviceIds) {
-  return request.put(`/broadcast/camera/${encodeURIComponent(cameraId)}/devices`, {
-    device_ids: deviceIds,
-  })
-}
-
 export function previewBroadcast(data) {
   return request.post('/broadcast/preview', data)
 }

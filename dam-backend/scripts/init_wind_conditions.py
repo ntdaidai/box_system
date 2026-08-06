@@ -10,8 +10,7 @@
     2. 创建风力等级条件（6-12级）
     3. 创建风灾事件
     4. 配置事件-条件关联
-    5. 创建响应流程（预警/警报/紧急）
-    6. 配置流程步骤（带资源感知优先级）
+    5. 配置事件动作步骤（带资源感知优先级）
 """
 
 import sys
@@ -25,9 +24,7 @@ from app.models.data_source import DataSource
 from app.models.condition_library import ConditionLibrary
 from app.models.event_library import EventLibrary
 from app.models.event_condition import EventCondition
-from app.models.action_flow import ActionFlow
-from app.models.action_step import ActionStep
-from app.models.event_action import EventAction
+from app.models.event_action import EventActionConfig
 from app.models.model_library import ModelLibrary
 from loguru import logger
 
@@ -236,182 +233,103 @@ def init_wind_conditions():
                     db.add(event_condition)
                     logger.info(f"关联事件-条件: {event_def['name']} -> {event_def['condition']}")
 
-        # 4. 行为流程定义
-        wind_flows = [
-            {
-                "name": "风灾预警响应流程",
-                "code": "WIND_WARNING",
-                "timeout": 120,
-                "failure_strategy": "continue",
-                "description": "6-7级风预警，只做监测记录"
-            },
-            {
-                "name": "风灾警报响应流程",
-                "code": "WIND_ALERT",
-                "timeout": 180,
-                "failure_strategy": "continue",
-                "description": "8-9级风警报，YOLO检测+告警"
-            },
-            {
-                "name": "风灾紧急响应流程",
-                "code": "WIND_EMERGENCY",
-                "timeout": 300,
-                "failure_strategy": "continue",
-                "description": "10级以上风灾，全模型分析+紧急告警"
-            },
-        ]
-
-        flow_map = {}
-        for flow_def in wind_flows:
-            flow = db.query(ActionFlow).filter(
-                ActionFlow.flow_code == flow_def["code"]
-            ).first()
-
-            if not flow:
-                flow = ActionFlow(
-                    flow_name=flow_def["name"],
-                    flow_code=flow_def["code"],
-                    timeout_seconds=flow_def["timeout"],
-                    failure_strategy=flow_def["failure_strategy"],
-                    description=flow_def["description"],
-                    is_activate=True
-                )
-                db.add(flow)
-                db.flush()
-                logger.info(f"创建流程: {flow_def['name']}")
-            else:
-                flow.timeout_seconds = flow_def["timeout"]
-                flow.description = flow_def["description"]
-                logger.info(f"更新流程: {flow_def['name']}")
-
-            flow_map[flow_def["code"]] = flow.id
-
-        # 5. 流程步骤
-
+        # 4. 事件动作定义
         # 获取模型ID
         yolo_model = db.query(ModelLibrary).filter(ModelLibrary.model_name == "YOLOv8").first()
         sam_model = db.query(ModelLibrary).filter(ModelLibrary.model_name == "SAM").first()
         qwen_model = db.query(ModelLibrary).filter(ModelLibrary.model_name == "Qwen3-VL-8B").first()
 
-        # 清空已有步骤（重新配置）
-        for flow_code, flow_id in flow_map.items():
-            db.query(ActionStep).filter(ActionStep.flow_id == flow_id).delete()
+        wind_action_steps = {
+            "WIND_WARNING": [
+                {
+                    "step_order": 1,
+                    "action_type": "script",
+                    "action_name": "记录风速日志",
+                    "model_id": None,
+                    "parameter": '{"priority": 1, "action": "log", "message": "风速预警: {wind_speed_ms}m/s"}',
+                },
+            ],
+            "WIND_ALERT": [
+                {
+                    "step_order": 1,
+                    "action_type": "llm",
+                    "action_name": "YOLO检测风灾损害",
+                    "model_id": yolo_model.id if yolo_model else None,
+                    "parameter": '{"priority": 1, "prompt": "检测大风导致的树木倒塌、建筑损坏等异常"}',
+                },
+                {
+                    "step_order": 2,
+                    "action_type": "alert",
+                    "action_name": "发送风灾警报",
+                    "model_id": None,
+                    "parameter": '{"priority": 1, "level": 2, "channels": ["app", "sms"], "template": "风灾警报：当前风速{wind_speed_ms}m/s，请注意安全"}',
+                },
+            ],
+            "WIND_EMERGENCY": [
+                {
+                    "step_order": 1,
+                    "action_type": "llm",
+                    "action_name": "YOLO检测风灾损害",
+                    "model_id": yolo_model.id if yolo_model else None,
+                    "parameter": '{"priority": 1, "prompt": "检测大风导致的严重损害：树木拔起、建筑倒塌、道路阻断"}',
+                },
+                {
+                    "step_order": 2,
+                    "action_type": "llm",
+                    "action_name": "SAM分割受损区域",
+                    "model_id": sam_model.id if sam_model else None,
+                    "parameter": '{"priority": 2, "prompt": "分割受损区域，评估影响范围"}',
+                },
+                {
+                    "step_order": 3,
+                    "action_type": "llm",
+                    "action_name": "Qwen综合分析",
+                    "model_id": qwen_model.id if qwen_model else None,
+                    "parameter": '{"priority": 3, "prompt": "综合分析风灾影响，评估大坝安全风险，生成应急建议"}',
+                },
+                {
+                    "step_order": 4,
+                    "action_type": "alert",
+                    "action_name": "发送紧急风灾警报",
+                    "model_id": None,
+                    "parameter": '{"priority": 1, "level": 3, "channels": ["app", "sms", "phone"], "template": "紧急风灾警报：当前风速{wind_speed_ms}m/s，已达{wind_level}级，立即撤离危险区域！"}',
+                },
+            ],
+        }
+        event_flow_mapping = {
+            "WIND_LEVEL_6": ("WIND_WARNING", 120),
+            "WIND_LEVEL_7": ("WIND_WARNING", 120),
+            "WIND_LEVEL_8": ("WIND_ALERT", 180),
+            "WIND_LEVEL_9": ("WIND_ALERT", 180),
+            "WIND_LEVEL_10": ("WIND_EMERGENCY", 300),
+            "WIND_LEVEL_11": ("WIND_EMERGENCY", 300),
+            "WIND_LEVEL_12": ("WIND_EMERGENCY", 300),
+        }
 
-        # 风灾预警响应：只记录日志
-        warning_steps = [
-            {
-                "flow_code": "WIND_WARNING",
-                "step_order": 1,
-                "action_type": "script",
-                "model_id": None,
-                "parameter": '{"priority": 1, "action": "log", "message": "风速预警: {wind_speed_ms}m/s"}',
-                "description": "记录风速日志"
-            }
-        ]
-
-        # 风灾警报响应：YOLO检测 + 告警
-        alert_steps = [
-            {
-                "flow_code": "WIND_ALERT",
-                "step_order": 1,
-                "action_type": "llm",
-                "model_id": yolo_model.id if yolo_model else None,
-                "parameter": '{"priority": 1, "prompt": "检测大风导致的树木倒塌、建筑损坏等异常"}',
-                "description": "YOLO检测风灾损害"
-            },
-            {
-                "flow_code": "WIND_ALERT",
-                "step_order": 2,
-                "action_type": "alert",
-                "model_id": None,
-                "parameter": '{"priority": 1, "level": 2, "channels": ["app", "sms"], "template": "风灾警报：当前风速{wind_speed_ms}m/s，请注意安全"}',
-                "description": "发送风灾警报"
-            }
-        ]
-
-        # 风灾紧急响应：YOLO + SAM + Qwen + 紧急告警
-        emergency_steps = [
-            {
-                "flow_code": "WIND_EMERGENCY",
-                "step_order": 1,
-                "action_type": "llm",
-                "model_id": yolo_model.id if yolo_model else None,
-                "parameter": '{"priority": 1, "prompt": "检测大风导致的严重损害：树木拔起、建筑倒塌、道路阻断"}',
-                "description": "YOLO检测风灾损害"
-            },
-            {
-                "flow_code": "WIND_EMERGENCY",
-                "step_order": 2,
-                "action_type": "llm",
-                "model_id": sam_model.id if sam_model else None,
-                "parameter": '{"priority": 2, "prompt": "分割受损区域，评估影响范围"}',
-                "description": "SAM分割受损区域"
-            },
-            {
-                "flow_code": "WIND_EMERGENCY",
-                "step_order": 3,
-                "action_type": "llm",
-                "model_id": qwen_model.id if qwen_model else None,
-                "parameter": '{"priority": 3, "prompt": "综合分析风灾影响，评估大坝安全风险，生成应急建议"}',
-                "description": "Qwen综合分析"
-            },
-            {
-                "flow_code": "WIND_EMERGENCY",
-                "step_order": 4,
-                "action_type": "alert",
-                "model_id": None,
-                "parameter": '{"priority": 1, "level": 3, "channels": ["app", "sms", "phone"], "template": "紧急风灾警报：当前风速{wind_speed_ms}m/s，已达{wind_level}级，立即撤离危险区域！"}',
-                "description": "发送紧急风灾警报"
-            }
-        ]
-
-        # 创建所有步骤
-        all_steps = warning_steps + alert_steps + emergency_steps
-        for step_def in all_steps:
-            flow_id = flow_map.get(step_def["flow_code"])
-            if flow_id:
-                step = ActionStep(
-                    flow_id=flow_id,
-                    step_order=step_def["step_order"],
-                    action_type=step_def["action_type"],
-                    model_id=step_def["model_id"],
-                    parameter=step_def["parameter"],
-                    description=step_def["description"]
-                )
-                db.add(step)
-
-        logger.info("创建流程步骤完成")
-
-        # 6. 事件-行为关联
-        event_flow_mapping = [
-            ("WIND_LEVEL_6", "WIND_WARNING"),
-            ("WIND_LEVEL_7", "WIND_WARNING"),
-            ("WIND_LEVEL_8", "WIND_ALERT"),
-            ("WIND_LEVEL_9", "WIND_ALERT"),
-            ("WIND_LEVEL_10", "WIND_EMERGENCY"),
-            ("WIND_LEVEL_11", "WIND_EMERGENCY"),
-            ("WIND_LEVEL_12", "WIND_EMERGENCY"),
-        ]
-
-        for event_code, flow_code in event_flow_mapping:
+        for event_code, (flow_code, timeout_seconds) in event_flow_mapping.items():
             event_id = event_map.get(event_code)
-            flow_id = flow_map.get(flow_code)
-
-            if event_id and flow_id:
-                existing_rel = db.query(EventAction).filter(
-                    EventAction.event_id == event_id,
-                    EventAction.flow_id == flow_id
+            if not event_id:
+                continue
+            for step_def in wind_action_steps.get(flow_code, []):
+                action = db.query(EventActionConfig).filter(
+                    EventActionConfig.event_id == event_id,
+                    EventActionConfig.step_order == step_def["step_order"],
                 ).first()
-
-                if not existing_rel:
-                    event_action = EventAction(
+                if not action:
+                    action = EventActionConfig(
                         event_id=event_id,
-                        flow_id=flow_id,
-                        priority=1,
-                        is_activate=True
+                        step_order=step_def["step_order"],
                     )
-                    db.add(event_action)
-                    logger.info(f"关联事件-流程: {event_code} -> {flow_code}")
+                    db.add(action)
+                action.action_type = step_def["action_type"]
+                action.action_name = step_def["action_name"]
+                action.model_id = step_def["model_id"]
+                action.parameter = step_def["parameter"]
+                action.timeout_seconds = timeout_seconds
+                action.failure_strategy = "continue"
+                action.retry_count = 0
+                action.is_activate = True
+                logger.info(f"配置事件动作: {event_code} -> {action.action_name}")
 
         # 提交所有更改
         db.commit()
@@ -422,8 +340,8 @@ def init_wind_conditions():
         print(f"数据源: {db.query(DataSource).count()} 个")
         print(f"条件: {db.query(ConditionLibrary).filter(ConditionLibrary.source_id == 2).count()} 个（风灾相关）")
         print(f"事件: {db.query(EventLibrary).filter(EventLibrary.event_code.like('WIND_%')).count()} 个（风灾相关）")
-        print(f"流程: {db.query(ActionFlow).filter(ActionFlow.flow_code.like('WIND_%')).count()} 个（风灾相关）")
-        print(f"步骤: {db.query(ActionStep).join(ActionFlow).filter(ActionFlow.flow_code.like('WIND_%')).count()} 个（风灾相关）")
+        wind_event_ids = list(event_map.values())
+        print(f"动作: {db.query(EventActionConfig).filter(EventActionConfig.event_id.in_(wind_event_ids)).count()} 个（风灾相关）")
         print("========================\n")
 
     except Exception as e:

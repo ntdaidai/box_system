@@ -39,13 +39,13 @@ const sensors = [
   { name: '雨量计', key: 'rain', path: '/monitor/rain', icon: rainIcon },
   { name: '振动传感器', key: 'vibration', path: '/monitor/vibration', icon: vibrationIcon },
   { name: '视频监控', key: 'camera', path: '/monitor/camera', icon: cameraIcon },
-  { name: '大疆 Matrice 4E', key: 'uav', path: '/monitor/drone', icon: '/drone.png' },
+  { name: 'AGX 边缘计算盒', key: 'agx', path: '/monitor/overview', icon: '/agx.jpg' },
 ]
 
 const goTo = (path) => router.push(path)
 
 const getStatusClass = (key) => {
-  if (key === 'uav') return 'online'
+  if (key === 'agx') return deviceStatus.value.agx?.status || 'online'
   const status = deviceStatus.value[key]?.status
   if (status === 'online') return 'online'
   if (status === 'partial') return 'partial'
@@ -53,7 +53,7 @@ const getStatusClass = (key) => {
 }
 
 const getStatusText = (key) => {
-  if (key === 'uav') return '在线'
+  if (key === 'agx') return deviceStatus.value.agx?.status === 'offline' ? '离线' : '在线'
   const status = deviceStatus.value[key]?.status
   if (key === 'camera') {
     const item = deviceStatus.value.camera || {}
@@ -69,7 +69,7 @@ const defaultStatus = {
   rain: { status: 'online' },
   vibration: { status: 'online' },
   camera: { status: 'offline' },
-  uav: { status: 'online' },
+  agx: { status: 'online' },
 }
 
 const fetchStatus = async () => {

@@ -9,7 +9,6 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     JSON,
-    Numeric,
     String,
     Text,
 )
@@ -31,6 +30,7 @@ class SafetyEventInstance(Base):
     data_source_id = Column(BigInteger, ForeignKey("data_source.id", ondelete="RESTRICT"), nullable=False, index=True)
     source_type = Column(String(32), nullable=False, index=True)
     source_id = Column(BigInteger, nullable=True, index=True)
+    zone_id = Column(BigInteger, ForeignKey("camera_detection_zone.id", ondelete="SET NULL"), nullable=True, index=True)
     risk_level = Column(String(16), nullable=False, index=True)
     max_risk_level = Column(String(16), nullable=False, index=True)
     state = Column(String(16), nullable=False, default="ACTIVE", index=True)
@@ -46,24 +46,6 @@ class SafetyEventInstance(Base):
     update_time = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
-class VisualEventDetail(Base):
-    __tablename__ = "visual_event_detail"
-
-    id = Column(SQLITE_PK, primary_key=True, autoincrement=True)
-    event_instance_id = Column(BigInteger, ForeignKey("safety_event_instance.id", ondelete="CASCADE"), nullable=False, unique=True)
-    camera_id = Column(BigInteger, ForeignKey("camera_device.id", ondelete="RESTRICT"), nullable=False, index=True)
-    camera_name = Column(String(128), nullable=False)
-    target_type = Column(String(32), nullable=False, index=True)
-    target_id = Column(String(128), nullable=True, index=True)
-    zone_id = Column(BigInteger, ForeignKey("camera_detection_zone.id", ondelete="SET NULL"), nullable=True, index=True)
-    zone_name = Column(String(80), nullable=True)
-    zone_type = Column(String(32), nullable=True)
-    confidence = Column(Numeric(8, 6), nullable=True)
-    extra = Column(JSON, nullable=True)
-    create_time = Column(DateTime, default=datetime.now)
-    update_time = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-
-
 class SafetyEventTimelineLog(Base):
     __tablename__ = "safety_event_timeline_log"
 
@@ -71,7 +53,7 @@ class SafetyEventTimelineLog(Base):
     event_instance_id = Column(BigInteger, ForeignKey("safety_event_instance.id", ondelete="CASCADE"), nullable=False, index=True)
     event_id = Column(BigInteger, ForeignKey("event_library.id", ondelete="SET NULL"), nullable=True, index=True)
     condition_id = Column(BigInteger, ForeignKey("condition_library.id", ondelete="SET NULL"), nullable=True)
-    action_config_id = Column(BigInteger, ForeignKey("event_action_config.id", ondelete="SET NULL"), nullable=True)
+    action_config_id = Column(BigInteger, ForeignKey("event_action.id", ondelete="SET NULL"), nullable=True)
     action_key = Column(String(160), nullable=True, unique=True)
     stage = Column(String(32), nullable=True, index=True)
     log_type = Column(String(24), nullable=False, index=True)

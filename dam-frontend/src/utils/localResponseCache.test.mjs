@@ -9,22 +9,22 @@ import {
 
 {
   assert.equal(isCacheableRequest({ method: 'get', url: '/v1/sensor/history/temp' }), true)
-  assert.equal(isCacheableRequest({ method: 'post', url: '/alarm/list' }), false)
-  assert.equal(isCacheableRequest({ method: 'get', url: '/alarm/list', localCache: false }), false)
+  assert.equal(isCacheableRequest({ method: 'post', url: '/v1/integration/safety-events' }), false)
+  assert.equal(isCacheableRequest({ method: 'get', url: '/v1/integration/safety-events', localCache: false }), false)
 }
 
 {
   const left = buildCacheKey({
     method: 'get',
     baseURL: '/api',
-    url: '/alarm/list',
-    params: { page_size: 5, page_num: 1 },
+    url: '/v1/integration/safety-events',
+    params: { page_size: 5, page: 1 },
   })
   const right = buildCacheKey({
     method: 'get',
     baseURL: '/api',
-    url: '/alarm/list',
-    params: { page_num: 1, page_size: 5 },
+    url: '/v1/integration/safety-events',
+    params: { page: 1, page_size: 5 },
   })
   assert.equal(left, right)
 }

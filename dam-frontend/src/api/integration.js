@@ -32,6 +32,10 @@ export function getUnifiedSafetyEvents(params = {}) {
   return request.get('/v1/integration/safety-events', { params, localCache: false })
 }
 
+export function getUnifiedSafetyEventStatistics() {
+  return request.get('/v1/integration/safety-events/statistics', { localCache: false })
+}
+
 export function getUnifiedSafetyEventDetail(id) {
   return request.get(`/v1/integration/safety-events/${id}`, { localCache: false })
 }

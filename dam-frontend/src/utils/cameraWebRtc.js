@@ -133,12 +133,15 @@ export class CameraWebRtcPlayer {
   }
 
   _attachStream(stream) {
+    this.videoElement.muted = true
+    this.videoElement.autoplay = true
+    this.videoElement.playsInline = true
     this.videoElement.srcObject = stream
     this.videoElement.controls = false
     const playPromise = this.videoElement.play()
-    playPromise?.catch(() => {
+    playPromise?.catch((error) => {
       this.videoElement.controls = false
-      this._fail(new Error('浏览器阻止了实时视频自动播放'))
+      this.handlers.onAutoplayBlocked?.(error)
     })
   }
 

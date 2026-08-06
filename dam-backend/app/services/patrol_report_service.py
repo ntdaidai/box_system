@@ -32,7 +32,6 @@ from app.models.safety_integration import (
     SafetyEventEvidence,
     SafetyEventInstance,
     SafetyEventTimelineLog,
-    VisualEventDetail,
 )
 from app.services.patrol_report_document import render_daily_report_docx
 
@@ -88,12 +87,6 @@ def build_daily_report_context(
         row.id: row
         for row in db.query(DataSource).filter(DataSource.id.in_(source_ids)).all()
     } if source_ids else {}
-    visuals = {
-        row.event_instance_id: row
-        for row in db.query(VisualEventDetail).filter(
-            VisualEventDetail.event_instance_id.in_(instance_ids)
-        ).all()
-    } if instance_ids else {}
     tasks = {
         row.event_instance_id: row
         for row in db.query(SafetyEventTask).filter(
@@ -117,7 +110,7 @@ def build_daily_report_context(
     for instance in instances:
         definition = definitions.get(instance.current_event_id)
         source = sources.get(instance.data_source_id)
-        visual = visuals.get(instance.id)
+        visual = visual_snapshot(instance)
         task = tasks.get(instance.id)
         timeline = timeline_by_instance.get(instance.id, [])
         evidence = evidence_by_instance.get(instance.id, [])
@@ -296,27 +289,34 @@ def normalize_risk(value: Any) -> str:
     return {"3": "HIGH", "2": "MEDIUM", "1": "LOW", "高": "HIGH", "中": "MEDIUM", "低": "LOW"}.get(text, "LOW")
 
 
-def event_location(source: Optional[DataSource], visual: Optional[VisualEventDetail]) -> str:
+def visual_snapshot(instance: SafetyEventInstance) -> dict[str, Any]:
+    observation = dict(instance.latest_observation or {})
+    visual = observation.get("visual")
+    return dict(visual) if isinstance(visual, dict) else {}
+
+
+def event_location(source: Optional[DataSource], visual: dict[str, Any]) -> str:
     if visual:
-        values = [visual.camera_name, visual.zone_name]
+        values = [visual.get("camera_name"), visual.get("zone_name")]
         return " · ".join(str(value) for value in values if value) or "—"
     return getattr(source, "source_name", None) or "—"
 
 
 def key_observation(
     instance: SafetyEventInstance,
-    visual: Optional[VisualEventDetail],
+    visual: dict[str, Any],
     timeline: list[SafetyEventTimelineLog],
 ) -> str:
     if visual:
         parts = []
-        target = TARGET_NAMES.get(str(visual.target_type or "").lower(), visual.target_type)
+        target_type = visual.get("target_type")
+        target = TARGET_NAMES.get(str(target_type or "").lower(), target_type)
         if target:
             parts.append(f"目标：{target}")
-        if visual.confidence is not None:
-            parts.append(f"置信度：{float(visual.confidence) * 100:.0f}%")
-        if visual.zone_name:
-            parts.append(f"区域：{visual.zone_name}")
+        if visual.get("confidence") is not None:
+            parts.append(f"置信度：{float(visual.get('confidence')) * 100:.0f}%")
+        if visual.get("zone_name"):
+            parts.append(f"区域：{visual.get('zone_name')}")
         return "｜".join(parts) or "—"
 
     observation = {}

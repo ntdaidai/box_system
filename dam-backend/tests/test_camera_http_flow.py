@@ -7,10 +7,8 @@ import os
 import sys
 import threading
 import time
-import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -336,18 +334,13 @@ class CameraHttpFlowTests(unittest.TestCase):
         )
         self.assertEqual(invalid_stream.status_code, 401)
 
-        fake_minio_module = types.ModuleType("app.services.minio_service")
-        fake_minio_module.minio_service = types.SimpleNamespace(
-            upload_image=lambda *_args, **_kwargs: "mock://snapshot.jpg"
+        snapshot = self.client.post(
+            "/api/v1/camera/camera_http/snapshot", params={"confidence": 0.4}
         )
-        with patch.dict(sys.modules, {"app.services.minio_service": fake_minio_module}):
-            snapshot = self.client.post(
-                "/api/v1/camera/camera_http/snapshot", params={"confidence": 0.4}
-            )
         self.assertEqual(snapshot.status_code, 200)
         self.assertEqual(snapshot.json()["data"]["count"], 1)
         self.assertTrue(snapshot.json()["data"]["image_base64"])
-        self.assertEqual(snapshot.json()["data"]["minio_url"], "mock://snapshot.jpg")
+        self.assertIsNone(snapshot.json()["data"]["minio_url"])
 
         disabled = self.client.post(
             "/api/v1/camera/camera_http/detection/toggle",

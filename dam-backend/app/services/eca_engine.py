@@ -14,14 +14,13 @@ from app.core.database import SessionLocal
 from app.models.condition_library import ConditionLibrary
 from app.models.event_library import EventLibrary
 from app.models.event_condition import EventCondition
-from app.models.event_action_config import EventActionConfig
+from app.models.event_action import EventActionConfig
 from app.models.data_source import DataSource
 from app.models.model_library import ModelLibrary
 from app.models.camera import Camera
 from app.models.safety_integration import (
     SafetyEventInstance,
     SafetyEventTimelineLog,
-    VisualEventDetail,
 )
 from app.api.health import _get_gpu_info
 from app.core.config import settings
@@ -1575,6 +1574,15 @@ class ECAEngine:
 
         risk = {1: "LOW", 2: "MEDIUM", 3: "HIGH"}.get(int(event.risk_level or 1), "LOW")
         observation = dict(camera_data or {})
+        camera = db.query(Camera).filter(Camera.id == source.device_id).first() if source.device_id else None
+        observation["visual"] = {
+            **dict(observation.get("visual") or {}),
+            "camera_id": source.device_id,
+            "camera_name": camera.camera_name if camera else source.source_name,
+            "target_type": "qwen_camera_screening",
+            "confidence": self._max_camera_confidence(observation),
+            "screening": {key: value for key, value in observation.items() if key != "visual"},
+        }
 
         risk_rank = {"LOW": 1, "MEDIUM": 2, "HIGH": 3}
         if active:
@@ -1606,21 +1614,6 @@ class ECAEngine:
         db.add(instance)
         db.flush()
 
-        camera = None
-        if source.device_id:
-            camera = db.query(Camera).filter(Camera.id == source.device_id).first()
-        db.add(VisualEventDetail(
-            event_instance_id=instance.id,
-            camera_id=source.device_id or 0,
-            camera_name=(camera.camera_name if camera else source.source_name),
-            target_type="qwen_camera_screening",
-            target_id=None,
-            confidence=self._max_camera_confidence(observation),
-            extra={
-                "screening": observation,
-                "source_id": source.id,
-            },
-        ))
         db.add(SafetyEventTimelineLog(
             event_instance_id=instance.id,
             event_id=event.id,

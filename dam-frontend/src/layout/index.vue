@@ -80,7 +80,7 @@ import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores'
 import {
-  ArrowDown, Bell, DataAnalysis, Setting,
+  ArrowDown, DataAnalysis, Setting,
 } from '@element-plus/icons-vue'
 import {
   AlarmTriangleIcon,
@@ -112,6 +112,7 @@ const navList = [
   { name: '实时监控', path: '/monitor', icon: RealtimeMonitorIcon },
   { name: '告警管理', path: '/alarm', icon: AlarmTriangleIcon },
   { name: '数据管理', path: '/document', icon: DocumentSheetIcon },
+  { name: '系统管理', path: '/system', icon: Setting },
 ]
 
 // 各模块对应的菜单
@@ -132,37 +133,26 @@ const menuMap = {
     },
     {
       name: '视频监测',
+      path: '/monitor/camera',
       icon: VideoMonitorIcon,
-      children: [
-        { name: '视频监控', path: '/monitor/camera', icon: VideoMonitorIcon },
-        { name: '设备管理', path: '/monitor/camera/devices', icon: Setting },
-        { name: '信息配置', path: '/monitor/config', icon: Setting },
-      ],
-    },
-    {
-      name: '无人机监测',
-      path: '/monitor/drone',
-      icon: 'drone-custom-icon',
     },
   ],
   '/alarm': [
     {
       name: '告警管理',
+      path: '/alarm/safety-events',
       icon: AlarmTriangleIcon,
-      children: [
-        { name: '安全事件', path: '/alarm/safety-events', icon: Bell },
-      ],
     },
   ],
+  '/system': [
+    { name: '设备管理', path: '/system/devices', icon: Setting },
+    { name: '信息配置', path: '/system/config', icon: Setting },
+    { name: '无人机监测', path: '/system/drone', icon: 'drone-custom-icon' },
+    { name: '模型管理', path: '/system/models', icon: DataAnalysis },
+  ],
   '/document': [
-    {
-      name: '数据管理',
-      icon: DocumentSheetIcon,
-      children: [
-        { name: '文档管理', path: '/document/hub', icon: DocumentSheetIcon },
-        { name: '知识库', path: '/document/knowledge', icon: DataAnalysis },
-      ],
-    },
+    { name: '文档管理', path: '/document/hub', icon: DocumentSheetIcon },
+    { name: '知识库', path: '/document/knowledge', icon: DataAnalysis },
   ],
 }
 
@@ -182,7 +172,7 @@ const isDashboard = computed(() => route.path === '/dashboard')
 // 需要显示侧边栏的模块
 const showSiderbar = computed(() => {
   const path = route.path
-  return path.startsWith('/monitor') || path.startsWith('/alarm') || path.startsWith('/document')
+  return path.startsWith('/monitor') || path.startsWith('/alarm') || path.startsWith('/system') || path.startsWith('/document')
 })
 
 // 当前菜单

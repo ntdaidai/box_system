@@ -79,7 +79,7 @@ class DamWorkflowClientTests(unittest.TestCase):
                 "images": ["a.jpg"],
                 "snapshot_url": "b.jpg",
                 "minio_url": "http://localhost:9000/dam/c.jpg",
-                "object_name": "safety-events/snapshots/d.jpg",
+                "object_name": "safety-events/camera-snapshots/d.jpg",
                 "bucket_object": {
                     "bucket": "images",
                     "object_name": "safety-events/e.jpg",
@@ -92,7 +92,7 @@ class DamWorkflowClientTests(unittest.TestCase):
             [
                 "a.jpg",
                 "http://localhost:9000/dam/c.jpg",
-                "safety-events/snapshots/d.jpg",
+                "safety-events/camera-snapshots/d.jpg",
                 "images/safety-events/e.jpg",
                 "b.jpg",
             ],
@@ -121,13 +121,13 @@ class DamWorkflowClientTests(unittest.TestCase):
             event=event,
             instance=instance,
             sensor_data={
-                "video_url": "safety-events/videos/a.mp4",
+                "video_url": "safety-events/evidence-videos/a.mp4",
                 "media_objects": [{"type": "video", "bucket": "videos", "object_name": "b.mp4"}],
             },
         )
 
-        self.assertEqual(payload["videos"], ["safety-events/videos/a.mp4"])
-        self.assertIn({"type": "video", "path": "safety-events/videos/a.mp4"}, payload["media_objects"])
+        self.assertEqual(payload["videos"], ["safety-events/evidence-videos/a.mp4"])
+        self.assertIn({"type": "video", "path": "safety-events/evidence-videos/a.mp4"}, payload["media_objects"])
         self.assertIn({"type": "video", "bucket": "videos", "object_name": "b.mp4"}, payload["media_objects"])
         self.assertEqual(payload["sensor_data"]["videos"], payload["videos"])
 

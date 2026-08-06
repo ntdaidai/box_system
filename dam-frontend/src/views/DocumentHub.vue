@@ -42,9 +42,15 @@
         </el-select>
       </div>
       <div class="filter-actions">
-        <el-button type="primary" class="upload-button" @click="showUploadDialog">
-          <el-icon><Upload /></el-icon>
-          上传文档
+        <el-button
+          type="primary"
+          class="export-selected-button"
+          :disabled="selectedDocumentIds.length === 0"
+          :loading="exportingSelected"
+          @click="exportSelectedDocuments"
+        >
+          <el-icon><Download /></el-icon>
+          导出勾选文档
         </el-button>
       </div>
     </div>
@@ -83,15 +89,6 @@
       <div class="batch-status">
         已选择 <strong>{{ selectedDocumentIds.length }}</strong> 个文档
       </div>
-      <el-button
-        class="batch-button"
-        :disabled="selectedDocumentIds.length === 0"
-        :loading="exportingSelected"
-        @click="exportSelectedDocuments"
-      >
-        <el-icon><Download /></el-icon>
-        导出勾选文档
-      </el-button>
       <div class="month-export">
         <el-date-picker
           v-model="exportMonth"
@@ -185,7 +182,7 @@
     <div v-if="!loading && filteredDocuments.length === 0" class="empty-state">
       <el-icon class="empty-icon"><FolderOpened /></el-icon>
       <h3>暂无文档</h3>
-      <p>点击右上方“上传文档”按钮开始上传</p>
+      <p>暂无可导出的文档</p>
     </div>
 
     <el-dialog
@@ -229,33 +226,6 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="uploadDialogVisible" title="上传文档" width="500px">
-      <el-upload
-        class="upload-area"
-        drag
-        :auto-upload="false"
-        :file-list="uploadFileList"
-        :on-change="handleFileChange"
-        :before-upload="beforeUpload"
-        accept=".docx,.doc,.xlsx,.xls,.pptx,.ppt,.pdf,.odt,.ods,.odp,.csv,.txt"
-        multiple
-      >
-        <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
-        <div class="el-upload__text">
-          拖拽文件到此处，或 <em>点击选择</em>
-        </div>
-        <template #tip>
-          <div class="el-upload__tip">
-            支持 Word、Excel、PPT、PDF 等格式，单个文件不超过 50MB
-          </div>
-        </template>
-      </el-upload>
-      <template #footer>
-        <el-button @click="uploadDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="uploading" @click="handleUpload">上传</el-button>
-      </template>
-    </el-dialog>
-
     <el-dialog
       v-model="previewDialogVisible"
       class="document-preview-dialog"
@@ -291,7 +261,7 @@ import { ref, computed, onMounted, onActivated, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Upload, UploadFilled, Search, Document, FolderOpened,
+  Search, Document, FolderOpened,
   Clock, Download, ArrowLeft
 } from '@element-plus/icons-vue'
 import axios from 'axios'
@@ -301,7 +271,6 @@ const router = useRouter()
 const route = useRoute()
 
 const loading = ref(false)
-const uploading = ref(false)
 const exportingSelected = ref(false)
 const exportingMonth = ref(false)
 const deletingDocumentIds = ref([])
@@ -316,9 +285,6 @@ const selectedDocumentIds = ref([])
 const exportMonth = ref('')
 const exportFormatDialogVisible = ref(false)
 const selectedExportFormat = ref('source')
-
-const uploadDialogVisible = ref(false)
-const uploadFileList = ref([])
 
 const previewDialogVisible = ref(false)
 const previewTitle = ref('')

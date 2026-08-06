@@ -23,8 +23,8 @@
 ## 2. 明确边界
 
 - 暂不修改：用户表、模型库、工作流模块。
-- 模型库与本业务只保留 `event_action_config.model_id` 这一可选耦合点。
-- 原 `alarm` 表已删除；旧 `/api/alarm/*` 路径保留为兼容层，内部读取 `safety_event_instance`。
+- 模型库与本业务只保留 `event_action.model_id` 这一可选耦合点。
+- 原 `alarm` 表和旧 `/api/alarm/*` 兼容接口均已删除；告警列表读取 `safety_event_instance`。
 - `analysis_report` 保留为报告归档表，只保存报告编号、标题、类型、日期和 MinIO 地址。
 - 巡查报告入口保留；日报、月报和事件分析报告都应归档到 `analysis_report`。
 - 无人机可在监控总览和实时数据中静态展示，但它不是 `data_source`。
@@ -37,13 +37,12 @@
 data_source
   -> condition_library
   -> event_condition -> event_library
-  -> event_action_config
+  -> event_action
 
 camera_device -> camera_detection_zone
-event_action_config -> broadcast_device / broadcast_template / drone / route
+event_action -> broadcast_device / broadcast_template / drone / route
 
 event_library -> safety_event_instance
-                  -> visual_event_detail（仅视觉事件）
                   -> safety_event_timeline_log
                   -> safety_event_evidence
                   -> safety_event_task（需要人工处置时）
@@ -59,7 +58,7 @@ event_library -> safety_event_instance
 | `condition_library`        | 条件库         | `source_id`、`expression`、`time_window`、`duration`、`is_activate`              |
 | `event_library`            | 事件库         | `event_code`、`event_category`、`risk_level`、`recovery_duration`、`route_role_id`、`is_activate` |
 | `event_condition`          | 事件与条件关系 | `event_id`、`condition_id`、`logic_type`、`group_id`、`sort_order`               |
-| `event_action_config`      | 事件动作配置   | `event_id`、`step_order`、`action_type`、设备/模板/无人机/航线、重复策略、启用状态 |
+| `event_action`             | 事件动作配置   | `event_id`、`step_order`、`action_type`、设备/模板/无人机/航线、重复策略、启用状态 |
 
 注意：
 
@@ -107,7 +106,7 @@ event_library -> safety_event_instance
 - `broadcast_device`：广播设备台账；演示设备正式名称为“一号点广播”。
 - `broadcast_template`：自动广播文案模板。
 - 不再维护摄像头和广播设备绑定表；一号摄像头触发事件后按事件动作配置播放广播。
-- 自动广播必须同时选定广播设备和模板，并由 `event_action_config` 保存。
+- 自动广播必须同时选定广播设备和模板，并由 `event_action` 保存。
 - 一键喊话是用户实时录音，不使用模板、不记录说话文本，只记录用户、设备、执行结果和时间线。
 
 **`data_source.device_id`**
@@ -194,7 +193,7 @@ event_library -> safety_event_instance
 
 例如高温报警不能因为一次正常读数立刻完成，必须持续正常达到恢复时间。传感器与视觉共用实例、时间线、证据和人工操作表。
 
-当前实现边界：传感器已经统一实例和闭环日志，传感器和视觉动作配置统一读取 `event_action_config`。以后若要求传感器事件也自动广播、派无人机或生成人工任务，应继续复用统一动作配置和执行器，不能恢复旧 `safety_event/event_action` 执行日志方案，也不能再建一套传感器闭环表。
+当前实现边界：传感器已经统一实例和闭环日志，传感器和视觉动作配置统一读取 `event_action`。以后若要求传感器事件也自动广播、派无人机或生成人工任务，应继续复用统一动作配置和执行器，不能恢复旧 `safety_event/event_action` 执行日志方案，也不能再建一套传感器闭环表。
 
 ## 7. 标准处置流程
 
@@ -210,8 +209,8 @@ event_library -> safety_event_instance
 
 动作类型至少包括：`camera_snapshot`、`broadcast`、`drone_dispatch`、`staff_task`。
 
-- `event_action_config` 一行描述某个事件的一个动作步骤，按 `step_order` 顺序执行。
-- 广播设备、模板、无人机、航线、超时、失败策略、重试次数和广播重复策略均直接保存在 `event_action_config`。
+- `event_action` 一行描述某个事件的一个动作步骤，按 `step_order` 顺序执行。
+- 广播设备、模板、无人机、航线、超时、失败策略、重试次数和广播重复策略均直接保存在 `event_action`。
 - 当前广播默认重复策略为间隔 60 秒、最多 3 次，可在具体动作配置中修改。
 - 缺少广播设备/模板或无人机/航线时，应明确报配置错误，不能偷偷回退到旧数据。
 - 流程步骤完成表示动作已成功下发/接受，不要求等待无人机返航或工作人员最终处置完成。
@@ -225,6 +224,7 @@ event_library -> safety_event_instance
 - `instance_no`：业务唯一编号，例如 `EVT_20260804_xxx`。
 - `current_event_id`：当前阶段对应的事件库记录，可随风险升级改变。
 - `analysis_report_id`：可选，关联事件闭环分析报告；日报和月报不一定关联事件实例。
+- `zone_id`：可选，关联当前检测区域；历史区域名称和类型以视觉快照为准。
 - `event_category`、`source_type`、`source_id`、`data_source_id`：事件分类和来源。
 - `risk_level`、`max_risk_level`：当前和历史最高风险。
 - `state`：`ACTIVE/RESOLVED`。
@@ -232,9 +232,7 @@ event_library -> safety_event_instance
 - `started_at`、`last_observed_at`、`resolved_at`、`resolve_reason`。
 - `summary`、`latest_observation`、`version`。
 
-### `visual_event_detail`
-
-视觉事件一对一补充：摄像头、目标类型、`target_id`、区域、置信度和少量 `extra`。传感器事件没有此行。
+视觉事件不再使用独立详情表。摄像头、目标类型、`target_id`、区域名称、区域类型、置信度和 bbox 快照统一保存在 `latest_observation.visual`；摄像头基础信息可通过 `data_source_id/source_id` 回查。
 
 ### `safety_event_timeline_log`
 
@@ -274,7 +272,7 @@ event_library -> safety_event_instance
 - 设备管理 `/monitor/camera/devices`：摄像头管理、广播设备和广播模板；不再配置摄像头广播绑定。
 - 区域配置入口会打开视频监控区域抽屉；支持 3 至 15 点多边形、区域类型和启用状态，不配置触发时间。
 - 信息配置 `/monitor/config`：可配置视觉条件持续时间、事件参数、智能路由角色逻辑 ID，以及每个事件的动作步骤和具体动作目标。
-- 告警管理 `/alarm/safety-events`：统一安全事件列表和详情；旧 `/alarm/list` 页面通过实例表兼容展示，不再依赖 `alarm` 表。
+- 告警管理 `/alarm/safety-events`：统一安全事件列表和详情；旧 `/alarm/list` 路由重定向到该页面。
 - 详情页重点展示：当前状态、风险、来源、视觉详情、完整时间线、证据和人工任务。
 - 视频监控的检测事件展示也读取统一事件实例，不使用旧安全闭环表。
 - 小程序保留四项核心能力：事件列表、实时监控、一键喊话、人工处置。
@@ -284,7 +282,7 @@ event_library -> safety_event_instance
 ## 10. 主要接口
 
 - 摄像头：`/api/v1/camera/devices`、`/devices/test-connection`、`/{camera_id}/zones`、视频流和检测接口。
-- 广播：`/api/broadcast/devices`、`/templates`、`/camera/{camera_id}/devices`、`/audio/play`。
+- 广播：`/api/broadcast/devices`、`/templates`、`/preview`、`/play`、`/audio/play`。
 - 融合配置：`/api/v1/integration/config` 及 conditions/events/flows/actions 更新接口。
 - 统一事件：`/api/v1/integration/safety-events`、详情、`operation`、WebSocket。
 - ECA 定义读取与调度：`/api/v1/eca/...`。
@@ -297,9 +295,9 @@ event_library -> safety_event_instance
 - 不得恢复字符串摄像头业务 ID，所有摄像头关联使用 `camera_device.id`。
 - 不得恢复矩形检测区域、绘制 ID、区域表触发时间或读取 rect 的 fallback。
 - 不得让视觉检测再次调用旧通用 ECA 回调并重复创建事件。
-- 不得恢复旧 `event_action/action_flow/action_step/event_action_step_config` 拆表结构；事件动作统一使用 `event_action_config`。
+- 不得恢复旧 `event_action/action_flow/action_step/event_action_step_config` 拆表结构；事件动作统一使用当前 `event_action` 表。
 - 不得恢复 `camera_zone_condition` 或区域级触发时间；触发持续时间只在 `condition_library` 按事件码配置。
-- 不得恢复旧 `alarm` 表；旧告警接口只能作为 `safety_event_instance` 的兼容层。
+- 不得恢复旧 `alarm` 表或旧 `/api/alarm/*` 兼容接口。
 - 不得恢复旧 `safety_event`、旧安全事件日志或旧视觉闭环接口。
 - 不得让广播/无人机从旧测试 `event_action` 数据推断具体配置。
 - 不得恢复旧 `/api/device`、`/api/rule`、`/api/v1/camera/add|list|safety` 或 `/api/v1/eca/logs` 接口。
@@ -310,15 +308,16 @@ event_library -> safety_event_instance
 
 截至本文生成时：
 
-- ORM 已切换到 `event_action_config`；旧 `event_action/action_flow/action_step/event_action_step_config` 和 `camera_broadcast_device` 由迁移脚本 `dam-backend/scripts/migrate_20260806_event_action_config_consolidation.py` 备份并删除。
-- 第二阶段迁移脚本 `dam-backend/scripts/migrate_20260806_event_runtime_simplification.py` 已执行并记录到 `schema_migration`：删除 `alarm`、`camera_zone_condition`，清理旧 `[ZONE_ECA:*]` 和旧 PRESENT 视觉条件，保留 6 条业务视觉条件，调整 `analysis_report` 并为 `safety_event_instance` 增加 `analysis_report_id`。
-- 旧 `/api/alarm/*` 路径仍存在，但只作为兼容层读取和更新 `safety_event_instance`；不得再新增 `Alarm` ORM 或 `alarm` 表。
-- `visual_event_detail` 当前仍保守保留，因为运行时事件详情、巡查报告和人工升级判断仍有直接读取。下一阶段若继续减表，应先把区域、对象类型、置信度和展示详情收敛到 `safety_event_instance.latest_observation` 或少量实例字段，再删除该表。
+- ORM 已切换到当前 `event_action` 表；旧 `event_action/action_flow/action_step/event_action_step_config`、`camera_broadcast_device` 和中间过渡表 `event_action_config` 已由迁移脚本备份并清理。
+- 第二阶段迁移脚本 `dam-backend/scripts/migrate_20260806_event_runtime_simplification.py` 已执行：删除 `alarm`、`camera_zone_condition`，清理旧 `[ZONE_ECA:*]` 和旧 PRESENT 视觉条件，保留 6 条业务视觉条件，调整 `analysis_report` 并为 `safety_event_instance` 增加 `analysis_report_id`。
+- 第三阶段迁移脚本 `dam-backend/scripts/migrate_20260806_phase3_cleanup.py` 已执行：`event_action_config` 重命名为 `event_action`，`safety_event_instance` 增加 `zone_id`，旧 `visual_event_detail` 回填到 `latest_observation.visual` 后备份删除。备份文件：`backups/phase3_cleanup_20260806_132743.json`。
+- `schema_migration` 已确认无业务运行依赖，并通过 `dam-backend/scripts/drop_schema_migration.py --apply` 备份后删除。备份文件：`backups/schema_migration_drop_20260806_134220.json`。
+- 旧 `/api/alarm/*` 路径、`src/api/alarm.js`、旧告警列表和旧告警报告页面已删除；Dashboard 最近告警和统计使用统一安全事件接口。
+- 摄像头广播绑定接口已删除；广播设备展示读取全局可用广播设备，实际自动播放目标由 `event_action` 决定。
 - 信息配置页已改为事件策略和动作流程配置，不再依赖旧流程三表。
 - 区域配置页不再保存逐区域触发时间；触发时间统一在信息配置页的触发条件中配置。
-- 后端针对性测试最近结果：广播服务 11 通过、无人机派飞 2 通过、传感器统一实例 1 通过、旧告警兼容映射 3 通过。
-- 前端生产构建通过。
-- `schema_migration` 仍作为手写迁移脚本的幂等记录表保留；本轮迁移稳定后再评估是否删除。
+- 后端针对性测试最近结果：广播/无人机/统一实例/巡查报告 14 通过，安全事件引擎/ECA 风灾/缓存 14 通过，摄像头 API 合约 4 通过，摄像头实时流 7 通过；`compileall` 和 `app.main` 导入检查通过。
+- 前端生产构建通过；`localResponseCache.test.mjs` 通过；仅保留既有 Sass legacy API、Rollup PURE 注释和大 chunk 警告。
 - 当前工作区有用户及前一轮清理留下的未提交修改，接手 Agent 必须先执行 `git status`，不得回滚不属于自己的更改。
 
 仍需持续验证的实现细节：目标明确从区域离开时已有离场帧可生成抓拍；目标直接从检测结果中消失时，当前 missing 分支可能没有把最新画面传给 `_resolve`。后续改动必须补测“完全消失后自动闭环也有离场证据”，但不要因此改变本文定义的闭环规则。

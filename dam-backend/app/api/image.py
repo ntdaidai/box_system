@@ -56,6 +56,7 @@ async def upload_image(
         image_data=content,
         content_type=file.content_type,
         filename=file.filename,
+        folder="safety-events/manual-images",
     )
 
     if not url:
@@ -116,6 +117,7 @@ async def upload_image_base64(
             image_data=content,
             content_type=content_type,
             filename=filename,
+            folder="safety-events/manual-images",
         )
 
         if not url:

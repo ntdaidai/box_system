@@ -1,0 +1,41 @@
+{
+  "operation": "drop_schema_migration",
+  "audit": {
+    "schema_migration_exists": true,
+    "schema_migration_rows": 8
+  },
+  "rows": [
+    {
+      "id": "20260802_eca_safety_integration_v1",
+      "applied_at": "2026-08-02T12:41:41"
+    },
+    {
+      "id": "20260802_unused_legacy_cleanup_v1",
+      "applied_at": "2026-08-02T21:37:24"
+    },
+    {
+      "id": "20260803_action_config_cutover_v1",
+      "applied_at": "2026-08-03T12:22:40"
+    },
+    {
+      "id": "20260803_camera_primary_key_cutover_v1",
+      "applied_at": "2026-08-03T09:53:24"
+    },
+    {
+      "id": "20260803_remove_legacy_event_log_v1",
+      "applied_at": "2026-08-03T10:12:10"
+    },
+    {
+      "id": "20260806_event_action_config_consolidation_v1",
+      "applied_at": "2026-08-06T11:46:48"
+    },
+    {
+      "id": "20260806_event_runtime_simplification_v1",
+      "applied_at": "2026-08-06T11:58:04"
+    },
+    {
+      "id": "20260806_phase3_cleanup_v1",
+      "applied_at": "2026-08-06T13:27:44"
+    }
+  ]
+}

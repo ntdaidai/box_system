@@ -17,7 +17,6 @@ from app.models.safety_integration import (
     SafetyEventEvidence,
     SafetyEventInstance,
     SafetyEventTimelineLog,
-    VisualEventDetail,
 )
 
 
@@ -156,6 +155,19 @@ def seed() -> list[str]:
 
             resolved = spec["resolved_at"] is not None
             observation = {**spec["observation"], "_test_data": True, "_test_purpose": "patrol_report_validation"}
+            visual = spec.get("visual")
+            if visual:
+                observation["visual"] = {
+                    "camera_id": source.device_id,
+                    "camera_name": source.source_name,
+                    "target_type": visual["target_type"],
+                    "target_id": visual["target_id"],
+                    "zone_name": visual["zone_name"],
+                    "zone_type": visual["zone_type"],
+                    "confidence": visual["confidence"],
+                    "model": "report-validation-visual",
+                    "_test_data": True,
+                }
             instance = SafetyEventInstance(
                 instance_no=spec["instance_no"],
                 current_event_id=event.id,
@@ -211,19 +223,6 @@ def seed() -> list[str]:
 
             visual = spec.get("visual")
             if visual:
-                db.add(VisualEventDetail(
-                    event_instance_id=instance.id,
-                    camera_id=source.device_id,
-                    camera_name=source.source_name,
-                    target_type=visual["target_type"],
-                    target_id=visual["target_id"],
-                    zone_name=visual["zone_name"],
-                    zone_type=visual["zone_type"],
-                    confidence=visual["confidence"],
-                    extra={"_test_data": True, "model": "report-validation-visual"},
-                    create_time=spec["started_at"],
-                    update_time=spec["last_observed_at"],
-                ))
                 db.add(SafetyEventEvidence(
                     event_instance_id=instance.id,
                     evidence_type="IMAGE",

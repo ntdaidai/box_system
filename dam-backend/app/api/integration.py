@@ -14,14 +14,13 @@ from app.core.security import require_auth
 from app.models.broadcast import BroadcastDevice, BroadcastTemplate
 from app.models.camera import Camera
 from app.models.condition_library import ConditionLibrary
-from app.models.event_action_config import EventActionConfig
+from app.models.event_action import EventActionConfig
 from app.models.event_library import EventLibrary
 from app.models.safety_event_task import SafetyEventTask
 from app.models.safety_integration import (
     SafetyEventEvidence,
     SafetyEventInstance,
     SafetyEventTimelineLog,
-    VisualEventDetail,
 )
 from app.models.user import User
 from app.services.safety_event_operation_service import operate_safety_event as apply_safety_event_operation
@@ -383,6 +382,30 @@ def get_today_patrol_report(
     }
 
 
+@router.get("/safety-events/statistics", summary="获取统一安全事件统计")
+def safety_event_statistics(
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_auth),
+):
+    total = db.query(SafetyEventInstance).count()
+    high_level = db.query(SafetyEventInstance).filter(SafetyEventInstance.max_risk_level == "HIGH").count()
+    handled = db.query(SafetyEventInstance).filter(
+        or_(
+            SafetyEventInstance.state == "RESOLVED",
+            SafetyEventInstance.status.in_(("COMPLETED", "FALSE_ALARM")),
+        )
+    ).count()
+    return {
+        "code": 200,
+        "data": {
+            "total": total,
+            "unhandled": max(total - handled, 0),
+            "handled": handled,
+            "high_level": high_level,
+        },
+    }
+
+
 @router.get("/safety-events/{instance_id}", summary="获取统一安全事件详情")
 def get_safety_event_detail(
     instance_id: int,
@@ -393,7 +416,9 @@ def get_safety_event_detail(
     if not instance:
         raise HTTPException(status_code=404, detail="安全事件不存在")
     event = db.query(EventLibrary).filter(EventLibrary.id == instance.current_event_id).first()
-    visual = db.query(VisualEventDetail).filter(VisualEventDetail.event_instance_id == instance.id).first()
+    observation = dict(instance.latest_observation or {})
+    visual = observation.get("visual")
+    visual = dict(visual) if isinstance(visual, dict) else {}
     timeline = db.query(SafetyEventTimelineLog).filter(
         SafetyEventTimelineLog.event_instance_id == instance.id
     ).order_by(SafetyEventTimelineLog.create_time.asc(), SafetyEventTimelineLog.id.asc()).all()
@@ -404,10 +429,14 @@ def get_safety_event_detail(
     return {"code": 200, "data": {
         "event": _event_dict(instance, event),
         "visual_detail": None if not visual else {
-            "camera_id": visual.camera_id, "camera_name": visual.camera_name,
-            "target_type": visual.target_type, "target_id": visual.target_id,
-            "zone_id": visual.zone_id, "zone_name": visual.zone_name, "zone_type": visual.zone_type,
-            "confidence": float(visual.confidence) if visual.confidence is not None else None,
+            "camera_id": visual.get("camera_id") or instance.source_id,
+            "camera_name": visual.get("camera_name"),
+            "target_type": visual.get("target_type"),
+            "target_id": visual.get("target_id"),
+            "zone_id": instance.zone_id or visual.get("zone_id"),
+            "zone_name": visual.get("zone_name"),
+            "zone_type": visual.get("zone_type"),
+            "confidence": float(visual["confidence"]) if visual.get("confidence") is not None else None,
         },
         "timeline": [{
             "id": row.id, "stage": row.stage, "title": row.title,
