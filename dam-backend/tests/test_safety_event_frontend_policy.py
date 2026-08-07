@@ -16,8 +16,8 @@ class SafetyEventFrontendPolicyTests(unittest.TestCase):
         camera_view = read_frontend("src/views/Monitor/CameraView.vue")
         event_view = read_frontend("src/views/Alarm/SafetyEvents.vue")
 
-        self.assertIn("无需人工处置", camera_view)
-        self.assertIn("requiresManual(event)", camera_view)
+        self.assertIn("一键喊话", camera_view)
+        self.assertIn("处置任务", event_view)
         self.assertIn("安全事件实例", event_view)
         self.assertIn("getUnifiedSafetyEvents", event_view)
 
@@ -25,9 +25,9 @@ class SafetyEventFrontendPolicyTests(unittest.TestCase):
         camera_view = read_frontend("src/views/Monitor/CameraView.vue")
         event_view = read_frontend("src/views/Alarm/SafetyEvents.vue")
 
-        self.assertIn("接受任务", camera_view)
-        self.assertIn("现场处置", camera_view)
         self.assertIn("一键喊话", camera_view)
+        self.assertIn("接受任务", event_view)
+        self.assertIn("现场处置", event_view)
         self.assertIn("升级风险", event_view)
         self.assertIn("标记误报", event_view)
         self.assertIn("人工闭环", event_view)

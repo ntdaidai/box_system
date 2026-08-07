@@ -79,21 +79,21 @@ def init_wind_conditions():
                 "expression": "wind_speed_ms >= 20.8 AND wind_speed_ms < 24.5",
                 "time_window": 5,
                 "duration": 3,
-                "description": "风速20.8~24.5m/s，建筑物有损坏，持续3分钟触发"
+                "description": "风速20.8~24.5m/s，建筑物有损坏，持续3秒触发"
             },
             {
                 "name": "10级狂风",
                 "expression": "wind_speed_ms >= 24.5 AND wind_speed_ms < 28.5",
                 "time_window": 5,
                 "duration": 3,
-                "description": "风速24.5~28.5m/s，树木拔起，建筑物严重损坏，持续3分钟触发"
+                "description": "风速24.5~28.5m/s，树木拔起，建筑物严重损坏，持续3秒触发"
             },
             {
                 "name": "11级暴风",
                 "expression": "wind_speed_ms >= 28.5 AND wind_speed_ms < 32.7",
                 "time_window": 5,
                 "duration": 3,
-                "description": "风速28.5~32.7m/s，有则必有重大损毁，持续3分钟触发"
+                "description": "风速28.5~32.7m/s，有则必有重大损毁，持续3秒触发"
             },
             {
                 "name": "12级飓风",

@@ -508,7 +508,7 @@ class SqlSafetyEventStore:
         timeline = SafetyEventTimelineLog(
             event_instance_id=instance.id,
             event_id=instance.current_event_id,
-            action_config_id=action_config.id if action_config else None,
+            event_action_id=action_config.id if action_config else None,
             stage=self._stage_for_log_type(log_type),
             action_key=action_key,
             log_type=log_type,

@@ -1,11 +1,17 @@
 <template>
   <div class="events-page">
     <header class="page-header"><div><p>告警管理 / 安全事件</p><h2>安全事件实例</h2></div><el-button :icon="Refresh" :loading="loading" @click="loadEvents">刷新</el-button></header>
+    <section class="alarm-overview">
+      <article><span>事件总数</span><strong>{{ total }}</strong><small>当前筛选范围</small></article>
+      <article><span>待处理</span><strong>{{ overview.pending }}</strong><small>需要人工确认</small></article>
+      <article><span>高风险</span><strong>{{ overview.high }}</strong><small>优先处置</small></article>
+      <article><span>处理中</span><strong>{{ overview.processing }}</strong><small>已进入流程</small></article>
+    </section>
     <section class="filters"><el-select v-model="query.status" clearable placeholder="处置状态"><el-option label="待处理" value="PENDING" /><el-option label="处理中" value="PROCESSING" /><el-option label="已完成" value="COMPLETED" /><el-option label="误报" value="FALSE_ALARM" /></el-select><el-select v-model="query.risk_level" clearable placeholder="风险等级"><el-option label="低风险" value="LOW" /><el-option label="中风险" value="MEDIUM" /><el-option label="高风险" value="HIGH" /></el-select><el-input v-model.trim="query.keyword" clearable placeholder="事件编号、名称或摘要" @keyup.enter="loadEvents" /><el-button type="primary" :icon="Search" @click="loadEvents">查询</el-button></section>
     <section class="table-panel" :class="{ 'is-empty': !items.length }" v-loading="loading">
       <el-table v-if="items.length" class="events-table" :data="items" row-key="id">
-        <el-table-column label="事件编号" min-width="190">
-          <template #default="{ row }"><span class="event-no">{{ row.instance_no || '--' }}</span></template>
+        <el-table-column label="序号" width="86">
+          <template #default="{ $index }"><span class="event-no">{{ (query.page - 1) * query.page_size + $index + 1 }}</span></template>
         </el-table-column>
         <el-table-column label="事件名称" min-width="150">
           <template #default="{ row }"><strong class="event-name">{{ row.event_name || '未命名事件' }}</strong></template>
@@ -131,8 +137,13 @@
 
       <template v-if="detail.event?.state === 'ACTIVE'" #footer>
         <div class="detail-drawer-footer">
-          <div class="footer-hint"><strong>等待人工确认</strong><span>请根据现场情况选择处置结果</span></div>
+          <div class="footer-hint">
+            <strong>{{ detail.event?.risk_level === 'HIGH' ? '等待人工处置' : '等待人工确认' }}</strong>
+            <span>{{ detail.event?.risk_level === 'HIGH' ? '请先接单，再记录现场处置结果' : '请根据现场情况选择处置结果' }}</span>
+          </div>
           <div class="footer-actions">
+            <el-button :disabled="detail.event?.risk_level !== 'HIGH'" plain @click="operate('ACCEPT_TASK')">接受任务</el-button>
+            <el-button :disabled="detail.event?.risk_level !== 'HIGH'" plain @click="operate('COMPLETE_TASK')">现场处置</el-button>
             <el-button type="danger" plain @click="operate('UPGRADE')">升级风险</el-button>
             <el-button plain @click="operate('FALSE_ALARM')">标记误报</el-button>
             <el-button type="primary" @click="operate('RESOLVE')">完成并闭环</el-button>
@@ -146,7 +157,8 @@
 </template>
 
 <script setup>
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Picture, Refresh, Search } from '@element-plus/icons-vue'
 import { getUnifiedSafetyEventDetail, getUnifiedSafetyEvents, operateUnifiedSafetyEvent } from '@/api/integration'
@@ -154,10 +166,79 @@ import { getUnifiedSafetyEventDetail, getUnifiedSafetyEvents, operateUnifiedSafe
 const loading = ref(false), items = ref([]), total = ref(0), detailVisible = ref(false), evidenceVisible = ref(false), currentEvidence = ref([])
 const query = reactive({ status: '', risk_level: '', keyword: '', page: 1, page_size: 20 })
 const detail = reactive({ event: null, visual_detail: null, timeline: [], evidence: [], tasks: [] })
+const route = useRoute()
+const router = useRouter()
+const overview = computed(() => ({
+  pending: items.value.filter(item => item.status === 'PENDING').length,
+  processing: items.value.filter(item => item.status === 'PROCESSING').length,
+  high: items.value.filter(item => item.risk_level === 'HIGH').length,
+}))
 async function loadEvents() { loading.value = true; try { const res = await getUnifiedSafetyEvents(query, { silentError: true }); items.value = res.data?.items || []; total.value = res.data?.total || 0 } catch (error) { ElMessage.error('告警数据暂时不可达，请检查后端服务') } finally { loading.value = false } }
-async function openDetail(row) { const res = await getUnifiedSafetyEventDetail(row.id); Object.assign(detail, res.data || {}); detailVisible.value = true }
+async function openDetail(row) { if (!row?.id) return; await loadDetail(row.id); await router.push({ name: 'AlarmSafetyEventDetail', params: { id: row.id } }).catch(() => null) }
 function showEvidence(logId) { currentEvidence.value = detail.evidence.filter(item => item.timeline_log_id === logId); evidenceVisible.value = true }
-async function operate(action) { let risk_level; if (action === 'UPGRADE') risk_level = detail.event.risk_level === 'LOW' ? 'MEDIUM' : 'HIGH'; const { value: reason } = await ElMessageBox.prompt('请输入处置说明', action === 'FALSE_ALARM' ? '标记误报' : (action === 'RESOLVE' ? '人工闭环' : '升级风险'), { inputValue: '', inputPlaceholder: '简要说明原因' }); await operateUnifiedSafetyEvent(detail.event.id, { action, risk_level, reason }); ElMessage.success('事件状态已更新'); await openDetail({ id: detail.event.id }); await loadEvents() }
+async function operate(action) {
+  if (!detail.event?.id) return
+  let risk_level
+  if (action === 'UPGRADE') risk_level = detail.event.risk_level === 'LOW' ? 'MEDIUM' : 'HIGH'
+  const title = ({
+    ACCEPT_TASK: '接受任务',
+    COMPLETE_TASK: '现场处置',
+    FALSE_ALARM: '标记误报',
+    RESOLVE: '人工闭环',
+    UPGRADE: '升级风险',
+  })[action] || '事件操作'
+  try {
+    const { value: reason } = await ElMessageBox.prompt('请输入处置说明', title, {
+      inputValue: '',
+      inputPlaceholder: action === 'ACCEPT_TASK' ? '可填写接单说明' : '简要说明原因',
+    })
+    await operateUnifiedSafetyEvent(detail.event.id, { action, risk_level, reason })
+    ElMessage.success('事件状态已更新')
+    await loadDetail(detail.event.id)
+    await loadEvents()
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error.response?.data?.detail || '事件操作失败')
+  }
+}
+async function loadDetail(eventId) {
+  if (!eventId) {
+    detail.event = null
+    detail.visual_detail = null
+    detail.timeline = []
+    detail.evidence = []
+    detail.tasks = []
+    detailVisible.value = false
+    return
+  }
+  const res = await getUnifiedSafetyEventDetail(eventId)
+  detail.event = res.data?.event || null
+  detail.visual_detail = res.data?.visual_detail || null
+  detail.timeline = res.data?.timeline || []
+  detail.evidence = res.data?.evidence || []
+  detail.tasks = res.data?.tasks || []
+  detailVisible.value = true
+}
+watch(
+  () => route.query.eventId,
+  async (eventId) => {
+    if (!eventId) {
+      detailVisible.value = false
+      return
+    }
+    try {
+      await loadDetail(eventId)
+    } catch {
+      ElMessage.error('安全事件详情暂时不可达，请检查后端服务')
+    }
+  },
+  { immediate: true },
+)
+watch(detailVisible, (visible) => {
+  if (!visible && route.query.eventId) {
+    router.replace({ path: '/alarm/safety-events' }).catch(() => null)
+  }
+})
 function riskTag(v) { return ({ LOW: 'success', MEDIUM: 'warning', HIGH: 'danger' })[v] || 'info' }
 function riskClass(v) { return ({ LOW: 'risk-low', MEDIUM: 'risk-medium', HIGH: 'risk-high' })[v] || 'risk-unknown' }
 function riskLevelLabel(v) { return ({ LOW: '低风险', MEDIUM: '中风险', HIGH: '高风险' })[v] || '未知风险' }
@@ -176,7 +257,7 @@ loadEvents()
 </script>
 
 <style scoped>
-.events-page { min-height: 100%; padding: 20px; color: #d9e8f8; background: #071422; }.page-header,.filters,.drawer-actions,.timeline-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }.page-header p { margin: 0 0 5px; color: #79acd0; font-size: 13px; }.page-header h2 { margin: 0; color: #f3f8fd; font-size: 25px; letter-spacing: 0; }.filters,.detail-section { margin-top: 16px; padding: 14px; border: 1px solid rgba(96,151,191,.24); border-radius: 8px; background: #0b1d30; }.filters { justify-content: flex-start; }.filters .el-select { width: 150px; }.filters .el-input { max-width: 330px; }.table-panel { margin-top: 16px; overflow: hidden; border-radius: 10px; background: rgba(11,29,48,.72); box-shadow: 0 12px 32px rgba(0,7,14,.2); }.table-panel.is-empty { border-radius: 0; background: transparent; box-shadow: none; }.table-panel :deep(.el-table__inner-wrapper::before),.table-panel :deep(.el-table__fixed-right::before) { display: none; }.table-panel :deep(th.el-table__cell) { border-bottom: 0; background: rgba(30,58,95,.58) !important; }.table-panel :deep(td.el-table__cell) { border-bottom-color: rgba(96,151,191,.1); }.table-panel .el-pagination { gap: 12px; padding: 16px; justify-content: flex-end; }.table-panel :deep(.el-pagination .btn-prev),.table-panel :deep(.el-pagination .btn-next),.table-panel :deep(.el-pager li) { width: 52px; height: 46px; min-width: 52px; margin: 0; border: 1px solid #214766; border-radius: 5px; color: #7893aa; background: #0a1a2c; font-size: 16px; transition: border-color .18s ease,color .18s ease,background .18s ease; }.table-panel :deep(.el-pager) { display: flex; gap: 12px; }.table-panel :deep(.el-pager li.is-active) { border-color: #61b5ff; color: #fff; background: #3d8ed8; }.table-panel :deep(.el-pagination button:not(:disabled):hover),.table-panel :deep(.el-pager li:not(.is-active):hover) { border-color: #3f83b8; color: #a8d5f7; background: #102a43; }.table-panel :deep(.el-pagination button:disabled) { border-color: #193b57; color: #35536b; background: #091827; opacity: 1; }.empty-state,.loading-space { display: grid; min-height: 280px; place-items: center; background: radial-gradient(circle at 50% 40%,rgba(29,78,111,.2),transparent 48%); }.empty-state :deep(.el-empty) { padding: 36px 20px; }.empty-state :deep(.el-empty__description) { margin-top: 12px; }.empty-state :deep(.el-empty__description p) { color: #9bb2c7; font-size: 15px; }.empty-state :deep(.el-empty__bottom) { margin-top: 6px; }.empty-state > :deep(.el-empty) > p,.empty-state :deep(.el-empty__bottom p) { margin: 0; color: #607d96; font-size: 13px; }.summary-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; }.summary-grid div { padding: 12px; border: 1px solid rgba(96,151,191,.2); border-radius: 6px; }.summary-grid span,.timeline-row small { display: block; color: #829bb3; font-size: 12px; }.summary-grid strong { display: block; margin-top: 6px; }.detail-section h3 { margin: 0 0 12px; font-size: 16px; letter-spacing: 0; }.timeline-row { align-items: flex-start; }.timeline-row p { margin: 5px 0; }.drawer-actions { position: sticky; bottom: 0; margin-top: 18px; padding: 12px; justify-content: flex-end; background: #0b1d30; }.evidence-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 12px; }.evidence-grid figure { margin: 0; }.evidence-grid .el-image { width: 100%; aspect-ratio: 16/9; background: #02090f; }.evidence-grid figcaption { margin-top: 6px; color: #829bb3; font-size: 12px; }
+.events-page { min-height: 100%; padding: 20px; color: #d9e8f8; background: #071422; }.page-header,.filters,.drawer-actions,.timeline-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }.page-header p { margin: 0 0 5px; color: #79acd0; font-size: 13px; }.page-header h2 { margin: 0; color: #f3f8fd; font-size: 25px; letter-spacing: 0; }.alarm-overview { display: grid; grid-template-columns: repeat(4,minmax(150px,1fr)); gap: 12px; margin-top: 16px; }.alarm-overview article { min-height: 108px; padding: 16px 18px; display: grid; align-content: center; gap: 6px; border: 1px solid rgba(96,151,191,.22); border-radius: 8px; background: #0b1d30; }.alarm-overview span,.alarm-overview small { color: #8fb1c8; font-size: 13px; }.alarm-overview strong { color: #f3f8fd; font-size: 30px; line-height: 34px; }.filters,.detail-section { margin-top: 16px; padding: 14px; border: 1px solid rgba(96,151,191,.24); border-radius: 8px; background: #0b1d30; }.filters { justify-content: flex-start; }.filters .el-select { width: 150px; }.filters .el-input { max-width: 330px; }.table-panel { margin-top: 16px; overflow: hidden; border-radius: 10px; background: rgba(11,29,48,.72); box-shadow: 0 12px 32px rgba(0,7,14,.2); }.table-panel.is-empty { border-radius: 0; background: transparent; box-shadow: none; }.table-panel :deep(.el-table__inner-wrapper::before),.table-panel :deep(.el-table__fixed-right::before) { display: none; }.table-panel :deep(th.el-table__cell) { border-bottom: 0; background: rgba(30,58,95,.58) !important; }.table-panel :deep(td.el-table__cell) { border-bottom-color: rgba(96,151,191,.1); }.table-panel .el-pagination { gap: 12px; padding: 16px; justify-content: center; }.table-panel :deep(.el-pagination .btn-prev),.table-panel :deep(.el-pagination .btn-next),.table-panel :deep(.el-pager li) { width: 52px; height: 46px; min-width: 52px; margin: 0; border: 1px solid #214766; border-radius: 5px; color: #7893aa; background: #0a1a2c; font-size: 16px; transition: border-color .18s ease,color .18s ease,background .18s ease; }.table-panel :deep(.el-pager) { display: flex; gap: 12px; }.table-panel :deep(.el-pager li.is-active) { border-color: #61b5ff; color: #fff; background: #3d8ed8; }.table-panel :deep(.el-pagination button:not(:disabled):hover),.table-panel :deep(.el-pager li:not(.is-active):hover) { border-color: #3f83b8; color: #a8d5f7; background: #102a43; }.table-panel :deep(.el-pagination button:disabled) { border-color: #193b57; color: #35536b; background: #091827; opacity: 1; }.empty-state,.loading-space { display: grid; min-height: 280px; place-items: center; background: radial-gradient(circle at 50% 40%,rgba(29,78,111,.2),transparent 48%); }.empty-state :deep(.el-empty) { padding: 36px 20px; }.empty-state :deep(.el-empty__description) { margin-top: 12px; }.empty-state :deep(.el-empty__description p) { color: #9bb2c7; font-size: 15px; }.empty-state :deep(.el-empty__bottom) { margin-top: 6px; }.empty-state > :deep(.el-empty) > p,.empty-state :deep(.el-empty__bottom p) { margin: 0; color: #607d96; font-size: 13px; }.summary-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; }.summary-grid div { padding: 12px; border: 1px solid rgba(96,151,191,.2); border-radius: 6px; }.summary-grid span,.timeline-row small { display: block; color: #829bb3; font-size: 12px; }.summary-grid strong { display: block; margin-top: 6px; }.detail-section h3 { margin: 0 0 12px; font-size: 16px; letter-spacing: 0; }.timeline-row { align-items: flex-start; }.timeline-row p { margin: 5px 0; }.drawer-actions { position: sticky; bottom: 0; margin-top: 18px; padding: 12px; justify-content: flex-end; background: #0b1d30; }.evidence-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 12px; }.evidence-grid figure { margin: 0; }.evidence-grid .el-image { width: 100%; aspect-ratio: 16/9; background: #02090f; }.evidence-grid figcaption { margin-top: 6px; color: #829bb3; font-size: 12px; }
 /* 安全事件是用户扫描列表时的主信息，编号和时间保留为清晰的辅助信息。 */
 .events-table {
   --el-table-bg-color: #0a1b2c;

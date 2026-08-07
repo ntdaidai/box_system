@@ -30,15 +30,15 @@ VALUES ('8级大风', 2, 'wind_speed_ms >= 17.2 AND wind_speed_ms < 20.8', 5, 0,
 
 -- 9级烈风 (20.8~24.4 m/s)
 INSERT INTO condition_library (condition_name, source_id, expression, time_window, duration, description, is_activate)
-VALUES ('9级烈风', 2, 'wind_speed_ms >= 20.8 AND wind_speed_ms < 24.5', 5, 3, '风速20.8~24.5m/s，建筑物有损坏，持续3分钟触发', 1);
+VALUES ('9级烈风', 2, 'wind_speed_ms >= 20.8 AND wind_speed_ms < 24.5', 5, 3, '风速20.8~24.5m/s，建筑物有损坏，持续3秒触发', 1);
 
 -- 10级狂风 (24.5~28.4 m/s)
 INSERT INTO condition_library (condition_name, source_id, expression, time_window, duration, description, is_activate)
-VALUES ('10级狂风', 2, 'wind_speed_ms >= 24.5 AND wind_speed_ms < 28.5', 5, 3, '风速24.5~28.5m/s，树木拔起，建筑物严重损坏，持续3分钟触发', 1);
+VALUES ('10级狂风', 2, 'wind_speed_ms >= 24.5 AND wind_speed_ms < 28.5', 5, 3, '风速24.5~28.5m/s，树木拔起，建筑物严重损坏，持续3秒触发', 1);
 
 -- 11级暴风 (28.5~32.6 m/s)
 INSERT INTO condition_library (condition_name, source_id, expression, time_window, duration, description, is_activate)
-VALUES ('11级暴风', 2, 'wind_speed_ms >= 28.5 AND wind_speed_ms < 32.7', 5, 3, '风速28.5~32.7m/s，有则必有重大损毁，持续3分钟触发', 1);
+VALUES ('11级暴风', 2, 'wind_speed_ms >= 28.5 AND wind_speed_ms < 32.7', 5, 3, '风速28.5~32.7m/s，有则必有重大损毁，持续3秒触发', 1);
 
 -- 12级飓风 (32.7~36.9 m/s)
 INSERT INTO condition_library (condition_name, source_id, expression, time_window, duration, description, is_activate)

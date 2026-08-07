@@ -64,7 +64,7 @@ event_library -> safety_event_instance
 
 - 视觉条件表达式保持简单，例如 `person_present == 1`、`boat_present == 1`。
 - 摄像头、区域、目标轨迹不写进表达式，由视觉运行上下文提供。
-- 视觉业务将 `condition_library.duration` 解释为触发持续秒数；不要因旧字段注释而改成分钟。
+- 视觉业务将 `condition_library.time_window` 和 `condition_library.duration` 解释为秒；数据库字段注释和页面文案均按秒展示。
 - 传感器已有 ECA 数据不能覆盖或删除，视觉事件只做增量补充。
 
 ### 3.2 设备与区域层
@@ -186,7 +186,7 @@ event_library -> safety_event_instance
   -> 无实例则创建 safety_event_instance 和 TRIGGER 时间线
   -> 已有实例则只更新 last_observed_at/latest_observation
   -> 条件首次恢复时记录 recovery_started_at
-  -> 持续正常达到 event_library.recovery_duration
+  -> 持续正常达到 event_library.recovery_duration（秒）
   -> 状态改为 RESOLVED/COMPLETED
   -> 写 RESOLVE 时间线，原因 condition_recovered
 ```
@@ -240,7 +240,7 @@ event_library -> safety_event_instance
 
 - 类型：`TRIGGER/RISK_CHANGE/ACTION/MANUAL/RESOLVE/SYSTEM`。
 - 关联当时的事件、条件、流程和步骤。
-- 当前动作配置关联使用 `action_config_id`；旧 `flow_id/step_id` 已从 ORM 中移除。
+- 当前动作配置关联使用 `event_action_id`；旧 `flow_id/step_id` 已从 ORM 中移除。
 - 固定阶段字段 `stage` 用于前端进度条，当前约定为 `TRIGGER/DISPATCH/PROCESSING/REPORT/CLOSE`。
 - `action_key` 用于动作幂等，防止重复执行。
 - `payload` 保存当时配置快照、触发数据、动作参数、执行结果和错误详情。
@@ -312,6 +312,7 @@ event_library -> safety_event_instance
 - 第二阶段迁移脚本 `dam-backend/scripts/migrate_20260806_event_runtime_simplification.py` 已执行：删除 `alarm`、`camera_zone_condition`，清理旧 `[ZONE_ECA:*]` 和旧 PRESENT 视觉条件，保留 6 条业务视觉条件，调整 `analysis_report` 并为 `safety_event_instance` 增加 `analysis_report_id`。
 - 第三阶段迁移脚本 `dam-backend/scripts/migrate_20260806_phase3_cleanup.py` 已执行：`event_action_config` 重命名为 `event_action`，`safety_event_instance` 增加 `zone_id`，旧 `visual_event_detail` 回填到 `latest_observation.visual` 后备份删除。备份文件：`backups/phase3_cleanup_20260806_132743.json`。
 - `schema_migration` 已确认无业务运行依赖，并通过 `dam-backend/scripts/drop_schema_migration.py --apply` 备份后删除。备份文件：`backups/schema_migration_drop_20260806_134220.json`。
+- `dam-backend/scripts/migrate_20260807_timeline_event_action_id_seconds.py` 已执行：时间线字段改为 `event_action_id`，条件、事件和动作表的时间字段注释统一为秒。备份文件：`backups/timeline_event_action_id_seconds_20260807_113034.json`。
 - 旧 `/api/alarm/*` 路径、`src/api/alarm.js`、旧告警列表和旧告警报告页面已删除；Dashboard 最近告警和统计使用统一安全事件接口。
 - 摄像头广播绑定接口已删除；广播设备展示读取全局可用广播设备，实际自动播放目标由 `event_action` 决定。
 - 信息配置页已改为事件策略和动作流程配置，不再依赖旧流程三表。

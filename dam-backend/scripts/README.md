@@ -103,7 +103,7 @@ curl http://localhost:8090/api/v1/eca/scheduler/status \
 
 1. **持续时间设置**
    - 6-8级、12级：`duration=0`，立即触发
-   - 9-11级：`duration=3`，持续 3 分钟才触发
+   - 9-11级：`duration=3`，持续 3 秒才触发
 
 2. **资源感知优先级**
    - `priority=1`：critical，必须执行（告警、YOLO 检测）

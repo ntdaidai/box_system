@@ -186,7 +186,8 @@ const currentMenu = computed(() => {
 })
 
 const sidebarActivePath = computed(() => {
-  if (route.path === '/monitor/camera/video') return '/monitor/camera/image'
+  if (route.path === '/monitor/camera/image' || route.path === '/monitor/camera/video') return '/monitor/camera'
+  if (route.path.startsWith('/alarm/safety-events')) return '/alarm/safety-events'
   return route.path
 })
 

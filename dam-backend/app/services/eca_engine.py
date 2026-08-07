@@ -94,13 +94,13 @@ class ECAEngine:
         # 事件触发冷却记录: {event_id: last_trigger_time}
         self.event_last_trigger: Dict[int, datetime] = {}
 
-    def get_sensor_history(self, source_id: int, time_window_minutes: int) -> List[Dict]:
+    def get_sensor_history(self, source_id: int, time_window_seconds: int) -> List[Dict]:
         """
         从传感器采集器获取历史数据
 
         Args:
             source_id: 数据源ID
-            time_window_minutes: 时间窗口（分钟）
+            time_window_seconds: 时间窗口（秒）
 
         Returns:
             时间窗口内的历史数据列表
@@ -119,12 +119,12 @@ class ECAEngine:
             return []
 
         # 过滤时间窗口内的数据
-        cutoff = datetime.now().timestamp() - (time_window_minutes * 60)
+        cutoff = datetime.now().timestamp() - time_window_seconds
         filtered = [point for point in history if point["timestamp"] > cutoff]
 
         return filtered
 
-    def get_camera_history(self, source_id: int, time_window_minutes: int) -> List[Dict]:
+    def get_camera_history(self, source_id: int, time_window_seconds: int) -> List[Dict]:
         """Get recent ECA-compatible Qwen camera snapshots."""
         from app.services.vision_detector import vision_detector
 
@@ -134,6 +134,7 @@ class ECAEngine:
             if not source or str(source.source_type).lower() != "camera":
                 return []
             camera_id = str(source.device_id or source.id)
+            time_window_minutes = max(1, (max(1, int(time_window_seconds)) + 59) // 60)
             return vision_detector.get_history_snapshot(
                 camera_id,
                 time_window_minutes=time_window_minutes,
@@ -188,7 +189,7 @@ class ECAEngine:
         """
         try:
             expression = condition.expression
-            time_window = condition.time_window or 5  # 默认5分钟
+            time_window_seconds = max(1, int(condition.time_window or 5))  # 默认5秒
             duration = condition.duration or 0  # 默认0表示立即触发
             source_id = condition.source_id
 
@@ -210,14 +211,14 @@ class ECAEngine:
             if getattr(condition, "source", None):
                 source_type = str(condition.source.source_type or "").lower()
             if source_type == "camera":
-                history = self.get_camera_history(source_id, time_window)
+                history = self.get_camera_history(source_id, time_window_seconds)
             else:
-                history = self.get_sensor_history(source_id, time_window)
+                history = self.get_sensor_history(source_id, time_window_seconds)
 
             if not history:
                 # 没有历史数据，用当前数据开始计时
                 self.condition_met_since.setdefault(condition.id, datetime.now())
-                # 即使没有历史数据，如果 duration 很小（如1分钟），也可能满足
+                # 即使没有历史数据，如果 duration 很小（如1秒），也可能满足
                 # 这里返回 False，等待下次轮询积累历史数据
                 return True, False
 
@@ -251,16 +252,16 @@ class ECAEngine:
                 self.condition_met_since[condition.id] = datetime.fromtimestamp(earliest_ts)
 
             start_time = self.condition_met_since[condition.id]
-            elapsed_minutes = (datetime.now() - start_time).total_seconds() / 60
+            elapsed_seconds = (datetime.now() - start_time).total_seconds()
 
-            if elapsed_minutes >= duration:
+            if elapsed_seconds >= duration:
                 # 达到持续时间要求
                 return True, True
             else:
                 # 未达到持续时间
                 logger.debug(
-                    f"条件 {condition.condition_name} 已持续 {elapsed_minutes:.1f} 分钟, "
-                    f"需要 {duration} 分钟"
+                    f"条件 {condition.condition_name} 已持续 {elapsed_seconds:.1f} 秒, "
+                    f"需要 {duration} 秒"
                 )
                 return True, False
 
@@ -986,7 +987,7 @@ class ECAEngine:
                         trigger_type="AUTO",
                         status="SUCCESS",
                         message=f"{step.step_name}执行完成",
-                        action_config_id=step.id,
+                        event_action_id=step.id,
                         payload={
                             "instance_no": event_instance.instance_no,
                             "action_type": step.action_type,
@@ -1012,7 +1013,7 @@ class ECAEngine:
                         trigger_type="AUTO",
                         status="FAILED",
                         message=f"{step.step_name}执行失败",
-                        action_config_id=step.id,
+                        event_action_id=step.id,
                         payload={
                             "instance_no": event_instance.instance_no,
                             "action_type": step.action_type,
@@ -1354,7 +1355,7 @@ class ECAEngine:
                         message=alert_content,
                         operator="SYSTEM",
                         event_id=event.id if event else instance.current_event_id,
-                        action_config_id=step.id,
+                        event_action_id=step.id,
                         payload={"level": level, "channels": channels, "alarm_type": alarm_type},
                     )
                     timeline_id = timeline.id

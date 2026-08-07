@@ -2,10 +2,10 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 const routes = [
   {
-    path: '/satellite-map-test',
-    name: 'SatelliteMapTest',
-    component: () => import('@/views/SatelliteMapTest.vue'),
-    meta: { title: '平面卫星图测试' }
+    path: '/overview-region-annotator',
+    name: 'OverviewRegionAnnotator',
+    component: () => import('@/views/OverviewRegionAnnotator.vue'),
+    meta: { title: '总览页区域标注' }
   },
   {
     path: '/',
@@ -94,13 +94,13 @@ const routes = [
             path: 'camera/image',
             name: 'CameraImageAnalysis',
             component: () => import('@/views/Monitor/CameraView.vue'),
-            meta: { title: '图片/视频分析', mediaTab: 'image' }
+            meta: { title: '模拟分析', mediaTab: 'image' }
           },
           {
             path: 'camera/video',
             name: 'CameraVideoAnalysis',
             component: () => import('@/views/Monitor/CameraView.vue'),
-            meta: { title: '视频分析', mediaTab: 'video' }
+            meta: { title: '模拟分析', mediaTab: 'video' }
           },
           {
             path: 'drone',
@@ -133,6 +133,15 @@ const routes = [
             name: 'AlarmSafetyEvents',
             component: () => import('@/views/Alarm/SafetyEvents.vue'),
             meta: { title: '告警管理' }
+          },
+          {
+            path: 'safety-events/:id',
+            name: 'AlarmSafetyEventDetail',
+            redirect: (to) => ({
+              path: '/alarm/safety-events',
+              query: { eventId: to.params.id },
+            }),
+            meta: { title: '安全事件详情' }
           },
         ],
       },

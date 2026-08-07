@@ -131,7 +131,7 @@ def seed() -> int:
             trigger_type="AUTO",
             risk_level="MEDIUM",
             status="SUCCESS",
-            message="目标持续涉水超过4分钟且未离开警戒区，风险由低风险升级为中风险",
+            message="目标持续涉水超过240秒且未离开警戒区，风险由低风险升级为中风险",
             payload={"instance_no": INSTANCE_NO, "from": "LOW", "to": "MEDIUM", "confidence": 0.91},
             create_time=medium_at,
         )

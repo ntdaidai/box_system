@@ -134,7 +134,7 @@ data_source
 
 ### 2.6 `condition_library`
 
-条件库。视觉业务将 `duration` 解释为“持续秒数”。
+条件库。视觉业务将 `time_window` 和 `duration` 都解释为秒。
 
 核心字段：
 
@@ -281,7 +281,7 @@ data_source
 - `event_instance_id`
 - `event_id`
 - `condition_id`
-- `action_config_id`
+- `event_action_id`
 - `action_key`
 - `stage`
 - `log_type`
@@ -395,6 +395,7 @@ data_source
 - `dam-backend/scripts/migrate_20260806_event_runtime_simplification.py`
 - `dam-backend/scripts/migrate_20260806_phase3_cleanup.py`
 - `dam-backend/scripts/drop_schema_migration.py`
+- `dam-backend/scripts/migrate_20260807_timeline_event_action_id_seconds.py`
 
 迁移脚本执行前必须只读审计，执行时必须备份被删除表和关键数据。
 
@@ -428,7 +429,7 @@ data_source
 
 第三阶段已完成以下收口：
 
-1. `event_action_config` 已重命名为 `event_action`，时间线 `action_config_id` 外键指向 `event_action.id`。
+1. `event_action_config` 已重命名为 `event_action`，时间线 `event_action_id` 外键指向 `event_action.id`。
 2. `safety_event_instance` 增加 `zone_id` 外键，视觉详情快照统一放入 `latest_observation.visual`。
 3. `visual_event_detail` 已备份并删除，运行时详情、巡查报告、人工升级判断和列表筛选不再读取该表。
 4. 旧 `/api/alarm/*`、前端 `src/api/alarm.js`、旧告警列表/报告页面已删除；`/alarm/list` 路由重定向到 `/alarm/safety-events`。
@@ -438,9 +439,11 @@ data_source
 
 - `dam-backend/scripts/migrate_20260806_phase3_cleanup.py --apply`
 - `dam-backend/scripts/drop_schema_migration.py --apply`
+- `dam-backend/scripts/migrate_20260807_timeline_event_action_id_seconds.py --apply`
 - 备份文件：
   - `backups/phase3_cleanup_20260806_132743.json`
   - `backups/schema_migration_drop_20260806_134220.json`
+  - `backups/timeline_event_action_id_seconds_20260807_113034.json`
 
 历史迁移脚本仍保留用于审计已发生的结构变化，不作为新库初始化目标。
 

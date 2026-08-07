@@ -1,6 +1,7 @@
 """Unified ECA configuration and safety-event runtime models."""
 
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import (
     BigInteger,
@@ -53,7 +54,7 @@ class SafetyEventTimelineLog(Base):
     event_instance_id = Column(BigInteger, ForeignKey("safety_event_instance.id", ondelete="CASCADE"), nullable=False, index=True)
     event_id = Column(BigInteger, ForeignKey("event_library.id", ondelete="SET NULL"), nullable=True, index=True)
     condition_id = Column(BigInteger, ForeignKey("condition_library.id", ondelete="SET NULL"), nullable=True)
-    action_config_id = Column(BigInteger, ForeignKey("event_action.id", ondelete="SET NULL"), nullable=True)
+    event_action_id = Column(BigInteger, ForeignKey("event_action.id", ondelete="SET NULL"), nullable=True)
     action_key = Column(String(160), nullable=True, unique=True)
     stage = Column(String(32), nullable=True, index=True)
     log_type = Column(String(24), nullable=False, index=True)
@@ -66,6 +67,14 @@ class SafetyEventTimelineLog(Base):
     payload = Column(JSON, nullable=True)
     create_time = Column(DateTime, default=datetime.now, index=True)
     update_time = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    @property
+    def action_config_id(self) -> Optional[int]:
+        return self.event_action_id
+
+    @action_config_id.setter
+    def action_config_id(self, value: Optional[int]) -> None:
+        self.event_action_id = value
 
 
 class SafetyEventEvidence(Base):

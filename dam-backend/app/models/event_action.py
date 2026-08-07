@@ -49,7 +49,7 @@ class EventActionConfig(Base):
     )
     parameter = Column(Text, nullable=True, comment="动作参数JSON文本")
     retry_count = Column(Integer, nullable=False, default=0, comment="重试次数")
-    timeout_seconds = Column(Integer, nullable=False, default=60, comment="超时时间秒")
+    timeout_seconds = Column(Integer, nullable=False, default=60, comment="超时时间（单位：秒）")
     failure_strategy = Column(String(50), nullable=False, default="continue", comment="失败策略")
     broadcast_device_id = Column(
         BigInteger,
@@ -65,7 +65,7 @@ class EventActionConfig(Base):
     )
     drone_id = Column(String(64), nullable=True, comment="无人机编号")
     route_id = Column(String(64), nullable=True, comment="航线编号")
-    repeat_interval_seconds = Column(Integer, nullable=False, default=60, comment="重复间隔秒")
+    repeat_interval_seconds = Column(Integer, nullable=False, default=60, comment="重复间隔（单位：秒）")
     max_executions = Column(Integer, nullable=False, default=1, comment="最多执行次数")
     config_json = Column(JSON, nullable=True, comment="扩展动作配置")
     is_activate = Column(Boolean, nullable=False, default=True, index=True, comment="是否启用")
