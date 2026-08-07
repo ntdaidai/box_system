@@ -6,6 +6,8 @@ services:
     ports:
       - "3306:3306"
     environment:
+      # 容器系统时区设为东八区, 使 error.log/slow.log 等日志时间戳与本地一致
+      TZ: Asia/Shanghai
       MYSQL_ROOT_PASSWORD: root
       MYSQL_DATABASE: dam_system
       MYSQL_CHARSET: utf8mb4

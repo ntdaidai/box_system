@@ -22,7 +22,7 @@ from app.api import (
     integration,
 )
 from app.core.config import settings
-from app.core.database import SessionLocal, init_db
+from app.core.database import SessionLocal
 from app.core.redis import redis_manager
 from app.services.sensor_collector import sensor_collector
 from app.services.camera_stream import camera_manager
@@ -78,7 +78,8 @@ async def catch_all_exceptions(request: Request, call_next):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 启动阶段
-    init_db()
+    # 注：不再自动调用 init_db()，数据库表结构由 scripts/ 下的迁移脚本维护，
+    #     避免应用启动时自动建表导致误删的表（如 model_library）被重建。
 
     # 设置主事件循环引用（用于 ECA 引擎的异步任务调度）
     loop = asyncio.get_running_loop()

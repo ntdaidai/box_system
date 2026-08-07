@@ -6,7 +6,7 @@
         <h1>总览页摄像头区域标注</h1>
       </div>
       <div class="active-readout" :class="activeGroup.type">
-        <span>当前点位</span>
+        <span>当前区域组</span>
         <strong>{{ activeGroup.label }} / {{ activeGroup.typeLabel }}</strong>
       </div>
     </header>
@@ -94,7 +94,7 @@
 
       <aside class="side-panel">
         <section class="panel-block point-block">
-          <h2>摄像头点位</h2>
+          <h2>摄像头区域组</h2>
           <div class="point-grid">
             <button
               v-for="group in regionGroups"
@@ -112,7 +112,7 @@
         <section class="panel-block status-block">
           <h2>标注状态</h2>
           <div class="status-row">
-            <span>已保存点位</span>
+            <span>已保存区域</span>
             <strong>{{ savedRegions.length }} / {{ regionGroups.length }}</strong>
           </div>
           <div class="status-row">

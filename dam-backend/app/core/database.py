@@ -22,7 +22,11 @@ Base = declarative_base()
 
 
 def init_db():
-    """Create missing tables and initialize required default records."""
+    """Create missing tables and initialize required default records.
+
+    注：应用启动时（app/main.py 的 lifespan）已不再调用本函数，
+    仅由 scripts/ 下的手动初始化脚本（如 init_wind_conditions.py）使用。
+    """
     import app.models  # noqa: F401 - register models before create_all
     from app.core.security import hash_password
     from app.models.user import User

@@ -99,11 +99,21 @@ def build_daily_report_context(
     if instance_ids:
         for row in db.query(SafetyEventTimelineLog).filter(
             SafetyEventTimelineLog.event_instance_id.in_(instance_ids)
-        ).order_by(SafetyEventTimelineLog.create_time.asc(), SafetyEventTimelineLog.id.asc()).all():
+        ).order_by(
+            # 前缀列 event_instance_id 贴合 (event_instance_id, create_time, id) 复合索引, 消除 filesort
+            SafetyEventTimelineLog.event_instance_id.asc(),
+            SafetyEventTimelineLog.create_time.asc(),
+            SafetyEventTimelineLog.id.asc()
+        ).all():
             timeline_by_instance[row.event_instance_id].append(row)
         for row in db.query(SafetyEventEvidence).filter(
             SafetyEventEvidence.event_instance_id.in_(instance_ids)
-        ).order_by(SafetyEventEvidence.captured_at.asc(), SafetyEventEvidence.id.asc()).all():
+        ).order_by(
+            # 前缀列 event_instance_id 贴合 (event_instance_id, captured_at, id) 复合索引, 消除 filesort
+            SafetyEventEvidence.event_instance_id.asc(),
+            SafetyEventEvidence.captured_at.asc(),
+            SafetyEventEvidence.id.asc()
+        ).all():
             evidence_by_instance[row.event_instance_id].append(row)
 
     events = []
