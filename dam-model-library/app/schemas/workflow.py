@@ -15,6 +15,13 @@ class WorkflowExecuteRequest(BaseModel):
     media_objects: List[Dict[str, Any]] = Field(default_factory=list, description="Typed media object references")
     sensor_data: Dict[str, Any] = Field(default_factory=dict, description="Sensor/event data")
     event_type: Optional[str] = Field(None, description="Resolved DAM event type")
+    media_mode: Literal["video", "frames", "auto"] = Field(
+        "auto",
+        description="video=pass video to model service, frames=model service extracts frames, auto=video with frame fallback",
+    )
+    max_frames: int = Field(4, ge=1, le=32, description="Max frames extracted by model service")
+    frame_interval_seconds: float = Field(2.5, gt=0, description="Frame extraction interval in seconds")
+    fallback_to_frames: bool = Field(True, description="Fallback to frame extraction if direct video fails")
     mode: Literal["infer", "run"] = Field(
         "infer",
         description="infer requires running models; run auto-starts/stops models",

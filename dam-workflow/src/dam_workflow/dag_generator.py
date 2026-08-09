@@ -91,7 +91,9 @@ def ensure_required_nodes(dag: Dict) -> Dict:
                     edge["target"] = "action_report"
             edges.append({"source": "action_report", "target": end_id})
 
-    return {"nodes": nodes, "edges": edges}
+    dag["nodes"] = nodes
+    dag["edges"] = edges
+    return dag
 
 
 def validate_dag(dag: Dict) -> tuple[bool, str]:
@@ -272,6 +274,9 @@ def generate_dag(state: DamState, db=None) -> Dict:
             "nodes": template["nodes"],
             "edges": template["edges"],
         }
+        for key in ("workflow_family", "description", "post_actions"):
+            if key in template:
+                dag[key] = template[key]
     else:
         # 2. 模板未命中，使用本地 LLM 生成
         dag = generate_dag_via_llm(event_type, user_prompt)

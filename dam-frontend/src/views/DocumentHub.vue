@@ -297,6 +297,7 @@ const currentUser = ref({
 
 const businessTypes = [
   { label: '全部文档', value: '' },
+  { label: '事件报告', value: 'event' },
   { label: '巡查文档', value: 'inspection' },
   { label: '监测文档', value: 'monitoring' }
 ]
@@ -398,8 +399,10 @@ const getCategory = (extension) => {
 
 const detectBusinessType = (filename) => {
   const name = String(filename || '').toLowerCase()
+  const eventKeywords = ['事件', '处置报告', 'event', 'dam_event_report']
   const inspectionKeywords = ['巡查', '巡检', 'patrol', 'inspection']
   const monitoringKeywords = ['监测', '监控', '传感器', 'sensor', 'monitor']
+  if (eventKeywords.some((keyword) => name.includes(keyword))) return 'event'
   if (inspectionKeywords.some((keyword) => name.includes(keyword))) return 'inspection'
   if (monitoringKeywords.some((keyword) => name.includes(keyword))) return 'monitoring'
   return 'other'

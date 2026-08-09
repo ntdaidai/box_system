@@ -80,6 +80,7 @@ services:
     env_file:
       - ./dam-miniprogram/wechat-keys/wechat.env
     environment:
+      TZ: Asia/Shanghai
       # vLLM 视觉模型
       VLLM_QWEN3VL_URL: "${VLLM_QWEN3VL_URL:-http://localhost:8003}"
       QWEN_CAMERA_SCREENING_ENABLED: "${QWEN_CAMERA_SCREENING_ENABLED:-true}"
@@ -176,6 +177,7 @@ services:
       DB_USER: root
       DB_PASSWORD: root
       DB_NAME: dam_system
+      RESIDENT_MODEL_IDS: "9,10"
     network_mode: host
 
   # ========== DAM 工作流生成服务 ==========
@@ -203,8 +205,8 @@ services:
       MODEL_REGISTRY_DB_NAME: dam_system
       # 模型库 API
       MODEL_REGISTRY_API_BASE: http://127.0.0.1:5001
-      # DAM 工作流默认模型（使用模型库中已适配 /infer 的包装服务）
-      LLM_LOCAL_MODEL_ID: "14"
+      # DAM 工作流默认模型：9 和 10 为常驻模型，其他模型按需运行
+      LLM_LOCAL_MODEL_ID: "10"
       LLM_CLOUD_MODEL_ID: "13"
       LLM_FALLBACK_MODEL_ID: "9"
       # 服务配置

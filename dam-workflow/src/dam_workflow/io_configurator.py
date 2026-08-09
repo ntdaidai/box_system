@@ -151,6 +151,55 @@ def match_io_for_edge(source_node: Dict, target_node: Dict, event_type: str, db:
     target_class = target_node.get("node_class")
     source_category = source_node.get("model_category", "start" if source_class == "START" else "unknown")
     target_category = target_node.get("model_category", "unknown")
+    source_id = source_node.get("node_id", "source_node")
+
+    # Workflow-specific fixed mappings keep media and reports from being matched by
+    # loose type compatibility rules such as boxes -> images.
+    if source_class == "START" and target_category == "specialized":
+        return {
+            "inputs": {
+                "images": f"{{{{{source_id}.images}}}}",
+                "videos": f"{{{{{source_id}.videos}}}}",
+                "media_objects": f"{{{{{source_id}.media_objects}}}}",
+                "sensor_data": f"{{{{{source_id}.sensor_data}}}}",
+                "event_type": f"{{{{{source_id}.event_type}}}}",
+                "task_type": target_node.get("model_task") or target_node.get("node_type"),
+            },
+            "outputs": {},
+        }
+
+    if source_category == "specialized" and target_category == "local_llm":
+        return {
+            "inputs": {
+                "detection_results": f"{{{{{source_id}.detection_results}}}}",
+                "media_objects": f"{{{{{source_id}.media_objects}}}}",
+            },
+            "outputs": {},
+        }
+
+    if source_class == "START" and target_category == "local_llm":
+        return {
+            "inputs": {
+                "images": f"{{{{{source_id}.images}}}}",
+                "videos": f"{{{{{source_id}.videos}}}}",
+                "media_objects": f"{{{{{source_id}.media_objects}}}}",
+                "sensor_data": f"{{{{{source_id}.sensor_data}}}}",
+                "event_type": f"{{{{{source_id}.event_type}}}}",
+                "user_prompt": f"{{{{{source_id}.user_prompt}}}}",
+            },
+            "outputs": {},
+        }
+
+    if source_category == "local_llm" and target_category == "cloud_llm":
+        return {
+            "inputs": {
+                "preliminary_report": f"{{{{{source_id}.report}}}}",
+                "edge_analysis": f"{{{{{source_id}.final_report}}}}",
+                "media_objects": f"{{{{{source_id}.media_objects}}}}",
+                "cloud_media_objects": f"{{{{{source_id}.cloud_media_objects}}}}",
+            },
+            "outputs": {},
+        }
 
     # Layer 1: 模板匹配
     if db:
@@ -188,6 +237,21 @@ def match_io_for_edge(source_node: Dict, target_node: Dict, event_type: str, db:
     return llm_io_match(source_io, target_io, context)
 
 
+def bind_source_node_id(data_flow: Dict, source_id: str) -> Dict:
+    """将规则模板中的 source_node 占位符替换为真实上游节点 ID。"""
+    if not isinstance(data_flow, dict):
+        return data_flow
+    bound = copy.deepcopy(data_flow)
+    for section in ("inputs", "outputs"):
+        values = bound.get(section)
+        if not isinstance(values, dict):
+            continue
+        for key, value in list(values.items()):
+            if isinstance(value, str):
+                values[key] = value.replace("{{source_node.", "{{" + source_id + ".")
+    return bound
+
+
 def configure_io(dam_state: DamState, db: Session = None) -> Dict:
     """阶段 3：IO 配对
 
@@ -207,7 +271,7 @@ def configure_io(dam_state: DamState, db: Session = None) -> Dict:
     # 深拷贝，避免 final_dag 和 populated_dag 指向同一对象
     dag = copy.deepcopy(populated_dag)
     nodes = dag.get("nodes", [])
-    edges = populated_dag.get("edges", [])
+    edges = dag.get("edges", [])
 
     # 构建 node_id -> node 映射
     node_map = {n["node_id"]: n for n in nodes}
@@ -220,6 +284,7 @@ def configure_io(dam_state: DamState, db: Session = None) -> Dict:
         target_node = node_map.get(target_id, {})
 
         data_flow = match_io_for_edge(source_node, target_node, event_type, db)
+        data_flow = bind_source_node_id(data_flow, source_id)
         edge["data_flow"] = data_flow
 
     # 为 END 节点构建 data_flow

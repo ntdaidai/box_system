@@ -126,6 +126,7 @@ class ModelDeployBinding(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True, comment="主键")
     model_id = Column(BigInteger, nullable=False, comment="模型 ID")
+    bind_type = Column(String(16), nullable=True, comment="绑定类型")
     host_ip = Column(String(64), nullable=True, comment="部署主机 IP")
     host_port = Column(Integer, nullable=True, comment="部署主机端口")
     inference_path = Column(String(256), nullable=True, comment="推理接口路径")

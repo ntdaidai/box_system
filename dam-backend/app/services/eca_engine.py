@@ -24,6 +24,7 @@ from app.models.safety_integration import (
 )
 from app.api.health import _get_gpu_info
 from app.core.config import settings
+from app.services.dam_event_report_service import dam_event_report_service
 from app.services.dam_model_library_client import dam_model_library_client
 from app.services.dam_workflow_client import dam_workflow_client
 from app.services.unified_sensor_event_service import unified_sensor_event_service
@@ -865,6 +866,14 @@ class ECAEngine:
                 if execution_result is not None
                 else ("failed" if execution_error else "not_submitted")
             )
+            workflow_payload = {
+                "instance_no": instance.instance_no,
+                "event_type": result.get("event_type"),
+                "visual_tasks": result.get("visual_tasks") or [],
+                "final_dag": final_dag,
+                "execution_result": execution_result,
+                "execution_error": execution_error,
+            }
             safety_event_runtime_service.append_timeline(
                 db,
                 instance,
@@ -876,15 +885,10 @@ class ECAEngine:
                     f"智能路由生成完成：{node_count}个节点，{edge_count}条边；"
                     f"模型库执行状态 {execution_status}"
                 ),
-                payload={
-                    "instance_no": instance.instance_no,
-                    "event_type": result.get("event_type"),
-                    "visual_tasks": result.get("visual_tasks") or [],
-                    "final_dag": final_dag,
-                    "execution_result": execution_result,
-                    "execution_error": execution_error,
-                },
+                payload=workflow_payload,
             )
+            if execution_result is not None:
+                self.generate_dam_event_report(instance, event, workflow_payload, db)
             db.commit()
             return result
         except Exception as e:
@@ -905,6 +909,47 @@ class ECAEngine:
             )
             db.commit()
             return None
+
+    def generate_dam_event_report(
+        self,
+        instance: SafetyEventInstance,
+        event: EventLibrary,
+        workflow_payload: Dict[str, Any],
+        db: Session,
+    ) -> None:
+        """Generate a report from DAM workflow output without breaking ECA execution."""
+        try:
+            report = dam_event_report_service.generate_from_workflow(
+                db,
+                instance=instance,
+                event=event,
+                workflow_payload=workflow_payload,
+            )
+            if report:
+                logger.info(
+                    "DAM事件处置报告已生成 instance={} report_id={}",
+                    instance.instance_no,
+                    report.id,
+                )
+        except Exception as report_error:
+            logger.warning(
+                "DAM事件处置报告生成失败: instance={}, error={}",
+                instance.instance_no,
+                report_error,
+            )
+            safety_event_runtime_service.append_timeline(
+                db,
+                instance,
+                action_key=f"dam-event-report:{instance.instance_no}",
+                log_type="REPORT",
+                trigger_type="AUTO",
+                status="FAILED",
+                message="事件处置报告生成失败",
+                payload={
+                    "instance_no": instance.instance_no,
+                    "error": str(report_error),
+                },
+            )
 
     async def execute_configured_actions(
         self,
@@ -1520,10 +1565,15 @@ class ECAEngine:
                 DataSource.device_id == int(camera_id),
             ).first()
             if not source:
+                logger.warning(f"[摄像头ECA评估] 未找到启用的数据源: camera={camera_id}")
                 return
 
             events = self._get_events_by_source(source.id, db)
             if not events:
+                logger.info(
+                    f"[摄像头ECA评估] 数据源未关联事件: "
+                    f"camera={camera_id}, source={source.id}"
+                )
                 return
 
             camera_data = vision_detector.get_detection_snapshot(camera_id)
@@ -1533,13 +1583,26 @@ class ECAEngine:
                 camera_data["qwen_summary"] = screening.get("summary")
                 camera_data["qwen_risk_level"] = screening.get("risk_level")
                 camera_data["qwen_image_urls"] = screening.get("image_urls") or details.get("image_urls") or []
+                source_video_url = screening.get("source_video_url")
+                video_urls = screening.get("video_urls") or ([source_video_url] if source_video_url else [])
+                media_objects = screening.get("media_objects") or []
+                if source_video_url:
+                    camera_data["source_video_url"] = source_video_url
+                    camera_data["video_url"] = source_video_url
+                if video_urls:
+                    camera_data["video_urls"] = video_urls
+                    camera_data["videos"] = video_urls
+                if media_objects:
+                    camera_data["media_objects"] = media_objects
 
+            triggered_events = []
             for event in events:
                 try:
                     conditions_met = self.check_event_conditions(event.id, camera_data, db)
                     if conditions_met:
                         instance = self.trigger_camera_event(event, source, camera_data, db)
                         if instance:
+                            triggered_events.append(event.event_name)
                             logger.info(
                                 f"[摄像头触发] 事件: {event.event_name} "
                                 f"(风险等级: {event.risk_level}, camera={camera_id})"
@@ -1548,6 +1611,10 @@ class ECAEngine:
                         self.resolve_camera_event_if_recovered(event, source, camera_data, db)
                 except Exception as exc:
                     logger.error(f"检查摄像头事件 {event.event_name} 失败: {exc}")
+            logger.info(
+                f"[摄像头ECA评估] 完成: camera={camera_id}, source={source.id}, "
+                f"events={len(events)}, triggered={triggered_events or 'none'}"
+            )
         except Exception as exc:
             logger.error(f"摄像头触发处理异常: {exc}")
         finally:

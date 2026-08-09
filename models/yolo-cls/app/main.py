@@ -1,7 +1,10 @@
 """FastAPI 主应用。"""
 
 import os
+import tempfile
+import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import Body, FastAPI, HTTPException
@@ -218,6 +221,52 @@ def _standard_output(raw: dict, *, media_type: str, media_ref: str) -> dict:
     }
 
 
+def _frame_interval(payload: dict) -> int:
+    for source in (payload, payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}):
+        for key in ("frame_interval", "sample_interval", "sample_every_n_frames"):
+            value = source.get(key)
+            if value is not None:
+                try:
+                    return max(1, min(int(value), 300))
+                except (TypeError, ValueError):
+                    pass
+    # ECA 证据视频通常只有几帧，默认逐帧分类，避免只抽到第一帧。
+    return 1
+
+
+def _frame_object_prefix(bucket: str, object_key: str) -> str:
+    stem = object_key.rsplit(".", 1)[0].strip("/")
+    return f"{stem}/yolo_frames/{int(time.time() * 1000)}"
+
+
+def _upload_frame_evidence(raw: dict, *, bucket: str, object_key: str) -> None:
+    frames = raw.get("frames")
+    if not isinstance(frames, list) or not frames:
+        return
+    prefix = _frame_object_prefix(bucket, object_key)
+    for index, frame in enumerate(frames, 1):
+        if not isinstance(frame, dict):
+            continue
+        local_path = frame.pop("local_frame_path", None)
+        if not local_path:
+            continue
+        path = Path(local_path)
+        try:
+            frame_key = f"{prefix}/frame_{index:03d}.jpg"
+            minio_ref = minio_client.upload_file(
+                bucket,
+                frame_key,
+                path,
+                content_type="image/jpeg",
+            )
+            frame["bucket"] = bucket
+            frame["object_key"] = frame_key
+            frame["path"] = minio_ref
+            frame["type"] = "image"
+        finally:
+            path.unlink(missing_ok=True)
+
+
 @app.post("/infer", tags=["工作流"])
 @app.post("/predict", tags=["工作流"])
 async def workflow_infer(payload: dict = Body(...)):
@@ -237,8 +286,28 @@ async def workflow_infer(payload: dict = Body(...)):
     temp_path = minio_client.download_file(bucket, object_key, suffix=suffix)
     try:
         if is_video:
-            result = yolo_service.classify_video(temp_path, int(payload.get("frame_interval", 30)))
-            return _standard_output(result, media_type="video", media_ref=f"{bucket}/{object_key}")
+            with tempfile.TemporaryDirectory(prefix="yolo_frames_") as frame_dir:
+                result = yolo_service.classify_video(
+                    temp_path,
+                    _frame_interval(payload),
+                    keep_frames_dir=Path(frame_dir),
+                )
+                _upload_frame_evidence(result, bucket=bucket, object_key=object_key)
+                output = _standard_output(result, media_type="video", media_ref=f"{bucket}/{object_key}")
+                output["key_frames"] = result.get("frames") or []
+                output["media_objects"] = [
+                    {
+                        "type": "image",
+                        "path": frame.get("path"),
+                        "bucket": frame.get("bucket"),
+                        "object_key": frame.get("object_key"),
+                        "timestamp_ms": frame.get("timestamp_ms"),
+                        "source": "yolo_video_frame",
+                    }
+                    for frame in result.get("frames") or []
+                    if frame.get("path")
+                ]
+                return output
         result = yolo_service.classify_image(temp_path)
         return _standard_output(result, media_type="image", media_ref=f"{bucket}/{object_key}")
     finally:

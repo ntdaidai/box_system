@@ -7,15 +7,17 @@
 - cloud_llm：云端大模型（qwen35B，最终报告，一定存在）
 """
 import logging
+import json
 from typing import Any, Dict, Optional, List
 from sqlalchemy.orm import Session
 
 from src.dam_workflow.state import DamState
 from src.core.config import settings
 from src.core.models import (
-    ModelEventMapping, ModelRegistry, ModelDeployBinding, ModelIOSchema,
+    ModelRegistry, ModelDeployBinding, ModelIOSchema,
     ModelEvaluationTemplate, ActorLibrary,
 )
+from src.dam_workflow.model_registry_client import model_registry_client
 
 logger = logging.getLogger(__name__)
 
@@ -102,41 +104,6 @@ def fetch_actor_prompt(
     }
 
 
-def query_event_model_mapping(db: Session, event_type: str, task_type: str, model_category: str) -> List[Dict]:
-    """从事件→模型映射表查询候选模型
-
-    Args:
-        db: SQLAlchemy Session
-        event_type: 事件类型
-        task_type: 任务类型
-        model_category: 模型类别 (specialized/local_llm/cloud_llm)
-
-    Returns:
-        候选模型列表
-    """
-    rows = (
-        db.query(ModelEventMapping)
-        .filter(
-            ModelEventMapping.event_type == event_type,
-            ModelEventMapping.task_type == task_type,
-            ModelEventMapping.model_category == model_category,
-        )
-        .order_by(ModelEventMapping.priority.desc())
-        .all()
-    )
-    return [
-        {
-            "id": r.id,
-            "event_type": r.event_type,
-            "task_type": r.task_type,
-            "model_category": r.model_category,
-            "model_id": r.model_id,
-            "priority": r.priority,
-        }
-        for r in rows
-    ]
-
-
 def get_model_with_inference_url(model_id: int, db: Session) -> Optional[Dict]:
     """获取模型信息（含推理地址）
 
@@ -183,6 +150,214 @@ def get_model_with_inference_url(model_id: int, db: Session) -> Optional[Dict]:
     }
 
 
+def _extract_llm_content(result: Dict[str, Any]) -> str:
+    """Extract chat content from model-library/vLLM style responses."""
+    if not isinstance(result, dict):
+        return ""
+    data = result.get("data") if isinstance(result.get("data"), dict) else result
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if not choices and isinstance(data, dict) and isinstance(data.get("data"), dict):
+        choices = data["data"].get("choices")
+    if choices:
+        first = choices[0] if isinstance(choices[0], dict) else {}
+        return (first.get("message") or {}).get("content") or first.get("text") or ""
+    content = data.get("response") if isinstance(data, dict) else ""
+    return content if isinstance(content, str) else ""
+
+
+def _parse_json_object(text: str) -> Optional[Dict[str, Any]]:
+    if not isinstance(text, str) or not text.strip():
+        return None
+    content = text.strip()
+    if content.startswith("```"):
+        content = content.split("\n", 1)[-1]
+        if content.endswith("```"):
+            content = content[:-3]
+    start = content.find("{")
+    end = content.rfind("}")
+    if start >= 0 and end > start:
+        content = content[start:end + 1]
+    try:
+        parsed = json.loads(content)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        return None
+
+
+def _model_candidate_rows(model_category: str, db: Session) -> List[Dict[str, Any]]:
+    """Collect selectable model candidates, including stopped but deploy-bound models."""
+    query = (
+        db.query(ModelRegistry, ModelDeployBinding)
+        .join(ModelDeployBinding, ModelDeployBinding.model_id == ModelRegistry.id)
+    )
+    if model_category == "specialized":
+        query = query.filter(
+            ModelRegistry.model_type.isnot(None),
+            ~ModelRegistry.model_type.ilike("%llm%"),
+            ~ModelRegistry.model_type.ilike("%vlm%"),
+            ~ModelRegistry.model_type.ilike("%language%"),
+        )
+    elif model_category == "local_llm":
+        query = query.filter(
+            ModelRegistry.model_type.ilike("%llm%")
+            | ModelRegistry.model_type.ilike("%vlm%")
+            | ModelRegistry.model_type.ilike("%language%")
+        )
+    elif model_category == "cloud_llm":
+        query = query.filter(
+            ModelRegistry.model_type.ilike("%llm%")
+            | ModelRegistry.model_type.ilike("%vlm%")
+            | ModelRegistry.model_type.ilike("%language%")
+        )
+
+    rows: List[Dict[str, Any]] = []
+    for model, binding in query.order_by(ModelRegistry.id.asc()).all():
+        rows.append({
+            "model_id": model.id,
+            "name": model.name,
+            "description": model.description,
+            "tags": model.tags,
+            "model_type": model.model_type,
+            "framework": model.framework,
+            "runtime_status": model.runtime_status,
+            "bind_type": binding.bind_type,
+            "inference_url": (
+                f"http://{binding.host_ip}:{binding.host_port}{binding.inference_path or ''}"
+                if binding.host_ip and binding.host_port else None
+            ),
+        })
+    return rows
+
+
+def _fallback_score_candidate(candidate: Dict[str, Any], node: Dict[str, Any], event_type: str) -> int:
+    text = " ".join(str(candidate.get(key) or "") for key in ("name", "description", "model_type", "framework")).lower()
+    node_text = " ".join(str(node.get(key) or "") for key in ("node_type", "model_task", "model_family", "event_group")).lower()
+    wants_classification = "classification" in node_text or "分类" in node_text
+    wants_detection = "detection" in node_text or "检测" in node_text or "目标" in node_text
+    wants_tracking = "tracking" in node_text or "跟踪" in node_text
+    has_classification = "classification" in text or "分类" in text
+    has_detection = "detection" in text or "detect" in text or "检测" in text
+    has_tracking = "tracking" in text or "track" in text or "跟踪" in text
+    if wants_classification and not has_classification:
+        return 0
+    if wants_detection and not has_detection:
+        return 0
+    if wants_tracking and not has_tracking:
+        return 0
+    score = 0
+    for token in (node.get("model_task"), node.get("model_family"), node.get("event_group"), event_type):
+        if token and str(token).lower() in text:
+            score += 5
+    if wants_classification and has_classification:
+        score += 8
+    if wants_detection and has_detection:
+        score += 8
+    if wants_tracking and has_tracking:
+        score += 8
+    if "yolo" in node_text and "yolo" in text:
+        score += 6
+    if candidate.get("runtime_status") == "running":
+        score += 2
+    if candidate.get("inference_url"):
+        score += 1
+    return score
+
+
+def select_model_with_qwen_selector(node: Dict, event_type: str, model_category: str, db: Session) -> Optional[Dict]:
+    """Use resident Qwen0.8B to select a model from model_registry candidates."""
+    if not settings.llm_fallback_model_id:
+        return None
+
+    candidates = _model_candidate_rows(model_category, db)
+    if not candidates:
+        return None
+
+    compact_candidates = [
+        {
+            "model_id": item["model_id"],
+            "name": item["name"],
+            "description": item["description"],
+            "model_type": item["model_type"],
+            "framework": item["framework"],
+            "runtime_status": item["runtime_status"],
+            "inference_url": item["inference_url"],
+        }
+        for item in candidates[:30]
+    ]
+    prompt = (
+        "你是模型路由选择器。请根据工作流节点需求，从候选模型中选择最合适的一个。\n"
+        "只允许选择候选列表中存在的 model_id；如果没有合适模型，返回 null。\n\n"
+        "选择原则：\n"
+        "1. natural_disaster + classification + yolov26 优先选择 YOLO 灾害分类模型；\n"
+        "2. person_behavior + detection + yolov26 优先选择 YOLO 目标检测模型；\n"
+        "3. 不要为 specialized 节点选择 LLM/VLM；\n"
+        "4. stopped 但已绑定 inference_url 的模型可以选择，执行阶段可再决定是否启动；\n"
+        "5. 输出必须是 JSON，不要输出额外文字。\n\n"
+        f"【事件类型】{event_type}\n"
+        f"【节点需求】{json.dumps({k: node.get(k) for k in ['node_id', 'node_type', 'model_category', 'model_task', 'model_family', 'event_group', 'target_event_type']}, ensure_ascii=False)}\n"
+        f"【候选模型】{json.dumps(compact_candidates, ensure_ascii=False)}\n\n"
+        "输出格式：{\"model_id\": 12, \"confidence\": 0.0, \"reason\": \"选择理由\"}"
+    )
+    try:
+        result = model_registry_client.infer(
+            model_id=settings.llm_fallback_model_id,
+            request_data={
+                "prompt": prompt,
+                "max_tokens": 256,
+                "temperature": 0,
+            },
+        )
+        decision = _parse_json_object(_extract_llm_content(result)) or {}
+    except Exception as exc:
+        logger.warning("Qwen0.8B 模型选择失败，使用规则兜底: %s", exc)
+        decision = {}
+
+    candidate_ids = {item["model_id"] for item in candidates}
+    selected_id = decision.get("model_id")
+    try:
+        selected_id = int(selected_id) if selected_id is not None else None
+    except (TypeError, ValueError):
+        selected_id = None
+
+    if selected_id not in candidate_ids:
+        scored = sorted(
+            candidates,
+            key=lambda item: _fallback_score_candidate(item, node, event_type),
+            reverse=True,
+        )
+        if not scored or _fallback_score_candidate(scored[0], node, event_type) <= 0:
+            return None
+        selected_id = scored[0]["model_id"]
+        decision = {
+            "confidence": 0.0,
+            "reason": "Qwen0.8B 未返回有效候选，使用规则评分兜底",
+        }
+    else:
+        selected_candidate = next((item for item in candidates if item["model_id"] == selected_id), None)
+        if not selected_candidate or _fallback_score_candidate(selected_candidate, node, event_type) <= 0:
+            logger.warning(
+                "Qwen0.8B选择的模型与任务不兼容: event=%s, node=%s, selected_id=%s",
+                event_type,
+                node.get("node_type"),
+                selected_id,
+            )
+            return None
+
+    model_info = get_model_with_inference_url(selected_id, db)
+    if model_info:
+        model_info["selection_source"] = "qwen0.8b_model_selector"
+        model_info["selection_reason"] = decision.get("reason")
+        model_info["selection_confidence"] = decision.get("confidence")
+        logger.info(
+            "Qwen0.8B模型选择: event=%s, node=%s, model_id=%s, reason=%s",
+            event_type,
+            node.get("node_type"),
+            selected_id,
+            decision.get("reason"),
+        )
+    return model_info
+
+
 def fuzzy_match_model(node_type: str, model_category: str, db: Session) -> Optional[Dict]:
     """从 model_registry 按类型模糊匹配模型
 
@@ -196,7 +371,7 @@ def fuzzy_match_model(node_type: str, model_category: str, db: Session) -> Optio
     """
     # 提取关键词
     keywords = []
-    for kw in ["检测", "分割", "变化", "推理", "识别", "测量", "分析", "评估", "报告"]:
+    for kw in ["检测", "分类", "目标", "跟踪", "分割", "变化", "推理", "识别", "测量", "分析", "评估", "报告"]:
         if kw in node_type:
             keywords.append(kw)
 
@@ -315,27 +490,22 @@ def select_model_for_action(node: Dict, event_type: str, db: Session = None) -> 
             return model_info
 
     if db:
-        # 1. 从映射表查询候选模型
-        candidates = query_event_model_mapping(db, event_type, node_type, model_category)
+        # specialized 节点使用常驻 Qwen0.8B 从模型库候选中选择
+        if model_category == "specialized":
+            model_info = select_model_with_qwen_selector(node, event_type, model_category, db)
+            if model_info:
+                return model_info
 
-        if candidates:
-            # 2. 按优先级选择
-            best = max(candidates, key=lambda x: x.get("priority", 0))
-            if best.get("model_id"):
-                # 3. 从 model_registry + model_deploy_binding 获取完整信息
-                model_info = get_model_with_inference_url(best["model_id"], db)
-                if model_info:
-                    return model_info
-
-        # 4. 映射表无命中，模糊匹配
+        # Qwen0.8B 未选出结果时，回退到运行中模型模糊匹配
         model_info = fuzzy_match_model(node_type, model_category, db)
         if model_info:
             return model_info
 
-    # 5. 无数据库连接或未找到，返回占位信息
+    # 6. 无数据库连接或未找到，返回占位信息
+    placeholder_name = f"{node_type}（待配置）" if node_type.endswith("模型") else f"{node_type}模型（待配置）"
     return {
         "model_id": None,
-        "model_name": f"{node_type}模型（待配置）",
+        "model_name": placeholder_name,
         "model_type": node_type,
         "framework": None,
         "inference_url": None,
@@ -430,6 +600,27 @@ def configure_action_node(
             },
         }
 
+    elif model_category == "specialized":
+        task = node.get("model_task") or node.get("node_type")
+        node["physical_io_schema"] = {
+            "inputs": {
+                "images": {"type": "array", "required": False, "description": "图片路径列表"},
+                "videos": {"type": "array", "required": False, "description": "视频路径列表"},
+                "media_objects": {"type": "array", "required": False, "description": "媒体对象引用"},
+                "sensor_data": {"type": "object", "required": False, "description": "传感器数据"},
+                "event_type": {"type": "string", "required": True, "description": "事件类型"},
+                "task_type": {"type": "string", "required": True, "description": "专有模型任务类型"},
+            },
+            "outputs": {
+                "detection_results": {"type": "object", "description": "专有模型检测/分类结果"},
+                "confidence": {"type": "float", "description": "置信度"},
+                "boxes": {"type": "array", "description": "目标框"},
+                "tracks": {"type": "array", "description": "目标轨迹"},
+                "media_objects": {"type": "array", "description": "媒体对象引用"},
+            },
+        }
+        node["task_type"] = task
+
     return node
 
 
@@ -475,5 +666,8 @@ def populate_models(dam_state: DamState, db: Session = None) -> Dict:
                 node["model_name"] = model_info.get("model_name")
                 node["inference_url"] = model_info.get("inference_url")
                 node["io_schema"] = model_info.get("io_schema")
+                for key in ("selection_source", "selection_reason", "selection_confidence"):
+                    if key in model_info:
+                        node[key] = model_info.get(key)
 
     return draft_dag

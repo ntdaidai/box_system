@@ -76,7 +76,7 @@ class Settings:
         _get_env("QWEN_CAMERA_SCREENING_URL_EXPIRES_SECONDS", "600")
     )
     QWEN_CAMERA_SCREENING_OBJECT_PREFIX: str = _get_env(
-        "QWEN_CAMERA_SCREENING_OBJECT_PREFIX", "safety-events/qwen-temp-frames"
+        "QWEN_CAMERA_SCREENING_OBJECT_PREFIX", "camera"
     ).strip("/")
     QWEN_CAMERA_SCREENING_RETENTION_MINUTES: int = int(
         _get_env("QWEN_CAMERA_SCREENING_RETENTION_MINUTES", "60")
@@ -102,7 +102,7 @@ class Settings:
         _get_env("DAM_MODEL_LIBRARY_WORKFLOW_EXECUTE_ENABLED", "true").lower() == "true"
     )
     DAM_MODEL_LIBRARY_WORKFLOW_MODE: str = _get_env(
-        "DAM_MODEL_LIBRARY_WORKFLOW_MODE", "infer"
+        "DAM_MODEL_LIBRARY_WORKFLOW_MODE", "run"
     )
 
     # ── CORS ───────────────────────────────────────────────────

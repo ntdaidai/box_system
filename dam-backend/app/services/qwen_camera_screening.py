@@ -6,10 +6,14 @@ import asyncio
 import base64
 import json
 import re
+import tempfile
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import cv2
+import numpy as np
 from loguru import logger
 from openai import AsyncOpenAI
 
@@ -55,6 +59,8 @@ SYSTEM_PROMPT = """你是库坝与河道摄像头安全初筛模型。
 
 规则：
 - detected 字段只能是 0 或 1。
+- target_variables 之间互斥，只允许最主要、证据最充分的一类输出 1，其余全部输出 0。
+- 如果画面主要是洪水/大面积积水/水流上涨，不要同时输出泥石流或滑坡。
 - confidence 范围是 0 到 1。
 - 看不清或证据不足时输出 0，并在 uncertainties 说明。
 - 地震不能只凭普通画面轻易判定，除非画面有明显震动破坏迹象。
@@ -70,6 +76,7 @@ class QwenCameraScreeningService:
         self._task: Optional[asyncio.Task] = None
         self._last_run: Dict[str, float] = {}
         self._last_cleanup_at = 0.0
+        self._inference_lock = asyncio.Lock()
 
     async def start(self) -> None:
         if not settings.QWEN_CAMERA_SCREENING_ENABLED:
@@ -155,20 +162,68 @@ class QwenCameraScreeningService:
             logger.warning(f"Qwen摄像头初筛抓图失败: camera={camera_id}, error={exc}")
             return None
 
-        image_urls, model_image_urls = await self._upload_frames(camera_id, frames)
-        result, raw_response = await self._call_qwen(
-            camera_id,
-            frames,
-            image_urls,
-            model_image_urls,
+        return await self.screen_frames(camera_id, frames, input_source="camera")
+
+    async def screen_frames(
+        self,
+        camera_id: str,
+        frames: List[tuple[float, bytes]],
+        *,
+        input_source: str = "simulation",
+        window_seconds: Optional[float] = None,
+        evidence_video_path: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Screen an explicit frame window and dispatch the result to camera ECA."""
+        if not frames:
+            return None
+        effective_window = (
+            max(1.0, float(window_seconds))
+            if window_seconds is not None
+            else float(settings.QWEN_CAMERA_SCREENING_WINDOW_SECONDS)
         )
+        async with self._inference_lock:
+            batch_ts = int(time.time() * 1000)
+            image_urls, model_image_urls = await self._upload_frames(camera_id, frames, batch_ts)
+            if evidence_video_path:
+                video_url, video_object_name = await self._upload_source_video(
+                    camera_id,
+                    evidence_video_path,
+                    batch_ts,
+                )
+            else:
+                video_url, video_object_name = await self._upload_evidence_video(
+                    camera_id,
+                    frames,
+                    batch_ts,
+                    effective_window,
+                )
+            result, raw_response = await self._call_qwen(
+                camera_id,
+                frames,
+                image_urls,
+                model_image_urls,
+                effective_window,
+            )
         if not result:
             return None
 
         result["camera_id"] = int(camera_id) if camera_id.isdigit() else camera_id
         result["timestamp"] = time.time()
-        result["window_seconds"] = settings.QWEN_CAMERA_SCREENING_WINDOW_SECONDS
+        result["window_seconds"] = effective_window
+        result["input_source"] = input_source
         result["image_urls"] = image_urls
+        if video_url:
+            result["source_video_url"] = video_url
+            result["video_urls"] = [video_url]
+            result["media_objects"] = [{
+                "type": "video",
+                "path": video_url,
+                "bucket": minio_service.bucket_name,
+                "object_key": video_object_name,
+                "source": "qwen_screening_evidence_video",
+                "duration_seconds": effective_window,
+                "frame_count": len(frames),
+            }]
         vision_detector.update_qwen_screening_result(
             camera_id,
             result,
@@ -177,17 +232,111 @@ class QwenCameraScreeningService:
         )
         return result
 
+    async def screen_video_file(
+        self,
+        camera_id: str,
+        video_path: str,
+        *,
+        input_source: str = "simulation_video",
+        window_seconds: Optional[float] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Screen a local video file by sampling frames server-side."""
+        frames, duration_seconds = await asyncio.to_thread(
+            self._extract_video_frames,
+            video_path,
+            window_seconds,
+        )
+        if not frames:
+            return None
+        return await self.screen_frames(
+            camera_id,
+            frames,
+            input_source=input_source,
+            window_seconds=duration_seconds or window_seconds,
+            evidence_video_path=video_path,
+        )
+
+    def _extract_video_frames(
+        self,
+        video_path: str,
+        window_seconds: Optional[float] = None,
+    ) -> tuple[List[tuple[float, bytes]], float]:
+        path = Path(video_path)
+        cap = cv2.VideoCapture(str(path))
+        if not cap.isOpened():
+            raise ValueError("视频解码失败")
+        try:
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            fps = float(cap.get(cv2.CAP_PROP_FPS) or 0)
+            if not (0.1 <= fps <= 240):
+                fps = 25.0
+            duration = total_frames / fps if total_frames > 0 else float(window_seconds or 0)
+            frame_count = max(1, min(int(settings.QWEN_CAMERA_SCREENING_FRAME_COUNT), 4))
+            if total_frames > 0:
+                if frame_count == 1:
+                    indices = [max(0, total_frames // 2)]
+                else:
+                    indices = [
+                        min(total_frames - 1, round(i * (total_frames - 1) / (frame_count - 1)))
+                        for i in range(frame_count)
+                    ]
+            else:
+                indices = []
+
+            frames: List[tuple[float, bytes]] = []
+            for index in indices:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, index)
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    continue
+                jpeg = self._normalize_frame_to_jpeg(frame)
+                captured_at = time.time() - max(duration, 1.0) + (index / fps if fps else 0.0)
+                frames.append((captured_at, jpeg))
+
+            if not frames:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                while len(frames) < frame_count:
+                    ok, frame = cap.read()
+                    if not ok or frame is None:
+                        break
+                    frames.append((time.time(), self._normalize_frame_to_jpeg(frame)))
+                    skip = max(1, round(fps * max(1.0, float(window_seconds or 10.0)) / max(frame_count, 1)))
+                    current = int(cap.get(cv2.CAP_PROP_POS_FRAMES) or 0)
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, current + skip)
+            return frames, duration or float(window_seconds or settings.QWEN_CAMERA_SCREENING_WINDOW_SECONDS)
+        finally:
+            cap.release()
+
+    def _normalize_frame_to_jpeg(self, image: np.ndarray) -> bytes:
+        max_side = max(64, int(settings.QWEN_CAMERA_SCREENING_MAX_IMAGE_SIDE))
+        height, width = image.shape[:2]
+        if max(height, width) > max_side:
+            scale = max_side / max(height, width)
+            image = cv2.resize(
+                image,
+                (max(1, round(width * scale)), max(1, round(height * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+        success, encoded = cv2.imencode(
+            ".jpg",
+            image,
+            [int(cv2.IMWRITE_JPEG_QUALITY), max(20, min(int(settings.QWEN_CAMERA_SCREENING_JPEG_QUALITY), 95))],
+        )
+        if not success:
+            raise ValueError("视频帧编码失败")
+        return encoded.tobytes()
+
     async def _upload_frames(
         self,
         camera_id: str,
         frames: List[tuple[float, bytes]],
+        batch_ts: int,
     ) -> tuple[List[str], List[str]]:
         urls: List[str] = []
         object_names: List[str] = []
         captured_day = datetime.now().strftime("%Y-%m-%d")
-        batch_ts = int(time.time() * 1000)
         for index, (_timestamp, data) in enumerate(frames):
-            prefix = settings.QWEN_CAMERA_SCREENING_OBJECT_PREFIX or "safety-events/qwen-temp-frames"
+            prefix = settings.QWEN_CAMERA_SCREENING_OBJECT_PREFIX or "camera"
             object_name = (
                 f"{prefix}/{captured_day}/camera_{camera_id}/"
                 f"{batch_ts}/frame_{index + 1}.jpg"
@@ -202,6 +351,123 @@ class QwenCameraScreeningService:
                 urls.append(url)
                 object_names.append(object_name)
         return urls, self._build_model_image_urls(object_names)
+
+    async def _upload_evidence_video(
+        self,
+        camera_id: str,
+        frames: List[tuple[float, bytes]],
+        batch_ts: int,
+        window_seconds: float,
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Create a short evidence video from sampled frames and upload it to MinIO."""
+        if len(frames) < 2:
+            return None, None
+        return await asyncio.to_thread(
+            self._write_and_upload_evidence_video,
+            camera_id,
+            frames,
+            batch_ts,
+            window_seconds,
+        )
+
+    def _write_and_upload_evidence_video(
+        self,
+        camera_id: str,
+        frames: List[tuple[float, bytes]],
+        batch_ts: int,
+        window_seconds: float,
+    ) -> tuple[Optional[str], Optional[str]]:
+        decoded: List[np.ndarray] = []
+        for _timestamp, data in frames:
+            image = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+            if image is not None:
+                decoded.append(image)
+        if len(decoded) < 2:
+            return None, None
+
+        height, width = decoded[0].shape[:2]
+        if width <= 0 or height <= 0:
+            return None, None
+        normalized = []
+        for image in decoded:
+            if image.shape[:2] != (height, width):
+                image = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
+            normalized.append(image)
+
+        fps = max(1.0, min(6.0, len(normalized) / max(1.0, float(window_seconds))))
+        tmp_path: Optional[Path] = None
+        writer = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+            writer = cv2.VideoWriter(
+                str(tmp_path),
+                cv2.VideoWriter_fourcc(*"mp4v"),
+                fps,
+                (width, height),
+            )
+            if not writer.isOpened():
+                return None, None
+            for image in normalized:
+                writer.write(image)
+        finally:
+            if writer is not None:
+                writer.release()
+
+        if not tmp_path or not tmp_path.exists() or tmp_path.stat().st_size <= 0:
+            return None, None
+
+        captured_day = datetime.now().strftime("%Y-%m-%d")
+        prefix = settings.QWEN_CAMERA_SCREENING_OBJECT_PREFIX or "camera"
+        object_name = (
+            f"{prefix}/{captured_day}/camera_{camera_id}/"
+            f"{batch_ts}/evidence.mp4"
+        )
+        try:
+            url = minio_service.upload_file(
+                str(tmp_path),
+                object_name=object_name,
+                content_type="video/mp4",
+            )
+            return (url, object_name) if url else (None, None)
+        finally:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    async def _upload_source_video(
+        self,
+        camera_id: str,
+        video_path: str,
+        batch_ts: int,
+    ) -> tuple[Optional[str], Optional[str]]:
+        return await asyncio.to_thread(
+            self._upload_source_video_sync,
+            camera_id,
+            video_path,
+            batch_ts,
+        )
+
+    def _upload_source_video_sync(
+        self,
+        camera_id: str,
+        video_path: str,
+        batch_ts: int,
+    ) -> tuple[Optional[str], Optional[str]]:
+        captured_day = datetime.now().strftime("%Y-%m-%d")
+        prefix = settings.QWEN_CAMERA_SCREENING_OBJECT_PREFIX or "camera"
+        suffix = Path(video_path).suffix.lower() or ".mp4"
+        object_name = (
+            f"{prefix}/{captured_day}/camera_{camera_id}/"
+            f"{batch_ts}/evidence{suffix}"
+        )
+        url = minio_service.upload_file(
+            video_path,
+            object_name=object_name,
+            content_type="video/mp4",
+        )
+        return (url, object_name) if url else (None, None)
 
     def _build_model_image_urls(self, object_names: List[str]) -> List[str]:
         if not settings.QWEN_CAMERA_SCREENING_USE_MINIO_URL:
@@ -249,9 +515,10 @@ class QwenCameraScreeningService:
         deleted = 0
         try:
             prefixes = {
-                f"{settings.QWEN_CAMERA_SCREENING_OBJECT_PREFIX or 'safety-events/qwen-temp-frames'}/",
+                f"{settings.QWEN_CAMERA_SCREENING_OBJECT_PREFIX or 'camera'}/",
                 "camera/",
                 "qwen-screening/",
+                "safety-events/qwen-temp-frames/",
             }
             for prefix in prefixes:
                 objects = minio_service.client.list_objects(
@@ -286,6 +553,7 @@ class QwenCameraScreeningService:
         frames: List[tuple[float, bytes]],
         image_urls: List[str],
         model_image_urls: List[str],
+        window_seconds: float,
     ) -> tuple[Optional[Dict[str, Any]], str]:
         if self.client is None:
             return None, ""
@@ -308,7 +576,7 @@ class QwenCameraScreeningService:
         prompt = {
             "camera_id": camera_id,
             "image_count": len(frames),
-            "window_seconds": settings.QWEN_CAMERA_SCREENING_WINDOW_SECONDS,
+            "window_seconds": window_seconds,
             "minio_image_urls": image_urls,
             "target_variables": [
                 "mudslide_detected",
@@ -382,9 +650,16 @@ class QwenCameraScreeningService:
             for scene_key, confidence_key in zip(scene_keys, confidence_keys):
                 if confidence[confidence_key] < min_confidence:
                     scene[scene_key] = 0
+            self._enforce_single_scene(scene, confidence)
             data["risk_level"] = str(data.get("risk_level") or "LOW").upper()
             if data["risk_level"] not in {"LOW", "MEDIUM", "HIGH"}:
                 data["risk_level"] = "LOW"
+            natural_disaster = any(scene[key] == 1 for key in scene_keys[:4])
+            person_or_boat = any(scene[key] == 1 for key in scene_keys[4:])
+            if natural_disaster:
+                data["risk_level"] = "HIGH"
+            elif person_or_boat and data["risk_level"] == "LOW":
+                data["risk_level"] = "MEDIUM"
             data["evidence"] = [
                 str(item)[:200]
                 for item in (data.get("evidence") or [])
@@ -400,6 +675,28 @@ class QwenCameraScreeningService:
         except Exception as exc:
             logger.warning(f"Qwen摄像头初筛JSON解析失败: {exc}, content={content[:200]}")
             return None
+
+    @staticmethod
+    def _enforce_single_scene(scene: Dict[str, Any], confidence: Dict[str, Any]) -> None:
+        """Keep the camera screening result as a single primary trigger."""
+        pairs = [
+            ("mudslide_detected", "mudslide_confidence"),
+            ("landslide_detected", "landslide_confidence"),
+            ("earthquake_detected", "earthquake_confidence"),
+            ("flood_detected", "flood_confidence"),
+            ("person_present", "person_confidence"),
+            ("boat_present", "boat_confidence"),
+        ]
+        active = [
+            (scene_key, confidence_key, float(confidence.get(confidence_key, 0.0) or 0.0))
+            for scene_key, confidence_key in pairs
+            if scene.get(scene_key) == 1
+        ]
+        if not active:
+            return
+        winner = max(active, key=lambda item: item[2])[0]
+        for scene_key, _confidence_key in pairs:
+            scene[scene_key] = 1 if scene_key == winner else 0
 
 
 qwen_camera_screening_service = QwenCameraScreeningService()

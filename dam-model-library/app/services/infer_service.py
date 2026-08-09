@@ -6,13 +6,16 @@
 3. 可选的输入校验（基于 IO Schema）
 """
 
+import math
 import time
 import httpx
 from typing import Optional, Any
+from urllib.parse import urlparse, urlunparse
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
 from loguru import logger
 
+from app.config import settings
 from app.models.model_registry import ModelRegistry
 from app.models.model_deploy_binding import ModelDeployBinding
 from app.models.model_io_schema import ModelIOSchema
@@ -73,6 +76,7 @@ class InferService:
         # 构建推理 URL
         inference_path = binding.inference_path or DEFAULT_INFERENCE_PATH
         inference_url = f"http://{binding.host_ip}:{binding.host_port}{inference_path}"
+        request_data = self._prepare_request_data(binding, request_data)
 
         # 发送推理请求
         try:
@@ -126,7 +130,7 @@ class InferService:
         inference_result = None
 
         try:
-            # 如果未运行，自动启动
+            # 如果未运行，自动启动；run 语义下非常驻模型推理结束后会停止容器以节省资源。
             if model.runtime_status != "running":
                 logger.info(f"模型 {model_id} 未运行，自动启动...")
                 start_time = time.time()
@@ -141,6 +145,7 @@ class InferService:
             # 执行推理
             inference_path = binding.inference_path or DEFAULT_INFERENCE_PATH
             inference_url = f"http://{binding.host_ip}:{binding.host_port}{inference_path}"
+            request_data = self._prepare_request_data(binding, request_data)
             response = self.client.post(inference_url, json=request_data)
             response.raise_for_status()
             inference_result = response.json()
@@ -159,8 +164,8 @@ class InferService:
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"推理失败: {str(e)}")
         finally:
-            # 无论成功失败，只要是自动启动的，都停止容器
-            if auto_started:
+            # run 语义：非常驻模型推理结束后停止；0.8B/4B 等常驻模型保持运行。
+            if model_id not in settings.resident_model_id_set and model.runtime_status == "running":
                 stop_time = time.time()
                 logger.info(f"停止容器...")
                 try:
@@ -183,6 +188,115 @@ class InferService:
                 result["runtime_info"]["duration_ms"] = int((stop_time - start_time) * 1000)
 
         return result
+
+    def _prepare_request_data(self, binding: ModelDeployBinding, request_data: dict) -> dict:
+        """Adapt the unified workflow request to the bound generic inference API."""
+        path = str(binding.inference_path or DEFAULT_INFERENCE_PATH)
+        payload = dict(request_data or {})
+        if path.endswith("/v1/chat/completions"):
+            return self._build_chat_completion_payload(binding, payload)
+        return payload
+
+    def _build_chat_completion_payload(self, binding: ModelDeployBinding, payload: dict) -> dict:
+        if payload.get("messages"):
+            messages = payload["messages"]
+        else:
+            prompt = str(payload.get("prompt") or payload.get("user_prompt") or "")
+            content: Any = prompt
+            image_urls = self._extract_media_urls(payload, media_type="image")
+            video_urls = self._extract_media_urls(payload, media_type="video")
+            if image_urls or video_urls:
+                content = [{"type": "text", "text": prompt}]
+                content.extend(
+                    {"type": "video_url", "video_url": {"url": url}}
+                    for url in video_urls[:1]
+                )
+                if not video_urls:
+                    content.extend(
+                        {"type": "image_url", "image_url": {"url": url}}
+                        for url in image_urls[:4]
+                    )
+            messages = [{"role": "user", "content": content}]
+
+        result = {
+            "model": payload.get("model") or self._resolve_chat_model_id(binding),
+            "messages": messages,
+            "max_tokens": self._chat_max_tokens(payload, messages),
+            "temperature": float(payload.get("temperature") or 0.2),
+        }
+        for key in ("top_p", "stream"):
+            if key in payload:
+                result[key] = payload[key]
+        return result
+
+    def _resolve_chat_model_id(self, binding: ModelDeployBinding) -> str:
+        try:
+            url = f"http://{binding.host_ip}:{binding.host_port}/v1/models"
+            response = self.client.get(url, timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            models = data.get("data") if isinstance(data, dict) else None
+            if isinstance(models, list) and models:
+                model_id = models[0].get("id") if isinstance(models[0], dict) else None
+                if model_id:
+                    return str(model_id)
+        except Exception as exc:
+            logger.debug(f"读取 vLLM 模型列表失败，使用 fallback model id: {exc}")
+        return "default"
+
+    def _chat_max_tokens(self, payload: dict, messages: list[dict]) -> int:
+        """Target 2048 output tokens, then shrink to fit 2048-context vLLM models."""
+        requested = min(int(payload.get("max_tokens") or 2048), 2048)
+        text_chars = self._message_text_chars(messages)
+        estimated_prompt_tokens = math.ceil(text_chars / 2.0)
+        available = 2048 - estimated_prompt_tokens - 64
+        if available <= 0:
+            return min(requested, 512)
+        return max(256, min(requested, available))
+
+    def _message_text_chars(self, messages: list[dict]) -> int:
+        return sum(self._content_text_chars(message.get("content")) for message in messages)
+
+    def _content_text_chars(self, content: Any) -> int:
+        if isinstance(content, str):
+            return len(content)
+        if isinstance(content, list):
+            return sum(self._content_text_chars(item.get("text") if isinstance(item, dict) else item) for item in content)
+        if isinstance(content, dict):
+            return sum(self._content_text_chars(value) for value in content.values())
+        return 0
+
+    @staticmethod
+    def _extract_media_urls(payload: dict, media_type: str = "image") -> list[str]:
+        urls: list[str] = []
+        keys = ("videos", "video_urls") if media_type == "video" else ("images", "image_urls")
+        for key in keys:
+            value = payload.get(key)
+            items = value if isinstance(value, list) else [value]
+            for item in items:
+                if isinstance(item, str) and item.startswith(("http://", "https://")):
+                    urls.append(InferService._model_reachable_url(item))
+        for item in payload.get("media_objects") or []:
+            if not isinstance(item, dict):
+                continue
+            item_type = str(item.get("type") or "").lower()
+            if media_type == "video":
+                if item_type != "video":
+                    continue
+            elif item_type not in {"image", "frame"}:
+                continue
+            ref = item.get("url") or item.get("path") or item.get("file_url")
+            if isinstance(ref, str) and ref.startswith(("http://", "https://")):
+                urls.append(InferService._model_reachable_url(ref))
+        return list(dict.fromkeys(urls))
+
+    @staticmethod
+    def _model_reachable_url(url: str) -> str:
+        parsed = urlparse(url)
+        if parsed.hostname in {"localhost", "127.0.0.1"} and parsed.port == 9000:
+            netloc = "172.17.0.1:9000"
+            return urlunparse(parsed._replace(netloc=netloc))
+        return url
 
     def _wait_for_ready(self, binding: ModelDeployBinding, timeout: int = 600) -> bool:
         """探活：等待推理服务就绪

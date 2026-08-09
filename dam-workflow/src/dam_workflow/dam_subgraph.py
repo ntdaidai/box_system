@@ -38,6 +38,7 @@ def run_dam_workflow(
             "success": bool,
             "final_dag": Dict,  # 最终可执行 DAG
             "event_type": str,  # 事件类型
+            "event_group": str,  # 工作流族
             "visual_tasks": List[str],  # 视觉任务列表
             "error": str,  # 错误信息（如有）
         }
@@ -56,6 +57,7 @@ def run_dam_workflow(
         # 构建初始状态
         state: DamState = {
             "event_type": dam_input["event_type"],
+            "event_group": dam_input["event_group"],
             "images": dam_input["images"],
             "videos": dam_input["videos"],
             "media_objects": dam_input["media_objects"],
@@ -81,6 +83,7 @@ def run_dam_workflow(
             "success": True,
             "final_dag": final_dag,
             "event_type": dam_input["event_type"],
+            "event_group": dam_input["event_group"],
             "visual_tasks": draft_dag.get("visual_tasks", []),
         }
 

@@ -5,7 +5,8 @@ from typing import List, Dict, Optional, TypedDict, Any
 
 class DamInput(TypedDict):
     """DAM 系统标准输入"""
-    event_type: str                # 已确定的事件类型（如 "滑坡"、"裂缝"、"渗漏"）
+    event_type: str                # 已确定的事件类型（如 "洪水"、"人员入侵"、"暴雨"）
+    event_group: str               # 工作流族（natural_disaster/person_behavior/extreme_weather）
     images: List[str]              # 现场图片路径列表
     videos: List[str]              # 现场视频路径列表
     media_objects: List[Dict[str, Any]]  # 现场媒体对象引用
@@ -26,6 +27,7 @@ class DamState(TypedDict, total=False):
     """DAM 轻量工作流状态"""
     # --- 输入 ---
     event_type: str                        # 已确定的事件类型
+    event_group: str                       # 工作流族
     images: List[str]                      # 现场图片路径列表
     videos: List[str]                      # 现场视频路径列表
     media_objects: List[Dict[str, Any]]    # 媒体对象引用

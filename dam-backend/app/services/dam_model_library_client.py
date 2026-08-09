@@ -83,6 +83,9 @@ class DamModelLibraryClient:
         videos: Optional[List[str]] = None,
         media_objects: Optional[List[Dict[str, Any]]] = None,
         event_type: Optional[str] = None,
+        media_mode: str = "auto",
+        max_frames: int = 4,
+        frame_interval_seconds: float = 2.5,
         mode: str = settings.DAM_MODEL_LIBRARY_WORKFLOW_MODE,
     ) -> Dict[str, Any]:
         payload = {
@@ -93,6 +96,10 @@ class DamModelLibraryClient:
             "media_objects": media_objects or [],
             "sensor_data": sensor_data,
             "event_type": event_type,
+            "media_mode": media_mode,
+            "max_frames": max_frames,
+            "frame_interval_seconds": frame_interval_seconds,
+            "fallback_to_frames": True,
             "mode": mode,
         }
         async with httpx.AsyncClient(timeout=self.timeout) as client:

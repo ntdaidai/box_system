@@ -1,40 +1,99 @@
 # -*- coding: utf-8 -*-
 """关键词提取（纯规则，无 LLM）"""
-import re
-from typing import Optional
+import json
+from typing import Any, Dict, Optional
 
 # 事件类型关键词映射
 EVENT_KEYWORDS = {
+    "泥石流": ["AI_MUDSLIDE", "泥石流", "山洪泥石流", "debris flow", "mudslide"],
     "滑坡": ["滑坡", "山体滑坡", "边坡失稳", "滑动", "landslide"],
-    "裂缝": ["裂缝", "裂纹", "开裂", "龟裂", "crack"],
-    "渗漏": ["渗漏", "渗水", "漏水", "渗流", "seepage"],
-    "变形": ["变形", "位移", "形变", "偏移", "deformation"],
-    "沉降": ["沉降", "下沉", "地面沉降", "settlement"],
-    "管涌": ["管涌", "涌水", "涌砂", "piping"],
-    "降雨": ["降雨", "暴雨", "大雨", "下雨", "rainfall"],
-    "水位": ["水位", "水位升高", "水位异常", "water_level"],
+    "洪水": ["AI_FLOOD", "洪水", "洪涝", "内涝", "水淹", "flood"],
+    "地震": ["AI_EARTHQUAKE", "地震", "震动", "震害", "earthquake"],
+    "人员入侵": ["PERSON_INTRUSION", "人员入侵", "人员闯入", "入侵", "闯入", "intrusion"],
+    "滩涂游玩": ["PERSON_WATERFRONT", "PERSON_WADING", "滩涂游玩", "人员亲水", "人员涉水", "涉水", "亲水", "游玩", "wading", "waterfront"],
+    "夜间电鱼捕鱼": ["BOAT_INTRUSION", "BOAT_STAY", "BOAT_ILLEGAL_FISHING", "电鱼", "捕鱼", "偷捕", "非法捕鱼", "船只闯入", "船只停留", "船只偷捕", "fishing"],
+    "台风": ["台风", "typhoon"],
+    "暴雨": ["暴雨", "强降雨", "rainstorm"],
+    "高温": ["高温", "heat", "high_temperature"],
+    "低温": ["低温", "寒潮", "low_temperature"],
+}
+
+EVENT_GROUPS = {
+    "泥石流": "natural_disaster",
+    "滑坡": "natural_disaster",
+    "洪水": "natural_disaster",
+    "地震": "natural_disaster",
+    "人员入侵": "person_behavior",
+    "滩涂游玩": "person_behavior",
+    "夜间电鱼捕鱼": "person_behavior",
+    "台风": "extreme_weather",
+    "暴雨": "extreme_weather",
+    "高温": "extreme_weather",
+    "低温": "extreme_weather",
+}
+
+EVENT_CODE_TYPES = {
+    "AI_MUDSLIDE": "泥石流",
+    "AI_LANDSLIDE": "滑坡",
+    "AI_FLOOD": "洪水",
+    "AI_EARTHQUAKE": "地震",
+    "PERSON_INTRUSION": "人员入侵",
+    "PERSON_WATERFRONT": "滩涂游玩",
+    "PERSON_WADING": "滩涂游玩",
+    "BOAT_INTRUSION": "夜间电鱼捕鱼",
+    "BOAT_STAY": "夜间电鱼捕鱼",
+    "BOAT_ILLEGAL_FISHING": "夜间电鱼捕鱼",
 }
 
 # 支持的事件类型列表
 SUPPORTED_EVENT_TYPES = list(EVENT_KEYWORDS.keys())
 
 
-def extract_event_type(user_prompt: str) -> Optional[str]:
-    """从用户 prompt 中提取事件类型（纯规则匹配，无 LLM）
+def _flatten_context(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except TypeError:
+        return str(value)
+
+
+def extract_event_type(user_prompt: str, sensor_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """从用户 prompt 和结构化上下文中提取事件类型（纯规则匹配，无 LLM）
 
     Args:
         user_prompt: 用户输入的 prompt 文本
+        sensor_data: 后端传入的事件上下文
 
     Returns:
         事件类型字符串，未匹配返回 None
     """
-    if not user_prompt:
+    sensor_data = sensor_data or {}
+    event_code = str(sensor_data.get("event_code") or "").strip().upper()
+    if event_code in EVENT_CODE_TYPES:
+        return EVENT_CODE_TYPES[event_code]
+
+    text_parts = [
+        user_prompt or "",
+        _flatten_context(sensor_data.get("event_code")),
+        _flatten_context(sensor_data.get("event_name")),
+        _flatten_context(sensor_data.get("event_type")),
+        _flatten_context(sensor_data.get("event_category")),
+        _flatten_context(sensor_data.get("summary")),
+        _flatten_context(sensor_data.get("description")),
+        _flatten_context(sensor_data.get("qwen_summary")),
+        _flatten_context(sensor_data.get("screening")),
+    ]
+    text = "\n".join(part for part in text_parts if part)
+    if not text:
         return None
 
-    # 遍历每种事件类型的关键词
+    text_lower = text.lower()
     for event_type, keywords in EVENT_KEYWORDS.items():
         for keyword in keywords:
-            if keyword in user_prompt:
+            if keyword.lower() in text_lower:
                 return event_type
 
     return None
@@ -43,3 +102,8 @@ def extract_event_type(user_prompt: str) -> Optional[str]:
 def validate_event_type(event_type: str) -> bool:
     """验证事件类型是否支持"""
     return event_type in SUPPORTED_EVENT_TYPES
+
+
+def get_event_group(event_type: str) -> str:
+    """获取事件所属工作流族。"""
+    return EVENT_GROUPS.get(event_type, "unknown")

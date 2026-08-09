@@ -1,188 +1,205 @@
 # -*- coding: utf-8 -*-
-"""事件→工作流模板映射
+"""事件→工作流模板映射。
 
-工作流结构：
-START → [专用小模型(specialized)] → 场景推理(local_llm) → 最终报告(cloud_llm) → END
+工作流结构遵循三类工作流族：
+- natural_disaster：灾害分类模型 -> qwen4B 场景理解 -> qwen35B 增强分析
+- person_behavior：目标检测模型 -> 目标跟踪 -> qwen4B 行为理解 -> qwen35B 增强分析
+- extreme_weather：多源数据结构化 -> qwen4B 风险融合 -> qwen35B 增强分析
 
-说明：
-- 专用小模型：分类、检测等，根据事件类型决定是否需要
-- 本地大模型（qwen4B）：场景推理，生成初步报告，一定存在
-- 云端大模型（qwen35B）：综合分析，生成最终报告，一定存在
 """
+from __future__ import annotations
+
+import copy
 from typing import Dict, List, Optional
 
 
-# 事件→工作流模板
+def _node(node_id: str, node_class: str, node_type: str, **extra) -> Dict:
+    return {
+        "node_id": node_id,
+        "node_class": node_class,
+        "node_type": node_type,
+        **extra,
+    }
+
+
+def _model_node(node_id: str, node_type: str, model_category: str, **extra) -> Dict:
+    return _node(
+        node_id,
+        "ACTION",
+        node_type,
+        expected_implementation_type="MODEL",
+        model_category=model_category,
+        **extra,
+    )
+
+
+def _chain(*node_ids: str) -> List[Dict]:
+    return [
+        {"source": source, "target": target}
+        for source, target in zip(node_ids, node_ids[1:])
+    ]
+
+
+def _natural_disaster_template(event_type: str) -> Dict:
+    return {
+        "workflow_family": "natural_disaster",
+        "description": f"{event_type}自然灾害事件分析工作流",
+        "visual_tasks": [
+            "多源数据获取",
+            "灾害分类模型",
+            "置信度判断",
+            "场景理解与初步报告",
+            "云端增强分析",
+        ],
+        "nodes": [
+            _node("start_0", "START", "多源数据获取"),
+            _model_node(
+                "action_classify",
+                "灾害分类模型",
+                "specialized",
+                model_task="classification",
+                model_family="yolov26",
+                event_group="natural_disaster",
+                target_event_type=event_type,
+                confidence_policy={
+                    "high_confidence_threshold": 0.75,
+                    "low_confidence_action": "补充视频帧、补充传感器、查询知识库",
+                },
+            ),
+            _model_node(
+                "action_reasoning",
+                "qwen4B场景理解",
+                "local_llm",
+                model_task="scene_understanding",
+                event_group="natural_disaster",
+            ),
+            _model_node(
+                "action_report",
+                "云端Qwen3.5-35B增强分析",
+                "cloud_llm",
+                model_task="final_review",
+                event_group="natural_disaster",
+            ),
+            _node("end_0", "END", "分析结果生成"),
+        ],
+        "edges": _chain("start_0", "action_classify", "action_reasoning", "action_report", "end_0"),
+        "post_actions": ["设备联动（取证）", "报告生成"],
+    }
+
+
+def _person_behavior_template(event_type: str) -> Dict:
+    return {
+        "workflow_family": "person_behavior",
+        "description": f"{event_type}人员异常行为分析工作流",
+        "visual_tasks": [
+            "视频流获取",
+            "目标检测模型",
+            "目标跟踪",
+            "行为理解",
+            "云端增强分析",
+        ],
+        "nodes": [
+            _node("start_0", "START", "视频流获取"),
+            _model_node(
+                "action_detect",
+                "YOLOv26目标检测",
+                "specialized",
+                model_task="detection",
+                model_family="yolov26",
+                event_group="person_behavior",
+                target_event_type=event_type,
+            ),
+            _model_node(
+                "action_track",
+                "目标跟踪",
+                "specialized",
+                model_task="tracking",
+                model_family="tracker",
+                event_group="person_behavior",
+                optional=True,
+            ),
+            _model_node(
+                "action_reasoning",
+                "qwen4B行为理解",
+                "local_llm",
+                model_task="behavior_understanding",
+                event_group="person_behavior",
+            ),
+            _model_node(
+                "action_report",
+                "云端Qwen3.5-35B增强分析",
+                "cloud_llm",
+                model_task="final_review",
+                event_group="person_behavior",
+            ),
+            _node("end_0", "END", "分析结果生成"),
+        ],
+        "edges": _chain(
+            "start_0",
+            "action_detect",
+            "action_track",
+            "action_reasoning",
+            "action_report",
+            "end_0",
+        ),
+        "post_actions": ["设备联动（取证）", "报告生成"],
+    }
+
+
+def _extreme_weather_template(event_type: str) -> Dict:
+    return {
+        "workflow_family": "extreme_weather",
+        "description": f"{event_type}极端天气风险分析工作流",
+        "visual_tasks": [
+            "多源数据结构化",
+            "qwen4B综合风险分析",
+            "云端增强推理",
+        ],
+        "nodes": [
+            _node("start_0", "START", "多源数据获取"),
+            _model_node(
+                "action_reasoning",
+                "qwen4B综合风险分析",
+                "local_llm",
+                model_task="risk_fusion",
+                event_group="extreme_weather",
+                required_sources=["iotdb", "weather_api", "video", "knowledge_base"],
+            ),
+            _model_node(
+                "action_report",
+                "云端Qwen3.5-35B增强推理",
+                "cloud_llm",
+                model_task="final_review",
+                event_group="extreme_weather",
+            ),
+            _node("end_0", "END", "分析结果生成"),
+        ],
+        "edges": _chain("start_0", "action_reasoning", "action_report", "end_0"),
+        "post_actions": ["设备联动（取证）", "报告生成"],
+    }
+
+
 EVENT_WORKFLOW_TEMPLATES = {
-    "滑坡": {
-        "description": "滑坡事件应急巡查工作流",
-        "visual_tasks": ["滑坡区域检测", "场景推理与初步报告", "综合分析与最终报告"],
-        "nodes": [
-            {"node_id": "start_0", "node_class": "START", "node_type": "输入接收"},
-            {"node_id": "action_detect", "node_class": "ACTION", "node_type": "滑坡区域检测",
-             "expected_implementation_type": "MODEL", "model_category": "specialized"},
-            {"node_id": "action_reasoning", "node_class": "ACTION", "node_type": "场景推理与初步报告",
-             "expected_implementation_type": "MODEL", "model_category": "local_llm"},
-            {"node_id": "action_report", "node_class": "ACTION", "node_type": "综合分析与最终报告",
-             "expected_implementation_type": "MODEL", "model_category": "cloud_llm"},
-            {"node_id": "end_0", "node_class": "END", "node_type": "输出"},
-        ],
-        "edges": [
-            {"source": "start_0", "target": "action_detect"},
-            {"source": "action_detect", "target": "action_reasoning"},
-            {"source": "action_reasoning", "target": "action_report"},
-            {"source": "action_report", "target": "end_0"},
-        ],
-    },
-    "裂缝": {
-        "description": "裂缝事件应急巡查工作流",
-        "visual_tasks": ["裂缝检测与定位", "场景推理与初步报告", "综合分析与最终报告"],
-        "nodes": [
-            {"node_id": "start_0", "node_class": "START", "node_type": "输入接收"},
-            {"node_id": "action_detect", "node_class": "ACTION", "node_type": "裂缝检测与定位",
-             "expected_implementation_type": "MODEL", "model_category": "specialized"},
-            {"node_id": "action_reasoning", "node_class": "ACTION", "node_type": "场景推理与初步报告",
-             "expected_implementation_type": "MODEL", "model_category": "local_llm"},
-            {"node_id": "action_report", "node_class": "ACTION", "node_type": "综合分析与最终报告",
-             "expected_implementation_type": "MODEL", "model_category": "cloud_llm"},
-            {"node_id": "end_0", "node_class": "END", "node_type": "输出"},
-        ],
-        "edges": [
-            {"source": "start_0", "target": "action_detect"},
-            {"source": "action_detect", "target": "action_reasoning"},
-            {"source": "action_reasoning", "target": "action_report"},
-            {"source": "action_report", "target": "end_0"},
-        ],
-    },
-    "渗漏": {
-        "description": "渗漏事件应急巡查工作流",
-        "visual_tasks": ["渗漏区域检测", "场景推理与初步报告", "综合分析与最终报告"],
-        "nodes": [
-            {"node_id": "start_0", "node_class": "START", "node_type": "输入接收"},
-            {"node_id": "action_detect", "node_class": "ACTION", "node_type": "渗漏区域检测",
-             "expected_implementation_type": "MODEL", "model_category": "specialized"},
-            {"node_id": "action_reasoning", "node_class": "ACTION", "node_type": "场景推理与初步报告",
-             "expected_implementation_type": "MODEL", "model_category": "local_llm"},
-            {"node_id": "action_report", "node_class": "ACTION", "node_type": "综合分析与最终报告",
-             "expected_implementation_type": "MODEL", "model_category": "cloud_llm"},
-            {"node_id": "end_0", "node_class": "END", "node_type": "输出"},
-        ],
-        "edges": [
-            {"source": "start_0", "target": "action_detect"},
-            {"source": "action_detect", "target": "action_reasoning"},
-            {"source": "action_reasoning", "target": "action_report"},
-            {"source": "action_report", "target": "end_0"},
-        ],
-    },
-    "变形": {
-        "description": "变形事件应急巡查工作流",
-        "visual_tasks": ["变形区域检测", "场景推理与初步报告", "综合分析与最终报告"],
-        "nodes": [
-            {"node_id": "start_0", "node_class": "START", "node_type": "输入接收"},
-            {"node_id": "action_detect", "node_class": "ACTION", "node_type": "变形区域检测",
-             "expected_implementation_type": "MODEL", "model_category": "specialized"},
-            {"node_id": "action_reasoning", "node_class": "ACTION", "node_type": "场景推理与初步报告",
-             "expected_implementation_type": "MODEL", "model_category": "local_llm"},
-            {"node_id": "action_report", "node_class": "ACTION", "node_type": "综合分析与最终报告",
-             "expected_implementation_type": "MODEL", "model_category": "cloud_llm"},
-            {"node_id": "end_0", "node_class": "END", "node_type": "输出"},
-        ],
-        "edges": [
-            {"source": "start_0", "target": "action_detect"},
-            {"source": "action_detect", "target": "action_reasoning"},
-            {"source": "action_reasoning", "target": "action_report"},
-            {"source": "action_report", "target": "end_0"},
-        ],
-    },
-    "沉降": {
-        "description": "沉降事件应急巡查工作流",
-        "visual_tasks": ["沉降区域检测", "场景推理与初步报告", "综合分析与最终报告"],
-        "nodes": [
-            {"node_id": "start_0", "node_class": "START", "node_type": "输入接收"},
-            {"node_id": "action_detect", "node_class": "ACTION", "node_type": "沉降区域检测",
-             "expected_implementation_type": "MODEL", "model_category": "specialized"},
-            {"node_id": "action_reasoning", "node_class": "ACTION", "node_type": "场景推理与初步报告",
-             "expected_implementation_type": "MODEL", "model_category": "local_llm"},
-            {"node_id": "action_report", "node_class": "ACTION", "node_type": "综合分析与最终报告",
-             "expected_implementation_type": "MODEL", "model_category": "cloud_llm"},
-            {"node_id": "end_0", "node_class": "END", "node_type": "输出"},
-        ],
-        "edges": [
-            {"source": "start_0", "target": "action_detect"},
-            {"source": "action_detect", "target": "action_reasoning"},
-            {"source": "action_reasoning", "target": "action_report"},
-            {"source": "action_report", "target": "end_0"},
-        ],
-    },
-    "管涌": {
-        "description": "管涌事件应急巡查工作流",
-        "visual_tasks": ["管涌口检测", "场景推理与初步报告", "综合分析与最终报告"],
-        "nodes": [
-            {"node_id": "start_0", "node_class": "START", "node_type": "输入接收"},
-            {"node_id": "action_detect", "node_class": "ACTION", "node_type": "管涌口检测",
-             "expected_implementation_type": "MODEL", "model_category": "specialized"},
-            {"node_id": "action_reasoning", "node_class": "ACTION", "node_type": "场景推理与初步报告",
-             "expected_implementation_type": "MODEL", "model_category": "local_llm"},
-            {"node_id": "action_report", "node_class": "ACTION", "node_type": "综合分析与最终报告",
-             "expected_implementation_type": "MODEL", "model_category": "cloud_llm"},
-            {"node_id": "end_0", "node_class": "END", "node_type": "输出"},
-        ],
-        "edges": [
-            {"source": "start_0", "target": "action_detect"},
-            {"source": "action_detect", "target": "action_reasoning"},
-            {"source": "action_reasoning", "target": "action_report"},
-            {"source": "action_report", "target": "end_0"},
-        ],
-    },
-    "降雨": {
-        "description": "降雨事件应急巡查工作流（无需检测，直接推理）",
-        "visual_tasks": ["场景推理与初步报告", "综合分析与最终报告"],
-        "nodes": [
-            {"node_id": "start_0", "node_class": "START", "node_type": "输入接收"},
-            {"node_id": "action_reasoning", "node_class": "ACTION", "node_type": "场景推理与初步报告",
-             "expected_implementation_type": "MODEL", "model_category": "local_llm"},
-            {"node_id": "action_report", "node_class": "ACTION", "node_type": "综合分析与最终报告",
-             "expected_implementation_type": "MODEL", "model_category": "cloud_llm"},
-            {"node_id": "end_0", "node_class": "END", "node_type": "输出"},
-        ],
-        "edges": [
-            {"source": "start_0", "target": "action_reasoning"},
-            {"source": "action_reasoning", "target": "action_report"},
-            {"source": "action_report", "target": "end_0"},
-        ],
-    },
-    "水位": {
-        "description": "水位事件应急巡查工作流（无需检测，直接推理）",
-        "visual_tasks": ["场景推理与初步报告", "综合分析与最终报告"],
-        "nodes": [
-            {"node_id": "start_0", "node_class": "START", "node_type": "输入接收"},
-            {"node_id": "action_reasoning", "node_class": "ACTION", "node_type": "场景推理与初步报告",
-             "expected_implementation_type": "MODEL", "model_category": "local_llm"},
-            {"node_id": "action_report", "node_class": "ACTION", "node_type": "综合分析与最终报告",
-             "expected_implementation_type": "MODEL", "model_category": "cloud_llm"},
-            {"node_id": "end_0", "node_class": "END", "node_type": "输出"},
-        ],
-        "edges": [
-            {"source": "start_0", "target": "action_reasoning"},
-            {"source": "action_reasoning", "target": "action_report"},
-            {"source": "action_report", "target": "end_0"},
-        ],
-    },
+    "泥石流": _natural_disaster_template("泥石流"),
+    "滑坡": _natural_disaster_template("滑坡"),
+    "洪水": _natural_disaster_template("洪水"),
+    "地震": _natural_disaster_template("地震"),
+    "人员入侵": _person_behavior_template("人员入侵"),
+    "滩涂游玩": _person_behavior_template("滩涂游玩"),
+    "夜间电鱼捕鱼": _person_behavior_template("夜间电鱼捕鱼"),
+    "台风": _extreme_weather_template("台风"),
+    "暴雨": _extreme_weather_template("暴雨"),
+    "高温": _extreme_weather_template("高温"),
+    "低温": _extreme_weather_template("低温"),
 }
 
 
 def get_template(event_type: str) -> Optional[Dict]:
-    """获取事件类型对应的工作流模板
-
-    Args:
-        event_type: 事件类型
-
-    Returns:
-        模板字典，未找到返回 None
-    """
-    return EVENT_WORKFLOW_TEMPLATES.get(event_type)
+    """获取事件类型对应的工作流模板。"""
+    template = EVENT_WORKFLOW_TEMPLATES.get(event_type)
+    return copy.deepcopy(template) if template else None
 
 
 def get_supported_event_types() -> List[str]:
-    """获取支持的事件类型列表"""
+    """获取支持的事件类型列表。"""
     return list(EVENT_WORKFLOW_TEMPLATES.keys())

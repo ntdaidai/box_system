@@ -32,6 +32,10 @@ class WorkflowExecutorService:
         media_objects: Optional[List[Dict[str, Any]]] = None,
         sensor_data: Optional[Dict[str, Any]] = None,
         event_type: Optional[str] = None,
+        media_mode: str = "auto",
+        max_frames: int = 4,
+        frame_interval_seconds: float = 2.5,
+        fallback_to_frames: bool = True,
         mode: str = "infer",
         validate: bool = False,
         filter_output: bool = False,
@@ -60,6 +64,10 @@ class WorkflowExecutorService:
                     "media_objects": media_objects,
                     "sensor_data": sensor_data,
                     "user_prompt": prompt,
+                    "media_mode": media_mode,
+                    "max_frames": max_frames,
+                    "frame_interval_seconds": frame_interval_seconds,
+                    "fallback_to_frames": fallback_to_frames,
                 }
                 context[node_id] = output
                 node_results.append(self._node_result(node, "success", output))
@@ -81,6 +89,10 @@ class WorkflowExecutorService:
                 media_objects=media_objects,
                 sensor_data=sensor_data,
                 event_type=event_type,
+                media_mode=media_mode,
+                max_frames=max_frames,
+                frame_interval_seconds=frame_interval_seconds,
+                fallback_to_frames=fallback_to_frames,
             )
             model_id = self._node_model_id(node)
             if not model_id:
@@ -167,6 +179,10 @@ class WorkflowExecutorService:
         media_objects: List[Dict[str, Any]],
         sensor_data: Dict[str, Any],
         event_type: Optional[str],
+        media_mode: str,
+        max_frames: int,
+        frame_interval_seconds: float,
+        fallback_to_frames: bool,
     ) -> Dict[str, Any]:
         inputs: Dict[str, Any] = {}
         node_id = node.get("node_id")
@@ -189,6 +205,10 @@ class WorkflowExecutorService:
         inputs.setdefault("sensor_data", sensor_data)
         inputs.setdefault("user_prompt", prompt)
         inputs.setdefault("event_type", event_type)
+        inputs.setdefault("media_mode", media_mode)
+        inputs.setdefault("max_frames", max_frames)
+        inputs.setdefault("frame_interval_seconds", frame_interval_seconds)
+        inputs.setdefault("fallback_to_frames", fallback_to_frames)
         return inputs
 
     def _collect_end_output(
@@ -266,19 +286,75 @@ class WorkflowExecutorService:
     ) -> Dict[str, Any]:
         metadata = self._node_request_metadata(node)
         request_inputs = {**inputs, **metadata} if metadata else inputs
+        media_options = self._media_options(node, request_inputs)
         template = node.get("prompt_template") or node.get("evaluation_template")
         if template:
+            compact_inputs = self._compact_for_prompt(request_inputs)
             return {
-                "prompt": self._render_prompt(template, request_inputs, prompt, sensor_data, event_type),
-                "inputs": request_inputs,
+                "prompt": self._render_prompt(
+                    template,
+                    compact_inputs,
+                    self._short_text(prompt, 1200),
+                    self._compact_for_prompt(sensor_data),
+                    event_type,
+                ),
+                "inputs": compact_inputs,
+                **media_options,
                 **metadata,
             }
-        return {**request_inputs, **metadata}
+        return {**request_inputs, **media_options, **metadata}
+
+    @staticmethod
+    def _media_options(node: Dict[str, Any], inputs: Dict[str, Any]) -> Dict[str, Any]:
+        requested_mode = str(inputs.get("media_mode") or "auto").lower()
+        node_mode = str(node.get("media_mode") or "").lower()
+        if node_mode in {"video", "frames", "auto"}:
+            media_mode = node_mode
+        elif requested_mode == "auto":
+            media_mode = "video" if WorkflowExecutorService._node_prefers_video(node) else "frames"
+        elif requested_mode in {"video", "frames"}:
+            media_mode = requested_mode
+        else:
+            media_mode = "frames"
+        return {
+            "media_mode": media_mode,
+            "max_frames": inputs.get("max_frames") or 4,
+            "frame_interval_seconds": inputs.get("frame_interval_seconds") or 2.5,
+            "fallback_to_frames": inputs.get("fallback_to_frames", True),
+            "read_media": inputs.get("read_media", True),
+            "strict_media": inputs.get("strict_media", True),
+        }
+
+    @staticmethod
+    def _node_prefers_video(node: Dict[str, Any]) -> bool:
+        model_category = str(node.get("model_category") or "").lower()
+        model_task = str(node.get("model_task") or node.get("node_type") or "").lower()
+        model_family = str(node.get("model_family") or "").lower()
+        node_text = " ".join(
+            str(node.get(key) or "")
+            for key in ("node_id", "node_type", "model_name", "model_task", "model_family", "model_category")
+        ).lower()
+        if model_category in {"local_llm", "cloud_llm"}:
+            return True
+        if model_task in {"scene_understanding", "behavior_understanding", "risk_fusion", "final_review"}:
+            return True
+        if "qwen" in model_family or "qwen" in node_text:
+            return True
+        return False
 
     @staticmethod
     def _node_request_metadata(node: Dict[str, Any]) -> Dict[str, Any]:
         metadata: Dict[str, Any] = {}
-        for key in ("actor_name", "system_prompt", "system_prompt_source"):
+        for key in (
+            "actor_name",
+            "system_prompt",
+            "system_prompt_source",
+            "model_task",
+            "model_family",
+            "event_group",
+            "target_event_type",
+            "confidence_policy",
+        ):
             value = node.get(key)
             if value:
                 metadata[key] = value
@@ -307,6 +383,112 @@ class WorkflowExecutorService:
                 json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value),
             )
         return rendered
+
+    @classmethod
+    def _compact_for_prompt(cls, value: Any, depth: int = 0) -> Any:
+        if depth > 3:
+            return cls._summarize_leaf(value)
+        if isinstance(value, dict):
+            compact: Dict[str, Any] = {}
+            if cls._looks_like_media_object(value):
+                return cls._compact_media_object(value)
+            priority = (
+                "event_type",
+                "event_name",
+                "event_code",
+                "risk_level",
+                "qwen_summary",
+                "qwen_risk_level",
+                "summary",
+                "class",
+                "class_name",
+                "confidence",
+                "score",
+                "status",
+                "error",
+                "response",
+                "report",
+                "final_report",
+                "source_video_url",
+                "videos",
+                "media_objects",
+                "frames",
+                "key_frames",
+            )
+            for key in priority:
+                if key in value:
+                    compact[key] = cls._compact_for_prompt(value[key], depth + 1)
+            for key, item in value.items():
+                if key in compact or key in {"inputs", "user_prompt", "sensor_data"}:
+                    continue
+                if len(compact) >= 16:
+                    break
+                compact[key] = cls._compact_for_prompt(item, depth + 1)
+            return compact
+        if isinstance(value, list):
+            if value and all(isinstance(item, dict) and cls._looks_like_media_object(item) for item in value):
+                return [cls._compact_media_object(item) for item in value[:2]]
+            items = [cls._compact_for_prompt(item, depth + 1) for item in value[:6]]
+            if len(value) > 6:
+                items.append({"omitted_count": len(value) - 6})
+            return items
+        if isinstance(value, str):
+            if cls._looks_like_media_ref(value):
+                return cls._compact_media_ref(value)
+            return cls._short_text(value, 800)
+        return value
+
+    @staticmethod
+    def _looks_like_media_object(value: Dict[str, Any]) -> bool:
+        keys = {"path", "url", "object_name", "object_key", "bucket", "type"}
+        return bool(keys.intersection(value.keys()))
+
+    @staticmethod
+    def _compact_media_object(value: Dict[str, Any]) -> Dict[str, Any]:
+        object_name = (
+            value.get("object_key")
+            or value.get("object_name")
+            or value.get("path")
+            or value.get("url")
+            or ""
+        )
+        return {
+            "type": value.get("type") or "media",
+            "bucket": value.get("bucket"),
+            "object": WorkflowExecutorService._compact_media_ref(str(object_name)),
+        }
+
+    @staticmethod
+    def _looks_like_media_ref(value: str) -> bool:
+        lowered = value.lower()
+        return lowered.startswith(("http://", "https://", "minio://", "s3://")) or any(
+            lowered.endswith(suffix)
+            for suffix in (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".mp4", ".mov", ".webm", ".avi", ".mkv")
+        )
+
+    @staticmethod
+    def _compact_media_ref(value: str) -> str:
+        text = str(value or "")
+        if "/" not in text:
+            return WorkflowExecutorService._short_text(text, 96)
+        parts = text.rstrip("/").split("/")
+        tail = "/".join(parts[-3:])
+        return WorkflowExecutorService._short_text(tail, 120)
+
+    @staticmethod
+    def _summarize_leaf(value: Any) -> Any:
+        if isinstance(value, (dict, list)):
+            return {"type": type(value).__name__, "size": len(value)}
+        if isinstance(value, str):
+            return WorkflowExecutorService._short_text(value, 200)
+        return value
+
+    @staticmethod
+    def _short_text(value: str, limit: int) -> str:
+        text = str(value or "")
+        if len(text) <= limit:
+            return text
+        return text[:limit] + f"...[truncated {len(text) - limit} chars]"
 
     @staticmethod
     def _node_model_id(node: Dict[str, Any]) -> Optional[int]:

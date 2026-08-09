@@ -1,5 +1,11 @@
 <template>
-  <div class="indexBox" :class="{ 'dashboard-shell': isDashboard }">
+  <div
+    class="indexBox"
+    :class="{
+      'dashboard-shell': isDashboard,
+      'bigscreen-shell': isBigScreenPreview
+    }"
+  >
     <!-- 顶栏 -->
     <header class="headBox row">
       <div class="logo fl">库坝应急巡查智能感知系统</div>
@@ -58,7 +64,7 @@
 
       <!-- 内容区 -->
       <main class="contentBox flexBox">
-        <div class="routerBox flexBox">
+        <div v-if="!isBigScreenPreview" class="routerBox flexBox">
           <el-icon :size="18"><SystemOverviewIcon /></el-icon>
           <span>
             <span v-for="(item, index) in breadcrumbs" :key="index">
@@ -80,7 +86,7 @@ import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores'
 import {
-  ArrowDown, DataAnalysis, Setting,
+  ArrowDown, DataAnalysis, Setting, VideoCamera,
 } from '@element-plus/icons-vue'
 import {
   AlarmTriangleIcon,
@@ -151,6 +157,7 @@ const menuMap = {
   ],
   '/system': [
     { name: '数据源管理', path: '/system/devices', icon: Setting },
+    { name: '视频检测', path: '/system/video-detection', icon: VideoCamera },
     { name: '联动系统', path: '/system/linkage', icon: Setting },
     { name: '无人机监测', path: '/system/drone', icon: 'drone-custom-icon' },
     { name: '模型管理', path: '/system/models', icon: DataAnalysis },
@@ -173,6 +180,7 @@ const currentNav = computed(() => {
 })
 
 const isDashboard = computed(() => route.path === '/dashboard')
+const isBigScreenPreview = computed(() => route.path === '/overview-bigscreen-preview')
 
 // 需要显示侧边栏的模块
 const showSiderbar = computed(() => {

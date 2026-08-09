@@ -17,6 +17,7 @@ IMAGE_KEYS = (
     "images",
     "image_paths",
     "image_urls",
+    "qwen_image_urls",
     "minio_urls",
     "minio_paths",
     "object_names",
@@ -101,9 +102,11 @@ class DamWorkflowClient:
     ) -> Dict[str, Any]:
         images = self._extract_images(sensor_data)
         videos = self._extract_values(sensor_data, VIDEO_KEYS)
-        media_objects = self._extract_media_objects(sensor_data)
+        media_objects = self._extract_media_objects(sensor_data, prefer_videos=bool(videos))
         actor_name = self._resolve_actor_name(event, instance, sensor_data)
-        if not images:
+        if videos:
+            images = []
+        elif not images:
             images = [settings.DAM_WORKFLOW_PLACEHOLDER_IMAGE]
         return {
             "prompt": self._build_prompt(event, instance, sensor_data),
@@ -119,6 +122,7 @@ class DamWorkflowClient:
                 "event_instance_no": instance.instance_no,
                 "event_id": event.id,
                 "event_name": event.event_name,
+                "event_code": getattr(event, "event_code", None),
                 "event_category": event.event_category,
                 "risk_level": event.risk_level,
             },
@@ -130,15 +134,24 @@ class DamWorkflowClient:
         instance: SafetyEventInstance,
         sensor_data: Dict[str, Any],
     ) -> str:
-        sensor_json = json.dumps(sensor_data or {}, ensure_ascii=False, indent=2)
+        sensor_json = json.dumps(
+            DamWorkflowClient._compact_sensor_data(sensor_data or {}),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        media_hint = "现场证据以事件视频为主；初筛图片仅作为触发证据。" if (
+            sensor_data or {}
+        ).get("source_video_url") else "现场证据以图片/视频引用为准。"
         return (
             "你是一名库坝应急巡查智能感知系统中的工作流规划智能体。\n"
             f"当前触发事件：{event.event_name}。\n"
+            f"事件编码：{getattr(event, 'event_code', None) or '未配置'}。\n"
             f"事件分类：{event.event_category or '未配置'}。\n"
             f"风险等级：{event.risk_level or '未配置'}。\n"
             f"统一事件实例：{instance.instance_no}。\n"
-            "事件类型已经由系统确定，请根据当前事件、现场图片和传感器数据规划最合理的视觉分析流程。\n"
-            "请遵循专有模型优先、小模型优先、大模型负责理解与推理、避免重复分析的原则。\n"
+            f"{media_hint}\n"
+            "事件类型已经由系统确定，请规划最合理的视觉分析流程。\n"
+            "原则：专有模型优先，小模型优先，大模型负责理解与推理，避免重复分析。\n"
             f"当前传感器数据：\n{sensor_json}"
         )
 
@@ -200,7 +213,11 @@ class DamWorkflowClient:
         return list(dict.fromkeys(values))
 
     @staticmethod
-    def _extract_media_objects(sensor_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _extract_media_objects(
+        sensor_data: Dict[str, Any],
+        *,
+        prefer_videos: bool = False,
+    ) -> List[Dict[str, Any]]:
         objects: List[Dict[str, Any]] = []
         data = dict(sensor_data or {})
         for key in MEDIA_KEYS:
@@ -213,9 +230,17 @@ class DamWorkflowClient:
                     objects.append({"path": item})
         for video in DamWorkflowClient._extract_values(sensor_data, VIDEO_KEYS):
             objects.append({"type": "video", "path": video})
+        if prefer_videos:
+            return DamWorkflowClient._dedupe_media_objects(
+                [item for item in objects if str(item.get("type") or "").lower() == "video"]
+            )
         for image in DamWorkflowClient._extract_values(sensor_data, IMAGE_KEYS):
             if image != settings.DAM_WORKFLOW_PLACEHOLDER_IMAGE:
                 objects.append({"type": "image", "path": image})
+        return DamWorkflowClient._dedupe_media_objects(objects)
+
+    @staticmethod
+    def _dedupe_media_objects(objects: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         deduped: List[Dict[str, Any]] = []
         seen = set()
         for item in objects:
@@ -224,6 +249,46 @@ class DamWorkflowClient:
                 seen.add(key)
                 deduped.append(item)
         return deduped
+
+    @staticmethod
+    def _compact_sensor_data(sensor_data: Dict[str, Any]) -> Dict[str, Any]:
+        keep_keys = {
+            "event_code",
+            "event_name",
+            "event_category",
+            "risk_level",
+            "event_instance_no",
+            "qwen_summary",
+            "qwen_risk_level",
+            "flood_detected",
+            "flood_confidence",
+            "mudslide_detected",
+            "mudslide_confidence",
+            "landslide_detected",
+            "landslide_confidence",
+            "earthquake_detected",
+            "earthquake_confidence",
+            "person_present",
+            "person_confidence",
+            "boat_present",
+            "boat_confidence",
+        }
+        compact = {key: value for key, value in sensor_data.items() if key in keep_keys}
+        video_values = DamWorkflowClient._extract_values(sensor_data, VIDEO_KEYS)
+        if video_values:
+            compact["video_evidence_count"] = len(video_values)
+            compact["video_evidence"] = "事件证据视频已入库"
+        image_urls = sensor_data.get("qwen_image_urls")
+        if isinstance(image_urls, list) and image_urls:
+            compact["qwen_image_count"] = len(image_urls)
+            compact["qwen_image_ref"] = "关键帧已入库，工作流以事件视频为主"
+        media_objects = sensor_data.get("media_objects")
+        if isinstance(media_objects, list) and media_objects:
+            compact["video_media_object_count"] = sum(
+                1 for item in media_objects
+                if isinstance(item, dict) and str(item.get("type") or "").lower() == "video"
+            )
+        return compact
 
     @staticmethod
     def _media_ref(value: Dict[str, Any]) -> Optional[str]:

@@ -25,6 +25,7 @@ class AnalyzeResponse(BaseModel):
     """分析响应"""
     success: bool
     event_type: Optional[str] = None
+    event_group: Optional[str] = None
     visual_tasks: Optional[List[str]] = None
     final_dag: Optional[dict] = None
     error: Optional[str] = None
@@ -53,6 +54,7 @@ def analyze(request: AnalyzeRequest, db: Session = Depends(get_db)):
     return AnalyzeResponse(
         success=result["success"],
         event_type=result.get("event_type"),
+        event_group=result.get("event_group"),
         visual_tasks=result.get("visual_tasks"),
         final_dag=result.get("final_dag"),
         error=result.get("error"),

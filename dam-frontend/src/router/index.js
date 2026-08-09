@@ -2,12 +2,6 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 const routes = [
   {
-    path: '/overview-region-annotator',
-    name: 'OverviewRegionAnnotator',
-    component: () => import('@/views/OverviewRegionAnnotator.vue'),
-    meta: { title: '总览页区域标注' }
-  },
-  {
     path: '/',
     component: () => import('@/layout/index.vue'),
     redirect: '/dashboard',
@@ -17,6 +11,12 @@ const routes = [
         name: 'Dashboard',
         component: () => import('@/views/Dashboard/index.vue'),
         meta: { title: '综合态势' }
+      },
+      {
+        path: 'overview-bigscreen-preview',
+        name: 'OverviewBigScreenPreview',
+        component: () => import('@/views/OverviewBigScreenPreview.vue'),
+        meta: { title: '总览页数字大屏预览' }
       },
       // ========== 实时监控模块 ==========
       {
@@ -93,14 +93,14 @@ const routes = [
           {
             path: 'camera/image',
             name: 'CameraImageAnalysis',
-            component: () => import('@/views/Monitor/CameraView.vue'),
-            meta: { title: '模拟分析', mediaTab: 'image' }
+            redirect: '/system/video-detection',
+            meta: { title: '视频检测' }
           },
           {
             path: 'camera/video',
             name: 'CameraVideoAnalysis',
-            component: () => import('@/views/Monitor/CameraView.vue'),
-            meta: { title: '模拟分析', mediaTab: 'video' }
+            redirect: '/system/video-detection',
+            meta: { title: '视频检测' }
           },
           {
             path: 'drone',
@@ -156,6 +156,12 @@ const routes = [
             name: 'SystemDeviceManagement',
             component: () => import('@/views/Monitor/DeviceManagement.vue'),
             meta: { title: '数据源管理' }
+          },
+          {
+            path: 'video-detection',
+            name: 'SystemVideoDetection',
+            component: () => import('@/views/System/VideoDetection.vue'),
+            meta: { title: '视频检测' }
           },
           {
             path: 'config',

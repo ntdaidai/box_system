@@ -1,8 +1,12 @@
 """YOLO 推理服务模块。"""
 
+import tempfile
+import uuid
+
 import cv2
 import numpy as np
 from pathlib import Path
+from typing import Optional
 from ultralytics import YOLO
 
 from config import ModelConfig
@@ -66,7 +70,13 @@ class YOLOService:
             "top_k": topk_result,
         }
 
-    def classify_video(self, video_path: Path, frame_interval: int = 30) -> dict:
+    def classify_video(
+        self,
+        video_path: Path,
+        frame_interval: int = 30,
+        *,
+        keep_frames_dir: Optional[Path] = None,
+    ) -> dict:
         """对视频进行分类（抽帧分类）。
 
         Args:
@@ -82,6 +92,7 @@ class YOLOService:
 
         frames_results = []
         frame_id = 0
+        source_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
 
         while True:
             ret, frame = cap.read()
@@ -91,16 +102,24 @@ class YOLOService:
             # 按间隔抽帧
             if frame_id % frame_interval == 0:
                 # 保存临时图片
-                temp_frame_path = Path(f"/tmp/frame_{frame_id}.jpg")
+                frame_dir = keep_frames_dir or Path(tempfile.gettempdir())
+                frame_dir.mkdir(parents=True, exist_ok=True)
+                temp_frame_path = frame_dir / f"yolo_frame_{uuid.uuid4().hex}_{frame_id}.jpg"
                 cv2.imwrite(str(temp_frame_path), frame)
 
                 # 分类
                 result = self.classify_image(temp_frame_path)
                 result["frame_id"] = frame_id
+                result["timestamp_ms"] = (
+                    int((frame_id / source_fps) * 1000)
+                    if source_fps > 0
+                    else int(cap.get(cv2.CAP_PROP_POS_MSEC) or 0)
+                )
+                result["local_frame_path"] = str(temp_frame_path)
                 frames_results.append(result)
 
-                # 清理临时文件
-                temp_frame_path.unlink(missing_ok=True)
+                if keep_frames_dir is None:
+                    temp_frame_path.unlink(missing_ok=True)
 
             frame_id += 1
 
@@ -119,6 +138,7 @@ class YOLOService:
             "total_frames": frame_id,
             "sampled_frames": len(frames_results),
             "frame_interval": frame_interval,
+            "fps": source_fps,
             "frames": frames_results,
         }
 

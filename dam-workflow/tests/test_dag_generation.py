@@ -2,9 +2,9 @@
 """测试 DAG 生成流程
 
 测试场景：
-1. 模板匹配事件（滑坡、裂缝等）→ 0 次 LLM 调用
-2. 非模板匹配事件 → 1 次 LLM 调用（本地 qwen4B）
-3. 无检测场景（降雨、水位）→ 不含 specialized 节点
+1. 自然灾害模板 → 灾害分类模型 + qwen4B + qwen35B
+2. 人员行为模板 → 目标检测 + 跟踪 + qwen4B + qwen35B
+3. 极端天气模板 → qwen4B + qwen35B
 """
 import sys
 import os
@@ -19,25 +19,25 @@ from src.dam_workflow.dag_generator import generate_dag
 from src.dam_workflow.model_registry_client import model_registry_client
 
 
-def test_template_path():
-    """测试模板路径（零 LLM 调用）
+def test_natural_disaster_template_path():
+    """测试自然灾害模板路径（零 LLM 调用）
 
     预期：
-    - 事件类型：滑坡（命中预定义模板）
+    - 事件类型：洪水（命中预定义模板）
     - LLM 调用次数：0
     - 使用模型：无
-    - 节点结构：START → specialized → local_llm → cloud_llm → END
+    - 节点结构：START → classification → local_llm → cloud_llm → END
     """
     print("=" * 60)
-    print("测试 1：模板路径（滑坡事件）")
+    print("测试 1：自然灾害模板路径（洪水事件）")
     print("=" * 60)
     print("预期：0 次 LLM 调用，直接使用模板")
     print()
 
     state = {
-        "event_type": "滑坡",
-        "images": ["landslide_001.jpg"],
-        "user_prompt": "发生了滑坡事件，请分析",
+        "event_type": "洪水",
+        "images": ["flood_001.jpg"],
+        "user_prompt": "发生了洪水灾害，请分析",
         "retry_count": 0,
     }
 
@@ -63,6 +63,9 @@ def test_template_path():
         assert 'specialized' in categories, "缺少 specialized 节点"
         assert 'local_llm' in categories, "缺少 local_llm 节点"
         assert 'cloud_llm' in categories, "缺少 cloud_llm 节点"
+        assert dag.get("workflow_family") == "natural_disaster"
+        classify = next(n for n in dag["nodes"] if n.get("node_id") == "action_classify")
+        assert classify.get("model_task") == "classification"
 
         return True, 0, "无"
     except Exception as e:
@@ -70,23 +73,23 @@ def test_template_path():
         return False, 0, "无"
 
 
-def test_no_detection_path():
-    """测试无检测场景（降雨事件）
+def test_extreme_weather_path():
+    """测试极端天气场景（暴雨事件）
 
     预期：
-    - 事件类型：降雨（无需检测）
+    - 事件类型：暴雨（无需专有视觉模型）
     - LLM 调用次数：0
     - 使用模型：无
     - 节点结构：START → local_llm → cloud_llm → END（无 specialized）
     """
     print("=" * 60)
-    print("测试 2：无检测场景（降雨事件）")
+    print("测试 2：极端天气场景（暴雨事件）")
     print("=" * 60)
     print("预期：0 次 LLM 调用，无 specialized 节点")
     print()
 
     state = {
-        "event_type": "降雨",
+        "event_type": "暴雨",
         "images": ["rain_001.jpg"],
         "user_prompt": "暴雨来袭，请分析风险",
         "retry_count": 0,
@@ -113,7 +116,49 @@ def test_no_detection_path():
         assert 'specialized' not in categories, "不应有 specialized 节点"
         assert 'local_llm' in categories, "缺少 local_llm 节点"
         assert 'cloud_llm' in categories, "缺少 cloud_llm 节点"
+        assert dag.get("workflow_family") == "extreme_weather"
 
+        return True, 0, "无"
+    except Exception as e:
+        print(f"❌ 失败: {e}")
+        return False, 0, "无"
+
+
+def test_person_behavior_template_path():
+    """测试人员行为模板路径（零 LLM 调用）"""
+    print("=" * 60)
+    print("测试 3：人员行为模板路径（非法捕鱼事件）")
+    print("=" * 60)
+    print("预期：0 次 LLM 调用，包含 detection 和 tracking 节点")
+    print()
+
+    state = {
+        "event_type": "夜间电鱼捕鱼",
+        "images": ["boat_001.jpg"],
+        "videos": ["boat_001.mp4"],
+        "user_prompt": "夜间发现船只疑似电鱼捕鱼，请分析",
+        "retry_count": 0,
+    }
+
+    try:
+        dag = generate_dag(state)
+        print("✅ DAG 生成成功!")
+        print(f"   节点数量: {len(dag['nodes'])}")
+        print(f"   边数量: {len(dag['edges'])}")
+        print()
+
+        for node in dag['nodes']:
+            node_class = node['node_class']
+            node_type = node['node_type']
+            model_category = node.get('model_category', 'N/A')
+            print(f"     - {node['node_id']}: [{node_class}] {node_type} ({model_category})")
+        print()
+
+        assert dag.get("workflow_family") == "person_behavior"
+        tasks = {n.get("model_task") for n in dag["nodes"]}
+        assert "detection" in tasks, "缺少 detection 节点"
+        assert "tracking" in tasks, "缺少 tracking 节点"
+        assert "behavior_understanding" in tasks, "缺少 behavior_understanding 节点"
         return True, 0, "无"
     except Exception as e:
         print(f"❌ 失败: {e}")
@@ -124,7 +169,7 @@ def test_all_template_events():
     """测试所有模板事件（零 LLM 调用）
 
     预期：
-    - 事件类型：所有 8 种预定义事件
+    - 事件类型：所有预定义事件
     - LLM 调用次数：0（每个事件）
     - 使用模型：无
     """
@@ -134,7 +179,11 @@ def test_all_template_events():
     print("预期：每个事件 0 次 LLM 调用")
     print()
 
-    events = ["滑坡", "裂缝", "渗漏", "变形", "沉降", "管涌", "降雨", "水位"]
+    events = [
+        "泥石流", "滑坡", "洪水", "地震",
+        "人员入侵", "滩涂游玩", "夜间电鱼捕鱼",
+        "台风", "暴雨", "高温", "低温",
+    ]
     success_count = 0
 
     for event in events:
@@ -219,21 +268,21 @@ def main():
 
     results = []
 
-    # 测试 1：模板路径
-    success, calls, model = test_template_path()
-    results.append(("模板路径（滑坡）", success, calls, model))
+    # 测试 1：自然灾害模板路径
+    success, calls, model = test_natural_disaster_template_path()
+    results.append(("自然灾害模板（洪水）", success, calls, model))
 
-    # 测试 2：无检测场景
-    success, calls, model = test_no_detection_path()
-    results.append(("无检测场景（降雨）", success, calls, model))
+    # 测试 2：极端天气模板路径
+    success, calls, model = test_extreme_weather_path()
+    results.append(("极端天气模板（暴雨）", success, calls, model))
 
-    # 测试 3：所有模板事件
+    # 测试 3：人员行为模板路径
+    success, calls, model = test_person_behavior_template_path()
+    results.append(("人员行为模板（捕鱼）", success, calls, model))
+
+    # 测试 4：所有模板事件
     success, calls, model = test_all_template_events()
     results.append(("所有模板事件", success, calls, model))
-
-    # 测试 4：LLM 兜底路径
-    success, calls, model = test_llm_fallback_path()
-    results.append(("LLM 兜底路径", success, calls, model))
 
     # 打印汇总
     print()

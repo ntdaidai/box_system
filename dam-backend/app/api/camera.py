@@ -37,6 +37,7 @@ from app.services.camera_snapshot import camera_snapshot_service
 from app.services.camera_source import camera_rtsp_path, camera_source_from_row
 from app.services.camera_web_proxy import camera_web_proxy_manager
 from app.services.camera_zone_store import get_camera_zone_store
+from app.services.qwen_camera_screening import qwen_camera_screening_service
 from app.services.stream_ticket import stream_ticket_store
 from app.services.video_detection import video_detection_service
 from app.services.vision_model_registry import vision_model_registry
@@ -178,6 +179,23 @@ def _persist_video(upload_file, target: Path, max_bytes: int) -> int:
         target.chmod(0o600)
         while True:
             chunk = upload_file.read(1024 * 1024)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > max_bytes:
+                raise ValueError("视频文件大小超过限制")
+            output.write(chunk)
+    if written == 0:
+        raise ValueError("视频文件为空")
+    return written
+
+
+async def _persist_upload_video(upload_file: UploadFile, target: Path, max_bytes: int) -> int:
+    written = 0
+    with target.open("xb") as output:
+        target.chmod(0o600)
+        while True:
+            chunk = await upload_file.read(1024 * 1024)
             if not chunk:
                 break
             written += len(chunk)
@@ -925,6 +943,140 @@ async def detect_uploaded_image(
             "result_image_base64": result_image_base64,
             "minio_url": None,
         },
+    )
+
+
+@router.post(
+    "/{camera_id}/screening/simulate",
+    response_model=DetectResponse,
+    summary="使用上传帧模拟摄像头Qwen初筛",
+)
+async def simulate_camera_screening(
+    camera_id: str,
+    frames: List[UploadFile] = File(...),
+    window_seconds: float = Query(10.0, ge=1.0, le=60.0),
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_auth),
+):
+    row = _camera_device_row(db, camera_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="摄像头设备不存在")
+    if not row.enabled:
+        raise HTTPException(status_code=409, detail="摄像头设备未启用")
+    if not 1 <= len(frames) <= 4:
+        raise HTTPException(status_code=400, detail="每次初筛需要上传 1 到 4 张画面")
+
+    normalized_frames: List[tuple[float, bytes]] = []
+    total_bytes = 0
+    try:
+        for index, upload in enumerate(frames):
+            if upload.content_type and not upload.content_type.startswith("image/"):
+                raise HTTPException(status_code=400, detail="模拟画面必须是图片格式")
+            payload = await upload.read()
+            total_bytes += len(payload)
+            if not payload or len(payload) > settings.MAX_IMAGE_SIZE_MB * 1024 * 1024:
+                raise HTTPException(status_code=400, detail="单张模拟画面为空或超过大小限制")
+            if total_bytes > settings.MAX_IMAGE_SIZE_MB * 4 * 1024 * 1024:
+                raise HTTPException(status_code=400, detail="模拟画面总大小超过限制")
+
+            image = cv2.imdecode(np.frombuffer(payload, np.uint8), cv2.IMREAD_COLOR)
+            if image is None:
+                raise HTTPException(status_code=400, detail="模拟画面解码失败")
+            if image.shape[0] * image.shape[1] > settings.MAX_IMAGE_PIXELS:
+                raise HTTPException(status_code=400, detail="模拟画面像素尺寸超过限制")
+
+            max_side = max(64, int(settings.QWEN_CAMERA_SCREENING_MAX_IMAGE_SIDE))
+            height, width = image.shape[:2]
+            if max(height, width) > max_side:
+                scale = max_side / max(height, width)
+                image = cv2.resize(
+                    image,
+                    (max(1, round(width * scale)), max(1, round(height * scale))),
+                    interpolation=cv2.INTER_AREA,
+                )
+            jpeg = _encode_jpeg(
+                image,
+                quality=max(20, min(int(settings.QWEN_CAMERA_SCREENING_JPEG_QUALITY), 95)),
+            )
+            captured_at = time.time() - window_seconds + (
+                window_seconds * index / max(1, len(frames) - 1)
+            )
+            normalized_frames.append((captured_at, jpeg))
+    finally:
+        for upload in frames:
+            await upload.close()
+
+    result = await qwen_camera_screening_service.screen_frames(
+        str(row.id),
+        normalized_frames,
+        input_source="simulation",
+        window_seconds=window_seconds,
+    )
+    if result is None:
+        raise HTTPException(status_code=502, detail="Qwen 初筛未返回有效 JSON")
+    return DetectResponse(
+        code=200,
+        data={**result, "eca_dispatched": True},
+        message="模拟画面已完成 Qwen 初筛并提交 ECA",
+    )
+
+
+@router.post(
+    "/{camera_id}/screening/simulate-video",
+    response_model=DetectResponse,
+    summary="使用上传视频模拟摄像头Qwen初筛",
+)
+async def simulate_camera_screening_video(
+    camera_id: str,
+    file: UploadFile = File(...),
+    window_seconds: float = Query(10.0, ge=1.0, le=60.0),
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_auth),
+):
+    row = _camera_device_row(db, camera_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="摄像头设备不存在")
+    if not row.enabled:
+        raise HTTPException(status_code=409, detail="摄像头设备未启用")
+
+    filename = file.filename or "simulation.mp4"
+    suffix = Path(filename).suffix.lower()
+    if suffix not in VIDEO_SUFFIXES:
+        raise HTTPException(status_code=400, detail="模拟视频格式不支持")
+    if file.content_type and not (
+        file.content_type.startswith("video/")
+        or file.content_type in {"application/octet-stream"}
+    ):
+        raise HTTPException(status_code=400, detail="模拟输入必须是视频文件")
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="qwen_camera_video_"))
+    temp_path = temp_dir / f"simulation{suffix}"
+    try:
+        try:
+            await _persist_upload_video(
+                file,
+                temp_path,
+                int(settings.MAX_VIDEO_SIZE_MB) * 1024 * 1024,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        result = await qwen_camera_screening_service.screen_video_file(
+            str(row.id),
+            str(temp_path),
+            input_source="simulation_video",
+            window_seconds=window_seconds,
+        )
+    finally:
+        await file.close()
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    if result is None:
+        raise HTTPException(status_code=502, detail="Qwen 视频初筛未返回有效 JSON")
+    return DetectResponse(
+        code=200,
+        data={**result, "eca_dispatched": True},
+        message="模拟视频已完成 Qwen 初筛并提交 ECA",
     )
 
 

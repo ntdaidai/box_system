@@ -71,6 +71,39 @@ export function detectImage(imageBase64, confidence = 0.5, taskType = 'detect') 
   })
 }
 
+// 将浏览器采集的关键帧作为指定摄像头画面送入 Qwen -> ECA 链路。
+export function simulateCameraScreening(cameraId, frames, options = {}) {
+  const formData = new FormData()
+  frames.forEach((frame, index) => {
+    formData.append('frames', frame, `frame_${index + 1}.jpg`)
+  })
+  return request.post(
+    `/v1/camera/${encodeURIComponent(cameraId)}/screening/simulate`,
+    formData,
+    {
+      params: { window_seconds: options.windowSeconds ?? 10 },
+      timeout: options.timeout ?? 120000,
+      silentError: true,
+    },
+  )
+}
+
+// 将本地视频作为摄像头模拟输入送入 Qwen -> ECA 链路；抽帧由后端服务完成。
+export function simulateCameraVideoScreening(cameraId, file, options = {}) {
+  const formData = new FormData()
+  formData.append('file', file)
+  return request.post(
+    `/v1/camera/${encodeURIComponent(cameraId)}/screening/simulate-video`,
+    formData,
+    {
+      params: { window_seconds: options.windowSeconds ?? 10 },
+      timeout: options.timeout ?? 180000,
+      silentError: true,
+      onUploadProgress: options.onUploadProgress,
+    },
+  )
+}
+
 // 创建临时视频检测任务，视频本体不会进入历史记录。
 export function createVideoDetection(file, options = {}) {
   const formData = new FormData()

@@ -63,6 +63,26 @@ class MinIOClient:
         except S3Error:
             return False
 
+    def upload_file(
+        self,
+        bucket: str,
+        object_key: str,
+        file_path: Path,
+        *,
+        content_type: str = "application/octet-stream",
+    ) -> str:
+        """上传本地文件到 MinIO."""
+        try:
+            self.client.fput_object(
+                bucket,
+                object_key.strip("/"),
+                str(file_path),
+                content_type=content_type,
+            )
+            return f"{bucket}/{object_key.strip('/')}"
+        except S3Error as e:
+            raise RuntimeError(f"MinIO 上传失败: {e}")
+
     def cleanup_temp_file(self, file_path: Path) -> None:
         """清理临时文件。
 

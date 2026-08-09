@@ -188,6 +188,14 @@
   padding-left: 20px;
 }
 
+.bigscreen-shell .contentBox {
+  padding: 0;
+}
+
+.bigscreen-shell .viewBox {
+  overflow: hidden;
+}
+
 .routerBox {
   width: 100%;
   height: 44px;
@@ -219,4 +227,83 @@
 .viewBox::-webkit-scrollbar-thumb {
   background-color: rgba(0, 200, 255, 0.3);
   border-radius: 3px;
+}
+
+@media (max-width: 900px) {
+  .headBox {
+    height: 52px;
+    padding: 0 14px;
+  }
+
+  .headBox .logo {
+    max-width: calc(100vw - 108px);
+    overflow: hidden;
+    font-size: 16px;
+    text-overflow: ellipsis;
+  }
+
+  .headBox .menu {
+    display: none;
+  }
+
+  .headBox .avatar {
+    margin-left: 8px;
+    padding: 5px 8px;
+  }
+
+  .headBox .avatar .txt,
+  .headBox .avatar .el-icon:last-child {
+    display: none;
+  }
+
+  .main-container {
+    min-height: 0;
+    flex-direction: column;
+  }
+
+  .siderBox {
+    width: 100%;
+    min-width: 0;
+    height: auto;
+    padding: 7px 8px 1px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .siderBox .el-menu {
+    display: flex;
+    width: max-content;
+    min-width: 100%;
+    gap: 6px;
+  }
+
+  .siderBox .el-menu-item,
+  .siderBox .el-sub-menu__title {
+    width: auto;
+    height: 40px !important;
+    margin-bottom: 6px;
+    padding: 0 12px !important;
+    line-height: 40px !important;
+    white-space: nowrap;
+  }
+
+  .siderBox .el-menu-item.is-active {
+    border-left: 0;
+    border-bottom: 2px solid var(--accent-color);
+  }
+
+  .contentBox {
+    min-height: 0;
+    padding: 8px;
+  }
+
+  .routerBox {
+    height: 38px;
+    margin-bottom: 8px;
+    padding: 0 12px;
+    line-height: 38px;
+    border-radius: 8px;
+  }
 }
