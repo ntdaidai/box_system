@@ -75,6 +75,7 @@ class YOLOService:
         video_path: Path,
         frame_interval: int = 30,
         *,
+        max_frames: int | None = 8,
         keep_frames_dir: Optional[Path] = None,
     ) -> dict:
         """对视频进行分类（抽帧分类）。
@@ -93,14 +94,29 @@ class YOLOService:
         frames_results = []
         frame_id = 0
         source_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        total_frames_hint = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        frame_interval = max(1, int(frame_interval or 1))
+        max_frames = int(max_frames or 0)
+        sample_count = min(max_frames, total_frames_hint) if max_frames > 0 and total_frames_hint > 0 else 0
+        sample_frame_ids = (
+            {
+                int(round(index * (total_frames_hint - 1) / max(1, sample_count - 1)))
+                for index in range(sample_count)
+            }
+            if sample_count > 0
+            else set()
+        )
 
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
 
-            # 按间隔抽帧
-            if frame_id % frame_interval == 0:
+            should_sample = frame_id in sample_frame_ids if sample_frame_ids else frame_id % frame_interval == 0
+            if should_sample:
+                if not sample_frame_ids and max_frames > 0 and len(frames_results) >= max_frames:
+                    frame_id += 1
+                    continue
                 # 保存临时图片
                 frame_dir = keep_frames_dir or Path(tempfile.gettempdir())
                 frame_dir.mkdir(parents=True, exist_ok=True)
@@ -110,6 +126,7 @@ class YOLOService:
                 # 分类
                 result = self.classify_image(temp_frame_path)
                 result["frame_id"] = frame_id
+                result["frame_time_sec"] = frame_id / source_fps if source_fps > 0 else None
                 result["timestamp_ms"] = (
                     int((frame_id / source_fps) * 1000)
                     if source_fps > 0
@@ -136,8 +153,10 @@ class YOLOService:
         return {
             "main_class": main_class,
             "total_frames": frame_id,
+            "duration_sec": frame_id / source_fps if source_fps > 0 else None,
             "sampled_frames": len(frames_results),
-            "frame_interval": frame_interval,
+            "frame_interval": None if sample_frame_ids else frame_interval,
+            "sampling_strategy": "uniform" if sample_frame_ids else "interval",
             "fps": source_fps,
             "frames": frames_results,
         }

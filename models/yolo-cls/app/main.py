@@ -147,12 +147,17 @@ def _as_list(value):
 def _lookup_media(payload: dict, *, prefer_video: bool = True):
     inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
     sensor_data = payload.get("sensor_data") if isinstance(payload.get("sensor_data"), dict) else {}
+    extensions = (".mp4", ".avi", ".mov", ".mkv") if prefer_video else (".jpg", ".jpeg", ".png", ".bmp")
     keys = (
         ("videos", "video_paths", "video_urls", "video", "video_path", "video_url", "source_video_url")
         if prefer_video else
         ("images", "image_paths", "image_urls", "image", "image_path", "image_url", "snapshot_url", "file_url")
     )
     for source in (payload, inputs, sensor_data):
+        bucket = source.get("bucket")
+        object_key = source.get("object_key") or source.get("object_name")
+        if bucket and object_key and str(object_key).lower().endswith(extensions):
+            return {"bucket": bucket, "object_key": object_key}
         for key in keys:
             for item in _as_list(source.get(key)):
                 if item:
@@ -234,6 +239,11 @@ def _frame_interval(payload: dict) -> int:
     return 1
 
 
+def _payload_value(payload: dict, key: str, default=None):
+    inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
+    return payload.get(key, inputs.get(key, default))
+
+
 def _frame_object_prefix(bucket: str, object_key: str) -> str:
     stem = object_key.rsplit(".", 1)[0].strip("/")
     return f"{stem}/yolo_frames/{int(time.time() * 1000)}"
@@ -290,6 +300,7 @@ async def workflow_infer(payload: dict = Body(...)):
                 result = yolo_service.classify_video(
                     temp_path,
                     _frame_interval(payload),
+                    max_frames=_payload_value(payload, "max_frames", 8),
                     keep_frames_dir=Path(frame_dir),
                 )
                 _upload_frame_evidence(result, bucket=bucket, object_key=object_key)

@@ -97,12 +97,31 @@ class DetectorService:
             "annotated_path": str(annotated_path) if annotated_path else None,
         }
 
-    def detect_video(self, video_path: Path, frame_interval: int = 30) -> dict:
+    def detect_video(
+        self,
+        video_path: Path,
+        frame_interval: int = 30,
+        max_frames: int | None = 8,
+    ) -> dict:
         """对视频抽帧检测。"""
 
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             raise RuntimeError(f"无法打开视频文件: {video_path}")
+
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        total_frames_hint = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        frame_interval = max(1, int(frame_interval or 1))
+        max_frames = int(max_frames or 0)
+        sample_count = min(max_frames, total_frames_hint) if max_frames > 0 and total_frames_hint > 0 else 0
+        sample_frame_ids = (
+            {
+                int(round(index * (total_frames_hint - 1) / max(1, sample_count - 1)))
+                for index in range(sample_count)
+            }
+            if sample_count > 0
+            else set()
+        )
 
         frames: list[dict] = []
         all_detections: list[dict] = []
@@ -114,18 +133,28 @@ class DetectorService:
                 ret, frame = cap.read()
                 if not ret:
                     break
-                if frame_id % frame_interval == 0:
+                should_sample = frame_id in sample_frame_ids if sample_frame_ids else frame_id % frame_interval == 0
+                if should_sample:
+                    if not sample_frame_ids and max_frames > 0 and len(frames) >= max_frames:
+                        frame_id += 1
+                        continue
                     temp_frame_path = temp_dir / f"frame_{frame_id}.jpg"
                     cv2.imwrite(str(temp_frame_path), frame)
                     result = self.detect_image(temp_frame_path)
+                    frame_time_sec = frame_id / fps if fps > 0 else None
                     frame_result = {
                         "frame_id": frame_id,
+                        "frame_time_sec": frame_time_sec,
                         "detections": result["detections"],
                         "detection_count": result["detection_count"],
                         "annotated_path": result["annotated_path"],
                     }
                     frames.append(frame_result)
-                    all_detections.extend(result["detections"])
+                    for det in result["detections"]:
+                        enriched = dict(det)
+                        enriched["frame_id"] = frame_id
+                        enriched["frame_time_sec"] = frame_time_sec
+                        all_detections.append(enriched)
                     temp_frame_path.unlink(missing_ok=True)
                 frame_id += 1
         finally:
@@ -137,8 +166,11 @@ class DetectorService:
 
         return {
             "total_frames": frame_id,
+            "fps": fps,
+            "duration_sec": frame_id / fps if fps > 0 else None,
             "sampled_frames": len(frames),
-            "frame_interval": frame_interval,
+            "frame_interval": None if sample_frame_ids else frame_interval,
+            "sampling_strategy": "uniform" if sample_frame_ids else "interval",
             "frames": frames,
             "detections": all_detections,
             "detection_count": len(all_detections),

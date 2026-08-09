@@ -33,8 +33,7 @@ class WorkflowExecutorService:
         sensor_data: Optional[Dict[str, Any]] = None,
         event_type: Optional[str] = None,
         media_mode: str = "auto",
-        max_frames: int = 4,
-        frame_interval_seconds: float = 2.5,
+        max_frames: int = 8,
         fallback_to_frames: bool = True,
         mode: str = "infer",
         validate: bool = False,
@@ -66,7 +65,6 @@ class WorkflowExecutorService:
                     "user_prompt": prompt,
                     "media_mode": media_mode,
                     "max_frames": max_frames,
-                    "frame_interval_seconds": frame_interval_seconds,
                     "fallback_to_frames": fallback_to_frames,
                 }
                 context[node_id] = output
@@ -91,7 +89,6 @@ class WorkflowExecutorService:
                 event_type=event_type,
                 media_mode=media_mode,
                 max_frames=max_frames,
-                frame_interval_seconds=frame_interval_seconds,
                 fallback_to_frames=fallback_to_frames,
             )
             model_id = self._node_model_id(node)
@@ -181,7 +178,6 @@ class WorkflowExecutorService:
         event_type: Optional[str],
         media_mode: str,
         max_frames: int,
-        frame_interval_seconds: float,
         fallback_to_frames: bool,
     ) -> Dict[str, Any]:
         inputs: Dict[str, Any] = {}
@@ -207,7 +203,6 @@ class WorkflowExecutorService:
         inputs.setdefault("event_type", event_type)
         inputs.setdefault("media_mode", media_mode)
         inputs.setdefault("max_frames", max_frames)
-        inputs.setdefault("frame_interval_seconds", frame_interval_seconds)
         inputs.setdefault("fallback_to_frames", fallback_to_frames)
         return inputs
 
@@ -473,8 +468,7 @@ class WorkflowExecutorService:
             media_mode = "frames"
         return {
             "media_mode": media_mode,
-            "max_frames": inputs.get("max_frames") or 4,
-            "frame_interval_seconds": inputs.get("frame_interval_seconds") or 2.5,
+            "max_frames": inputs.get("max_frames") or 8,
             "fallback_to_frames": inputs.get("fallback_to_frames", True),
             "read_media": inputs.get("read_media", True),
             "strict_media": inputs.get("strict_media", True),
@@ -696,7 +690,6 @@ class WorkflowExecutorService:
             "media_mode": request_data.get("media_mode"),
             "fallback_to_frames": request_data.get("fallback_to_frames"),
             "max_frames": request_data.get("max_frames"),
-            "frame_interval_seconds": request_data.get("frame_interval_seconds"),
             "image_count": len(images),
             "video_count": len(videos),
             "media_object_count": len(media_objects),

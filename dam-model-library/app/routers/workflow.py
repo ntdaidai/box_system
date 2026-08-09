@@ -28,7 +28,6 @@ def execute_workflow(
         event_type=data.event_type,
         media_mode=data.media_mode,
         max_frames=data.max_frames,
-        frame_interval_seconds=data.frame_interval_seconds,
         fallback_to_frames=data.fallback_to_frames,
         mode=data.mode,
         validate=data.validate,

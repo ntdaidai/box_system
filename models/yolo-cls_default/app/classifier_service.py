@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import tempfile
+import uuid
 from pathlib import Path
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -143,7 +145,14 @@ class ClassifierService:
         top1 = topk_result[0]
         return {"class": top1["class_name"], "confidence": top1["confidence"], "top_k": topk_result}
 
-    def classify_video(self, video_path: Path, frame_interval: int = 30) -> dict:
+    def classify_video(
+        self,
+        video_path: Path,
+        frame_interval: int = 30,
+        *,
+        max_frames: int | None = 8,
+        keep_frames_dir: Optional[Path] = None,
+    ) -> dict:
         """对视频进行抽帧分类。"""
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
@@ -151,26 +160,53 @@ class ClassifierService:
 
         frames_results = []
         frame_id = 0
-        temp_dir = Path(tempfile.mkdtemp(prefix="cls_frames_"))
+        source_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        total_frames_hint = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        frame_interval = max(1, int(frame_interval or 1))
+        max_frames = int(max_frames or 0)
+        sample_count = min(max_frames, total_frames_hint) if max_frames > 0 and total_frames_hint > 0 else 0
+        sample_frame_ids = (
+            {
+                int(round(index * (total_frames_hint - 1) / max(1, sample_count - 1)))
+                for index in range(sample_count)
+            }
+            if sample_count > 0
+            else set()
+        )
+        temp_dir = keep_frames_dir or Path(tempfile.mkdtemp(prefix="cls_frames_"))
+        temp_dir.mkdir(parents=True, exist_ok=True)
         try:
             while True:
                 ret, frame = cap.read()
                 if not ret:
                     break
-                if frame_id % frame_interval == 0:
-                    temp_frame_path = temp_dir / f"frame_{frame_id}.jpg"
+                should_sample = frame_id in sample_frame_ids if sample_frame_ids else frame_id % frame_interval == 0
+                if should_sample:
+                    if not sample_frame_ids and max_frames > 0 and len(frames_results) >= max_frames:
+                        frame_id += 1
+                        continue
+                    temp_frame_path = temp_dir / f"cls_frame_{uuid.uuid4().hex}_{frame_id}.jpg"
                     cv2.imwrite(str(temp_frame_path), frame)
                     result = self.classify_image(temp_frame_path)
                     result["frame_id"] = frame_id
+                    result["frame_time_sec"] = frame_id / source_fps if source_fps > 0 else None
+                    result["timestamp_ms"] = (
+                        int((frame_id / source_fps) * 1000)
+                        if source_fps > 0
+                        else int(cap.get(cv2.CAP_PROP_POS_MSEC) or 0)
+                    )
+                    result["local_frame_path"] = str(temp_frame_path)
                     frames_results.append(result)
-                    temp_frame_path.unlink(missing_ok=True)
+                    if keep_frames_dir is None:
+                        temp_frame_path.unlink(missing_ok=True)
                 frame_id += 1
         finally:
             cap.release()
-            try:
-                temp_dir.rmdir()
-            except OSError:
-                pass
+            if keep_frames_dir is None:
+                try:
+                    temp_dir.rmdir()
+                except OSError:
+                    pass
 
         class_counts = {}
         for frame_result in frames_results:
@@ -180,8 +216,11 @@ class ClassifierService:
         return {
             "main_class": main_class,
             "total_frames": frame_id,
+            "fps": source_fps,
+            "duration_sec": frame_id / source_fps if source_fps > 0 else None,
             "sampled_frames": len(frames_results),
-            "frame_interval": frame_interval,
+            "frame_interval": None if sample_frame_ids else frame_interval,
+            "sampling_strategy": "uniform" if sample_frame_ids else "interval",
             "frames": frames_results,
         }
 

@@ -1,6 +1,7 @@
 """FastAPI 主应用。"""
 
 import os
+from collections import Counter
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
@@ -178,8 +179,67 @@ def _risk_from_detections(detections: list[dict]) -> str:
     return "low"
 
 
+def _class_counts(detections: list[dict]) -> dict:
+    return dict(Counter(str(det.get("class_name") or "unknown") for det in detections))
+
+
+def _max_confidence_by_class(detections: list[dict]) -> dict:
+    result: dict[str, float] = {}
+    for det in detections:
+        name = str(det.get("class_name") or "unknown")
+        confidence = float(det.get("confidence") or 0.0)
+        result[name] = max(result.get(name, 0.0), confidence)
+    return result
+
+
+def _frames_with_detections(raw: dict) -> list[dict]:
+    frames = raw.get("frames") or []
+    result = []
+    for frame in frames:
+        detections = frame.get("detections") or []
+        if not detections:
+            continue
+        result.append(
+            {
+                "frame_id": frame.get("frame_id"),
+                "frame_time_sec": frame.get("frame_time_sec"),
+                "detection_count": len(detections),
+                "classes": _class_counts(detections),
+            }
+        )
+    return result
+
+
+def _risk_signals(detections: list[dict]) -> dict:
+    counts = _class_counts(detections)
+    has_person = counts.get("person", 0) > 0 or counts.get("crowd", 0) > 0
+    has_swimmer = counts.get("swimmer", 0) > 0
+    has_boat = counts.get("boat", 0) > 0
+    return {
+        "person_intrusion_candidate": has_person,
+        "mudflat_playing_candidate": has_person or has_swimmer,
+        "illegal_fishing_candidate": has_boat and (has_person or has_swimmer),
+        "requires_scene_understanding": has_person or has_swimmer or has_boat,
+    }
+
+
+def _target_summary(detections: list[dict]) -> str:
+    counts = _class_counts(detections)
+    if not counts:
+        return "未检测到人员、船只或游泳/涉水目标"
+    parts = []
+    for label in ("person", "crowd", "swimmer", "boat"):
+        count = counts.get(label, 0)
+        if count:
+            parts.append(f"{label} {count}")
+    return "检测到 " + "，".join(parts)
+
+
 def _standard_output(raw: dict, *, media_type: str, media_ref: str) -> dict:
     detections = raw.get("detections") or []
+    class_counts = _class_counts(detections)
+    risk_signals = _risk_signals(detections)
+    target_summary = _target_summary(detections)
     return {
         **raw,
         "status": "success",
@@ -187,7 +247,12 @@ def _standard_output(raw: dict, *, media_type: str, media_ref: str) -> dict:
         "media": media_ref,
         "detection_results": raw,
         "detection_count": len(detections),
-        "report": f"{media_type}检测完成，共发现 {len(detections)} 个目标",
+        "class_counts": class_counts,
+        "max_confidence_by_class": _max_confidence_by_class(detections),
+        "frames_with_detections": _frames_with_detections(raw),
+        "risk_signals": risk_signals,
+        "target_summary": target_summary,
+        "report": f"{media_type}检测完成，{target_summary}，共 {len(detections)} 个目标",
         "risk_level": _risk_from_detections(detections),
     }
 
@@ -214,7 +279,11 @@ async def workflow_infer(payload: dict = Body(...)):
     temp_path = minio_client.download_file(bucket, object_key, suffix=suffix)
     try:
         if is_video:
-            result = detector_service.detect_video(temp_path, int(payload.get("frame_interval", 30)))
+            result = detector_service.detect_video(
+                temp_path,
+                int(payload.get("frame_interval") or 30),
+                max_frames=payload.get("max_frames", 8),
+            )
             return _standard_output(result, media_type="video", media_ref=f"{bucket}/{object_key}")
         result = detector_service.detect_image(temp_path)
         return _standard_output(result, media_type="image", media_ref=f"{bucket}/{object_key}")

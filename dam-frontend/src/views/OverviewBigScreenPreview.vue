@@ -2467,11 +2467,14 @@ onBeforeUnmount(() => {
   position: relative;
   min-width: 0;
   display: grid;
+  grid-template-rows: 14px 24px;
+  place-items: center;
   gap: 4px;
-  padding: 9px 10px;
+  padding: 8px 10px;
   border: 1px solid rgba(67, 200, 255, .14);
   border-radius: 7px;
   background: rgba(2, 16, 30, .32);
+  text-align: center;
 }
 
 .device-counts span {
@@ -2481,7 +2484,8 @@ onBeforeUnmount(() => {
 }
 
 .device-counts strong {
-  display: block;
+  display: grid;
+  place-items: center;
   color: #38d59c;
   font-size: 22px;
   line-height: 1;

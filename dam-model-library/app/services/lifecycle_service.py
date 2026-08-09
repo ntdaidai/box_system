@@ -154,6 +154,13 @@ class LifecycleService:
             except Exception as e:
                 logger.warning(f"删除旧容器失败（可能已不存在）: {e}")
 
+        expected_container_name = generate_container_name(model_id, model.name)
+        if binding.container_name != expected_container_name:
+            try:
+                docker_service.remove_container(expected_container_name)
+            except Exception as e:
+                logger.warning(f"按名称清理旧容器失败（可能已不存在）: {e}")
+
         # 清空容器信息，把 bind_type 改为 image，这样 start_model 会走 docker run 路径
         binding.container_id = None
         binding.container_name = None

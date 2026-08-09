@@ -144,7 +144,7 @@ class WorkflowInferRequest(BaseModel):
     videos: List[str] = Field(default_factory=list, description="视频路径，仅作为上下文字符串")
     media_objects: List[Dict[str, Any]] = Field(default_factory=list, description="媒体对象")
     media_mode: str = Field("video", description="video=视频理解优先，frames=图片帧优先，auto=视频优先")
-    max_frames: int = Field(4, ge=1, le=32, description="图片帧兜底最大数量")
+    max_frames: int = Field(8, ge=1, le=32, description="图片帧兜底最大数量")
     actor_name: Optional[str] = Field(None, description="角色名称")
     system_prompt: Optional[str] = Field(None, description="角色 system prompt")
     system_prompt_source: Optional[str] = Field(None, description="角色 system prompt 来源")

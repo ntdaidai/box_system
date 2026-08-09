@@ -278,7 +278,18 @@ def _model_candidate_rows(model_category: str, db: Session) -> List[Dict[str, An
 
 
 def _fallback_score_candidate(candidate: Dict[str, Any], node: Dict[str, Any], event_type: str) -> int:
-    text = " ".join(str(candidate.get(key) or "") for key in ("name", "description", "model_type", "framework")).lower()
+    tags = candidate.get("tags")
+    if isinstance(tags, str):
+        try:
+            tags = json.loads(tags)
+        except json.JSONDecodeError:
+            tags = [tags]
+    tags_text = " ".join(str(item or "") for item in tags) if isinstance(tags, list) else ""
+    text = " ".join(
+        str(candidate.get(key) or "")
+        for key in ("name", "description", "model_type", "framework")
+    )
+    text = f"{text} {tags_text}".lower()
     node_text = " ".join(str(node.get(key) or "") for key in ("node_type", "model_task", "model_family", "event_group")).lower()
     wants_classification = "classification" in node_text or "分类" in node_text
     wants_detection = "detection" in node_text or "检测" in node_text or "目标" in node_text
@@ -296,6 +307,14 @@ def _fallback_score_candidate(candidate: Dict[str, Any], node: Dict[str, Any], e
     for token in (node.get("model_task"), node.get("model_family"), node.get("event_group"), event_type):
         if token and str(token).lower() in text:
             score += 5
+    event_text = str(event_type or "").lower()
+    if any(token in event_text for token in ("人员", "入侵", "滩涂", "游玩", "电鱼", "捕鱼", "person", "intrusion", "fishing")):
+        if "person_event" in text or "人员" in text:
+            score += 10
+        if "baseline" in text or "默认" in text:
+            score -= 6
+    if "specialized" in text or "专有" in text:
+        score += 4
     if wants_classification and has_classification:
         score += 8
     if wants_detection and has_detection:
@@ -325,6 +344,7 @@ def select_model_with_qwen_selector(node: Dict, event_type: str, model_category:
             "model_id": item["model_id"],
             "name": item["name"],
             "description": item["description"],
+            "tags": item.get("tags"),
             "model_type": item["model_type"],
             "framework": item["framework"],
             "runtime_status": item["runtime_status"],

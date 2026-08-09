@@ -84,8 +84,7 @@ class DamModelLibraryClient:
         media_objects: Optional[List[Dict[str, Any]]] = None,
         event_type: Optional[str] = None,
         media_mode: str = "auto",
-        max_frames: int = 4,
-        frame_interval_seconds: float = 2.5,
+        max_frames: int = 8,
         mode: str = settings.DAM_MODEL_LIBRARY_WORKFLOW_MODE,
     ) -> Dict[str, Any]:
         payload = {
@@ -98,7 +97,6 @@ class DamModelLibraryClient:
             "event_type": event_type,
             "media_mode": media_mode,
             "max_frames": max_frames,
-            "frame_interval_seconds": frame_interval_seconds,
             "fallback_to_frames": True,
             "mode": mode,
         }

@@ -19,8 +19,7 @@ class WorkflowExecuteRequest(BaseModel):
         "auto",
         description="video=pass video to model service, frames=model service extracts frames, auto=video with frame fallback",
     )
-    max_frames: int = Field(4, ge=1, le=32, description="Max frames extracted by model service")
-    frame_interval_seconds: float = Field(2.5, gt=0, description="Frame extraction interval in seconds")
+    max_frames: int = Field(8, ge=1, le=32, description="Max uniformly sampled frames extracted by model service")
     fallback_to_frames: bool = Field(True, description="Fallback to frame extraction if direct video fails")
     mode: Literal["infer", "run"] = Field(
         "infer",

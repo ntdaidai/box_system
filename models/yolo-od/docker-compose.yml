@@ -1,12 +1,13 @@
 services:
   yolo26x-smallobj-2-api:
     build: .
+    image: yolo-od:latest
     container_name: yolo26x-smallobj-2-detector
     restart: unless-stopped
     ports:
       - "8012:8000"
     environment:
-      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ENDPOINT=172.17.0.1:9000
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
       - MODEL_WEIGHTS=/app/models/yolo26x_smallobj_2_best.pt
