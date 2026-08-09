@@ -55,6 +55,23 @@ def _json_value(value: Any, default: Any):
     return value
 
 
+def _is_qwen_camera_screening_observation(observation: Any) -> bool:
+    data = _json_value(observation, {}) or {}
+    if not isinstance(data, dict):
+        return False
+    visual = data.get("visual") if isinstance(data.get("visual"), dict) else {}
+    if visual.get("target_type") == "qwen_camera_screening":
+        return True
+    screening = visual.get("screening") if isinstance(visual.get("screening"), dict) else {}
+    media_objects = data.get("media_objects") or screening.get("media_objects") or []
+    if isinstance(media_objects, list):
+        return any(
+            isinstance(item, dict) and str(item.get("source") or "").startswith("qwen_screening")
+            for item in media_objects
+        )
+    return False
+
+
 class SqlSafetyEventStore:
     def __init__(self):
         self._lock = threading.RLock()
@@ -377,8 +394,10 @@ class SqlSafetyEventStore:
             )
             db.add(instance)
             db.flush()
-        instance.current_event_id = definition.id
-        instance.event_category = definition.event_category
+        preserve_qwen_event = _is_qwen_camera_screening_observation(instance.latest_observation)
+        if not preserve_qwen_event:
+            instance.current_event_id = definition.id
+            instance.event_category = definition.event_category
         instance.risk_level = risk
         instance.max_risk_level = event.get("max_risk_level") or instance.max_risk_level or risk
         instance.state = state
@@ -386,7 +405,8 @@ class SqlSafetyEventStore:
         instance.last_observed_at = _to_datetime(event.get("last_seen_at")) or instance.last_observed_at
         instance.resolved_at = _to_datetime(event.get("resolved_at"))
         instance.resolve_reason = event.get("resolve_reason")
-        instance.summary = f"{camera.camera_name} - {definition.event_name}"
+        if not preserve_qwen_event:
+            instance.summary = f"{camera.camera_name} - {definition.event_name}"
         observation = dict(event.get("latest_observation") or {})
         observation["runtime"] = {
             "handling_mode": event.get("handling_mode") or HANDLING_AUTO,

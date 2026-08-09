@@ -17,10 +17,10 @@ EXPOSE 8000
 ENTRYPOINT ["python3", "-m", "vllm.entrypoints.openai.api_server"]
 CMD ["--model", "/models", \
      "--served-model-name", "qwen4B", \
-     "--gpu-memory-utilization", "0.2", \
-     "--max-model-len", "2048", \
-     "--max-num-seqs", "3", \
-     "--max-num-batched-tokens", "2048", \
+     "--gpu-memory-utilization", "0.25", \
+     "--max-model-len", "8192", \
+     "--max-num-seqs", "1", \
+     "--max-num-batched-tokens", "8192", \
      "--trust-remote-code", \
      "--kv-cache-dtype", "auto", \
      "--enable-prefix-caching", \

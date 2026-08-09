@@ -19,6 +19,7 @@ from openai import AsyncOpenAI
 
 from app.core.config import settings
 from app.core.database import SessionLocal
+from app.models.actor_library import ActorLibrary, ActorPromptStage
 from app.models.camera import Camera
 from app.services.camera_source import camera_source_from_row
 from app.services.camera_snapshot import camera_snapshot_service
@@ -66,6 +67,11 @@ SYSTEM_PROMPT = """你是库坝与河道摄像头安全初筛模型。
 - 地震不能只凭普通画面轻易判定，除非画面有明显震动破坏迹象。
 """
 
+CAMERA_SCREENING_ACTOR_NAME = "摄像头初筛专家"
+CAMERA_SCREENING_STAGE_CODE = "camera_screening"
+CAMERA_SCREENING_MODEL_SCOPE = "qwen0_8b"
+PROMPT_CACHE_SECONDS = 60.0
+
 
 class QwenCameraScreeningService:
     """Periodically screen live camera keyframes with the local Qwen model."""
@@ -77,6 +83,14 @@ class QwenCameraScreeningService:
         self._last_run: Dict[str, float] = {}
         self._last_cleanup_at = 0.0
         self._inference_lock = asyncio.Lock()
+        self._prompt_cache: Dict[str, Any] = {
+            "expires_at": 0.0,
+            "prompt": SYSTEM_PROMPT,
+            "source": "builtin.camera_screening",
+            "actor_name": CAMERA_SCREENING_ACTOR_NAME,
+            "stage_code": CAMERA_SCREENING_STAGE_CODE,
+            "prompt_version": "builtin",
+        }
 
     async def start(self) -> None:
         if not settings.QWEN_CAMERA_SCREENING_ENABLED:
@@ -197,7 +211,7 @@ class QwenCameraScreeningService:
                     batch_ts,
                     effective_window,
                 )
-            result, raw_response = await self._call_qwen(
+            result, raw_response, prompt_config = await self._call_qwen(
                 camera_id,
                 frames,
                 image_urls,
@@ -211,6 +225,10 @@ class QwenCameraScreeningService:
         result["timestamp"] = time.time()
         result["window_seconds"] = effective_window
         result["input_source"] = input_source
+        result["actor_name"] = prompt_config.get("actor_name")
+        result["stage_code"] = prompt_config.get("stage_code")
+        result["system_prompt_source"] = prompt_config.get("source")
+        result["prompt_version"] = prompt_config.get("prompt_version")
         result["image_urls"] = image_urls
         if video_url:
             result["source_video_url"] = video_url
@@ -587,8 +605,9 @@ class QwenCameraScreeningService:
                 "boat_present",
             ],
         }
+        prompt_config = await asyncio.to_thread(self._get_camera_screening_prompt)
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": prompt_config["prompt"]},
             {
                 "role": "user",
                 "content": image_content + [
@@ -610,10 +629,71 @@ class QwenCameraScreeningService:
                 max_tokens=min(int(settings.LOCAL_LLM_MAX_TOKENS), 1024),
             )
             content = response.choices[0].message.content or ""
-            return self._parse_result(content), content
+            return self._parse_result(content), content, prompt_config
         except Exception as exc:
             logger.warning(f"Qwen摄像头初筛调用失败: camera={camera_id}, error={exc}")
-            return None, ""
+            return None, "", prompt_config
+
+    def _get_camera_screening_prompt(self) -> Dict[str, Any]:
+        now = time.time()
+        cached = self._prompt_cache
+        if cached.get("prompt") and now < float(cached.get("expires_at") or 0):
+            return cached
+
+        config = self._load_camera_screening_prompt_from_db()
+        if not config:
+            config = {
+                "prompt": SYSTEM_PROMPT,
+                "source": "builtin.camera_screening",
+                "actor_name": CAMERA_SCREENING_ACTOR_NAME,
+                "stage_code": CAMERA_SCREENING_STAGE_CODE,
+                "prompt_version": "builtin",
+            }
+        config["expires_at"] = now + PROMPT_CACHE_SECONDS
+        self._prompt_cache = config
+        return config
+
+    @staticmethod
+    def _load_camera_screening_prompt_from_db() -> Optional[Dict[str, Any]]:
+        db = SessionLocal()
+        try:
+            actor = (
+                db.query(ActorLibrary)
+                .filter(ActorLibrary.actor_name == CAMERA_SCREENING_ACTOR_NAME)
+                .first()
+            )
+            if not actor:
+                return None
+            row = (
+                db.query(ActorPromptStage)
+                .filter(
+                    ActorPromptStage.actor_id == actor.id,
+                    ActorPromptStage.stage_code == CAMERA_SCREENING_STAGE_CODE,
+                    ActorPromptStage.model_scope.in_([CAMERA_SCREENING_MODEL_SCOPE, "general"]),
+                    ActorPromptStage.is_active == 1,
+                )
+                .order_by(
+                    (ActorPromptStage.model_scope == CAMERA_SCREENING_MODEL_SCOPE).desc(),
+                    ActorPromptStage.update_time.desc(),
+                    ActorPromptStage.id.desc(),
+                )
+                .first()
+            )
+            if not row or not row.system_prompt:
+                return None
+            return {
+                "prompt": row.system_prompt,
+                "source": f"actor_prompt_stage.{row.stage_code}.{row.model_scope}.{row.version}",
+                "actor_name": actor.actor_name,
+                "stage_code": row.stage_code,
+                "prompt_version": row.version,
+                "prompt_model_scope": row.model_scope,
+            }
+        except Exception as exc:
+            logger.warning(f"读取摄像头初筛角色提示词失败，使用内置提示词: {exc}")
+            return None
+        finally:
+            db.close()
 
     def _parse_result(self, content: str) -> Optional[Dict[str, Any]]:
         try:

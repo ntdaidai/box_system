@@ -15,7 +15,7 @@ from src.dam_workflow.state import DamState
 from src.core.config import settings
 from src.core.models import (
     ModelRegistry, ModelDeployBinding, ModelIOSchema,
-    ModelEvaluationTemplate, ActorLibrary,
+    ModelEvaluationTemplate, ActorLibrary, ActorPromptStage,
 )
 from src.dam_workflow.model_registry_client import model_registry_client
 
@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_ACTOR_NAME = "自然灾害分析专家"
+MODEL_CATEGORY_STAGE = {
+    "local_llm": ("edge_analysis", "qwen4b"),
+    "cloud_llm": ("cloud_review", "qwen35b"),
+}
 ACTOR_RULES = (
     ("自然灾害分析专家", ("自然灾害", "泥石流", "滑坡", "洪水", "地震", "landslide", "debris", "flood", "earthquake", "natural_disaster")),
     ("人员行为分析专家", ("人员", "入侵", "滩涂", "游玩", "电鱼", "捕鱼", "船只", "行为", "intrusion", "person", "people", "fishing", "behavior")),
@@ -76,7 +80,7 @@ def fetch_actor_prompt(
     actor_name: str,
     model_category: str,
 ) -> Optional[Dict[str, str]]:
-    """从 actor_library 读取本地或云端模型 system prompt。"""
+    """从 actor_prompt_stage/actor_library 读取模型阶段 system prompt。"""
     if not db:
         return None
 
@@ -85,6 +89,13 @@ def fetch_actor_prompt(
         actor = db.query(ActorLibrary).filter(ActorLibrary.actor_name == DEFAULT_ACTOR_NAME).first()
     if not actor:
         return None
+
+    stage_info = MODEL_CATEGORY_STAGE.get(model_category)
+    if stage_info:
+        stage_code, model_scope = stage_info
+        stage_prompt = fetch_actor_stage_prompt(db, actor, stage_code, model_scope)
+        if stage_prompt:
+            return stage_prompt
 
     if model_category == "local_llm":
         prompt = actor.local_system_prompt
@@ -101,6 +112,43 @@ def fetch_actor_prompt(
         "actor_name": actor.actor_name,
         "system_prompt": prompt,
         "system_prompt_source": source,
+    }
+
+
+def fetch_actor_stage_prompt(
+    db: Session,
+    actor: ActorLibrary,
+    stage_code: str,
+    model_scope: str,
+) -> Optional[Dict[str, str]]:
+    """读取角色阶段 prompt，优先精确模型范围，其次 general。"""
+    rows = (
+        db.query(ActorPromptStage)
+        .filter(
+            ActorPromptStage.actor_id == actor.id,
+            ActorPromptStage.stage_code == stage_code,
+            ActorPromptStage.is_active == 1,
+            ActorPromptStage.model_scope.in_([model_scope, "general"]),
+        )
+        .order_by(
+            (ActorPromptStage.model_scope == model_scope).desc(),
+            ActorPromptStage.update_time.desc(),
+            ActorPromptStage.id.desc(),
+        )
+        .all()
+    )
+    if not rows:
+        return None
+    row = rows[0]
+    if not row.system_prompt:
+        return None
+    return {
+        "actor_name": actor.actor_name,
+        "system_prompt": row.system_prompt,
+        "system_prompt_source": f"actor_prompt_stage.{row.stage_code}.{row.model_scope}.{row.version}",
+        "stage_code": row.stage_code,
+        "prompt_version": row.version,
+        "prompt_model_scope": row.model_scope,
     }
 
 
@@ -544,6 +592,12 @@ def configure_action_node(
             node["actor_name"] = actor_prompt["actor_name"]
             node["system_prompt"] = actor_prompt["system_prompt"]
             node["system_prompt_source"] = actor_prompt["system_prompt_source"]
+            if actor_prompt.get("stage_code"):
+                node["stage_code"] = actor_prompt["stage_code"]
+            if actor_prompt.get("prompt_version"):
+                node["prompt_version"] = actor_prompt["prompt_version"]
+            if actor_prompt.get("prompt_model_scope"):
+                node["prompt_model_scope"] = actor_prompt["prompt_model_scope"]
         else:
             node["actor_name"] = inferred_actor_name
             node["system_prompt_source"] = "default_model_service_prompt"

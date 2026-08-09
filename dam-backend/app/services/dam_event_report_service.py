@@ -5,9 +5,10 @@ from __future__ import annotations
 import datetime as dt
 import re
 import tempfile
+import urllib.request
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
 from docx.shared import Mm
@@ -50,8 +51,33 @@ TEMPLATE_FIELDS = {
     "handling_summary",
     "timeline_summary",
     "evidence_summary",
+    "frame_evidence_summary",
+    "linkage_evidence_summary",
     "evidence_caption",
     "conclusion",
+    "report_time",
+    "instance_no_prefix",
+    "instance_no_suffix",
+    "occur_time_display",
+    "event_duration",
+    "emergency_level",
+    "confidence_label",
+    "trigger_summary",
+    "screening_summary",
+    "model_route_summary",
+    "workflow_nodes_summary",
+    "specialized_summary",
+    "local_analysis_summary",
+    "cloud_analysis_summary",
+    "scene_detail",
+    "risk_assessment_detail",
+    "impact_assessment",
+    "response_plan",
+    "monitoring_suggestions",
+    "recommendations_text",
+    "evidence_inventory",
+    "analysis_limitations",
+    "follow_up_actions",
 }
 RISK_NAMES = {"HIGH": "高风险", "MEDIUM": "中风险", "LOW": "低风险"}
 STATUS_NAMES = {
@@ -271,14 +297,38 @@ class DamEventReportService:
         self.collect_template_dicts(value, candidates)
         overrides: dict[str, Any] = {}
         for candidate in candidates:
+            detailed = self.detailed_fields_summary(candidate)
+            if detailed:
+                overrides["handling_summary"] = detailed
             for field in TEMPLATE_FIELDS:
                 current = candidate.get(field)
                 if current in (None, "", []):
                     continue
+                if field == "handling_summary" and overrides.get("handling_summary"):
+                    continue
                 if isinstance(current, (dict, list)):
                     current = self.format_structured_value(current)
                 overrides[field] = current
+            if not overrides.get("key_observation"):
+                risk_reasoning = candidate.get("risk_reasoning")
+                if isinstance(risk_reasoning, str) and risk_reasoning.strip():
+                    overrides["key_observation"] = self.compact(risk_reasoning, 260)
+            if not overrides.get("conclusion"):
+                conclusion = candidate.get("impact_assessment") or candidate.get("monitoring_suggestions")
+                if isinstance(conclusion, str) and conclusion.strip():
+                    overrides["conclusion"] = self.compact(conclusion, 320)
         return overrides
+
+    def detailed_fields_summary(self, value: dict[str, Any]) -> str:
+        fields = [
+            ("一、现场场景", value.get("detailed_scene_analysis")),
+            ("二、风险研判", value.get("risk_reasoning")),
+            ("三、影响评估", value.get("impact_assessment")),
+            ("四、处置建议", value.get("response_plan")),
+            ("五、持续监测", value.get("monitoring_suggestions")),
+        ]
+        lines = [f"{label}：{text}" for label, text in fields if isinstance(text, str) and text.strip()]
+        return "\n".join(lines)
 
     def collect_template_dicts(self, value: Any, candidates: list[dict[str, Any]]) -> None:
         if isinstance(value, dict):
@@ -352,12 +402,19 @@ class DamEventReportService:
 
         context = {
             "report_date": report_date,
+            "report_time": self.format_datetime(dt.datetime.now(LOCAL_TIMEZONE)),
             "event_name": getattr(event, "event_name", None) or instance.summary or "安全事件",
             "instance_no": instance.instance_no,
+            "instance_no_prefix": self.instance_no_parts(instance.instance_no)[0],
+            "instance_no_suffix": self.instance_no_parts(instance.instance_no)[1],
             "risk_label": RISK_NAMES.get(str(instance.max_risk_level or instance.risk_level or "").upper(), "低风险"),
             "result_label": self.result_label(instance),
             "occur_time": self.format_datetime(instance.started_at),
+            "occur_time_display": self.format_datetime(instance.started_at).replace(" ", "\n"),
             "completed_at": self.format_datetime(instance.resolved_at) if instance.resolved_at else "—",
+            "event_duration": self.event_duration(instance),
+            "emergency_level": self.emergency_level(instance),
+            "confidence_label": self.confidence_label(selected),
             "source_label": source_label,
             "location": self.location(source, camera, visual),
             "evidence_count": len(image_items),
@@ -366,6 +423,24 @@ class DamEventReportService:
             "source_summary": self.source_summary(image_items, video_items, selected),
             "handling_source": selected["source_label"],
             "timeline_count": len(timeline),
+            "trigger_summary": self.trigger_summary(instance, event, visual, workflow_insight),
+            "screening_summary": self.screening_summary(visual),
+            "model_route_summary": self.model_route_summary(workflow_payload, selected),
+            "workflow_nodes_summary": self.workflow_nodes_summary(workflow_payload),
+            "specialized_summary": self.specialized_summary(workflow_insight),
+            "local_analysis_summary": self.node_analysis_summary(workflow_payload, "action_reasoning"),
+            "cloud_analysis_summary": self.node_analysis_summary(workflow_payload, "action_report"),
+            "scene_detail": self.final_report_field(selected, "detailed_scene_analysis", selected_text),
+            "risk_assessment_detail": self.final_report_field(selected, "risk_reasoning", workflow_insight.get("raw_excerpt")),
+            "impact_assessment": self.final_report_field(selected, "impact_assessment", "需结合现场巡查、水位雨量和坝体状态持续确认影响范围。"),
+            "response_plan": self.final_report_field(selected, "response_plan", "维持事件取证和现场复核，按风险等级启动相应联动处置。"),
+            "monitoring_suggestions": self.final_report_field(selected, "monitoring_suggestions", "持续跟踪摄像头画面、水位、雨量、风速和坝体安全监测数据。"),
+            "recommendations_text": self.recommendations_text(selected),
+            "evidence_inventory": self.evidence_inventory(image_items, video_items),
+            "frame_evidence_summary": self.frame_evidence_summary(image_items, video_items),
+            "linkage_evidence_summary": self.linkage_evidence_summary(evidence),
+            "analysis_limitations": self.analysis_limitations(selected, workflow_insight, image_items, video_items),
+            "follow_up_actions": self.follow_up_actions(instance, selected),
             "handling_summary": self.handling_summary(
                 instance=instance,
                 event=event,
@@ -384,18 +459,29 @@ class DamEventReportService:
         }
         context.update(self.extract_template_overrides(selected.get("raw_output")))
         context["report_date"] = report_date
+        context["event_name"] = getattr(event, "event_name", None) or instance.summary or "安全事件"
+        context["instance_no"] = instance.instance_no
+        context["instance_no_prefix"], context["instance_no_suffix"] = self.instance_no_parts(instance.instance_no)
+        context["risk_label"] = RISK_NAMES.get(str(instance.max_risk_level or instance.risk_level or "").upper(), "低风险")
+        context["result_label"] = self.result_label(instance)
+        context["occur_time"] = self.format_datetime(instance.started_at)
+        context["occur_time_display"] = self.format_datetime(instance.started_at).replace(" ", "\n")
+        context["completed_at"] = self.format_datetime(instance.resolved_at) if instance.resolved_at else "—"
+        context["evidence_count"] = len(image_items)
+        context["evidence_caption"] = self.evidence_caption(image_items, video_items)
         context["evidence_image"] = evidence_image_path
         if selected.get("source") == "qwen4b":
-            context["handling_summary"] = self.handling_summary(
-                instance=instance,
-                event=event,
-                visual=visual,
-                selected=selected,
-                selected_text=selected_text,
-                workflow_insight=workflow_insight,
-                image_items=image_items,
-                video_items=video_items,
-            )
+            if not context.get("handling_summary"):
+                context["handling_summary"] = self.handling_summary(
+                    instance=instance,
+                    event=event,
+                    visual=visual,
+                    selected=selected,
+                    selected_text=selected_text,
+                    workflow_insight=workflow_insight,
+                    image_items=image_items,
+                    video_items=video_items,
+                )
             context["conclusion"] = self.build_conclusion(workflow_insight, cloud_note)
         return context
 
@@ -488,7 +574,7 @@ class DamEventReportService:
         for row in evidence:
             if str(row.evidence_type or "").upper() in {"IMAGE", "CAMERA_SNAPSHOT", "DRONE_IMAGE", "STAFF_IMAGE"}:
                 items.append({"url": row.file_url, "caption": row.description or "事件图像"})
-        return self.unique_media_items(items)
+        return self.unique_media_items(items)[:8]
 
     def collect_video_items(
         self,
@@ -580,6 +666,11 @@ class DamEventReportService:
 
     def read_minio_or_http_bytes(self, value: str) -> Optional[bytes]:
         bucket, object_name = self.parse_minio_reference(value)
+        if bucket and object_name and not minio_service.client:
+            try:
+                minio_service.connect()
+            except Exception as exc:
+                logger.debug("MinIO 懒连接失败: {}", exc)
         if bucket and object_name and minio_service.client:
             try:
                 response = minio_service.client.get_object(bucket, object_name)
@@ -590,6 +681,21 @@ class DamEventReportService:
                     response.release_conn()
             except Exception as exc:
                 logger.debug("读取 MinIO 图像失败 {}: {}", value, exc)
+        parsed = urlparse(value)
+        if parsed.scheme in {"http", "https"}:
+            urls = [value]
+            if parsed.hostname in {"localhost", "127.0.0.1"} and parsed.port == 9000:
+                endpoint = getattr(settings, "QWEN_CAMERA_SCREENING_MINIO_ENDPOINT", "") or "172.17.0.1:9000"
+                urls.append(urlunparse(parsed._replace(netloc=endpoint)))
+            for url in urls:
+                try:
+                    with urllib.request.urlopen(url, timeout=5) as response:
+                        content_type = response.headers.get("Content-Type") or ""
+                        data = response.read()
+                    if data and (content_type.startswith("image/") or Path(parsed.path).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}):
+                        return data
+                except Exception as exc:
+                    logger.debug("HTTP读取图像失败 {}: {}", url, exc)
         return None
 
     def parse_minio_reference(self, value: str) -> tuple[Optional[str], Optional[str]]:
@@ -628,6 +734,39 @@ class DamEventReportService:
                 return "误报关闭"
             return "已闭环"
         return STATUS_NAMES.get(str(instance.status or "").upper(), "处理中")
+
+    def event_duration(self, instance: SafetyEventInstance) -> str:
+        start = instance.started_at
+        end = instance.resolved_at or instance.last_observed_at or dt.datetime.now()
+        if not start or not end:
+            return "—"
+        seconds = max(0, int((end - start).total_seconds()))
+        minutes, sec = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours}小时{minutes}分钟{sec}秒"
+        if minutes:
+            return f"{minutes}分钟{sec}秒"
+        return f"{sec}秒"
+
+    def instance_no_parts(self, instance_no: str) -> tuple[str, str]:
+        text = str(instance_no or "").strip()
+        if "_" not in text:
+            return text, ""
+        parts = text.split("_")
+        if len(parts) >= 3:
+            return "_".join(parts[:2]), "_".join(parts[2:])
+        return text, ""
+
+    def emergency_level(self, instance: SafetyEventInstance) -> str:
+        risk = str(instance.max_risk_level or instance.risk_level or "").upper()
+        return {"HIGH": "I级关注", "MEDIUM": "II级关注", "LOW": "III级关注"}.get(risk, "待确认")
+
+    def confidence_label(self, selected: dict[str, Any]) -> str:
+        confidence = self.numeric_value(self.find_in_selected(selected, "confidence"))
+        if confidence is None:
+            return "—"
+        return f"{confidence * 100:.1f}%"
 
     def event_summary(
         self,
@@ -704,12 +843,239 @@ class DamEventReportService:
         return "；".join(pieces) + "，用于支撑本次事件研判。"
 
     def evidence_caption(self, image_items: list[dict[str, Any]], video_items: list[dict[str, Any]]) -> str:
-        if image_items:
-            caption = image_items[0].get("caption") or "事件关键帧"
-            return str(caption)
+        return ""
+
+    def trigger_summary(
+        self,
+        instance: SafetyEventInstance,
+        event: EventLibrary,
+        visual: dict[str, Any],
+        insight: dict[str, Any],
+    ) -> str:
+        event_name = getattr(event, "event_name", None) or instance.summary or "安全事件"
+        camera_name = visual.get("camera_name") or "现场摄像头"
+        summary = insight.get("qwen_summary") or "触发时未记录初筛摘要"
+        return f"{camera_name}在{self.format_datetime(instance.started_at)}触发{event_name}，初筛摘要为：{summary}。"
+
+    def screening_summary(self, visual: dict[str, Any]) -> str:
+        screening = visual.get("screening") if isinstance(visual.get("screening"), dict) else {}
+        if not screening:
+            return "未获取到摄像头初筛结构化结果。"
+        labels = [
+            ("洪水", "flood_detected", "flood_confidence"),
+            ("泥石流", "mudslide_detected", "mudslide_confidence"),
+            ("滑坡", "landslide_detected", "landslide_confidence"),
+            ("地震", "earthquake_detected", "earthquake_confidence"),
+            ("人员", "person_present", "person_confidence"),
+            ("船只/捕鱼", "boat_present", "boat_confidence"),
+        ]
+        hits = []
+        negatives = []
+        for label, flag_key, confidence_key in labels:
+            flag = screening.get(flag_key)
+            confidence = self.numeric_value(screening.get(confidence_key))
+            text = f"{label}({confidence * 100:.1f}%)" if confidence is not None else label
+            if str(flag) in {"1", "True", "true"} or flag == 1 or flag is True:
+                hits.append(text)
+            else:
+                negatives.append(label)
+        hit_text = "、".join(hits) if hits else "未命中明确场景"
+        negative_text = "、".join(negatives[:6]) if negatives else "无"
+        return f"初筛命中：{hit_text}；未命中/排除：{negative_text}；风险等级：{screening.get('qwen_risk_level') or '—'}。"
+
+    def model_route_summary(self, workflow_payload: dict[str, Any], selected: dict[str, Any]) -> str:
+        execution = workflow_payload.get("execution_result") if isinstance(workflow_payload, dict) else {}
+        nodes = (execution or {}).get("node_results") or []
+        success_nodes = {
+            str(row.get("node_id") or "")
+            for row in nodes
+            if isinstance(row, dict) and str(row.get("status") or "").lower() == "success"
+        }
+        route_parts = []
+        if "action_classify" in success_nodes:
+            route_parts.append("专有模型完成灾害类别复核")
+        if "action_reasoning" in success_nodes:
+            route_parts.append("4B本地模型完成现场语义理解")
+        if "action_report" in success_nodes:
+            route_parts.append("35B云端模型完成增强研判与报告校核")
+        route_text = "，".join(route_parts) if route_parts else "模型节点已完成可用结果回传"
+        source_label = selected.get("source_label", "智能分析模型")
+        return f"ECA触发后，智能路由进入自然灾害分析链路，{route_text}；本报告以{source_label}结果作为最终分析依据。"
+
+    def workflow_nodes_summary(self, workflow_payload: dict[str, Any]) -> str:
+        execution = workflow_payload.get("execution_result") if isinstance(workflow_payload, dict) else {}
+        rows = []
+        label_map = {
+            "start_0": "事件触发",
+            "action_classify": "专有模型复核",
+            "action_reasoning": "4B 场景理解",
+            "action_report": "35B 增强分析",
+            "end_0": "流程结束",
+        }
+        for row in (execution or {}).get("node_results") or []:
+            if not isinstance(row, dict):
+                continue
+            node_id = str(row.get("node_id") or "")
+            status = str(row.get("status") or "unknown")
+            model_id = row.get("model_id")
+            meta = row.get("request_meta") if isinstance(row.get("request_meta"), dict) else {}
+            media = []
+            if meta.get("video_count"):
+                media.append(f"视频{meta.get('video_count')}段")
+            if meta.get("image_count"):
+                media.append(f"图片{meta.get('image_count')}张")
+            media_text = f"，输入{'、'.join(media)}" if media else ""
+            model_text = f"，模型ID {model_id}" if model_id else ""
+            rows.append(f"{label_map.get(node_id, node_id)}：{status}{model_text}{media_text}")
+        return "\n".join(rows) or "未记录模型节点执行明细。"
+
+    def specialized_summary(self, insight: dict[str, Any]) -> str:
+        label = insight.get("specialized_class_label") or "未获得专有模型类别"
+        confidence = insight.get("specialized_confidence")
+        confidence_text = f"{confidence * 100:.1f}%" if confidence is not None else "—"
+        sampled = insight.get("sampled_frames") or "—"
+        report = insight.get("classification_report")
+        suffix = f"；模型说明：{self.compact(str(report), 220)}" if report else ""
+        return f"复核类别：{label}；置信度：{confidence_text}；采样帧数：{sampled}{suffix}。"
+
+    def node_analysis_summary(self, workflow_payload: dict[str, Any], node_id: str) -> str:
+        inference = self.find_node_inference(workflow_payload, node_id)
+        if not inference:
+            return "该节点未返回可用分析。"
+        source = inference.get("system_prompt_source") or inference.get("actor_name") or node_id
+        risk = inference.get("risk_level") or self.find_in_value(inference, "risk_level") or "—"
+        confidence = self.numeric_value(inference.get("confidence") or self.find_in_value(inference, "confidence"))
+        confidence_text = f"{confidence * 100:.1f}%" if confidence is not None else "—"
+        report = (
+            inference.get("report")
+            or self.find_in_value(inference, "scene_analysis")
+            or self.find_in_value(inference, "detailed_scene_analysis")
+            or "未生成文字摘要"
+        )
+        return f"来源：{source}；风险：{risk}；置信度：{confidence_text}；摘要：{self.compact(str(report), 420)}"
+
+    def evidence_inventory(self, image_items: list[dict[str, Any]], video_items: list[dict[str, Any]]) -> str:
+        rows = []
+        for index, item in enumerate(video_items[:5], 1):
+            rows.append(f"视频{index}：{item.get('caption') or '事件证据视频'}，位置：{item.get('url')}")
+        for index, item in enumerate(image_items[:8], 1):
+            rows.append(f"图像{index}：{item.get('caption') or '关键帧/截图'}，位置：{item.get('url')}")
+        return "\n".join(rows) if rows else "未归档媒体证据。"
+
+    def frame_evidence_summary(self, image_items: list[dict[str, Any]], video_items: list[dict[str, Any]]) -> str:
+        qwen_frames = 0
+        review_frames = 0
+        for item in image_items:
+            url = str(item.get("url") or "")
+            if "/evidence/" in url or "yolo_frames" in url or "key_frame" in url:
+                review_frames += 1
+            else:
+                qwen_frames += 1
+        parts = []
         if video_items:
-            return "事件证据视频已归档，报告中未嵌入视频内容。"
-        return "暂无图像证据"
+            parts.append(f"事件证据视频{len(video_items)}段")
+        if qwen_frames:
+            parts.append(f"摄像头初筛关键帧{qwen_frames}张")
+        if review_frames:
+            parts.append(f"模型复核抽帧{review_frames}张")
+        if not parts:
+            return "未记录可用于报告展示的抽帧图片。"
+        return "已归档" + "、".join(parts) + "；报告正文嵌入代表性画面，其余图片随事件证据一并留存。"
+
+    def linkage_evidence_summary(self, evidence: list[SafetyEventEvidence]) -> str:
+        labels = {
+            "DRONE": "无人机",
+            "UAV": "无人机",
+            "DRONE_IMAGE": "无人机",
+            "DRONE_VIDEO": "无人机",
+            "ROBOT_DOG": "机器狗",
+            "ROBOT": "机器狗",
+            "ROBOT_IMAGE": "机器狗",
+            "ROBOT_VIDEO": "机器狗",
+        }
+        counts: dict[str, int] = {}
+        for row in evidence:
+            source_type = str(row.source_type or "").upper()
+            evidence_type = str(row.evidence_type or "").upper()
+            label = labels.get(source_type) or labels.get(evidence_type)
+            if not label:
+                continue
+            counts[label] = counts.get(label, 0) + 1
+        if counts:
+            return "；".join(f"{label}联动取证{count}条" for label, count in counts.items()) + "，作为现场补充证据。"
+        return "本次事件暂未记录机器狗或无人机联动取证；如后续联动设备上传图片/视频，将作为补充证据归档。"
+
+    def analysis_limitations(
+        self,
+        selected: dict[str, Any],
+        insight: dict[str, Any],
+        image_items: list[dict[str, Any]],
+        video_items: list[dict[str, Any]],
+    ) -> str:
+        limitations = self.find_in_selected(selected, "uncertainties")
+        if isinstance(limitations, list) and limitations:
+            return "；".join(str(item) for item in limitations if item)
+        if isinstance(limitations, str) and limitations.strip():
+            return limitations.strip()
+        parts = []
+        if not video_items:
+            parts.append("缺少可回放事件视频")
+        if not image_items:
+            parts.append("报告未嵌入可用关键帧")
+        if not insight.get("specialized_confidence"):
+            parts.append("专有模型置信度未记录")
+        return "；".join(parts) if parts else "未发现明显数据缺口，仍建议结合现场人工复核。"
+
+    def follow_up_actions(self, instance: SafetyEventInstance, selected: dict[str, Any]) -> str:
+        risk = str(instance.max_risk_level or instance.risk_level or "").upper()
+        base = [
+            "保留本次事件视频、关键帧、模型结果和人工处置记录，形成可追溯证据链。",
+            "将事件结论同步至值班台账，复盘智能路由节点耗时和模型输出质量。",
+        ]
+        if risk == "HIGH":
+            base.insert(0, "按高风险事件进行持续跟踪，闭环后仍需安排现场或远程复核。")
+        if selected.get("cloud_error"):
+            base.append("云端模型异常期间应复核本地 4B 结果，待云端恢复后可重新生成增强报告。")
+        return "\n".join(f"{idx}. {text}" for idx, text in enumerate(base, 1))
+
+    def recommendations_text(self, selected: dict[str, Any]) -> str:
+        value = self.find_in_selected(selected, "recommendations")
+        if isinstance(value, list) and value:
+            return "\n".join(f"{idx}. {item}" for idx, item in enumerate(value, 1) if item)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return "1. 继续监测事件区域。\n2. 结合现场条件执行人工复核。\n3. 视风险变化升级联动处置。"
+
+    def final_report_field(self, selected: dict[str, Any], key: str, fallback: Any = "") -> str:
+        value = self.find_in_selected(selected, key)
+        if isinstance(value, list):
+            return "；".join(str(item) for item in value if item)
+        if isinstance(value, dict):
+            return self.format_structured_value(value)
+        text = str(value or fallback or "").strip()
+        return text or "—"
+
+    def find_in_selected(self, selected: dict[str, Any], key: str) -> Any:
+        return self.find_in_value(selected.get("raw_output"), key)
+
+    def find_in_value(self, value: Any, key: str) -> Any:
+        if isinstance(value, dict):
+            if key in value and value.get(key) not in (None, "", []):
+                return value.get(key)
+            for child_key in ("inference_result", "final_report", "scene_analysis", "template_data", "docx_context", "output"):
+                found = self.find_in_value(value.get(child_key), key)
+                if found not in (None, "", []):
+                    return found
+            for child in value.values():
+                found = self.find_in_value(child, key)
+                if found not in (None, "", []):
+                    return found
+        elif isinstance(value, list):
+            for item in value:
+                found = self.find_in_value(item, key)
+                if found not in (None, "", []):
+                    return found
+        return None
 
     def timeline_summary(self, timeline: list[SafetyEventTimelineLog]) -> str:
         if not timeline:

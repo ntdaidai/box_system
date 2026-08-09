@@ -12,6 +12,7 @@ from app.models.analysis_report import AnalysisReport
 from app.models.broadcast import BroadcastDevice, BroadcastTemplate
 from app.models.camera import Camera
 from app.models.miniprogram import MiniProgramSubscription
+from app.models.actor_library import ActorLibrary, ActorPromptStage
 from app.models.safety_integration import (
     SafetyEventEvidence,
     SafetyEventInstance,
@@ -33,6 +34,8 @@ __all__ = [
     "BroadcastTemplate",
     "Camera",
     "MiniProgramSubscription",
+    "ActorLibrary",
+    "ActorPromptStage",
     "SafetyEventEvidence",
     "SafetyEventInstance",
     "SafetyEventTimelineLog",

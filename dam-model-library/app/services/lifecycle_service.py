@@ -35,7 +35,26 @@ class LifecycleService:
         db.commit()
 
         try:
-            if binding.bind_type in ("container", "both"):
+            if binding.bind_type in ("image", "both") and (not binding.container_id):
+                # 仅有镜像：docker run 创建新容器
+                container_name = generate_container_name(model_id, model.name)
+                container_id = docker_service.create_and_start_container(
+                    image_name=binding.image_name,
+                    container_name=container_name,
+                    host_port=binding.host_port,
+                    container_port=binding.container_port,
+                    gpu_device=binding.gpu_device,
+                    extra_mounts=binding.extra_mounts,
+                    extra_env=binding.extra_env,
+                    container_config=binding.container_config,
+                )
+                # 更新绑定记录：填入容器信息，bind_type 改为 both
+                binding.container_id = container_id
+                binding.container_name = container_name
+                binding.bind_type = "both"
+                db.commit()
+
+            elif binding.bind_type in ("container", "both"):
                 # 已有容器：docker start
                 docker_service.start_container(binding.container_id)
                 self._wait_container_running(binding.container_id)
@@ -53,7 +72,6 @@ class LifecycleService:
                     extra_env=binding.extra_env,
                     container_config=binding.container_config,
                 )
-                # 更新绑定记录：填入容器信息，bind_type 改为 both
                 binding.container_id = container_id
                 binding.container_name = container_name
                 binding.bind_type = "both"

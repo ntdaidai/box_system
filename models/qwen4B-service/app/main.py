@@ -14,12 +14,13 @@ import io
 import json
 import mimetypes
 import re
+import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional, Any, Dict
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
@@ -33,6 +34,7 @@ from loguru import logger
 VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8001")
 MODEL_NAME = os.getenv("MODEL_NAME", "qwen4B")
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "2048"))
+WORKFLOW_MAX_TOKENS = int(os.getenv("WORKFLOW_MAX_TOKENS", "2048"))
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.15"))
 TIMEOUT = int(os.getenv("TIMEOUT", "60"))
 UPLOAD_MEDIA_TO_CLOUD = os.getenv("UPLOAD_MEDIA_TO_CLOUD", "true").lower() == "true"
@@ -43,6 +45,14 @@ EDGE_MINIO_ACCESS_KEY = os.getenv("EDGE_MINIO_ACCESS_KEY", os.getenv("MINIO_ACCE
 EDGE_MINIO_SECRET_KEY = os.getenv("EDGE_MINIO_SECRET_KEY", os.getenv("MINIO_SECRET_KEY", "minioadmin"))
 EDGE_MINIO_SECURE = os.getenv("EDGE_MINIO_SECURE", os.getenv("MINIO_SECURE", "false")).lower() == "true"
 EDGE_MINIO_BUCKET = os.getenv("EDGE_MINIO_BUCKET", os.getenv("DEFAULT_BUCKET", "dam"))
+EDGE_MODEL_MINIO_ENDPOINT = os.getenv("EDGE_MODEL_MINIO_ENDPOINT", "")
+MINIO_PRESIGNED_EXPIRE_SECONDS = int(os.getenv("MINIO_PRESIGNED_EXPIRE_SECONDS", "1800"))
+WORKFLOW_VIDEO_PROXY_ENABLED = os.getenv("WORKFLOW_VIDEO_PROXY_ENABLED", "true").lower() == "true"
+WORKFLOW_VIDEO_PROXY_FPS = float(os.getenv("WORKFLOW_VIDEO_PROXY_FPS", "1"))
+WORKFLOW_VIDEO_PROXY_MAX_FRAMES = int(os.getenv("WORKFLOW_VIDEO_PROXY_MAX_FRAMES", "8"))
+WORKFLOW_VIDEO_PROXY_WIDTH = int(os.getenv("WORKFLOW_VIDEO_PROXY_WIDTH", "448"))
+WORKFLOW_VIDEO_PROXY_CRF = int(os.getenv("WORKFLOW_VIDEO_PROXY_CRF", "35"))
+EDGE_PROXY_MEDIA_PREFIX = os.getenv("EDGE_PROXY_MEDIA_PREFIX", "qwen4b-proxy-media")
 
 CLOUD_MINIO_ENDPOINT = os.getenv("CLOUD_MINIO_ENDPOINT", os.getenv("A100_MINIO_ENDPOINT", "10.196.85.11:9469"))
 CLOUD_MINIO_ACCESS_KEY = os.getenv("CLOUD_MINIO_ACCESS_KEY", os.getenv("A100_MINIO_ACCESS_KEY", "minioadmin"))
@@ -119,6 +129,9 @@ class InferRequest(BaseModel):
     actor_name: Optional[str] = Field(None, description="角色名称")
     system_prompt: Optional[str] = Field(None, description="角色 system prompt")
     system_prompt_source: Optional[str] = Field(None, description="角色 system prompt 来源")
+    stage_code: Optional[str] = Field(None, description="角色阶段编码")
+    prompt_version: Optional[str] = Field(None, description="角色提示词版本")
+    prompt_model_scope: Optional[str] = Field(None, description="角色提示词模型范围")
 
 
 class WorkflowInferRequest(BaseModel):
@@ -130,6 +143,8 @@ class WorkflowInferRequest(BaseModel):
     images: List[str] = Field(default_factory=list, description="图片路径，仅作为上下文字符串")
     videos: List[str] = Field(default_factory=list, description="视频路径，仅作为上下文字符串")
     media_objects: List[Dict[str, Any]] = Field(default_factory=list, description="媒体对象")
+    media_mode: str = Field("video", description="video=视频理解优先，frames=图片帧优先，auto=视频优先")
+    max_frames: int = Field(4, ge=1, le=32, description="图片帧兜底最大数量")
     actor_name: Optional[str] = Field(None, description="角色名称")
     system_prompt: Optional[str] = Field(None, description="角色 system prompt")
     system_prompt_source: Optional[str] = Field(None, description="角色 system prompt 来源")
@@ -157,6 +172,11 @@ class SceneAnalysis(BaseModel):
     confidence: float = Field(..., ge=0.0, le=1.0, description="模型置信度")
     evidence: List[str] = Field(default_factory=list, description="判断依据")
     uncertainties: List[str] = Field(default_factory=list, description="不确定因素")
+    detailed_scene_analysis: str = Field("", description="较完整的场景分析")
+    risk_reasoning: str = Field("", description="风险推理依据")
+    impact_assessment: str = Field("", description="影响范围初判")
+    response_plan: str = Field("", description="初步处置建议")
+    monitoring_suggestions: str = Field("", description="后续监测建议")
 
 
 class InferResponse(BaseModel):
@@ -189,7 +209,12 @@ SYSTEM_PROMPT = """你是边缘侧灾害巡查智能分析模型。
     "risk_level": "low/medium/high",
     "confidence": 0.0-1.0,
     "evidence": ["判断依据1", "判断依据2"],
-    "uncertainties": ["不确定因素1", "不确定因素2"]
+    "uncertainties": ["不确定因素1", "不确定因素2"],
+    "detailed_scene_analysis": "120-200字，说明画面中的地貌/水体/人员/设施状态和可见异常",
+    "risk_reasoning": "80-160字，说明为什么判定该风险等级，以及哪些证据更关键",
+    "impact_assessment": "80-160字，初步判断可能影响的道路、人员、库坝设施或周边区域",
+    "response_plan": "80-160字，给出边缘侧可执行的初步处置建议",
+    "monitoring_suggestions": "60-120字，说明后续应持续观察的指标或画面变化"
 }"""
 
 
@@ -275,43 +300,124 @@ def build_user_prompt(request: InferRequest) -> str:
     return "\n".join(parts)
 
 
-def parse_scene_analysis(content: str) -> SceneAnalysis:
-    """解析模型输出的场景分析结果"""
+def _scene_analysis_from_dict(data: Dict[str, Any]) -> SceneAnalysis:
+    def list_value(key: str) -> List[str]:
+        value = data.get(key)
+        if isinstance(value, list):
+            return [str(item) for item in value if str(item).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return []
+
     try:
-        # 尝试找到 JSON 块
+        confidence = float(data.get("confidence", 0.5))
+    except (TypeError, ValueError):
+        confidence = 0.5
+
+    return SceneAnalysis(
+        scene_type=str(data.get("scene_type") or "未知"),
+        suspected_event=str(data.get("suspected_event") or "未知"),
+        risk_level=str(data.get("risk_level") or "medium"),
+        confidence=max(0.0, min(confidence, 1.0)),
+        evidence=list_value("evidence"),
+        uncertainties=list_value("uncertainties"),
+        detailed_scene_analysis=str(data.get("detailed_scene_analysis") or ""),
+        risk_reasoning=str(data.get("risk_reasoning") or ""),
+        impact_assessment=str(data.get("impact_assessment") or ""),
+        response_plan=str(data.get("response_plan") or ""),
+        monitoring_suggestions=str(data.get("monitoring_suggestions") or ""),
+    )
+
+
+def _extract_json_string_field(content: str, key: str) -> Optional[str]:
+    match = re.search(rf'"{re.escape(key)}"\s*:\s*"([\s\S]*?)(?<!\\)"', content)
+    if not match:
+        return None
+    try:
+        return json.loads(f'"{match.group(1)}"')
+    except json.JSONDecodeError:
+        return match.group(1)
+
+
+def _extract_json_number_field(content: str, key: str) -> Optional[float]:
+    match = re.search(rf'"{re.escape(key)}"\s*:\s*([0-9]+(?:\.[0-9]+)?)', content)
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
+
+
+def _extract_json_array_field(content: str, key: str) -> List[str]:
+    match = re.search(rf'"{re.escape(key)}"\s*:\s*\[([\s\S]*?)(?:\]|\n\s*"\w+"\s*:)', content)
+    if not match:
+        return []
+    items: List[str] = []
+    for item in re.finditer(r'"([\s\S]*?)(?<!\\)"', match.group(1)):
+        try:
+            parsed = json.loads(f'"{item.group(1)}"')
+        except json.JSONDecodeError:
+            parsed = item.group(1)
+        if str(parsed).strip():
+            items.append(str(parsed).strip())
+    return items
+
+
+def _parse_partial_scene_analysis(content: str) -> Optional[SceneAnalysis]:
+    data: Dict[str, Any] = {}
+    for key in (
+        "scene_type",
+        "suspected_event",
+        "risk_level",
+        "detailed_scene_analysis",
+        "risk_reasoning",
+        "impact_assessment",
+        "response_plan",
+        "monitoring_suggestions",
+    ):
+        value = _extract_json_string_field(content, key)
+        if value:
+            data[key] = value
+    confidence = _extract_json_number_field(content, "confidence")
+    if confidence is not None:
+        data["confidence"] = confidence
+    evidence = _extract_json_array_field(content, "evidence")
+    uncertainties = _extract_json_array_field(content, "uncertainties")
+    if evidence:
+        data["evidence"] = evidence
+    if uncertainties:
+        data["uncertainties"] = uncertainties
+
+    meaningful_keys = {"scene_type", "suspected_event", "risk_level", "evidence", "detailed_scene_analysis"}
+    if meaningful_keys.intersection(data):
+        logger.warning("模型输出 JSON 不完整，已从已生成字段中恢复场景分析")
+        return _scene_analysis_from_dict(data)
+    return None
+
+
+def parse_scene_analysis(content: str) -> SceneAnalysis:
+    """解析模型输出的场景分析结果，支持从被截断的 JSON 中恢复关键字段。"""
+    try:
         json_match = re.search(r'\{[\s\S]*\}', content)
         if json_match:
-            json_str = json_match.group()
-            data = json.loads(json_str)
-
-            return SceneAnalysis(
-                scene_type=data.get("scene_type", "未知"),
-                suspected_event=data.get("suspected_event", "未知"),
-                risk_level=data.get("risk_level", "medium"),
-                confidence=float(data.get("confidence", 0.5)),
-                evidence=data.get("evidence", []),
-                uncertainties=data.get("uncertainties", [])
-            )
-        else:
-            logger.warning(f"无法从模型输出中提取 JSON: {content[:200]}")
-            return SceneAnalysis(
-                scene_type="未知",
-                suspected_event="未知",
-                risk_level="medium",
-                confidence=0.5,
-                evidence=["模型输出格式异常"],
-                uncertainties=["需要人工复核"]
-            )
+            return _scene_analysis_from_dict(json.loads(json_match.group()))
     except json.JSONDecodeError as e:
         logger.error(f"JSON 解析失败: {e}, 内容: {content[:200]}")
-        return SceneAnalysis(
-            scene_type="未知",
-            suspected_event="未知",
-            risk_level="medium",
-            confidence=0.5,
-            evidence=["模型输出解析失败"],
-            uncertainties=["需要人工复核"]
-        )
+
+    partial = _parse_partial_scene_analysis(content)
+    if partial:
+        return partial
+
+    logger.warning(f"无法从模型输出中提取 JSON: {content[:200]}")
+    return SceneAnalysis(
+        scene_type="未知",
+        suspected_event="未知",
+        risk_level="medium",
+        confidence=0.5,
+        evidence=["模型输出格式异常"],
+        uncertainties=["需要人工复核"],
+    )
 
 
 def determine_cloud_enhancement(scene_analysis: SceneAnalysis, request: InferRequest) -> bool:
@@ -400,6 +506,17 @@ def media_ref_from_string(value: str, default_bucket: Optional[str]) -> Optional
         return None
     parsed = urlparse(text)
     if parsed.scheme in {"http", "https"}:
+        edge_endpoint = urlparse(f"http://{EDGE_MINIO_ENDPOINT}")
+        if parsed.netloc in {EDGE_MINIO_ENDPOINT, edge_endpoint.netloc, "localhost:9000", "127.0.0.1:9000"}:
+            path_parts = parsed.path.lstrip("/").split("/", 1)
+            if len(path_parts) == 2:
+                return {
+                    "source": text,
+                    "source_kind": "minio",
+                    "bucket": path_parts[0],
+                    "object_name": path_parts[1],
+                    "type": media_type_from_name(path_parts[1]),
+                }
         return {
             "source": text,
             "source_kind": "url",
@@ -424,6 +541,15 @@ def media_ref_from_string(value: str, default_bucket: Optional[str]) -> Optional
         }
     parts = text.split("/", 1)
     if len(parts) == 2:
+        known_buckets = {item for item in {default_bucket, EDGE_MINIO_BUCKET, CLOUD_MINIO_BUCKET} if item}
+        if default_bucket and parts[0] not in known_buckets:
+            return {
+                "source": text,
+                "source_kind": "minio",
+                "bucket": default_bucket,
+                "object_name": text.lstrip("/"),
+                "type": media_type_from_name(text),
+            }
         return {
             "source": text,
             "source_kind": "minio",
@@ -472,6 +598,138 @@ def media_ref_from_object(obj: Dict[str, Any], default_bucket: Optional[str]) ->
     }
 
 
+def model_reachable_url(url: str) -> str:
+    """把宿主机 MinIO URL 改成模型容器可访问的地址。"""
+    parsed = urlparse(str(url or ""))
+    if parsed.scheme in {"http", "https"} and parsed.hostname in {"localhost", "127.0.0.1"} and parsed.port == 9000:
+        return urlunparse(parsed._replace(netloc="172.17.0.1:9000"))
+    return str(url)
+
+
+def model_minio_endpoint() -> str:
+    """生成预签名 URL 时使用模型容器可访问的 MinIO 地址。"""
+    if EDGE_MODEL_MINIO_ENDPOINT:
+        return EDGE_MODEL_MINIO_ENDPOINT
+    parsed = urlparse(f"http://{EDGE_MINIO_ENDPOINT}")
+    if parsed.hostname in {"localhost", "127.0.0.1"} and parsed.port == 9000:
+        return "172.17.0.1:9000"
+    return EDGE_MINIO_ENDPOINT
+
+
+def presigned_edge_minio_url(bucket: str, object_name: str) -> str:
+    """为 vLLM 生成可读取私有 MinIO 对象的预签名 URL。"""
+    object_name = resolve_edge_object_name(bucket, object_name)
+    edge_client = get_minio_client(
+        model_minio_endpoint(),
+        EDGE_MINIO_ACCESS_KEY,
+        EDGE_MINIO_SECRET_KEY,
+        EDGE_MINIO_SECURE,
+    )
+    return edge_client.presigned_get_object(
+        bucket,
+        object_name,
+        expires=timedelta(seconds=max(60, MINIO_PRESIGNED_EXPIRE_SECONDS)),
+    )
+
+
+def media_ref_url(ref: Dict[str, Any]) -> Optional[str]:
+    """把 URL/minio 媒体引用转换成 vLLM 可读取 URL。"""
+    if ref.get("source_kind") == "url":
+        return model_reachable_url(str(ref.get("source") or ""))
+    if ref.get("source_kind") == "minio":
+        bucket = ref.get("bucket")
+        object_name = ref.get("object_name")
+        if bucket and object_name:
+            return presigned_edge_minio_url(str(bucket), str(object_name))
+    return None
+
+
+async def build_workflow_media_content(request: WorkflowInferRequest) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """构建传给 Qwen4B 的多模态内容，视频理解优先。"""
+    refs = collect_media_refs(request)
+    media_mode = str(request.media_mode or "video").lower()
+    videos = [ref for ref in refs if ref.get("type") == "video"]
+    images = [ref for ref in refs if ref.get("type") == "image"]
+    content: List[Dict[str, Any]] = []
+    transform = {
+        "enabled": WORKFLOW_VIDEO_PROXY_ENABLED,
+        "mode": "none",
+        "source": None,
+        "proxy": None,
+        "errors": [],
+    }
+
+    if media_mode != "frames" and videos:
+        for ref in videos[:1]:
+            selected_ref = ref
+            if WORKFLOW_VIDEO_PROXY_ENABLED:
+                try:
+                    selected_ref = await create_video_proxy_ref(request, ref)
+                    transform["mode"] = "video_proxy"
+                    transform["source"] = {
+                        "bucket": ref.get("bucket"),
+                        "object_name": ref.get("object_name"),
+                        "source_kind": ref.get("source_kind"),
+                    }
+                    transform["proxy"] = selected_ref.get("proxy_info")
+                except Exception as e:
+                    message = f"生成 4B 代理视频失败，回退原始视频: {e}"
+                    transform["errors"].append(message)
+                    logger.warning(message)
+            url = media_ref_url(selected_ref)
+            if url:
+                content.append({"type": "video_url", "video_url": {"url": url}})
+        if content:
+            return content, transform
+
+    for ref in images[: max(1, min(int(request.max_frames or 4), 8))]:
+        url = media_ref_url(ref)
+        if url:
+            content.append({"type": "image_url", "image_url": {"url": url}})
+    return content, transform
+
+
+def edge_object_name_candidates(object_name: str) -> List[str]:
+    """为被上游节点截断的摄像头对象键生成候选路径。"""
+    text = str(object_name or "").lstrip("/")
+    candidates = [text]
+    parts = text.split("/")
+    if len(parts) >= 3 and re.fullmatch(r"camera_\d+", parts[0] or ""):
+        timestamp_text = parts[1]
+        date_candidates = [datetime.now().strftime("%Y-%m-%d")]
+        if timestamp_text.isdigit():
+            try:
+                ts = int(timestamp_text)
+                if ts > 10_000_000_000:
+                    ts = ts / 1000
+                date_candidates.insert(0, datetime.fromtimestamp(ts).strftime("%Y-%m-%d"))
+            except (OverflowError, OSError, ValueError):
+                pass
+        for date_value in dict.fromkeys(date_candidates):
+            candidates.append(f"camera/{date_value}/{text}")
+    return list(dict.fromkeys(item for item in candidates if item))
+
+
+def resolve_edge_object_name(bucket: str, object_name: str) -> str:
+    """确认边缘 MinIO 对象键存在，必要时补全摄像头日期前缀。"""
+    edge_client = get_minio_client(
+        EDGE_MINIO_ENDPOINT,
+        EDGE_MINIO_ACCESS_KEY,
+        EDGE_MINIO_SECRET_KEY,
+        EDGE_MINIO_SECURE,
+    )
+    last_error: Optional[Exception] = None
+    for candidate in edge_object_name_candidates(object_name):
+        try:
+            edge_client.stat_object(bucket, candidate)
+            return candidate
+        except Exception as e:
+            last_error = e
+    if last_error:
+        raise last_error
+    return object_name
+
+
 def collect_media_refs(request: WorkflowInferRequest) -> List[Dict[str, Any]]:
     """汇总并去重所有媒体引用。"""
     images, videos, media_objects = collect_workflow_media(request)
@@ -502,7 +760,10 @@ def collect_media_refs(request: WorkflowInferRequest) -> List[Dict[str, Any]]:
     deduped: List[Dict[str, Any]] = []
     seen = set()
     for ref in refs:
-        key = (ref.get("source_kind"), ref.get("bucket"), ref.get("object_name"), str(ref.get("source")))
+        if ref.get("source_kind") == "minio":
+            key = ("minio", ref.get("bucket"), ref.get("object_name"))
+        else:
+            key = (ref.get("source_kind"), ref.get("bucket"), ref.get("object_name"), str(ref.get("source")))
         if key in seen:
             continue
         seen.add(key)
@@ -537,7 +798,9 @@ async def load_media_bytes(ref: Dict[str, Any]) -> bytes:
     )
 
     def read_object():
-        response = edge_client.get_object(ref["bucket"], ref["object_name"])
+        object_name = resolve_edge_object_name(ref["bucket"], ref["object_name"])
+        ref["object_name"] = object_name
+        response = edge_client.get_object(ref["bucket"], object_name)
         try:
             return response.read()
         finally:
@@ -545,6 +808,104 @@ async def load_media_bytes(ref: Dict[str, Any]) -> bytes:
             response.release_conn()
 
     return await asyncio.to_thread(read_object)
+
+
+async def upload_bytes_to_edge(data: bytes, object_name: str, content_type: str) -> None:
+    """上传 4B 本地理解用的轻量代理媒体到边缘 MinIO。"""
+    edge_client = get_minio_client(
+        EDGE_MINIO_ENDPOINT,
+        EDGE_MINIO_ACCESS_KEY,
+        EDGE_MINIO_SECRET_KEY,
+        EDGE_MINIO_SECURE,
+    )
+
+    def put_object():
+        if not edge_client.bucket_exists(EDGE_MINIO_BUCKET):
+            edge_client.make_bucket(EDGE_MINIO_BUCKET)
+        edge_client.put_object(
+            EDGE_MINIO_BUCKET,
+            object_name,
+            io.BytesIO(data),
+            len(data),
+            content_type=content_type,
+        )
+
+    await asyncio.to_thread(put_object)
+
+
+async def transcode_video_proxy(data: bytes, source_name: str) -> bytes:
+    """把原始视频压成少帧低分辨率 MP4，控制 Qwen-VL 视频 token。"""
+    with tempfile.TemporaryDirectory(prefix="qwen4b_video_") as tmpdir:
+        input_path = Path(tmpdir) / source_name
+        output_path = Path(tmpdir) / "proxy.mp4"
+        input_path.write_bytes(data)
+
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(input_path),
+            "-vf",
+            f"fps={WORKFLOW_VIDEO_PROXY_FPS},scale={WORKFLOW_VIDEO_PROXY_WIDTH}:-2",
+            "-frames:v",
+            str(max(1, WORKFLOW_VIDEO_PROXY_MAX_FRAMES)),
+            "-an",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            str(WORKFLOW_VIDEO_PROXY_CRF),
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await process.communicate()
+        if process.returncode != 0:
+            raise RuntimeError(stderr.decode("utf-8", errors="replace")[:1000] or "ffmpeg failed")
+        return output_path.read_bytes()
+
+
+async def create_video_proxy_ref(request: WorkflowInferRequest, ref: Dict[str, Any]) -> Dict[str, Any]:
+    """生成并上传 4B 使用的轻量代理视频，返回可签名的边缘 MinIO 引用。"""
+    data = await load_media_bytes(ref)
+    source_name = Path(str(ref.get("object_name") or "evidence.mp4")).name or "evidence.mp4"
+    proxy_data = await transcode_video_proxy(data, source_name)
+    task_key = task_key_from_request(request)
+    stem = Path(source_name).stem or "evidence"
+    object_name = (
+        f"{EDGE_PROXY_MEDIA_PREFIX}/{task_key}/videos/"
+        f"{int(time.time() * 1000)}_{stem}_proxy.mp4"
+    )
+    await upload_bytes_to_edge(proxy_data, object_name, "video/mp4")
+    return {
+        "source": f"{EDGE_MINIO_BUCKET}/{object_name}",
+        "source_kind": "minio",
+        "bucket": EDGE_MINIO_BUCKET,
+        "object_name": object_name,
+        "type": "video",
+        "proxy_info": {
+            "bucket": EDGE_MINIO_BUCKET,
+            "object_name": object_name,
+            "object_key": object_name,
+            "source_bytes": len(data),
+            "proxy_bytes": len(proxy_data),
+            "fps": WORKFLOW_VIDEO_PROXY_FPS,
+            "max_frames": WORKFLOW_VIDEO_PROXY_MAX_FRAMES,
+            "width": WORKFLOW_VIDEO_PROXY_WIDTH,
+            "content_type": "video/mp4",
+        },
+    }
 
 
 async def upload_bytes_to_cloud(data: bytes, object_name: str, content_type: str) -> None:
@@ -690,6 +1051,37 @@ def local_report_text(scene_analysis: SceneAnalysis) -> str:
     )
 
 
+def local_detailed_report_text(scene_analysis: SceneAnalysis) -> str:
+    scene_text = first_text(
+        scene_analysis.detailed_scene_analysis,
+        local_report_text(scene_analysis),
+    )
+    risk_text = first_text(
+        scene_analysis.risk_reasoning,
+        f"当前风险等级为{risk_label(scene_analysis.risk_level)}，本地模型置信度为{scene_analysis.confidence:.2f}。"
+        f"主要依据包括：{'；'.join(scene_analysis.evidence) if scene_analysis.evidence else '现场视觉证据不足'}。",
+    )
+    impact_text = first_text(
+        scene_analysis.impact_assessment,
+        "本地 4B 仅完成边缘侧初步研判，影响范围仍需结合专有模型、传感器和现场人工复核确认。",
+    )
+    response_text = first_text(
+        scene_analysis.response_plan,
+        "建议值班人员优先复核现场视频，保留当前证据，并将事件提交云端增强分析。",
+    )
+    monitoring_text = first_text(
+        scene_analysis.monitoring_suggestions,
+        "后续应持续关注画面中水位、坡面、人员活动和传感器变化，若风险升高应及时升级告警。",
+    )
+    return "\n".join([
+        f"一、现场场景：{scene_text}",
+        f"二、风险研判：{risk_text}",
+        f"三、影响初判：{impact_text}",
+        f"四、初步处置：{response_text}",
+        f"五、持续监测：{monitoring_text}",
+    ])
+
+
 def collect_context_events(request: WorkflowInferRequest) -> List[Dict[str, Any]]:
     """从工作流上下文中提取事件行。"""
     candidates = [
@@ -778,8 +1170,15 @@ def build_local_final_report(scene_analysis: SceneAnalysis) -> Dict[str, Any]:
         "risk_level": normalize_risk_key(scene_analysis.risk_level),
         "confidence": scene_analysis.confidence,
         "scene_analysis": local_report_text(scene_analysis),
+        "detailed_scene_analysis": first_text(scene_analysis.detailed_scene_analysis, local_report_text(scene_analysis)),
+        "risk_reasoning": first_text(scene_analysis.risk_reasoning, "本地模型结合视频证据和事件上下文完成初步风险判断。"),
         "evidence": scene_analysis.evidence,
-        "impact_assessment": "本地模型仅完成初步研判，影响范围需结合云端模型或人工复核确认。",
+        "impact_assessment": first_text(
+            scene_analysis.impact_assessment,
+            "本地模型仅完成初步研判，影响范围需结合云端模型或人工复核确认。",
+        ),
+        "response_plan": first_text(scene_analysis.response_plan, "建议保留证据并提交云端增强分析。"),
+        "monitoring_suggestions": first_text(scene_analysis.monitoring_suggestions, "建议持续关注相关传感器与视频画面变化。"),
         "recommendations": recommendations,
         "result_source": "local_qwen4b",
     }
@@ -832,6 +1231,19 @@ def build_local_template_data(request: WorkflowInferRequest, scene_analysis: Sce
         "ai_risk_level": risk_label(scene_analysis.risk_level),
         "ai_confidence": scene_analysis.confidence,
         "ai_recommendations": build_local_final_report(scene_analysis)["recommendations"],
+        "summary": short_text(local_report_text(scene_analysis), 180),
+        "key_observation": short_text(
+            first_text(scene_analysis.risk_reasoning, "；".join(scene_analysis.evidence), local_report_text(scene_analysis)),
+            260,
+        ),
+        "source_summary": "事件视频、Qwen3-VL-4B 本地场景理解、专有模型输出和传感器/事件上下文。",
+        "handling_source": "Qwen3-VL-4B 本地场景理解",
+        "handling_summary": local_detailed_report_text(scene_analysis),
+        "evidence_summary": "；".join(scene_analysis.evidence[:5]) if scene_analysis.evidence else "本地模型未提取到明确证据。",
+        "conclusion": first_text(
+            scene_analysis.impact_assessment,
+            f"本地初判为{scene_analysis.suspected_event}，风险等级{risk_label(scene_analysis.risk_level)}，建议继续复核。",
+        ),
     }
 
 
@@ -849,18 +1261,25 @@ def flatten_template_fields(template_data: Dict[str, Any]) -> Dict[str, Any]:
 def build_workflow_prompt(request: WorkflowInferRequest) -> str:
     """构建 DAG 工作流文本 prompt。"""
     if request.prompt:
-        return request.prompt
-    payload = {
-        "event_type": request.event_type,
-        "inputs": request.inputs,
-        "sensor_data": request.sensor_data,
-        "images": request.images,
-        "videos": request.videos,
-        "media_objects": request.media_objects,
-    }
+        base_prompt = request.prompt
+    else:
+        payload = {
+            "event_type": request.event_type,
+            "inputs": request.inputs,
+            "sensor_data": request.sensor_data,
+            "images": request.images,
+            "videos": request.videos,
+            "media_objects": request.media_objects,
+        }
+        base_prompt = (
+            "请根据以下工作流上下文生成库坝应急巡查分析结果。\n"
+            f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+        )
     return (
-        "请根据以下工作流上下文生成库坝应急巡查分析结果。\n"
-        f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+        f"{base_prompt}\n\n"
+        "输出必须是一个合法 JSON 对象，并额外包含以下详细字段："
+        "detailed_scene_analysis、risk_reasoning、impact_assessment、response_plan、monitoring_suggestions。"
+        "这些字段要用于正式报告，不能只写短语；每项请写成完整中文段落。"
     )
 
 
@@ -878,6 +1297,11 @@ def workflow_actor_name(request: WorkflowInferRequest) -> Optional[str]:
 def workflow_system_prompt_source(request: WorkflowInferRequest) -> Optional[str]:
     inputs = request.inputs if isinstance(request.inputs, dict) else {}
     return request.system_prompt_source or inputs.get("system_prompt_source")
+
+
+def workflow_meta_value(request: WorkflowInferRequest, key: str) -> Optional[Any]:
+    inputs = request.inputs if isinstance(request.inputs, dict) else {}
+    return getattr(request, key, None) or inputs.get(key)
 
 
 # ==================== API 接口 ====================
@@ -1020,14 +1444,18 @@ async def workflow_infer(request: WorkflowInferRequest):
             media_upload = await upload_workflow_media_to_cloud(request)
 
         system_prompt = workflow_system_prompt(request)
+        media_content, media_transform = await build_workflow_media_content(request)
+        user_content: Any = prompt
+        if media_content:
+            user_content = media_content + [{"type": "text", "text": prompt}]
         response = await client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
+                {"role": "user", "content": user_content},
             ],
             temperature=TEMPERATURE,
-            max_tokens=MAX_TOKENS,
+            max_tokens=max(256, min(WORKFLOW_MAX_TOKENS, MAX_TOKENS)),
         )
         content = response.choices[0].message.content or ""
         scene_analysis = parse_scene_analysis(content)
@@ -1060,6 +1488,9 @@ async def workflow_infer(request: WorkflowInferRequest):
             "result_source": "local_qwen4b",
             "actor_name": workflow_actor_name(request),
             "system_prompt_source": workflow_system_prompt_source(request),
+            "stage_code": workflow_meta_value(request, "stage_code"),
+            "prompt_version": workflow_meta_value(request, "prompt_version"),
+            "prompt_model_scope": workflow_meta_value(request, "prompt_model_scope"),
             "cloud_enhancement": final_report["risk_level"] == "high" or scene_analysis.confidence < 0.7,
             "media_objects": media_objects_for_next_node,
             "cloud_media_objects": cloud_media_objects,
@@ -1073,6 +1504,13 @@ async def workflow_infer(request: WorkflowInferRequest):
                 ],
             } if cloud_media_objects else None,
             "media_upload": media_upload,
+            "media_used": {
+                "mode": request.media_mode,
+                "content_count": len(media_content),
+                "video_count": sum(1 for item in media_content if item.get("type") == "video_url"),
+                "image_count": sum(1 for item in media_content if item.get("type") == "image_url"),
+            },
+            "media_transform": media_transform,
         }
     except HTTPException:
         raise
@@ -1085,6 +1523,7 @@ async def workflow_infer(request: WorkflowInferRequest):
             "report": "",
             "risk_level": "unknown",
             "media_upload": media_upload,
+            "cloud_media_objects": media_upload.get("objects") or [],
         }
 
 

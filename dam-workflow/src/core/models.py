@@ -6,7 +6,7 @@
 from datetime import datetime
 from sqlalchemy import (
     Column, BigInteger, Integer, SmallInteger, String, Text, JSON,
-    Enum, DateTime, Index, UniqueConstraint,
+    Enum, DateTime, Index, UniqueConstraint, ForeignKey, Numeric,
 )
 from src.core.database import Base
 
@@ -75,6 +75,30 @@ class ActorLibrary(Base):
     __table_args__ = (
         UniqueConstraint("actor_name", name="uk_actor_name"),
         {"mysql_charset": "utf8mb4", "comment": "角色库"},
+    )
+
+
+class ActorPromptStage(Base):
+    """角色阶段提示词：按模型阶段覆盖 actor_library 的粗粒度 prompt。"""
+    __tablename__ = "actor_prompt_stage"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
+    actor_id = Column(BigInteger, ForeignKey("actor_library.id"), nullable=False, comment="角色ID")
+    stage_code = Column(String(64), nullable=False, comment="阶段编码")
+    model_scope = Column(String(64), nullable=False, comment="模型范围")
+    system_prompt = Column(Text, nullable=False, comment="阶段 system prompt")
+    output_schema = Column(JSON, nullable=True, comment="输出 schema")
+    max_tokens = Column(Integer, nullable=True, comment="建议最大输出 token")
+    temperature = Column(Numeric(4, 2), nullable=True, comment="建议温度")
+    is_active = Column(SmallInteger, nullable=False, default=1, comment="是否启用")
+    version = Column(String(32), nullable=False, default="v1", comment="版本")
+    create_time = Column(DateTime, nullable=False, default=datetime.now, comment="创建时间")
+    update_time = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now, comment="更新时间")
+
+    __table_args__ = (
+        UniqueConstraint("actor_id", "stage_code", "model_scope", "version", name="uk_actor_stage_model_version"),
+        Index("idx_stage_scope_active", "stage_code", "model_scope", "is_active"),
+        {"mysql_charset": "utf8mb4", "comment": "角色阶段提示词表"},
     )
 
 

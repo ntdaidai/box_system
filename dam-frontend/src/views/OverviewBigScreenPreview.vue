@@ -2,134 +2,84 @@
   <main class="bigscreen-page">
     <div class="ambient-grid"></div>
 
-    <header class="screen-header">
-      <div class="brand-block">
-        <span class="brand-mark">BOX</span>
-        <div>
-          <span class="eyebrow">DAM SAFETY COMMAND CENTER</span>
-          <strong>大坝智能安防平台</strong>
-        </div>
-      </div>
-
-      <div class="screen-title">
-        <span>DATENGXIA HYDROPOWER STATION</span>
-        <h1>大藤峡安防态势总览</h1>
-      </div>
-
-      <div class="clock-block">
-        <span>{{ currentDate }} · {{ currentWeek }}</span>
-        <strong>{{ currentTime }}</strong>
-        <em><i></i>{{ loading ? '数据同步中' : '数据实时接入' }}</em>
-      </div>
-    </header>
-
     <section class="screen-grid">
       <aside class="left-column">
-        <section class="screen-panel overview-panel">
+        <section class="screen-panel today-panel">
           <div class="panel-heading">
-            <div>
-              <span>01 / OVERVIEW</span>
-              <h2>今日态势</h2>
-            </div>
-            <b>LIVE</b>
+            <h2>今日态势</h2>
           </div>
-          <div class="metric-grid">
-            <div
-              v-for="metric in overviewMetrics"
-              :key="metric.key"
-              class="metric-item"
-              :class="metric.tone"
-            >
-              <span>{{ metric.label }}</span>
-              <strong>{{ metric.value }}</strong>
-              <em v-if="metric.trend">
-                较昨日
-                <i :class="metric.trend.tone">{{ metric.trend.icon }} {{ metric.trend.text }}</i>
-              </em>
-              <em v-else>{{ metric.note }}</em>
-            </div>
+          <div class="today-grid">
+            <article v-for="metric in todayMetrics" :key="metric.key" class="today-card" :class="metric.tone">
+              <span class="metric-icon">{{ metric.icon }}</span>
+              <div>
+                <span>{{ metric.label }}</span>
+                <strong>{{ metric.value }}</strong>
+                <em>
+                  <i :class="metric.trend.tone">{{ metric.trend.icon }} {{ metric.trend.delta }}</i>
+                  较昨日
+                </em>
+              </div>
+            </article>
           </div>
         </section>
 
         <section class="screen-panel risk-panel">
-          <div class="panel-heading compact">
-            <div>
-              <span>02 / RISK DISTRIBUTION</span>
-              <h2>风险分布</h2>
-            </div>
-            <span class="panel-note">今日 / 昨日</span>
-          </div>
-          <div class="risk-total">
-            <div>
-              <span>今日综合风险</span>
-              <strong>{{ formatNumber(todayRiskTotal) }}</strong>
-              <em>
-                较昨日
-                <i :class="riskComparison.tone">{{ riskComparison.icon }} {{ riskComparison.text }}</i>
-              </em>
-            </div>
-            <div class="risk-orbit">
-              <span>高风险</span>
-              <strong>{{ formatNumber(todayHighRisk) }}</strong>
+          <div class="panel-heading">
+            <h2>风险分布</h2>
+            <div class="risk-switch">
+              <button
+                v-for="item in riskModes"
+                :key="item.key"
+                :class="{ active: activeRiskModeKey === item.key }"
+                @click="handleRiskModeClick(item.key)"
+              >
+                {{ item.label }}
+              </button>
             </div>
           </div>
-          <div class="risk-bars">
-            <div v-for="row in riskRows" :key="row.key" class="risk-bar-row">
-              <span>{{ row.label }}</span>
-              <div>
-                <i :class="row.key" :style="{ width: `${row.currentWidth}%` }"></i>
-                <b :style="{ width: `${row.previousWidth}%` }"></b>
+          <div class="risk-showcase">
+            <div class="risk-chart-wrap">
+              <div ref="riskChartRef" class="risk-main-chart echarts-chart"></div>
+              <div class="risk-center">
+                <strong>{{ formatNumber(activeRiskCount) }}</strong>
+                <span :class="`risk-level-${activeRiskLevel.key}`">{{ activeRiskLevel.shortLabel }}</span>
               </div>
-              <em>{{ formatNumber(row.current) }} / {{ formatNumber(row.previous) }}</em>
             </div>
-            <div class="risk-legend">
-              <span><i class="legend-today"></i>今日</span>
-              <span><i class="legend-yesterday"></i>昨日</span>
+            <div class="risk-summary">
+              <span>{{ activeRiskMode.label }}</span>
+              <strong :class="`risk-level-${activeRiskLevel.key}`">{{ activeRiskLevel.label }}</strong>
+              <em>
+                {{ activeRiskMode.compareLabel }}
+                <b :class="activeRiskTrend.tone">{{ activeRiskTrend.icon }} {{ activeRiskTrend.delta }}</b>
+              </em>
             </div>
           </div>
         </section>
 
         <section class="screen-panel trend-panel">
-          <div class="panel-heading compact">
-            <div>
-              <span>03 / INCIDENT TREND</span>
-              <h2>闯入趋势</h2>
+          <div class="panel-heading">
+            <h2>闯入趋势</h2>
+            <div class="segmented">
+              <button
+                v-for="item in trendModes"
+                :key="item.key"
+                :class="{ active: trendMode === item.key }"
+                @click="trendMode = item.key"
+              >
+                {{ item.label }}
+              </button>
             </div>
-            <span class="panel-note">今日 · 按小时</span>
           </div>
           <div class="trend-legend">
-            <span><i class="person-line"></i>人员</span>
-            <span><i class="boat-line"></i>船只</span>
+            <span><i class="person"></i>人员</span>
+            <span><i class="boat"></i>船只</span>
           </div>
-          <svg class="mini-trend" viewBox="0 0 520 150" preserveAspectRatio="none" aria-label="今日闯入趋势">
-            <line v-for="line in [30, 70, 110]" :key="line" x1="0" :y1="line" x2="520" :y2="line"></line>
-            <polyline class="person-path" :points="trendSeries.person"></polyline>
-            <polyline class="boat-path" :points="trendSeries.boat"></polyline>
-          </svg>
-          <div class="trend-labels">
-            <span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span>
-          </div>
+          <div ref="trendChartRef" class="line-chart echarts-chart" aria-label="人员和船只闯入趋势"></div>
         </section>
       </aside>
 
       <main class="center-column">
-        <section class="selected-banner" :class="selectedGroup.type">
-          <div>
-            <span>当前监测区域 / SELECTED MONITORING ZONE</span>
-            <strong>{{ selectedGroup.label }} · {{ selectedGroup.typeLabel }}</strong>
-          </div>
-          <div class="selected-summary">
-            <span>{{ selectedData.primary }}</span>
-            <strong>{{ formatNumber(selectedData.value) }}<small>{{ selectedData.unit }}</small></strong>
-            <em>{{ selectedData.status }}</em>
-          </div>
-        </section>
-
         <section class="map-panel">
-          <div class="map-topline">
-            <span>REAL-TIME SATELLITE ZONE MAP</span>
-            <span>点击点位查看区域数据</span>
-          </div>
           <div
             ref="mapBoardRef"
             class="map-board"
@@ -140,143 +90,154 @@
             @pointercancel="endMapDrag"
           >
             <div class="map-scene" :style="mapSceneStyle">
-              <img class="satellite-image" src="/dammap.png" alt="大藤峡水电站卫星地图" />
+              <img class="satellite-image" src="/dam.png" alt="大藤峡水电站卫星地图" />
               <div class="map-shade"></div>
-              <svg class="map-overlay" viewBox="0 0 1000 430" preserveAspectRatio="none" aria-label="大藤峡摄像头区域地图">
-                <path
-                  v-if="selectedRegion"
-                  class="selected-region"
-                  :class="selectedGroup.type"
-                  :d="selectedRegion.path"
-                />
-                <g
-                  v-for="point in cameraPoints"
-                  :key="point.no"
-                  class="camera-hotspot"
-                  :class="{ active: point.regionKey === selectedGroup.key }"
-                  @pointerdown.stop
-                  @click.stop="handlePointClick(point.regionKey)"
-                >
-                  <circle class="hotspot-hit" :cx="point.x" :cy="point.y" r="9"></circle>
-                  <circle class="hotspot-ring" :cx="point.x" :cy="point.y" r="7"></circle>
-                  <circle class="hotspot-core" :cx="point.x" :cy="point.y" r="1.4"></circle>
-                  <title>{{ point.no }}号 / {{ point.typeLabel }}</title>
-                </g>
-                <g v-for="point in pendingPoints" :key="point.id" class="pending-hotspot" @pointerdown.stop>
-                  <circle class="pending-hit" :cx="point.x" :cy="point.y" r="8"></circle>
-                  <circle class="pending-ring" :cx="point.x" :cy="point.y" r="6"></circle>
-                  <title>待建中</title>
-                </g>
-              </svg>
-              <div class="map-scan"></div>
+              <button
+                v-for="point in cameraPoints"
+                :key="point.no"
+                class="camera-point"
+                :class="{ active: selectedPointNo === point.no }"
+                :style="{ left: `${point.x}%`, top: `${point.y}%` }"
+                @pointerdown.stop
+                @click.stop="selectPoint(point.no)"
+              >
+                <span>{{ point.no }}</span>
+              </button>
+            </div>
+            <div class="map-controls" aria-label="地图控制" @pointerdown.stop>
+              <button type="button" title="放大" @click.stop="zoomMapBy(1.18)">+</button>
+              <button type="button" title="缩小" @click.stop="zoomMapBy(0.84)">−</button>
+              <button type="button" class="locate" title="定位当前点位" @click.stop="focusSelectedMapPoint" aria-label="定位当前点位">
+                <span></span>
+              </button>
             </div>
           </div>
         </section>
 
         <section class="selected-detail">
-          <div class="detail-heading">
+          <div class="selected-title">
             <div>
-              <span>SELECTED ZONE DETAIL</span>
-              <h2>{{ selectedGroup.label }}数据概况</h2>
+              <span>当前监测点位</span>
+              <h2>{{ selectedPoint.no }}号摄像头 · {{ selectedGroup.typeLabel }}</h2>
             </div>
-            <div class="detail-state"><i></i>{{ selectedData.status }}</div>
           </div>
-          <div class="detail-grid">
-            <div class="detail-stat">
-              <span>今日事件</span>
-              <strong>{{ formatNumber(selectedData.recognized) }}</strong>
-              <em>{{ selectedGroup.type === 'personForbidden' ? '人员事件' : '船只事件' }}</em>
-            </div>
-            <div class="detail-stat">
-              <span>未处理事件</span>
-              <strong>{{ formatNumber(selectedData.unhandled) }}</strong>
-              <em>当前累计</em>
-            </div>
-            <div class="detail-stat">
-              <span>最近事件</span>
-              <strong class="time-value">{{ selectedData.lastTime }}</strong>
-              <em>已记录</em>
-            </div>
-            <div class="detail-chart">
-              <div class="chart-title">今日按小时事件变化</div>
-              <svg viewBox="0 0 360 78" preserveAspectRatio="none">
-                <polyline :points="selectedData.chart"></polyline>
-              </svg>
-            </div>
+          <div class="analytics-grid">
+            <article class="analytics-card hourly-card">
+              <div class="sub-heading">
+                <h3>告警趋势</h3>
+                <div class="mini-segmented">
+                  <button
+                    v-for="item in trendModes"
+                    :key="item.key"
+                    :class="{ active: detailTrendMode === item.key }"
+                    @click="detailTrendMode = item.key"
+                  >
+                    {{ item.label }}
+                  </button>
+                </div>
+              </div>
+              <div ref="hourlyChartRef" class="bar-chart echarts-chart"></div>
+            </article>
+
+            <article class="analytics-card composition-card">
+              <div class="sub-heading">
+                <h3>风险构成</h3>
+              </div>
+              <div ref="compositionChartRef" class="risk-composition echarts-chart"></div>
+            </article>
+
+            <article class="analytics-card disposal-card">
+              <div class="sub-heading">
+                <h3>告警状态</h3>
+              </div>
+              <div class="disposal-body">
+                <div class="disposal-ring-wrap">
+                  <div ref="disposalChartRef" class="disposal-ring echarts-chart"></div>
+                  <div class="disposal-center">
+                    <strong>{{ formatNumber(disposalStats.total) }}</strong>
+                    <span>告警总数</span>
+                  </div>
+                </div>
+                <div class="disposal-list">
+                  <span><i class="handled"></i>已处置 {{ disposalStats.handled }}</span>
+                  <span><i class="processing"></i>处理中 {{ disposalStats.processing }}</span>
+                  <span><i class="pending"></i>未处置 {{ disposalStats.pending }}</span>
+                </div>
+              </div>
+            </article>
           </div>
         </section>
       </main>
 
       <aside class="right-column">
         <section class="screen-panel clock-panel">
-          <div class="panel-heading compact">
-            <div>
-              <span>04 / SYSTEM TIME</span>
-              <h2>实时状态</h2>
-            </div>
-            <b class="online-badge"><i></i>{{ loading ? 'SYNCING' : 'ONLINE' }}</b>
-          </div>
-          <div class="large-clock">{{ currentTime }}</div>
-          <div class="clock-meta"><span>{{ currentDate }}</span><span>{{ currentWeek }}</span><span>30s 自动刷新</span></div>
-        </section>
-
-        <section class="screen-panel alerts-panel">
-          <div class="panel-heading compact">
-            <div>
-              <span>05 / RECENT ALERTS</span>
-              <h2>近期告警</h2>
-            </div>
-            <span class="count-badge">{{ formatNumber(unhandledCount) }} 未处理</span>
-          </div>
-          <div v-if="priorityAlert" class="priority-alert">
-            <div class="alert-pin"></div>
-            <div>
-              <span>最高优先级 · 未处理</span>
-              <strong>{{ alertTitle(priorityAlert) }}</strong>
-              <em>{{ formatAlertTime(priorityAlert.started_at) }} · {{ riskLabel(priorityAlert) }}</em>
-            </div>
-          </div>
-          <div v-else class="empty-alert">
-            <span class="empty-mark">—</span>
-            <div>
-              <strong>当前无未处理告警</strong>
-              <em>系统将持续接收安全事件</em>
-            </div>
-          </div>
-          <div class="alert-list">
-            <div v-if="recentAlerts.length === 0" class="empty-list">暂无告警记录</div>
-            <div v-for="alert in recentAlerts" :key="alert.id" class="alert-item">
-              <span class="alert-time">{{ formatAlertTime(alert.started_at) }}</span>
-              <i :class="riskClass(alert)"></i>
-              <div>
-                <strong>{{ alertTitle(alert) }}</strong>
-                <small>{{ alertZone(alert) }}</small>
-              </div>
-              <b>{{ statusLabel(alert) }}</b>
-            </div>
+          <div class="clock-block">
+            <span>{{ currentDate }} {{ currentWeek }}</span>
+            <strong>{{ currentTime }}</strong>
+            <em><i></i>{{ loading ? '同步中' : '实时刷新' }}</em>
           </div>
         </section>
 
-        <section class="screen-panel device-panel">
-          <div class="panel-heading compact">
-            <div>
-              <span>06 / DEVICE STATUS</span>
-              <h2>设备情况</h2>
-            </div>
-            <span class="panel-note">在线 {{ deviceOnline }} / {{ deviceTotal }}</span>
+        <section class="screen-panel progress-panel">
+          <div class="panel-heading">
+            <h2>实时告警进度 <span class="help-tip" title="最近最高风险">?</span></h2>
           </div>
-          <div class="device-summary">
-            <div class="device-donut" :style="deviceDonutStyle">
-              <strong>{{ deviceRate }}<small>%</small></strong>
-              <span>在线率</span>
+          <div v-if="priorityAlert" class="priority-summary">
+            <strong :class="riskClass(priorityAlert)">{{ riskLabel(priorityAlert) }}</strong>
+            <span>{{ alertTitle(priorityAlert) }}</span>
+          </div>
+          <div v-else class="priority-summary empty">
+            <strong>无告警</strong>
+            <span>当前无未处理告警</span>
+          </div>
+          <div v-if="!priorityAlert" class="alarm-idle">
+            <div class="idle-orbit">
+              <span></span>
+              <i></i>
             </div>
-            <div v-if="deviceRows.length" class="device-list">
-              <div v-for="device in deviceRows" :key="device.key">
-                <span><i class="online-dot" :class="{ offline: device.status !== 'online' }"></i>{{ device.label }}</span>
-                <b :class="{ offline: device.status !== 'online' }">{{ device.online }} / {{ device.total }}</b>
+            <div class="idle-copy">
+              <strong>告警监听中</strong>
+              <span>风险事件触发后将在此同步处置进度</span>
+            </div>
+            <div class="idle-status-grid">
+              <span>事件触发<i>待触发</i></span>
+              <span>处置流程<i>待启动</i></span>
+              <span>刷新状态<i>{{ loading ? '同步中' : '实时' }}</i></span>
+            </div>
+          </div>
+          <ol class="progress-timeline">
+            <li v-for="(item, index) in alarmTimeline" :key="item.key" :class="{ active: index === 0 }">
+              <i></i>
+              <span>{{ item.label }}</span>
+            </li>
+          </ol>
+        </section>
+
+        <section class="screen-panel device-panel" :class="{ warning: deviceOffline > 0 }">
+          <div class="panel-heading">
+            <h2>设备状态</h2>
+          </div>
+          <div class="device-state">
+            <div class="device-gauge-wrap">
+              <div ref="deviceChartRef" class="device-ring echarts-chart"></div>
+              <div class="device-center">
+                <strong>{{ deviceRate }}%</strong>
+                <span>在线率</span>
               </div>
             </div>
-            <div v-else class="device-empty">暂无设备状态数据</div>
+            <div class="device-counts">
+              <div class="device-count-row">
+                <article class="online">
+                  <span>在线</span>
+                  <strong>{{ deviceOnline }}</strong>
+                </article>
+                <article class="offline">
+                  <span>离线</span>
+                  <strong>{{ deviceOffline }}</strong>
+                </article>
+              </div>
+              <p class="device-report" :class="{ warning: deviceOffline > 0 }">{{ deviceReportText }}</p>
+            </div>
           </div>
         </section>
       </aside>
@@ -285,57 +246,90 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { getUnifiedSafetyEventStatistics, getUnifiedSafetyEvents } from '@/api/integration'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import * as echarts from 'echarts'
+import { getUnifiedSafetyEventDetail, getUnifiedSafetyEventStatistics, getUnifiedSafetyEvents } from '@/api/integration'
 import { getDeviceStatus } from '@/api/sensor'
 import { getCameraList } from '@/api/camera'
 
 const cameraPoints = [
-  { no: 1, x: 206, y: 178, typeLabel: '禁船区', regionKey: 'boat-1' },
-  { no: 3, x: 445, y: 286, typeLabel: '禁船区', regionKey: 'boat-34568' },
-  { no: 4, x: 499, y: 167, typeLabel: '禁船区', regionKey: 'boat-34568' },
-  { no: 5, x: 520, y: 167, typeLabel: '禁船区', regionKey: 'boat-34568' },
-  { no: 6, x: 685, y: 215, typeLabel: '禁船区', regionKey: 'boat-34568' },
-  { no: 7, x: 704, y: 215, typeLabel: '禁船区', regionKey: 'boat-7' },
-  { no: 8, x: 595, y: 290, typeLabel: '禁船区', regionKey: 'boat-34568' },
-  { no: 9, x: 931, y: 121, typeLabel: '人员禁入区', regionKey: 'person-9' },
+  { no: 1, x: 17.3410, y: 40.8304, areaType: 'boatForbidden', regionKey: 'boat-1' },
+  { no: 2, x: 7.3988, y: 15.2249, areaType: 'toConfirm', regionKey: 'camera-2' },
+  { no: 3, x: 41.8497, y: 74.0484, areaType: 'boatForbidden', regionKey: 'boat-34568' },
+  { no: 4, x: 47.3988, y: 38.0623, areaType: 'boatForbidden', regionKey: 'boat-34568' },
+  { no: 5, x: 49.2486, y: 38.0623, areaType: 'boatForbidden', regionKey: 'boat-34568' },
+  { no: 6, x: 66.3584, y: 52.5952, areaType: 'boatForbidden', regionKey: 'boat-34568' },
+  { no: 7, x: 68.2081, y: 52.5952, areaType: 'boatForbidden', regionKey: 'boat-7' },
+  { no: 8, x: 57.3410, y: 75.4325, areaType: 'boatForbidden', regionKey: 'boat-34568' },
+  { no: 9, x: 91.7919, y: 24.2215, areaType: 'personForbidden', regionKey: 'person-9' },
 ]
-
-const pendingPoints = [
-  { id: 'pending-1', x: 206, y: 192 },
-  { id: 'pending-2', x: 126, y: 120 },
-  { id: 'pending-3', x: 88, y: 143 },
-  { id: 'pending-4', x: 73, y: 132 },
-  { id: 'pending-5', x: 77, y: 107 },
-]
-
-const regions = {
-  'boat-1': { path: 'M400 145 L397 303 L386 289 L375 289 L362 283 L333 302 L295 285 L256 293 L240 303 L229 303 L211 307 L179 299 L194 187 L225 201 L261 195 L293 203 L328 185 L337 175 L329 172 L330 161 L366 162 L365 150 L384 145 Z' },
-  'boat-34568': { path: 'M415 160 L459 160 L544 188 L562 197 L609 207 L646 208 L679 196 L693 249 L653 268 L612 278 L583 280 L567 289 L557 285 L548 291 L497 279 L459 287 L417 281 Z' },
-  'boat-7': { path: 'M686 195 L747 172 L843 167 L850 217 L746 231 L723 243 L711 243 L697 249 Z' },
-  'person-9': { path: 'M998 213 L904 214 L904 227 L998 227 Z' },
-}
 
 const regionGroups = [
-  { key: 'boat-1', label: '1号', type: 'boatForbidden', typeLabel: '禁船区', category: 'ILLEGAL_FISHING' },
-  { key: 'boat-34568', label: '3/4/5/6/8号', type: 'boatForbidden', typeLabel: '禁船区', category: 'ILLEGAL_FISHING' },
-  { key: 'boat-7', label: '7号', type: 'boatForbidden', typeLabel: '禁船区', category: 'ILLEGAL_FISHING' },
-  { key: 'person-9', label: '9号', type: 'personForbidden', typeLabel: '人员禁入区', category: 'PERSON_SAFETY' },
+  { key: 'boat-1', type: 'boatForbidden', typeLabel: '禁船区', category: 'ILLEGAL_FISHING' },
+  { key: 'boat-34568', type: 'boatForbidden', typeLabel: '禁船区', category: 'ILLEGAL_FISHING' },
+  { key: 'boat-7', type: 'boatForbidden', typeLabel: '禁船区', category: 'ILLEGAL_FISHING' },
+  { key: 'person-9', type: 'personForbidden', typeLabel: '人员禁入区', category: 'PERSON_SAFETY' },
+  { key: 'camera-2', type: 'toConfirm', typeLabel: '待确认区', category: 'OTHER' },
 ]
 
-const selectedKey = ref('person-9')
+const riskModes = [
+  { key: 'today', label: '今日', compareLabel: '较昨日' },
+  { key: 'week', label: '本周', compareLabel: '较上周' },
+  { key: 'month', label: '本月', compareLabel: '较上月' },
+]
+
+const riskLevels = [
+  { key: 'LOW', label: '低风险', shortLabel: '低风险' },
+  { key: 'MEDIUM', label: '中风险', shortLabel: '中风险' },
+  { key: 'HIGH', label: '高风险', shortLabel: '高风险' },
+]
+
+const trendModes = [
+  { key: 'today', label: '今日' },
+  { key: 'week', label: '本周' },
+  { key: 'month', label: '本月' },
+]
+
+const riskColors = { LOW: '#38D59C', MEDIUM: '#FFB648', HIGH: '#FF5B68' }
+const chartTextColor = '#8fc8f2'
+const chartGridColor = 'rgba(143, 200, 242, .16)'
+const chartTooltip = {
+  appendToBody: true,
+  confine: true,
+  enterable: false,
+  className: 'bigscreen-chart-tooltip',
+  backgroundColor: 'rgba(2, 14, 28, .96)',
+  borderColor: 'rgba(67, 200, 255, .36)',
+  textStyle: { color: '#dff5ff', fontSize: 13 },
+  extraCssText: 'max-width:240px;white-space:normal;word-break:break-word;border-radius:8px;box-shadow:0 10px 28px rgba(0,0,0,.28);z-index:99999;',
+}
+const mapFocusScale = 1.38
+const selectedPointNo = ref(9)
+const activeRiskModeKey = ref('today')
+const riskFocusIndex = ref(2)
+const trendMode = ref('today')
+const detailTrendMode = ref('today')
 const currentDate = ref('--')
 const currentTime = ref('--:--:--')
 const currentWeek = ref('--')
 const loading = ref(false)
 const eventStats = ref({})
 const events = ref([])
+const priorityDetail = ref({ timeline: [] })
 const deviceStatus = ref({})
 const cameraSummary = ref({ online: 0, total: 0 })
 const mapBoardRef = ref(null)
+const riskChartRef = ref(null)
+const trendChartRef = ref(null)
+const hourlyChartRef = ref(null)
+const compositionChartRef = ref(null)
+const disposalChartRef = ref(null)
+const deviceChartRef = ref(null)
 const mapBaseSize = ref({ width: 0, height: 0 })
 const mapScale = ref(1)
-const mapOffset = ref({ x: 0, y: 0 })
+const mapOffset = ref({ x: 120, y: 0 })
+const minMapScale = ref(1)
+const chartInstances = new Map()
 
 const mapDragState = {
   active: false,
@@ -348,123 +342,159 @@ const mapDragState = {
 
 let clockTimer
 let refreshTimer
+let riskTimer
+let riskResumeTimer
 let mapResizeObserver
+let currentPriorityDetailId = null
+let mapInitialFocused = false
 
 const weekLabels = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
-const deviceNames = {
-  temp_humidity: '温湿度传感器',
-  wind: '风速风向传感器',
-  rain: '雨量计',
-  vibration: '振动传感器',
-  agx: '边缘计算盒',
-  camera: '摄像头',
-}
 
-const selectedGroup = computed(() => regionGroups.find((group) => group.key === selectedKey.value) || regionGroups[0])
-const selectedRegion = computed(() => regions[selectedGroup.value.key])
-const selectedCategory = computed(() => selectedGroup.value.category)
+const selectedPoint = computed(() => cameraPoints.find((point) => point.no === selectedPointNo.value) || cameraPoints[0])
+const selectedGroup = computed(() => regionGroups.find((group) => group.key === selectedPoint.value.regionKey) || regionGroups[0])
+const activeRiskLevel = computed(() => riskLevels[riskFocusIndex.value] || riskLevels[0])
+const activeRiskMode = computed(() => riskModes.find((mode) => mode.key === activeRiskModeKey.value) || riskModes[0])
 const mapSceneStyle = computed(() => ({
   width: `${mapBaseSize.value.width}px`,
   height: `${mapBaseSize.value.height}px`,
-  transform: `translate3d(-50%, 0, 0) translate3d(${mapOffset.value.x}px, ${mapOffset.value.y}px, 0) scale(${mapScale.value})`,
+  transform: `translate3d(-50%, -50%, 0) translate3d(${mapOffset.value.x}px, ${mapOffset.value.y}px, 0) scale(${mapScale.value})`,
 }))
+
+const todayEvents = computed(() => eventsInWindow('today'))
+const yesterdayEvents = computed(() => eventsInWindow('yesterday'))
 const unhandledCount = computed(() => Number(eventStats.value.unhandled ?? events.value.filter((event) => !isHandled(event)).length))
-const todayEvents = computed(() => eventsForDay(0))
-const yesterdayEvents = computed(() => eventsForDay(-1))
-const todayRiskTotal = computed(() => todayEvents.value.length)
-const yesterdayRiskTotal = computed(() => yesterdayEvents.value.length)
-const todayHighRisk = computed(() => todayEvents.value.filter((event) => riskValue(event) >= 3).length)
 
-const overviewMetrics = computed(() => [
-  {
-    key: 'person',
-    label: '人员闯入',
-    value: formatNumber(categoryEvents('PERSON_SAFETY', 0).length),
-    tone: 'danger',
-    trend: compareValues(categoryEvents('PERSON_SAFETY', 0).length, categoryEvents('PERSON_SAFETY', -1).length),
-  },
-  {
-    key: 'boat',
-    label: '船只闯入',
-    value: formatNumber(categoryEvents('ILLEGAL_FISHING', 0).length),
-    tone: 'warning',
-    trend: compareValues(categoryEvents('ILLEGAL_FISHING', 0).length, categoryEvents('ILLEGAL_FISHING', -1).length),
-  },
-  {
-    key: 'unhandled',
-    label: '未处理告警',
-    value: formatNumber(unhandledCount.value),
-    tone: 'cyan',
-    note: unhandledCount.value ? '当前需关注' : '当前无未处理',
-  },
-  {
-    key: 'devices',
-    label: '在线设备',
-    value: `${deviceOnline.value}`,
-    tone: 'green',
-    note: `共 ${deviceTotal.value} 台`,
-  },
-])
-
-const riskComparison = computed(() => compareValues(todayRiskTotal.value, yesterdayRiskTotal.value))
-const riskRows = computed(() => {
-  const rows = [
-    { key: 'person', label: '人员风险', current: categoryEvents('PERSON_SAFETY', 0).length, previous: categoryEvents('PERSON_SAFETY', -1).length },
-    { key: 'boat', label: '船只风险', current: categoryEvents('ILLEGAL_FISHING', 0).length, previous: categoryEvents('ILLEGAL_FISHING', -1).length },
+const todayMetrics = computed(() => {
+  const today = todayEvents.value
+  const yesterday = yesterdayEvents.value
+  return [
+    buildTodayMetric('person', '人员告警', '●', today, yesterday),
+    buildTodayMetric('boat', '船只告警', '▲', today, yesterday),
+    buildTodayMetric('other', '其他告警', '◆', today, yesterday),
+    {
+      key: 'unhandled',
+      label: '未处理告警',
+      icon: '!',
+      value: formatNumber(unhandledCount.value),
+      tone: 'cyan',
+      trend: compareNumber(unhandledCount.value, yesterday.filter((event) => !isHandled(event)).length),
+    },
   ]
-  return rows.map((row) => {
-    const base = Math.max(row.current + row.previous, 1)
-    return { ...row, currentWidth: Math.round((row.current / base) * 100), previousWidth: Math.round((row.previous / base) * 100) }
-  })
 })
 
-const trendSeries = computed(() => ({
-  person: buildPolyline(hourBuckets('PERSON_SAFETY')),
-  boat: buildPolyline(hourBuckets('ILLEGAL_FISHING')),
-}))
+const riskDistribution = computed(() => {
+  const build = (currentKey, previousKey) => {
+    const current = eventsInWindow(currentKey)
+    const previous = eventsInWindow(previousKey)
+    const rows = ['LOW', 'MEDIUM', 'HIGH'].map((level) => {
+      const count = current.filter((event) => riskLevel(event) === level).length
+      const previousCount = previous.filter((event) => riskLevel(event) === level).length
+      return {
+        key: level,
+        label: riskLevelLabel(level),
+        count,
+        trend: compareNumber(count, previousCount),
+      }
+    })
+    return { rows, total: rows.reduce((sum, item) => sum + item.count, 0) }
+  }
+  return {
+    today: build('today', 'yesterday'),
+    week: build('week', 'lastWeek'),
+    month: build('month', 'lastMonth'),
+  }
+})
+
+const activeRiskStats = computed(() => riskDistribution.value[activeRiskModeKey.value] || { rows: [], total: 0 })
+const activeRiskRow = computed(() => activeRiskStats.value.rows.find((row) => row.key === activeRiskLevel.value.key) || { count: 0, trend: compareNumber(0, 0) })
+const activeRiskCount = computed(() => activeRiskRow.value.count || 0)
+const activeRiskTrend = computed(() => activeRiskRow.value.trend || compareNumber(0, 0))
+
+const intrusionTrend = computed(() => {
+  const currentMode = trendMode.value
+  const labels = trendLabels(currentMode)
+  const person = trendBuckets(currentMode, 'person')
+  const boat = trendBuckets(currentMode, 'boat')
+  return {
+    labels,
+    person,
+    boat,
+  }
+})
+
+const selectedEvents = computed(() => {
+  const category = selectedGroup.value.category
+  if (category === 'PERSON_SAFETY') return events.value.filter((event) => getOverviewCategory(event) === 'person')
+  if (category === 'ILLEGAL_FISHING') return events.value.filter((event) => getOverviewCategory(event) === 'boat')
+  return events.value.filter((event) => getOverviewCategory(event) === 'other')
+})
 
 const selectedData = computed(() => {
-  const items = categoryEvents(selectedCategory.value, 0)
-  const unhandled = items.filter((event) => !isHandled(event)).length
-  const latest = items[0]
+  const timeline = eventTimelineBuckets(selectedEvents.value, detailTrendMode.value)
   return {
-    primary: selectedCategory.value === 'PERSON_SAFETY' ? '今日人员事件' : '今日船只事件',
-    value: items.length,
-    unit: '次',
-    status: unhandled ? `${unhandled} 项待处置` : '区域稳定',
-    recognized: items.length,
-    unhandled,
-    lastTime: latest ? formatAlertTime(latest.started_at) : '--:--:--',
-    chart: buildPolyline(hourBuckets(selectedCategory.value), 360, 78),
+    total: timeline.total.reduce((sum, value) => sum + value, 0),
+    labels: timeline.labels,
+    totalCounts: timeline.total,
+    risk: timeline.risk,
   }
+})
+
+const riskCompositionData = computed(() => {
+  const rows = [
+    { name: '闯入', events: events.value.filter((event) => ['person', 'boat'].includes(getOverviewCategory(event))) },
+    { name: '灾害', events: events.value.filter((event) => getOverviewCategory(event) === 'disaster') },
+    { name: '其他', events: events.value.filter((event) => getOverviewCategory(event) === 'other') },
+  ]
+  return {
+    labels: rows.map((row) => row.name),
+    risk: ['LOW', 'MEDIUM', 'HIGH'].reduce((acc, level) => {
+      acc[level] = rows.map((row) => {
+        if (row.name === '灾害' && !row.events.length) return 0
+        return row.events.filter((event) => riskLevel(event) === level).length
+      })
+      return acc
+    }, {}),
+  }
+})
+
+const disposalStats = computed(() => {
+  const total = events.value.length
+  const handled = events.value.filter(isHandled).length
+  const processing = events.value.filter((event) => event.status === 'PROCESSING').length
+  const pending = Math.max(total - handled - processing, 0)
+  return { total, handled, processing, pending }
 })
 
 const priorityAlert = computed(() => events.value
   .filter((event) => !isHandled(event))
   .slice()
-  .sort((a, b) => riskValue(b) - riskValue(a) || eventTimestamp(b) - eventTimestamp(a))[0] || null)
+  .sort((a, b) => riskRank(b) - riskRank(a) || eventTimestamp(b) - eventTimestamp(a))[0] || null)
 
-const recentAlerts = computed(() => {
-  const priorityId = priorityAlert.value?.id
-  const filtered = events.value.filter((event) => event.id !== priorityId)
-  return filtered.slice(0, priorityId ? 3 : 4)
+const alarmTimeline = computed(() => {
+  const rows = priorityDetail.value.timeline || []
+  if (rows.length) {
+    return rows.slice(0, 5).map((row) => ({
+      key: row.id || `${row.log_type}-${row.created_at}`,
+      label: logTypeLabel(row.log_type),
+    }))
+  }
+  if (!priorityAlert.value) return [{ key: 'idle', label: '等待事件触发' }]
+  return [
+    { key: 'trigger', label: '事件触发' },
+    { key: 'workflow', label: 'DAM_WORKFLOW' },
+    { key: 'action', label: priorityAlert.value.status === 'PROCESSING' ? '执行动作' : '等待处置' },
+  ]
 })
 
 const deviceRows = computed(() => {
   const rows = Object.entries(deviceStatus.value || {}).map(([key, item]) => {
     const total = Number(item?.total || 1)
     const online = Number(item?.online_count ?? (item?.status === 'online' ? total : 0))
-    return {
-      key,
-      label: deviceNames[key] || key,
-      total,
-      online,
-      status: item?.status === 'online' && online > 0 ? 'online' : 'offline',
-    }
+    return { key, total, online }
   })
   if (cameraSummary.value.total > 0 || Object.prototype.hasOwnProperty.call(deviceStatus.value, 'camera')) {
-    const camera = deviceSummaryRow('camera', cameraSummary.value.online, cameraSummary.value.total)
     const index = rows.findIndex((row) => row.key === 'camera')
+    const camera = { key: 'camera', online: cameraSummary.value.online, total: cameraSummary.value.total }
     if (index >= 0) rows.splice(index, 1, camera)
     else rows.push(camera)
   }
@@ -473,19 +503,332 @@ const deviceRows = computed(() => {
 
 const deviceOnline = computed(() => deviceRows.value.reduce((sum, item) => sum + item.online, 0))
 const deviceTotal = computed(() => deviceRows.value.reduce((sum, item) => sum + item.total, 0))
+const deviceOffline = computed(() => Math.max(deviceTotal.value - deviceOnline.value, 0))
 const deviceRate = computed(() => deviceTotal.value ? Math.round((deviceOnline.value / deviceTotal.value) * 100) : 0)
-const deviceDonutStyle = computed(() => ({
-  background: `conic-gradient(#59edc8 ${deviceRate.value * 3.6}deg, rgba(82, 231, 196, 0.12) 0deg)`,
-}))
+const offlineDeviceNames = computed(() => deviceRows.value
+  .filter((item) => item.total > item.online)
+  .map((item) => deviceTypeLabel(item.key)))
+const deviceReportText = computed(() => {
+  if (!deviceTotal.value) return '暂无设备状态数据'
+  if (!deviceOffline.value) return '所有设备正常运行'
+  const names = offlineDeviceNames.value.length ? offlineDeviceNames.value.join('、') : '部分设备'
+  return `${names}离线，请及时检查`
+})
 
-function deviceSummaryRow(key, online, total) {
+function buildTodayMetric(key, label, icon, today, yesterday) {
+  const matchMetric = (event) => {
+    const category = getOverviewCategory(event)
+    if (key === 'other') return category !== 'person' && category !== 'boat'
+    return category === key
+  }
+  const value = today.filter(matchMetric).length
+  const previous = yesterday.filter(matchMetric).length
   return {
     key,
-    label: deviceNames[key] || key,
-    online: Number(online || 0),
-    total: Number(total || 0),
-    status: Number(online || 0) > 0 && Number(online || 0) >= Number(total || 0) ? 'online' : 'offline',
+    label,
+    icon,
+    value: formatNumber(value),
+    tone: key === 'person' ? 'danger' : key === 'boat' ? 'boat' : 'purple',
+    trend: compareNumber(value, previous),
   }
+}
+
+function getChart(el, key) {
+  if (!el) return null
+  let chart = chartInstances.get(key)
+  if (!chart) {
+    chart = echarts.init(el, null, {
+      renderer: 'canvas',
+      width: Math.max(el.clientWidth, 1),
+      height: Math.max(el.clientHeight, 1),
+    })
+    chartInstances.set(key, chart)
+  }
+  resizeChartToElement(chart, el)
+  return chart
+}
+
+function resizeChartToElement(chart, el) {
+  const width = Math.max(el?.clientWidth || 0, 1)
+  const height = Math.max(el?.clientHeight || 0, 1)
+  chart.resize({ width, height })
+}
+
+function renderRiskCharts() {
+  const chart = getChart(riskChartRef.value, 'risk-distribution-main')
+  if (!chart) return
+  const rows = activeRiskStats.value.rows || []
+  const total = rows.reduce((sum, row) => sum + row.count, 0)
+  const activeDataIndex = rows.findIndex((row) => row.key === activeRiskLevel.value.key)
+  const data = total
+    ? rows.map((row) => ({
+      name: row.label,
+      value: row.count,
+      itemStyle: {
+        color: riskColors[row.key],
+        opacity: .86,
+      },
+    }))
+    : [{ name: '暂无数据', value: 1, itemStyle: { color: 'rgba(143, 200, 242, .16)' } }]
+  chart.setOption({
+    tooltip: { ...chartTooltip, trigger: 'item', formatter: '{b}<br/>{c} 次，占比 {d}%' },
+    series: [{
+      type: 'pie',
+      radius: ['58%', '78%'],
+      center: ['50%', '50%'],
+      selectedOffset: 0,
+      minAngle: total ? 5 : 360,
+      avoidLabelOverlap: true,
+      label: { show: false },
+      labelLine: { show: false },
+      itemStyle: { borderWidth: 0 },
+      emphasis: {
+        scale: true,
+        scaleSize: 5,
+        focus: 'self',
+        itemStyle: {
+          opacity: 1,
+          shadowBlur: 18,
+          shadowOffsetY: 8,
+          shadowColor: 'rgba(0, 0, 0, .38)',
+        },
+      },
+      blur: {
+        itemStyle: {
+          opacity: .18,
+        },
+      },
+      data,
+    }],
+  }, true)
+  chart.dispatchAction({ type: 'downplay', seriesIndex: 0 })
+  if (total && activeDataIndex >= 0) {
+    chart.dispatchAction({ type: 'highlight', seriesIndex: 0, dataIndex: activeDataIndex })
+  }
+}
+
+function renderTrendChart() {
+  const el = trendChartRef.value
+  const chart = getChart(el, 'intrusion-trend')
+  if (!chart) return
+  chart.setOption({
+    color: ['#ff6873', '#41c8ff'],
+    tooltip: { ...chartTooltip, trigger: 'axis' },
+    grid: { left: 28, right: 10, top: 16, bottom: 24 },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: intrusionTrend.value.labels,
+      axisLine: { lineStyle: { color: chartGridColor } },
+      axisTick: { show: false },
+      axisLabel: { color: chartTextColor, fontSize: 10, interval: 'auto', margin: 8 },
+    },
+    yAxis: {
+      type: 'value',
+      minInterval: 1,
+      splitLine: { lineStyle: { color: chartGridColor, type: 'dashed' } },
+      axisLabel: { color: chartTextColor, fontSize: 10 },
+    },
+    series: [
+      buildLineSeries('人员', intrusionTrend.value.person, '#ff6873'),
+      buildLineSeries('船只', intrusionTrend.value.boat, '#41c8ff'),
+    ],
+  }, true)
+}
+
+function buildLineSeries(name, data, color) {
+  return {
+    name,
+    type: 'line',
+    smooth: true,
+    symbol: 'circle',
+    symbolSize: 5,
+    showSymbol: false,
+    emphasis: { focus: 'series', scale: true },
+    lineStyle: { width: 2.4, color },
+    itemStyle: { color },
+    areaStyle: {
+      color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+        { offset: 0, color: `${color}44` },
+        { offset: 1, color: `${color}00` },
+      ]),
+    },
+    data,
+  }
+}
+
+function renderHourlyChart() {
+  const chart = getChart(hourlyChartRef.value, 'selected-alarm-trend')
+  if (!chart) return
+  chart.setOption({
+    color: ['#52dcff'],
+    tooltip: { ...chartTooltip, trigger: 'axis' },
+    grid: { left: 34, right: 12, top: 14, bottom: 28 },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: selectedData.value.labels,
+      axisLine: { lineStyle: { color: chartGridColor } },
+      axisTick: { show: false },
+      axisLabel: { color: chartTextColor, fontSize: 10, interval: 'auto' },
+    },
+    yAxis: {
+      type: 'value',
+      minInterval: 1,
+      splitLine: { lineStyle: { color: chartGridColor, type: 'dashed' } },
+      axisLabel: { color: chartTextColor, fontSize: 10 },
+    },
+    series: [{
+      name: '告警数',
+      type: 'line',
+      smooth: true,
+      symbol: 'circle',
+      symbolSize: 5,
+      showSymbol: false,
+      lineStyle: { width: 2.4, color: '#52dcff' },
+      itemStyle: { color: '#52dcff' },
+      areaStyle: {
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: 'rgba(82, 220, 255, .42)' },
+          { offset: 1, color: 'rgba(82, 220, 255, 0)' },
+        ]),
+      },
+      emphasis: { focus: 'series' },
+      data: selectedData.value.totalCounts,
+    }],
+  }, true)
+}
+
+function renderCompositionChart() {
+  const chart = getChart(compositionChartRef.value, 'risk-composition')
+  if (!chart) return
+  chart.setOption({
+    tooltip: {
+      ...chartTooltip,
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      valueFormatter: (value) => `${value} 次`,
+    },
+    legend: {
+      right: 2,
+      top: 0,
+      icon: 'circle',
+      itemWidth: 7,
+      itemHeight: 7,
+      itemGap: 10,
+      textStyle: { color: chartTextColor, fontSize: 10 },
+      data: ['低风险', '中风险', '高风险'],
+    },
+    grid: { left: 36, right: 12, top: 26, bottom: 24 },
+    xAxis: {
+      type: 'category',
+      data: riskCompositionData.value.labels,
+      axisLine: { lineStyle: { color: chartGridColor } },
+      axisTick: { show: false },
+      axisLabel: { color: '#bdeaff', fontSize: 12, interval: 0 },
+    },
+    yAxis: {
+      type: 'value',
+      minInterval: 1,
+      splitLine: { lineStyle: { color: chartGridColor, type: 'dashed' } },
+      axisLabel: { color: chartTextColor, fontSize: 10 },
+    },
+    series: ['LOW', 'MEDIUM', 'HIGH'].map((level) => ({
+      name: riskLevelLabel(level),
+      type: 'bar',
+      stack: 'risk',
+      barWidth: '38%',
+      itemStyle: { color: riskColors[level], borderRadius: level === 'HIGH' ? [2, 2, 0, 0] : 0 },
+      emphasis: { focus: 'series' },
+      data: riskCompositionData.value.risk[level],
+    })),
+  }, true)
+}
+
+function renderDisposalChart() {
+  const chart = getChart(disposalChartRef.value, 'disposal')
+  if (!chart) return
+  const stats = disposalStats.value
+  const visibleUnit = Math.max(stats.total * .018, .22)
+  const data = [
+    { name: '已处置', value: stats.handled || visibleUnit, realValue: stats.handled, itemStyle: { color: '#38D59C' } },
+    { name: '处理中', value: stats.processing || visibleUnit, realValue: stats.processing, itemStyle: { color: '#FFB648' } },
+    { name: '未处置', value: stats.pending || visibleUnit, realValue: stats.pending, itemStyle: { color: '#FF5B68' } },
+  ]
+  if (!stats.total) data.splice(0, data.length, { name: '暂无数据', value: 1, realValue: 0, itemStyle: { color: 'rgba(143, 200, 242, .16)' } })
+  chart.setOption({
+    tooltip: {
+      ...chartTooltip,
+      trigger: 'item',
+      formatter: (params) => `${params.name}<br/>${params.data?.realValue ?? params.value} 次`,
+    },
+    series: [{
+      type: 'pie',
+      radius: ['72%', '86%'],
+      center: ['50%', '50%'],
+      label: { show: false },
+      labelLine: { show: false },
+      itemStyle: { borderColor: '#06182b', borderWidth: 2 },
+      emphasis: { scale: true, scaleSize: 4 },
+      data,
+    }],
+  }, true)
+}
+
+function renderDeviceChart() {
+  const chart = getChart(deviceChartRef.value, 'device')
+  if (!chart) return
+  const total = Math.max(deviceTotal.value, 0)
+  const visibleUnit = total ? Math.max(total * .018, .18) : 0
+  const onlineValue = total ? (deviceOnline.value || visibleUnit) : 0
+  const offlineValue = total ? (deviceOffline.value || visibleUnit) : 0
+  const data = total
+    ? [
+      { name: '在线', value: onlineValue, realValue: deviceOnline.value, itemStyle: { color: '#38D59C' } },
+      { name: '离线', value: offlineValue, realValue: deviceOffline.value, itemStyle: { color: '#FF5B68' } },
+    ]
+    : [
+      { name: '暂无数据', value: 1, realValue: 0, itemStyle: { color: 'rgba(143, 200, 242, .18)' } },
+    ]
+  chart.setOption({
+    tooltip: {
+      ...chartTooltip,
+      trigger: 'item',
+      formatter: (params) => `${params.name}<br/>${params.data?.realValue ?? params.value} 台`,
+    },
+    series: [{
+      type: 'pie',
+      radius: ['62%', '82%'],
+      center: ['50%', '50%'],
+      startAngle: 90,
+      clockwise: true,
+      avoidLabelOverlap: false,
+      padAngle: 1.5,
+      selectedOffset: 0,
+      label: { show: false },
+      labelLine: { show: false },
+      itemStyle: {
+        borderColor: '#06182b',
+        borderWidth: 1,
+        borderRadius: 8,
+      },
+      emphasis: { scale: true, scaleSize: 2 },
+      data,
+    }],
+  }, true)
+}
+
+function renderAllCharts() {
+  renderRiskCharts()
+  renderTrendChart()
+  renderHourlyChart()
+  renderCompositionChart()
+  renderDisposalChart()
+  renderDeviceChart()
+}
+
+function resizeCharts() {
+  renderAllCharts()
 }
 
 function formatNumber(value) {
@@ -493,99 +836,216 @@ function formatNumber(value) {
   return Number.isFinite(number) ? String(Math.max(0, number)).padStart(2, '0') : '--'
 }
 
+function compareNumber(current, previous) {
+  const delta = Number(current || 0) - Number(previous || 0)
+  if (delta > 0) return { icon: '↑', delta: delta, tone: 'up' }
+  if (delta < 0) return { icon: '↓', delta: Math.abs(delta), tone: 'down' }
+  return { icon: '−', delta: 0, tone: 'flat' }
+}
+
 function eventTimestamp(event) {
-  const time = Date.parse(event?.started_at || '')
+  const time = Date.parse(event?.started_at || event?.last_observed_at || '')
   return Number.isFinite(time) ? time : 0
 }
 
-function dateKey(date) {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
+function riskLevel(event) {
+  return ['LOW', 'MEDIUM', 'HIGH'].includes(event?.max_risk_level) ? event.max_risk_level : event?.risk_level
 }
 
-function eventDateKey(event) {
-  const time = eventTimestamp(event)
-  return time ? dateKey(new Date(time)) : ''
+function riskRank(event) {
+  return ({ LOW: 1, MEDIUM: 2, HIGH: 3 })[riskLevel(event)] || 0
 }
 
-function eventsForDay(offset) {
-  const target = new Date()
-  target.setHours(0, 0, 0, 0)
-  target.setDate(target.getDate() + offset)
-  const key = dateKey(target)
-  return events.value.filter((event) => eventDateKey(event) === key)
+function riskLevelLabel(level) {
+  return ({ LOW: '低风险', MEDIUM: '中风险', HIGH: '高风险' })[level] || '未知'
 }
 
-function categoryEvents(category, offset) {
-  return eventsForDay(offset).filter((event) => event.event_category === category)
+function riskLabel(event) {
+  return riskLevelLabel(riskLevel(event))
 }
 
-function riskValue(event) {
-  return ({ LOW: 1, MEDIUM: 2, HIGH: 3 })[event?.max_risk_level || event?.risk_level] || 0
+function riskClass(event) {
+  return ({ LOW: 'low', MEDIUM: 'medium', HIGH: 'high' })[riskLevel(event)] || 'unknown'
+}
+
+function deviceTypeLabel(key) {
+  return ({
+    camera: '摄像头',
+    sensor: '传感器',
+    sensors: '传感器',
+    rain: '雨量计',
+    wind: '风速风向',
+    vibration: '振动传感器',
+    temp_humidity: '温湿度传感器',
+    temperature_humidity: '温湿度传感器',
+    drone: '无人机',
+  })[key] || key || '设备'
 }
 
 function isHandled(event) {
   return event?.state === 'RESOLVED' || ['COMPLETED', 'FALSE_ALARM'].includes(event?.status)
 }
 
-function compareValues(current, previous) {
-  if (current === previous) return { icon: '—', text: '持平', tone: 'flat' }
-  if (!previous && current > 0) return { icon: '↑', text: '新增', tone: 'up' }
-  const percent = Math.round(Math.abs((current - previous) / previous) * 100)
-  return current > previous
-    ? { icon: '↑', text: `${percent}%`, tone: 'up' }
-    : { icon: '↓', text: `${percent}%`, tone: 'down' }
+function getOverviewCategory(event) {
+  const category = String(event?.event_category || '').toUpperCase()
+  const text = `${event?.event_name || ''} ${event?.summary || ''}`.toUpperCase()
+  if (category === 'PERSON_SAFETY' || category.includes('PERSON')) return 'person'
+  if (category === 'ILLEGAL_FISHING' || category.includes('FISH') || category.includes('BOAT')) return 'boat'
+  if (
+    category.includes('FLOOD')
+    || category.includes('EARTHQUAKE')
+    || category.includes('LANDSLIDE')
+    || category.includes('DEBRIS')
+    || /洪水|地震|泥石流|滑坡/.test(text)
+  ) return 'disaster'
+  return 'other'
 }
 
-function hourBuckets(category) {
-  const values = Array.from({ length: 24 }, () => 0)
-  categoryEvents(category, 0).forEach((event) => {
+function rangeStart(type) {
+  const now = new Date()
+  const start = new Date(now)
+  if (type === 'today' || type === 'yesterday') start.setHours(0, 0, 0, 0)
+  if (type === 'yesterday') start.setDate(start.getDate() - 1)
+  if (type === 'week' || type === 'lastWeek') {
+    const day = (start.getDay() + 6) % 7
+    start.setHours(0, 0, 0, 0)
+    start.setDate(start.getDate() - day)
+    if (type === 'lastWeek') start.setDate(start.getDate() - 7)
+  }
+  if (type === 'month' || type === 'lastMonth') {
+    start.setHours(0, 0, 0, 0)
+    start.setDate(1)
+    if (type === 'lastMonth') start.setMonth(start.getMonth() - 1)
+  }
+  return start
+}
+
+function rangeEnd(type) {
+  const end = new Date()
+  if (type === 'yesterday') end.setDate(end.getDate() - 1)
+  if (type === 'lastWeek') {
+    const start = rangeStart('week')
+    return start
+  }
+  if (type === 'lastMonth') {
+    const start = rangeStart('month')
+    return start
+  }
+  return end
+}
+
+function eventsInWindow(type) {
+  const start = rangeStart(type).getTime()
+  const end = rangeEnd(type).getTime()
+  return events.value.filter((event) => {
     const time = eventTimestamp(event)
-    if (time) values[new Date(time).getHours()] += 1
+    return time >= start && time <= end
   })
-  return values
 }
 
-function buildPolyline(values, width = 520, height = 150) {
-  const max = Math.max(...values, 1)
-  const step = width / Math.max(values.length - 1, 1)
-  return values.map((value, index) => {
-    const x = Math.round(index * step)
-    const y = Math.round(height - 10 - ((value / max) * (height - 24)))
-    return `${x},${y}`
-  }).join(' ')
+function trendLabels(mode) {
+  if (mode === 'today') return Array.from({ length: 24 }, (_, index) => `${String(index).padStart(2, '0')}:00`)
+  const start = rangeStart(mode)
+  const end = new Date()
+  const labels = []
+  const cursor = new Date(start)
+  while (cursor <= end) {
+    labels.push(`${cursor.getMonth() + 1}/${cursor.getDate()}`)
+    cursor.setDate(cursor.getDate() + 1)
+  }
+  return labels.length ? labels : ['--']
 }
 
-function riskLabel(event) {
-  return ({ LOW: '低风险', MEDIUM: '中风险', HIGH: '高风险' })[event?.max_risk_level || event?.risk_level] || '风险待确认'
+function trendBuckets(mode, category) {
+  const labels = trendLabels(mode)
+  const buckets = Array.from({ length: labels.length }, () => 0)
+  const start = rangeStart(mode)
+  const source = eventsInWindow(mode).filter((event) => getOverviewCategory(event) === category)
+  source.forEach((event) => {
+    const date = new Date(eventTimestamp(event))
+    const index = mode === 'today'
+      ? date.getHours()
+      : Math.floor((date - start) / (24 * 60 * 60 * 1000))
+    if (index >= 0 && index < buckets.length) buckets[index] += 1
+  })
+  return buckets
 }
 
-function riskClass(event) {
-  return ({ HIGH: 'high', MEDIUM: 'medium', LOW: 'low' })[event?.max_risk_level || event?.risk_level] || 'low'
-}
-
-function statusLabel(event) {
-  if (isHandled(event)) return '已处理'
-  if (event?.status === 'PROCESSING') return '处理中'
-  return '未处理'
+function eventTimelineBuckets(sourceEvents, mode) {
+  const labels = trendLabels(mode)
+  const start = rangeStart(mode)
+  const end = rangeEnd(mode)
+  const total = Array.from({ length: labels.length }, () => 0)
+  const risk = {
+    LOW: Array.from({ length: labels.length }, () => 0),
+    MEDIUM: Array.from({ length: labels.length }, () => 0),
+    HIGH: Array.from({ length: labels.length }, () => 0),
+  }
+  sourceEvents.forEach((event) => {
+    const time = eventTimestamp(event)
+    if (time < start.getTime() || time > end.getTime()) return
+    const date = new Date(time)
+    const index = mode === 'today'
+      ? date.getHours()
+      : Math.floor((date - start) / (24 * 60 * 60 * 1000))
+    if (index < 0 || index >= labels.length) return
+    const level = riskLevel(event)
+    total[index] += 1
+    if (risk[level]) risk[level][index] += 1
+  })
+  return { labels, total, risk }
 }
 
 function alertTitle(event) {
-  return event?.event_name || event?.summary || (event?.event_category === 'PERSON_SAFETY' ? '人员安全事件' : '船只安全事件')
+  return event?.event_name || event?.summary || '安全告警事件'
 }
 
-function alertZone(event) {
-  return event?.event_category === 'PERSON_SAFETY' ? '9号人员禁入区' : '禁船区 · 共用船只统计'
+function logTypeLabel(value) {
+  return ({ TRIGGER: '事件触发', RISK_CHANGE: '风险变化', ACTION: '执行动作', MANUAL: '人工操作', RESOLVE: '事件闭环', SYSTEM: '系统记录' })[value] || value || '系统记录'
 }
 
-function formatAlertTime(value) {
-  if (!value) return '--:--:--'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '--:--:--'
-  const pad = (number) => String(number).padStart(2, '0')
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+function riskAutoSequence() {
+  return riskModes.flatMap((mode) => riskLevels.map((_, levelIndex) => ({
+    modeKey: mode.key,
+    levelIndex,
+  })))
+}
+
+function currentRiskAutoIndex() {
+  const sequence = riskAutoSequence()
+  const index = sequence.findIndex((item) => item.modeKey === activeRiskModeKey.value && item.levelIndex === riskFocusIndex.value)
+  return index >= 0 ? index : 0
+}
+
+function applyRiskAutoStep(index) {
+  const sequence = riskAutoSequence()
+  const item = sequence[((index % sequence.length) + sequence.length) % sequence.length]
+  activeRiskModeKey.value = item.modeKey
+  riskFocusIndex.value = item.levelIndex
+}
+
+function advanceRiskAuto() {
+  applyRiskAutoStep(currentRiskAutoIndex() + 1)
+}
+
+function restartRiskTimer() {
+  window.clearInterval(riskTimer)
+  riskTimer = window.setInterval(advanceRiskAuto, 3000)
+}
+
+function scheduleRiskAutoResume() {
+  window.clearInterval(riskTimer)
+  window.clearTimeout(riskResumeTimer)
+  riskResumeTimer = window.setTimeout(() => {
+    advanceRiskAuto()
+    restartRiskTimer()
+  }, 3000)
+}
+
+function handleRiskModeClick(modeKey) {
+  activeRiskModeKey.value = modeKey
+  riskFocusIndex.value = 0
+  scheduleRiskAutoResume()
 }
 
 function clampMapOffset() {
@@ -601,25 +1061,62 @@ function clampMapOffset() {
   }
 }
 
+function focusMapPoint(no, options = {}) {
+  const point = cameraPoints.find((item) => item.no === no)
+  const { width, height } = mapBaseSize.value
+  if (!point || !width || !height) return
+  const targetScale = Math.max(minMapScale.value, Math.min(4, options.scale || mapFocusScale))
+  const pointX = (point.x / 100 - .5) * width
+  const pointY = (point.y / 100 - .5) * height
+  mapScale.value = targetScale
+  mapOffset.value = {
+    x: -pointX * targetScale,
+    y: -pointY * targetScale,
+  }
+  clampMapOffset()
+}
+
+function focusSelectedMapPoint() {
+  focusMapPoint(selectedPointNo.value, { scale: mapFocusScale })
+}
+
+function zoomMapBy(ratio) {
+  const nextScale = Math.max(minMapScale.value, Math.min(4, mapScale.value * ratio))
+  if (nextScale === mapScale.value) return
+  const scaleRatio = nextScale / mapScale.value
+  mapScale.value = nextScale
+  mapOffset.value = {
+    x: mapOffset.value.x * scaleRatio,
+    y: mapOffset.value.y * scaleRatio,
+  }
+  clampMapOffset()
+}
+
 function updateMapBaseSize() {
   const board = mapBoardRef.value
   if (!board) return
   const rect = board.getBoundingClientRect()
-  const fitScale = rect.width / 1916
-  mapBaseSize.value = {
-    width: Math.ceil(1916 * fitScale),
-    height: Math.ceil(824 * fitScale),
+  if (!rect.width || !rect.height) return
+  const fitScale = Math.max(rect.width / 2168, rect.height / 725)
+  const width = Math.ceil(2168 * fitScale)
+  const height = Math.ceil(725 * fitScale)
+  mapBaseSize.value = { width, height }
+  minMapScale.value = Math.min(1, rect.width / width, rect.height / height)
+  if (mapScale.value < minMapScale.value) mapScale.value = minMapScale.value
+  if (!mapInitialFocused) {
+    mapInitialFocused = true
+    focusMapPoint(selectedPointNo.value, { scale: mapFocusScale })
+  } else {
+    clampMapOffset()
   }
-  clampMapOffset()
 }
 
 function handleMapWheel(event) {
   if (!mapBaseSize.value.width) return
   const board = mapBoardRef.value
   const rect = board.getBoundingClientRect()
-  const nextScale = Math.max(1, Math.min(4, mapScale.value * (event.deltaY > 0 ? 0.9 : 1.1)))
+  const nextScale = Math.max(minMapScale.value, Math.min(4, mapScale.value * (event.deltaY > 0 ? 0.9 : 1.1)))
   if (nextScale === mapScale.value) return
-
   const pointerX = event.clientX - rect.left - rect.width / 2
   const pointerY = event.clientY - rect.top - rect.height / 2
   const ratio = nextScale / mapScale.value
@@ -648,8 +1145,8 @@ function moveMapDrag(event) {
   const deltaY = event.clientY - mapDragState.startY
   if (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3) mapDragState.moved = true
   mapOffset.value = {
-    x: mapDragState.startOffsetX + deltaX / mapScale.value,
-    y: mapDragState.startOffsetY + deltaY / mapScale.value,
+    x: mapDragState.startOffsetX + deltaX,
+    y: mapDragState.startOffsetY + deltaY,
   }
   clampMapOffset()
 }
@@ -663,13 +1160,9 @@ function endMapDrag(event) {
   }, 0)
 }
 
-function handlePointClick(key) {
+function selectPoint(no) {
   if (mapDragState.moved) return
-  selectRegion(key)
-}
-
-function selectRegion(key) {
-  selectedKey.value = key
+  selectedPointNo.value = no
 }
 
 function updateClock() {
@@ -678,6 +1171,23 @@ function updateClock() {
   currentDate.value = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
   currentTime.value = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`
   currentWeek.value = weekLabels[now.getDay()]
+}
+
+async function fetchPriorityDetail() {
+  const id = priorityAlert.value?.id
+  if (!id) {
+    currentPriorityDetailId = null
+    priorityDetail.value = { timeline: [] }
+    return
+  }
+  if (id === currentPriorityDetailId) return
+  currentPriorityDetailId = id
+  try {
+    const res = await getUnifiedSafetyEventDetail(id)
+    priorityDetail.value = { timeline: res.data?.timeline || [] }
+  } catch {
+    priorityDetail.value = { timeline: [] }
+  }
 }
 
 async function fetchData() {
@@ -706,8 +1216,17 @@ async function fetchData() {
       total: enabled.length,
     }
   }
+  await fetchPriorityDetail()
   loading.value = false
+  await nextTick()
+  renderAllCharts()
 }
+
+watch(
+  [riskDistribution, activeRiskModeKey, activeRiskLevel, intrusionTrend, selectedData, riskCompositionData, disposalStats, deviceRate],
+  () => nextTick(renderAllCharts),
+  { deep: true }
+)
 
 onMounted(() => {
   updateClock()
@@ -717,39 +1236,62 @@ onMounted(() => {
     mapResizeObserver = new ResizeObserver(updateMapBaseSize)
     mapResizeObserver.observe(mapBoardRef.value)
   }
+  restartRiskTimer()
   fetchData()
   refreshTimer = window.setInterval(fetchData, 30000)
+  window.addEventListener('resize', resizeCharts)
+  nextTick(renderAllCharts)
 })
 
 onBeforeUnmount(() => {
   window.clearInterval(clockTimer)
   window.clearInterval(refreshTimer)
+  window.clearInterval(riskTimer)
+  window.clearTimeout(riskResumeTimer)
+  window.removeEventListener('resize', resizeCharts)
   mapResizeObserver?.disconnect()
+  chartInstances.forEach((chart) => chart.dispose())
+  chartInstances.clear()
 })
 </script>
 
 <style scoped>
+:global(.bigscreen-chart-tooltip) {
+  max-width: 240px !important;
+  white-space: normal !important;
+  word-break: break-word !important;
+  border-radius: 8px !important;
+  z-index: 99999 !important;
+  pointer-events: none;
+}
+
 .bigscreen-page {
+  --panel-radius: 8px;
+  --panel-border: rgba(74, 163, 214, .24);
+  --panel-border-soft: rgba(74, 163, 214, .16);
+  --panel-bg: linear-gradient(180deg, rgba(6, 28, 49, .94), rgba(3, 18, 33, .96));
+  --panel-glow: 0 12px 28px rgba(0, 0, 0, .26), inset 0 1px 0 rgba(185, 229, 255, .045);
+  --card-bg: linear-gradient(180deg, rgba(8, 35, 61, .68), rgba(4, 23, 42, .7));
   position: relative;
   width: 100%;
   height: 100%;
   overflow: hidden;
-  color: #dcefff;
+  color: #eef7ff;
   background:
-    radial-gradient(circle at 50% 45%, rgba(0, 139, 205, 0.13), transparent 34%),
-    linear-gradient(135deg, #020b16 0%, #061a31 48%, #03101f 100%);
-  font-family: "DIN Alternate", "Bahnschrift", "PingFang SC", "Microsoft YaHei", sans-serif;
+    radial-gradient(circle at 50% 30%, rgba(38, 119, 170, 0.08), transparent 38%),
+    linear-gradient(135deg, #020812 0%, #061827 54%, #020a13 100%);
+  font-family: "Bahnschrift", "DIN Alternate", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
 .ambient-grid {
   position: absolute;
   inset: 0;
+  opacity: .08;
   pointer-events: none;
-  opacity: 0.22;
   background:
-    linear-gradient(rgba(52, 183, 255, 0.08) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(52, 183, 255, 0.06) 1px, transparent 1px);
-  background-size: 42px 42px;
+    linear-gradient(rgba(67, 200, 255, .08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(67, 200, 255, .06) 1px, transparent 1px);
+  background-size: 44px 44px;
 }
 
 .screen-header,
@@ -759,14 +1301,13 @@ onBeforeUnmount(() => {
 }
 
 .screen-header {
-  height: 72px;
+  height: 86px;
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: minmax(560px, 1fr) minmax(360px, 1fr) minmax(230px, 1fr);
   align-items: center;
   padding: 0 24px;
-  border-bottom: 1px solid rgba(52, 191, 255, 0.28);
-  background: linear-gradient(180deg, rgba(10, 39, 69, 0.92), rgba(5, 20, 39, 0.7));
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
+  border-bottom: 1px solid rgba(74, 163, 214, .18);
+  background: linear-gradient(180deg, rgba(2, 12, 24, .92), rgba(2, 12, 24, .72));
 }
 
 .brand-block,
@@ -776,442 +1317,547 @@ onBeforeUnmount(() => {
 }
 
 .brand-block {
-  gap: 10px;
+  gap: 11px;
+  min-width: 0;
 }
 
 .brand-mark {
-  width: 36px;
-  height: 36px;
-  border: 1px solid rgba(66, 227, 255, 0.66);
-  display: grid;
-  place-items: center;
-  color: #51e8ff;
-  font-size: 11px;
-  font-weight: 900;
-  letter-spacing: 1px;
-  box-shadow: inset 0 0 18px rgba(0, 216, 255, 0.14), 0 0 15px rgba(0, 216, 255, 0.18);
-}
-
-.eyebrow,
-.screen-title span,
-.panel-heading span,
-.map-topline,
-.detail-heading span {
-  color: rgba(126, 203, 247, 0.62);
-  font-size: 9px;
-  letter-spacing: 0.8px;
+  width: 28px;
+  height: 28px;
+  clip-path: polygon(18% 0, 100% 0, 72% 42%, 100% 100%, 20% 72%, 0 38%);
+  background: linear-gradient(135deg, #52d8ff, #2679ff);
+  box-shadow: none;
 }
 
 .brand-block strong {
-  display: block;
-  margin-top: 3px;
-  color: #eef9ff;
+  flex: 0 0 auto;
+  color: #cbe7ff;
   font-size: 16px;
+  letter-spacing: 1px;
 }
 
-.screen-title {
-  text-align: center;
+.screen-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-left: 18px;
+}
+
+.screen-nav span {
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  color: #748da3;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.screen-nav span.active {
+  border-color: rgba(67, 200, 255, .58);
+  color: #bdeaff;
+  background: rgba(35, 119, 204, .16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05);
 }
 
 .screen-title h1 {
-  margin: 3px 0 0;
-  color: #f3fbff;
-  font-size: 26px;
-  letter-spacing: 4px;
-  text-shadow: 0 0 18px rgba(66, 218, 255, 0.46);
+  margin: 0;
+  color: #f4fbff;
+  font-size: 28px;
+  letter-spacing: 6px;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, .12);
 }
 
 .clock-block {
-  justify-content: flex-end;
+  width: 100%;
+  height: 100%;
+  justify-content: space-between;
   gap: 10px;
 }
 
-.clock-block > span {
-  color: rgba(174, 215, 245, 0.76);
-  font-size: 11px;
+.clock-block span {
+  color: #88a9c1;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .clock-block strong {
-  color: #f6fdff;
-  font-size: 21px;
+  color: #fff;
+  font-size: 23px;
   letter-spacing: 1px;
+  line-height: 1;
 }
 
 .clock-block em {
-  color: #59edc8;
-  font-size: 10px;
+  display: inline-flex;
+  align-items: center;
+  color: #38d59c;
+  font-size: 12px;
   font-style: normal;
+  white-space: nowrap;
 }
 
-.clock-block em i,
-.online-badge i,
-.detail-state i {
+.clock-block i,
+.online-badge i {
   display: inline-block;
   width: 6px;
   height: 6px;
-  margin-right: 5px;
+  margin-right: 6px;
   border-radius: 50%;
   background: currentColor;
-  box-shadow: 0 0 9px currentColor;
+  box-shadow: 0 0 6px currentColor;
 }
 
 .screen-grid {
-  height: calc(100% - 72px);
+  height: 100%;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(230px, 0.24fr) minmax(520px, 0.52fr) minmax(230px, 0.24fr);
-  gap: 12px;
-  padding: 12px 16px 14px;
+  grid-template-columns: minmax(260px, 20fr) minmax(760px, 62fr) minmax(230px, 18fr);
+  gap: 10px;
+  padding: 10px 14px 12px;
+  overflow: hidden;
 }
 
 .left-column,
-.right-column,
-.center-column {
+.center-column,
+.right-column {
   min-height: 0;
   display: grid;
   gap: 10px;
+  overflow: hidden;
 }
 
 .left-column {
-  grid-template-rows: auto auto minmax(160px, 1fr);
+  grid-template-rows: minmax(0, 28fr) minmax(0, 28fr) minmax(0, 36fr);
 }
 
 .center-column {
-  grid-template-rows: 58px auto minmax(174px, 1fr);
+  grid-template-rows: minmax(0, 65fr) minmax(240px, 35fr);
 }
 
 .right-column {
-  grid-template-rows: auto minmax(238px, 1fr) auto;
+  grid-template-rows: 74px minmax(0, 1fr) 202px;
 }
 
 .screen-panel,
-.selected-banner,
 .map-panel,
 .selected-detail {
   min-width: 0;
-  border: 1px solid rgba(50, 181, 255, 0.22);
-  background: linear-gradient(145deg, rgba(8, 38, 68, 0.78), rgba(3, 19, 38, 0.72));
-  box-shadow: inset 0 0 24px rgba(0, 190, 255, 0.035), 0 12px 26px rgba(0, 0, 0, 0.18);
+  min-height: 0;
+  position: relative;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--panel-radius);
+  background: var(--panel-bg);
+  box-shadow: var(--panel-glow);
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
-.screen-panel {
-  padding: 12px;
+.screen-panel::before,
+.map-panel::before,
+.selected-detail::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .045), transparent 26%);
+  opacity: .55;
+}
+
+.screen-panel,
+.selected-detail {
+  padding: 14px;
+}
+
+.clock-panel {
+  padding: 12px 14px;
+}
+
+.clock-panel .clock-block {
+  position: relative;
+  z-index: 1;
+  align-items: center;
+  border-radius: 8px;
+  background: linear-gradient(90deg, rgba(10, 45, 73, .5), rgba(3, 22, 40, .22));
+  padding: 0 4px;
 }
 
 .panel-heading,
-.detail-heading {
+.sub-heading,
+.selected-title {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
+  gap: 12px;
 }
 
 .panel-heading h2,
-.detail-heading h2 {
-  margin: 3px 0 0;
-  color: #effaff;
-  font-size: 18px;
+.selected-title h2,
+.sub-heading h3 {
+  margin: 0;
+  color: #eef7ff;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-shadow: none;
 }
 
-.panel-heading b {
-  color: #54e6c0;
+.sub-heading h3 {
+  font-size: 16px;
+}
+
+.sub-heading span,
+.selected-title span {
+  color: #9ed3f5;
+  font-size: 12px;
+}
+
+.disposal-card .sub-heading span {
+  color: #8fc8f2;
+  font-size: 12px;
+}
+
+.segmented {
+  display: flex;
+  padding: 2px;
+  border: 1px solid rgba(67, 200, 255, .24);
+  border-radius: 6px;
+  background: rgba(2, 16, 31, .78);
+  box-shadow: none;
+}
+
+.segmented button,
+.mini-segmented button {
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  color: #88a9c1;
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background .18s ease, color .18s ease, box-shadow .18s ease;
+}
+
+.segmented button.active,
+.mini-segmented button.active {
+  color: #e9f8ff;
+  background: linear-gradient(180deg, rgba(67, 200, 255, .26), rgba(37, 116, 204, .18));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06);
+}
+
+.mini-segmented {
+  display: flex;
+  flex: 0 0 auto;
+  padding: 1px;
+  border: 1px solid rgba(67, 200, 255, .24);
+  border-radius: 6px;
+  background: rgba(2, 16, 31, .62);
+}
+
+.mini-segmented button {
+  height: 22px;
+  padding: 0 8px;
   font-size: 10px;
-  letter-spacing: 1px;
 }
 
-.panel-heading.compact {
-  align-items: center;
-}
-
-.panel-note {
-  color: rgba(174, 215, 245, 0.64);
-  font-size: 10px;
-}
-
-.metric-grid {
+.today-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
-  margin-top: 11px;
+  margin-top: 10px;
 }
 
-.metric-item {
-  position: relative;
-  min-height: 70px;
-  padding: 9px 10px;
-  border-left: 2px solid currentColor;
-  background: rgba(1, 13, 27, 0.38);
+.today-card {
+  min-height: 76px;
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--panel-border-soft);
+  border-radius: 8px;
+  background: var(--card-bg);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .035);
 }
 
-.metric-item > span,
-.metric-item > em,
-.risk-total span,
-.risk-total em,
-.risk-bar-row > span,
-.risk-bar-row > em {
+.metric-icon {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: currentColor;
+  background: rgba(255, 255, 255, .07);
+  font-size: 18px;
+  box-shadow: none;
+}
+
+.today-card span:not(.metric-icon),
+.today-card em {
   display: block;
-  color: rgba(174, 215, 245, 0.72);
-  font-size: 10px;
+  color: #a4d2ee;
+  font-size: 12px;
   font-style: normal;
 }
 
-.metric-item strong {
+.today-card strong {
   display: block;
-  margin-top: 3px;
-  color: #f7fdff;
+  margin: 3px 0;
+  color: #fff;
   font-size: 26px;
   line-height: 1;
 }
 
-.metric-item em {
-  margin-top: 6px;
-}
-
-.metric-item em i,
-.risk-total em i {
+.today-card em i {
+  display: inline-flex;
+  min-width: 22px;
+  align-items: center;
+  justify-content: flex-start;
+  margin-right: 4px;
   font-style: normal;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
 
-.metric-item em i.up,
-.risk-total em i.up {
-  color: #ff6f76;
+.today-card.danger { color: #ff6873; }
+.today-card.boat { color: #41c8ff; }
+.today-card.purple { color: #9b73ff; }
+.today-card.cyan { color: #43c8ff; }
+
+.up,
+.down,
+.flat {
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
 
-.metric-item em i.down,
-.risk-total em i.down {
-  color: #59edc8;
-}
+.up { color: #ff5b68; }
+.down { color: #38d59c; }
+.flat { color: #88a9c1; }
 
-.metric-item em i.flat,
-.risk-total em i.flat {
-  color: rgba(174, 215, 245, 0.72);
-}
-
-.metric-item.danger { color: #ff6f76; }
-.metric-item.warning { color: #ffc65c; }
-.metric-item.cyan { color: #50e5ff; }
-.metric-item.green { color: #55e4be; }
-
-.risk-total {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin: 13px 2px 16px;
-}
-
-.risk-total strong {
-  display: block;
-  margin-top: 3px;
-  color: #f8fdff;
-  font-size: 30px;
-}
-
-.risk-orbit {
-  width: 58px;
-  height: 58px;
-  border: 1px solid rgba(255, 102, 111, 0.55);
-  border-radius: 50%;
-  display: grid;
-  place-content: center;
-  text-align: center;
-  box-shadow: 0 0 18px rgba(255, 102, 111, 0.16), inset 0 0 15px rgba(255, 102, 111, 0.1);
-}
-
-.risk-orbit span {
-  font-size: 9px;
-}
-
-.risk-orbit strong {
-  margin: 0;
-  color: #ff7e83;
-  font-size: 20px;
-}
-
-.risk-bars {
-  display: grid;
-  gap: 11px;
-}
-
-.risk-bar-row {
-  display: grid;
-  grid-template-columns: 55px 1fr 38px;
-  align-items: center;
-  gap: 7px;
-}
-
-.risk-bar-row > div {
-  display: flex;
-  height: 7px;
-  overflow: hidden;
-  background: rgba(174, 215, 245, 0.11);
-}
-
-.risk-bar-row > div i,
-.risk-bar-row > div b {
-  display: block;
-}
-
-.risk-bar-row > div i.person { background: #ff6f76; }
-.risk-bar-row > div i.boat { background: #ffc65c; }
-.risk-bar-row > div b { background: rgba(174, 215, 245, 0.22); }
-
-.risk-bar-row > em {
-  text-align: right;
-}
-
-.risk-legend,
-.trend-legend,
-.trend-labels,
-.clock-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.risk-legend {
-  justify-content: flex-end;
-  gap: 14px;
-  color: rgba(174, 215, 245, 0.62);
-  font-size: 9px;
-}
-
-.risk-legend i,
-.trend-legend i {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-right: 5px;
-  background: #ff6f76;
-}
-
-.risk-legend .legend-yesterday {
-  background: rgba(174, 215, 245, 0.3);
-}
-
-.trend-legend {
-  justify-content: flex-end;
-  gap: 12px;
-  margin-top: 12px;
-  color: rgba(174, 215, 245, 0.66);
-  font-size: 9px;
-}
-
-.trend-legend i {
-  width: 16px;
-  height: 2px;
-  vertical-align: middle;
-}
-
-.trend-legend .boat-line {
-  background: #ffc65c;
-}
-
-.mini-trend {
+.echarts-chart {
   width: 100%;
-  height: calc(100% - 63px);
-  min-height: 92px;
-  margin-top: 5px;
-  overflow: visible;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
 }
 
-.mini-trend line {
-  stroke: rgba(126, 203, 247, 0.12);
-  stroke-width: 1;
-}
-
-.mini-trend polyline,
-.detail-chart polyline {
-  fill: none;
-  stroke-width: 2.4;
-  vector-effect: non-scaling-stroke;
-}
-
-.mini-trend .person-path { stroke: #ff7180; }
-.mini-trend .boat-path { stroke: #ffc65c; }
-
-.trend-labels {
-  color: rgba(174, 215, 245, 0.54);
-  font-size: 9px;
-}
-
-.selected-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 16px;
-  border-left: 3px solid #ffc65c;
-}
-
-.selected-banner.personForbidden {
-  border-left-color: #ff7180;
-}
-
-.selected-banner > div > span {
-  display: block;
-  color: rgba(126, 203, 247, 0.62);
-  font-size: 9px;
-}
-
-.selected-banner > div > strong {
-  display: block;
-  margin-top: 3px;
-  color: #f5fdff;
-  font-size: 19px;
-}
-
-.selected-summary {
-  display: flex;
-  align-items: center;
+.risk-panel {
+  display: grid;
+  grid-template-rows: 34px minmax(0, 1fr);
   gap: 8px;
 }
 
-.selected-summary > span {
-  color: rgba(174, 215, 245, 0.68);
-  font-size: 10px;
+.risk-switch {
+  display: flex;
+  flex: 0 0 auto;
+  padding: 2px;
+  border: 1px solid rgba(74, 163, 214, .22);
+  border-radius: 6px;
+  background: rgba(3, 20, 36, .72);
 }
 
-.selected-summary > strong {
-  color: #ffd260;
-  font-size: 26px;
+.risk-switch button {
+  height: 24px;
+  padding: 0 12px;
+  border: 0;
+  color: #88a9c1;
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background .18s ease, color .18s ease, box-shadow .18s ease;
 }
 
-.selected-banner.personForbidden .selected-summary > strong {
-  color: #ff7a84;
+.risk-switch button.active {
+  color: #e9f8ff;
+  background: rgba(42, 111, 157, .36);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06);
 }
 
-.selected-summary small {
-  margin-left: 3px;
-  color: rgba(174, 215, 245, 0.68);
-  font-size: 11px;
-}
-
-.selected-summary em {
-  color: #59edc8;
-  font-size: 10px;
-  font-style: normal;
-}
-
-.map-panel {
+.risk-showcase {
   min-height: 0;
   display: grid;
-  grid-template-rows: 25px auto;
+  grid-template-columns: minmax(128px, 1.05fr) minmax(106px, .95fr);
+  align-items: center;
+  gap: 14px;
+}
+
+.risk-chart-wrap {
+  position: relative;
+  width: min(150px, 100%);
+  aspect-ratio: 1;
+  justify-self: center;
+}
+
+.risk-main-chart {
+  width: 100%;
+  height: 100%;
+}
+
+.risk-center {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 76px;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  gap: 4px;
+  pointer-events: none;
+  text-align: center;
+}
+
+.risk-center strong {
+  color: #fff;
+  font-size: 32px;
+  font-weight: 800;
+  line-height: 1;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, .12);
+}
+
+.risk-center span {
+  color: #8fc8f2;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.risk-center span.risk-level-LOW,
+.risk-summary strong.risk-level-LOW {
+  color: #38d59c;
+}
+
+.risk-center span.risk-level-MEDIUM,
+.risk-summary strong.risk-level-MEDIUM {
+  color: #ffb648;
+}
+
+.risk-center span.risk-level-HIGH,
+.risk-summary strong.risk-level-HIGH {
+  color: #ff5b68;
+}
+
+.risk-summary {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  color: #8fc8f2;
+}
+
+.risk-summary span {
+  font-size: 14px;
+}
+
+.risk-summary strong {
+  min-width: 74px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+  justify-self: start;
+  padding: 0 10px;
+  border: 1px solid rgba(93, 183, 232, .26);
+  border-radius: 6px;
+  color: #eef7ff;
+  background: rgba(14, 58, 92, .34);
+  font-size: 15px;
+  line-height: 1;
+  font-weight: 800;
+  box-shadow: none;
+}
+
+.risk-summary em {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: #c4e8fb;
+  background: rgba(67, 200, 255, .07);
+  font-size: 14px;
+  font-style: normal;
+  line-height: 1;
+}
+
+.risk-summary em b {
+  display: inline-flex;
+  min-width: 32px;
+  align-items: center;
+  justify-content: flex-start;
+  margin-left: 0;
+  font-weight: 700;
+  font-size: 17px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.trend-legend i {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+}
+
+.trend-panel {
+  display: grid;
+  grid-template-rows: 34px 18px minmax(0, 1fr);
+  align-items: stretch;
+}
+
+.trend-panel .panel-heading {
+  height: 34px;
+  min-height: 0;
+}
+
+.trend-legend {
+  display: flex;
+  height: 18px;
+  min-height: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  margin: 0;
+  color: #a4d2ee;
+  font-size: 12px;
   overflow: hidden;
 }
 
-.map-topline {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 11px;
-  background: rgba(1, 12, 26, 0.42);
+.trend-legend i.person {
+  background: #ff6873;
+}
+
+.trend-legend i.boat {
+  background: #41c8ff;
+}
+
+.line-chart {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin-top: 0;
+  overflow: hidden;
+}
+
+.person-path { stroke: #ff6873; }
+.boat-path { stroke: #41c8ff; }
+
+.map-panel {
+  overflow: hidden;
 }
 
 .map-board {
   position: relative;
   width: 100%;
-  height: auto;
-  aspect-ratio: 1916 / 824;
+  height: 100%;
   overflow: hidden;
-  background: #061421;
+  border-radius: 8px;
+  background: #051323;
   cursor: grab;
   touch-action: none;
   user-select: none;
@@ -1221,16 +1867,110 @@ onBeforeUnmount(() => {
   cursor: grabbing;
 }
 
+.map-controls {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 6;
+  display: grid;
+  gap: 7px;
+  pointer-events: auto;
+}
+
+.map-controls button {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(96, 190, 244, .32);
+  border-radius: 6px;
+  color: #e6f8ff;
+  background: rgba(4, 24, 43, .78);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, .22), inset 0 1px 0 rgba(255, 255, 255, .08);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .18s ease, border-color .18s ease, color .18s ease, transform .18s ease;
+}
+
+.map-controls button:hover {
+  border-color: rgba(111, 214, 255, .72);
+  color: #fff;
+  background: rgba(19, 71, 111, .82);
+  transform: translateY(-1px);
+}
+
+.map-controls .locate {
+  position: relative;
+  margin-top: 3px;
+  color: #e6f8ff;
+  font-size: 0;
+}
+
+.map-controls .locate::before,
+.map-controls .locate::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.map-controls .locate::before {
+  width: 12px;
+  height: 12px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  box-shadow: none;
+}
+
+.map-controls .locate::after {
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow:
+    0 -8px 0 -1px currentColor,
+    0 8px 0 -1px currentColor,
+    -8px 0 0 -1px currentColor,
+    8px 0 0 -1px currentColor;
+}
+
+.map-controls .locate span {
+  position: absolute;
+  inset: 0;
+}
+
+.map-controls .locate span::before,
+.map-controls .locate span::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  background: currentColor;
+  transform: translate(-50%, -50%);
+}
+
+.map-controls .locate span::before {
+  width: 18px;
+  height: 1px;
+}
+
+.map-controls .locate span::after {
+  width: 1px;
+  height: 18px;
+}
+
 .map-scene {
   position: absolute;
-  top: 0;
+  top: 50%;
   left: 50%;
   transform-origin: center center;
   will-change: transform;
 }
 
 .satellite-image,
-.map-overlay,
 .map-shade {
   position: absolute;
   inset: 0;
@@ -1240,7 +1980,7 @@ onBeforeUnmount(() => {
 
 .satellite-image {
   object-fit: fill;
-  filter: saturate(1.1) contrast(1.08) brightness(0.76);
+  filter: saturate(1.08) contrast(1.06) brightness(.72);
   pointer-events: none;
   user-select: none;
 }
@@ -1248,472 +1988,559 @@ onBeforeUnmount(() => {
 .map-shade {
   pointer-events: none;
   background:
-    radial-gradient(circle at 50% 48%, transparent 35%, rgba(2, 10, 22, 0.58) 100%),
-    linear-gradient(180deg, rgba(0, 17, 35, 0.18), rgba(0, 10, 22, 0.28));
+    radial-gradient(circle at 48% 50%, transparent 48%, rgba(0, 9, 20, .34)),
+    linear-gradient(180deg, rgba(0, 17, 35, .04), rgba(0, 12, 25, .08));
 }
 
-.map-overlay {
-  z-index: 2;
-}
-
-.selected-region {
-  fill: rgba(255, 198, 92, 0.045);
-  stroke: rgba(255, 198, 92, 0.72);
-  stroke-width: 1.1;
-  vector-effect: non-scaling-stroke;
-  filter: drop-shadow(0 0 5px rgba(255, 198, 92, 0.28));
-}
-
-.selected-region.personForbidden {
-  fill: rgba(255, 113, 128, 0.045);
-  stroke: rgba(255, 113, 128, 0.76);
-  filter: drop-shadow(0 0 5px rgba(255, 113, 128, 0.3));
-}
-
-.camera-hotspot {
-  cursor: pointer;
-}
-
-.hotspot-hit {
-  fill: rgba(255, 255, 255, 0.005);
-  stroke: transparent;
-}
-
-.hotspot-ring,
-.hotspot-core {
-  fill: transparent;
-  stroke: transparent;
-  opacity: 0;
-  vector-effect: non-scaling-stroke;
-}
-
-.hotspot-ring {
-  stroke-width: 1;
-}
-
-.hotspot-core {
-  fill: #64efff;
-}
-
-.camera-hotspot:hover .hotspot-ring,
-.camera-hotspot.active .hotspot-ring,
-.camera-hotspot:hover .hotspot-core,
-.camera-hotspot.active .hotspot-core {
-  opacity: 1;
-}
-
-.camera-hotspot:hover .hotspot-ring,
-.camera-hotspot.active .hotspot-ring {
-  stroke: #64efff;
-  filter: drop-shadow(0 0 5px rgba(100, 239, 255, 0.72));
-}
-
-.camera-hotspot.active .hotspot-ring {
-  stroke-width: 1.5;
-}
-
-.pending-hotspot {
-  cursor: help;
-}
-
-.pending-hit {
-  fill: rgba(70, 143, 244, 0.005);
-  stroke: transparent;
-}
-
-.pending-ring {
-  fill: transparent;
-  stroke: transparent;
-  stroke-width: 1;
-  opacity: 0;
-  vector-effect: non-scaling-stroke;
-}
-
-.pending-hotspot:hover .pending-ring {
-  opacity: 1;
-  stroke: rgba(117, 173, 255, 0.84);
-  filter: drop-shadow(0 0 5px rgba(70, 143, 244, 0.65));
-}
-
-.map-scan {
+.camera-point {
   position: absolute;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid rgba(255, 172, 178, .9);
+  border-radius: 50%;
+  color: #fff;
+  background: radial-gradient(circle, #ff6b72 0 42%, rgba(167, 30, 38, .92) 43% 100%);
+  box-shadow: 0 0 0 4px rgba(255, 91, 104, .12), 0 4px 14px rgba(0, 0, 0, .28);
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  transition: transform .18s ease, box-shadow .18s ease;
+  animation: pointPulse 2.4s ease-in-out infinite;
   z-index: 3;
-  inset: 0;
-  height: 18%;
-  pointer-events: none;
-  background: linear-gradient(180deg, transparent, rgba(66, 228, 255, 0.14), transparent);
-  animation: scan 5.5s linear infinite;
+}
+
+.camera-point span {
+  display: block;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 22px;
+}
+
+.camera-point:hover,
+.camera-point.active {
+  transform: translate(-50%, -50%) scale(1.12);
+}
+
+.camera-point.active {
+  border-color: #fff;
+  box-shadow: 0 0 0 6px rgba(255, 91, 104, .18), 0 6px 18px rgba(0, 0, 0, .34);
+  animation-duration: 1.35s;
 }
 
 .selected-detail {
-  padding: 12px 16px;
+  min-height: 0;
+  padding: 12px 16px 14px;
 }
 
-.detail-state {
-  color: #59edc8;
-  font-size: 10px;
+.selected-title {
+  height: 42px;
+  margin-bottom: 6px;
+  align-items: flex-start;
 }
 
-.detail-grid {
+.selected-title > div {
   display: grid;
-  grid-template-columns: 0.8fr 0.8fr 1.1fr 1.8fr;
-  align-items: end;
+  gap: 5px;
+}
+
+.selected-title span {
+  color: #8fc8f2;
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: .5px;
+}
+
+.selected-title h2 {
+  width: fit-content;
+  max-width: 100%;
+  margin: 0;
+  color: #f2fbff;
+  font-size: 21px;
+  line-height: 1.12;
+  letter-spacing: 0;
+  text-shadow: none;
+}
+
+.selected-title h2::after {
+  content: none;
+}
+
+.analytics-grid {
+  display: grid;
+  grid-template-columns: 1.1fr 1.18fr .98fr;
   gap: 12px;
-  margin-top: 10px;
+  height: calc(100% - 48px);
+  min-height: 0;
 }
 
-.detail-stat {
+.analytics-card {
   min-width: 0;
-  padding-right: 12px;
-  border-right: 1px solid rgba(126, 203, 247, 0.14);
+  min-height: 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(67, 200, 255, .2);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(9, 37, 65, .66), rgba(1, 17, 32, .58));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04);
+  overflow: hidden;
 }
 
-.detail-stat span,
-.detail-stat em {
-  display: block;
-  color: rgba(174, 215, 245, 0.64);
-  font-size: 9px;
-  font-style: normal;
+.analytics-card .sub-heading {
+  height: 28px;
+  align-items: flex-start;
 }
 
-.detail-stat strong {
-  display: block;
-  margin-top: 4px;
-  color: #f5fdff;
-  font-size: 22px;
-}
-
-.detail-stat .time-value {
+.analytics-card .sub-heading h3 {
+  color: #f2fbff;
   font-size: 17px;
+  line-height: 1.1;
+  font-weight: 800;
 }
 
-.detail-stat em {
-  margin-top: 3px;
+.analytics-card .sub-heading span {
+  color: #8ecaf1;
+  font-size: 12px;
+  line-height: 1.1;
 }
 
-.detail-chart {
-  min-width: 0;
+.bar-chart {
+  height: calc(100% - 30px);
+  min-height: 0;
+  margin-top: 6px;
 }
 
-.chart-title {
-  color: rgba(174, 215, 245, 0.64);
-  font-size: 9px;
+.risk-composition {
+  height: calc(100% - 30px);
+  min-height: 0;
+  margin-top: 6px;
+  overflow: hidden;
 }
 
-.detail-chart svg {
+.disposal-body {
+  display: grid;
+  grid-template-columns: minmax(126px, .9fr) minmax(150px, 1.1fr);
+  gap: 14px;
+  align-items: center;
+  height: calc(100% - 30px);
+  margin-top: 6px;
+}
+
+.disposal-ring-wrap {
+  position: relative;
+  width: 132px;
+  height: 132px;
+  justify-self: center;
+}
+
+.disposal-ring {
   width: 100%;
-  height: 60px;
-  margin-top: 3px;
+  height: 100%;
 }
 
-.detail-chart polyline {
-  stroke: #58e9ff;
+.disposal-center {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 86px;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  gap: 2px;
+  pointer-events: none;
+  text-align: center;
 }
 
-.clock-panel {
-  padding-bottom: 10px;
+.disposal-center strong {
+  color: #fff;
+  font-size: 31px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, .12);
 }
 
-.online-badge {
-  color: #59edc8;
-  font-size: 9px;
-  font-weight: 600;
+.disposal-center span {
+  color: #8fc8f2;
+  font-size: 13px;
+  line-height: 1;
+  white-space: nowrap;
 }
 
-.large-clock {
-  margin-top: 10px;
-  color: #f5fdff;
-  font-size: 33px;
-  letter-spacing: 2px;
+.disposal-list {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  color: #d8eefc;
+  font-size: 15px;
 }
 
-.clock-meta {
-  justify-content: flex-start;
-  gap: 11px;
-  margin-top: 5px;
-  color: rgba(174, 215, 245, 0.66);
-  font-size: 9px;
+.disposal-list i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 9px;
+  border-radius: 50%;
+  box-shadow: none;
 }
 
-.count-badge {
-  padding: 4px 6px;
-  border: 1px solid rgba(255, 113, 128, 0.35);
-  color: #ff8994;
-  font-size: 9px;
-}
-
-.priority-alert,
-.empty-alert {
+.disposal-list span {
   display: flex;
-  gap: 9px;
-  margin-top: 11px;
-  padding: 9px;
-  border-left: 2px solid #ff7180;
-  background: rgba(255, 76, 91, 0.08);
+  align-items: center;
+  min-width: 0;
+  white-space: nowrap;
+  line-height: 1.15;
 }
 
-.empty-alert {
-  border-left-color: rgba(89, 237, 200, 0.7);
-  background: rgba(89, 237, 200, 0.06);
+.disposal-list .handled { background: #38d59c; }
+.disposal-list .processing { background: #ffb648; }
+.disposal-list .pending { background: #ff5b68; }
+
+.help-tip {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 1px solid rgba(136, 169, 193, .42);
+  border-radius: 50%;
+  color: rgba(220, 237, 248, .72);
+  font-size: 12px;
+  cursor: help;
 }
 
-.alert-pin {
+.priority-summary {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 91, 104, .34);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(255, 91, 104, .12), rgba(255, 91, 104, .055));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .045);
+}
+
+.priority-summary strong {
+  font-size: 15px;
+}
+
+.priority-summary strong.low { color: #38d59c; }
+.priority-summary strong.medium { color: #ffb648; }
+.priority-summary strong.high { color: #ff5b68; }
+
+.priority-summary span {
+  color: #eef7ff;
+  font-size: 15px;
+}
+
+.priority-summary.empty {
+  border-color: rgba(56, 213, 156, .24);
+  background: rgba(56, 213, 156, .06);
+}
+
+.alarm-idle {
+  display: grid;
+  grid-template-columns: 74px 1fr;
+  gap: 14px;
+  align-items: center;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid rgba(67, 200, 255, .16);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 36px 40px, rgba(56, 213, 156, .13), transparent 58px),
+    rgba(5, 24, 43, .46);
+}
+
+.idle-orbit {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border: 1px solid rgba(67, 200, 255, .22);
+  border-radius: 50%;
+  background: rgba(3, 18, 33, .58);
+}
+
+.idle-orbit::before,
+.idle-orbit::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+}
+
+.idle-orbit::before {
+  inset: 15px;
+  border: 2px solid rgba(56, 213, 156, .72);
+}
+
+.idle-orbit::after {
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  transform: translate(-50%, -50%);
+  background: #38d59c;
+  box-shadow: 0 0 12px rgba(56, 213, 156, .72);
+}
+
+.idle-orbit span {
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  border-top: 2px solid rgba(67, 200, 255, .72);
+  border-right: 2px solid transparent;
+  animation: idleSpin 3.8s linear infinite;
+}
+
+.idle-orbit i {
+  position: absolute;
+  right: 8px;
+  top: 12px;
   width: 7px;
   height: 7px;
-  flex: 0 0 auto;
-  margin-top: 4px;
   border-radius: 50%;
-  background: #ff7180;
-  box-shadow: 0 0 10px #ff7180;
+  background: #43c8ff;
 }
 
-.empty-mark {
-  color: #59edc8;
-  font-size: 18px;
+.idle-copy {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.idle-copy strong {
+  color: #e9f8ff;
+  font-size: 16px;
   line-height: 1;
 }
 
-.priority-alert span,
-.priority-alert em,
-.empty-alert em {
-  display: block;
-  color: rgba(255, 166, 175, 0.72);
-  font-size: 9px;
-  font-style: normal;
-}
-
-.empty-alert em {
-  color: rgba(174, 215, 245, 0.62);
-}
-
-.priority-alert strong,
-.empty-alert strong {
-  display: block;
-  margin: 3px 0;
-  color: #fff3f4;
+.idle-copy span {
+  color: #8fc8f2;
   font-size: 12px;
+  line-height: 1.35;
 }
 
-.empty-alert strong {
-  color: #cffff0;
-}
-
-.alert-list {
-  margin-top: 8px;
-}
-
-.alert-item {
+.idle-status-grid {
+  grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: 48px 5px 1fr auto;
-  align-items: center;
-  gap: 6px;
-  min-height: 39px;
-  border-bottom: 1px solid rgba(126, 203, 247, 0.1);
-}
-
-.alert-time,
-.alert-item small,
-.alert-item b {
-  color: rgba(174, 215, 245, 0.6);
-  font-size: 9px;
-}
-
-.alert-item i {
-  width: 4px;
-  height: 20px;
-  background: #ff7180;
-}
-
-.alert-item i.medium { background: #ffc65c; }
-.alert-item i.low { background: #59edc8; }
-
-.alert-item strong {
-  display: block;
-  overflow: hidden;
-  color: #e9f7ff;
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.alert-item small {
-  display: block;
-  margin-top: 2px;
-}
-
-.alert-item b {
-  font-weight: 400;
-  white-space: nowrap;
-}
-
-.empty-list,
-.device-empty {
-  padding: 16px 0;
-  color: rgba(174, 215, 245, 0.56);
-  font-size: 10px;
-  text-align: center;
-}
-
-.device-summary {
-  display: grid;
-  grid-template-columns: 96px 1fr;
-  align-items: center;
-  gap: 11px;
-  margin-top: 13px;
-}
-
-.device-donut {
-  position: relative;
-  width: 78px;
-  height: 78px;
-  border-radius: 50%;
-  display: grid;
-  place-content: center;
-  text-align: center;
-  box-shadow: 0 0 18px rgba(89, 237, 200, 0.14);
-}
-
-.device-donut::before {
-  content: "";
-  position: absolute;
-  inset: 8px;
-  border-radius: 50%;
-  background: #09233d;
-}
-
-.device-donut strong,
-.device-donut span {
-  position: relative;
-  z-index: 1;
-}
-
-.device-donut strong {
-  color: #f4ffff;
-  font-size: 20px;
-}
-
-.device-donut small {
-  font-size: 10px;
-}
-
-.device-donut span {
-  color: rgba(174, 215, 245, 0.66);
-  font-size: 9px;
-}
-
-.device-list {
-  display: grid;
+  grid-template-columns: repeat(3, 1fr);
   gap: 8px;
 }
 
-.device-list div {
+.idle-status-grid span {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 9px 8px;
+  border: 1px solid rgba(67, 200, 255, .14);
+  border-radius: 6px;
+  color: #7faeca;
+  font-size: 11px;
+  background: rgba(2, 14, 28, .36);
+}
+
+.idle-status-grid i {
+  color: #cceeff;
+  font-size: 12px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.progress-timeline {
+  position: relative;
+  display: grid;
+  gap: 26px;
+  margin: 22px 0 0;
+  padding: 0 0 0 22px;
+  list-style: none;
+}
+
+.progress-timeline::before {
+  content: "";
+  position: absolute;
+  top: 9px;
+  bottom: 9px;
+  left: 7px;
+  width: 1px;
+  background: linear-gradient(180deg, #ff5b68, #ffb648, rgba(136, 169, 193, .25));
+}
+
+.progress-timeline li {
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  color: rgba(225, 244, 255, 0.84);
-  font-size: 10px;
+  min-height: 22px;
+  color: #cfe2f0;
+  font-size: 15px;
 }
 
-.device-list b {
-  color: #59edc8;
-  font-size: 10px;
-  font-weight: 600;
-}
-
-.device-list b.offline,
-.online-dot.offline {
-  color: #ff7180;
-  background: #ff7180;
-  box-shadow: 0 0 8px #ff7180;
-}
-
-.online-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-right: 6px;
+.progress-timeline i {
+  position: absolute;
+  left: -22px;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(136, 169, 193, .58);
   border-radius: 50%;
-  background: #59edc8;
-  box-shadow: 0 0 8px #59edc8;
+  background: #071a2f;
 }
 
-@keyframes scan {
-  0% { transform: translateY(-120%); opacity: 0; }
-  18%, 80% { opacity: 1; }
-  100% { transform: translateY(620%); opacity: 0; }
+.progress-timeline li.active i {
+  border-color: #ff5b68;
+  box-shadow: 0 0 0 4px rgba(255, 91, 104, .12);
+}
+
+.device-panel.warning {
+  border-color: rgba(255, 91, 104, .34);
+}
+
+.device-state {
+  display: grid;
+  grid-template-columns: minmax(118px, .9fr) minmax(0, 1.1fr);
+  gap: 14px;
+  align-items: center;
+  height: calc(100% - 34px);
+  margin-top: 10px;
+}
+
+.device-gauge-wrap {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  width: min(126px, 100%);
+  aspect-ratio: 1;
+  justify-self: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+}
+
+.device-gauge-wrap::after {
+  content: none;
+}
+
+.device-ring {
+  position: absolute;
+  inset: 0;
+}
+
+.device-center {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  gap: 4px;
+  width: 62px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  text-align: center;
+}
+
+.device-center strong {
+  color: #fff;
+  font-size: 24px;
+  line-height: 1;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.device-center span {
+  color: #8fc8f2;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.device-counts {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.device-count-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.device-counts article {
+  position: relative;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid rgba(67, 200, 255, .14);
+  border-radius: 7px;
+  background: rgba(2, 16, 30, .32);
+}
+
+.device-counts span {
+  color: #a4d2ee;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.device-counts strong {
+  display: block;
+  color: #38d59c;
+  font-size: 22px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.device-counts .offline strong {
+  color: #ff5b68;
+}
+
+.device-report {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 7px;
+  color: #cfe6f5;
+  background: rgba(56, 213, 156, .07);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.device-report.warning {
+  color: #ffd6d9;
+  background: rgba(255, 91, 104, .08);
+}
+
+@keyframes pointPulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(255, 91, 104, .12), 0 4px 14px rgba(0, 0, 0, .28); }
+  50% { box-shadow: 0 0 0 7px rgba(255, 91, 104, .04), 0 6px 16px rgba(0, 0, 0, .32); }
+}
+
+@keyframes idleSpin {
+  to { transform: rotate(360deg); }
 }
 
 @media (max-width: 1280px) {
-  .screen-header {
-    padding: 0 16px;
-  }
-
-  .screen-title h1 {
-    font-size: 22px;
-  }
-
   .screen-grid {
-    gap: 8px;
+    grid-template-columns: minmax(230px, 23fr) minmax(520px, 54fr) minmax(230px, 23fr);
     padding: 8px 10px 10px;
   }
 
   .screen-panel,
   .selected-detail {
+    padding: 11px;
+  }
+
+  .today-card {
+    min-height: 78px;
     padding: 10px;
   }
 
-  .metric-item strong {
-    font-size: 23px;
+  .today-card strong {
+    font-size: 24px;
   }
 
-  .detail-grid {
+  .analytics-grid {
     gap: 8px;
-  }
-}
-
-@media (max-width: 980px) {
-  .bigscreen-page {
-    height: auto;
-    min-height: 100%;
-    overflow: auto;
-  }
-
-  .screen-header {
-    height: auto;
-    min-height: 76px;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-    padding: 12px;
-  }
-
-  .screen-title {
-    grid-column: 1 / -1;
-    grid-row: 1;
-  }
-
-  .brand-block,
-  .clock-block {
-    grid-row: 2;
-  }
-
-  .clock-block {
-    justify-content: flex-end;
-  }
-
-  .screen-grid {
-    height: auto;
-    grid-template-columns: 1fr;
-  }
-
-  .left-column,
-  .right-column,
-  .center-column {
-    grid-template-rows: auto;
-  }
-
-  .center-column {
-    order: -1;
-    min-height: 740px;
   }
 }
 </style>

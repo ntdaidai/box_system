@@ -102,7 +102,7 @@ class WorkflowExecutorService:
                     "inputs": inputs,
                 }
                 context[node_id] = output
-                node_results.append(self._node_result(node, "skipped", output))
+                node_results.append(self._node_result(node, "skipped", output, request_data=None))
                 continue
 
             request_data = self._build_request_data(node, inputs, prompt, sensor_data, event_type)
@@ -127,7 +127,7 @@ class WorkflowExecutorService:
                     )
                 normalized = self._normalize_output(output)
                 context[node_id] = normalized
-                node_results.append(self._node_result(node, "success", normalized))
+                node_results.append(self._node_result(node, "success", normalized, request_data=request_data))
             except Exception as exc:
                 output = {
                     "error": str(exc),
@@ -135,7 +135,7 @@ class WorkflowExecutorService:
                     "inputs": inputs,
                 }
                 context[node_id] = output
-                node_results.append(self._node_result(node, "failed", output))
+                node_results.append(self._node_result(node, "failed", output, request_data=request_data))
 
         final_output = self._final_output(node_results, context)
         status = self._execution_status(node_results)
@@ -287,9 +287,19 @@ class WorkflowExecutorService:
         metadata = self._node_request_metadata(node)
         request_inputs = {**inputs, **metadata} if metadata else inputs
         media_options = self._media_options(node, request_inputs)
+        if str(node.get("model_category") or "").lower() == "cloud_llm":
+            return self._build_cloud_llm_request(
+                node=node,
+                inputs=request_inputs,
+                sensor_data=sensor_data,
+                event_type=event_type,
+                media_options=media_options,
+                metadata=metadata,
+            )
         template = node.get("prompt_template") or node.get("evaluation_template")
         if template:
             compact_inputs = self._compact_for_prompt(request_inputs)
+            top_media_objects = self._top_level_media_objects(node, request_inputs)
             return {
                 "prompt": self._render_prompt(
                     template,
@@ -299,10 +309,155 @@ class WorkflowExecutorService:
                     event_type,
                 ),
                 "inputs": compact_inputs,
+                "images": request_inputs.get("images") or [],
+                "videos": request_inputs.get("videos") or [],
+                "media_objects": top_media_objects,
                 **media_options,
                 **metadata,
             }
         return {**request_inputs, **media_options, **metadata}
+
+    @staticmethod
+    def _top_level_media_objects(node: Dict[str, Any], inputs: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """LLM 节点只把主视频证据放到顶层，避免中间抽帧淹没请求。"""
+        objects = inputs.get("media_objects")
+        objects = objects if isinstance(objects, list) else []
+        model_category = str(node.get("model_category") or "").lower()
+        if model_category in {"local_llm", "cloud_llm"}:
+            videos = [item for item in objects if isinstance(item, dict) and str(item.get("type") or "").lower() == "video"]
+            if videos:
+                return videos[:2]
+            video_paths = inputs.get("videos")
+            video_paths = video_paths if isinstance(video_paths, list) else []
+            return [{"type": "video", "path": path} for path in video_paths[:2] if isinstance(path, str) and path]
+        return [item for item in objects if isinstance(item, dict)]
+
+    @classmethod
+    def _build_cloud_llm_request(
+        cls,
+        *,
+        node: Dict[str, Any],
+        inputs: Dict[str, Any],
+        sensor_data: Dict[str, Any],
+        event_type: Optional[str],
+        media_options: Dict[str, Any],
+        metadata: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        cloud_media = cls._find_first_list(
+            inputs,
+            ("cloud_media_objects", "uploaded_media_objects"),
+        )
+        if not cloud_media:
+            cloud_media = cls._extract_media_objects(inputs)
+
+        edge_analysis = (
+            inputs.get("edge_analysis")
+            or inputs.get("final_report")
+            or inputs.get("report")
+            or {}
+        )
+        preliminary_report = (
+            inputs.get("preliminary_report")
+            or inputs.get("analysis_report")
+            or cls._extract_report_text(edge_analysis)
+        )
+        slim_sensor_data = cls._slim_sensor_data(sensor_data or inputs.get("sensor_data") or {})
+        slim_inputs = {
+            "event_type": event_type or inputs.get("event_type") or slim_sensor_data.get("event_name"),
+            "preliminary_report": cls._short_text(preliminary_report, 1200),
+            "edge_analysis": cls._compact_for_prompt(edge_analysis),
+            "cloud_media_objects": cloud_media,
+        }
+        prompt = (
+            "请对本次库坝安全事件进行云端最终复核，并生成事件处置报告 JSON。"
+            "以视频证据和边缘侧 4B 初判为主，不要虚构时间、地点、人员或设备动作；"
+            "发生时间、事件编号等以传入的 sensor_data 为准。"
+            "除摘要字段外，请输出详细报告字段 detailed_scene_analysis、risk_reasoning、"
+            "impact_assessment、response_plan、monitoring_suggestions，并保证这些字段是完整中文段落，"
+            "用于填充正式报告正文。"
+        )
+        return {
+            "prompt": prompt,
+            "inputs": slim_inputs,
+            "sensor_data": slim_sensor_data,
+            "event_type": slim_inputs["event_type"],
+            "images": [],
+            "videos": [],
+            "media_objects": cloud_media,
+            "report_requirement": {
+                "format": "dam_workflow",
+                "require_fields": ["report", "risk_level", "recommendations", "template_data"],
+            },
+            **media_options,
+            **metadata,
+        }
+
+    @staticmethod
+    def _find_first_list(value: Any, keys: tuple[str, ...]) -> List[Dict[str, Any]]:
+        if isinstance(value, dict):
+            for key in keys:
+                candidate = value.get(key)
+                if isinstance(candidate, list) and candidate:
+                    return [item for item in candidate if isinstance(item, dict)]
+            for item in value.values():
+                found = WorkflowExecutorService._find_first_list(item, keys)
+                if found:
+                    return found
+        elif isinstance(value, list):
+            for item in value:
+                found = WorkflowExecutorService._find_first_list(item, keys)
+                if found:
+                    return found
+        return []
+
+    @staticmethod
+    def _extract_report_text(value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, dict):
+            for key in ("analysis_report", "report", "scene_analysis", "response"):
+                item = value.get(key)
+                if isinstance(item, str) and item.strip():
+                    return item
+                if isinstance(item, dict):
+                    nested = WorkflowExecutorService._extract_report_text(item)
+                    if nested:
+                        return nested
+        return ""
+
+    @staticmethod
+    def _slim_sensor_data(sensor_data: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(sensor_data, dict):
+            return {}
+        keep = (
+            "event_id",
+            "event_code",
+            "event_name",
+            "event_category",
+            "event_instance_no",
+            "instance_no",
+            "risk_level",
+            "qwen_summary",
+            "qwen_risk_level",
+            "camera_id",
+            "camera_name",
+            "started_at",
+            "create_time",
+            "occur_time",
+            "flood_detected",
+            "flood_confidence",
+            "mudslide_detected",
+            "mudslide_confidence",
+            "landslide_detected",
+            "landslide_confidence",
+            "earthquake_detected",
+            "earthquake_confidence",
+            "person_present",
+            "person_confidence",
+            "boat_present",
+            "boat_confidence",
+        )
+        return {key: sensor_data[key] for key in keep if key in sensor_data}
 
     @staticmethod
     def _media_options(node: Dict[str, Any], inputs: Dict[str, Any]) -> Dict[str, Any]:
@@ -349,6 +504,9 @@ class WorkflowExecutorService:
             "actor_name",
             "system_prompt",
             "system_prompt_source",
+            "stage_code",
+            "prompt_version",
+            "prompt_model_scope",
             "model_task",
             "model_family",
             "event_group",
@@ -445,18 +603,12 @@ class WorkflowExecutorService:
 
     @staticmethod
     def _compact_media_object(value: Dict[str, Any]) -> Dict[str, Any]:
-        object_name = (
-            value.get("object_key")
-            or value.get("object_name")
-            or value.get("path")
-            or value.get("url")
-            or ""
-        )
-        return {
-            "type": value.get("type") or "media",
-            "bucket": value.get("bucket"),
-            "object": WorkflowExecutorService._compact_media_ref(str(object_name)),
-        }
+        compact: Dict[str, Any] = {"type": value.get("type") or "media"}
+        for key in ("bucket", "object_name", "object_key", "path", "url", "source", "content_type"):
+            item = value.get(key)
+            if item:
+                compact[key] = item
+        return compact
 
     @staticmethod
     def _looks_like_media_ref(value: str) -> bool:
@@ -515,7 +667,12 @@ class WorkflowExecutorService:
         return output if "inference_result" in output else data
 
     @staticmethod
-    def _node_result(node: Dict[str, Any], status: str, output: Dict[str, Any]) -> Dict[str, Any]:
+    def _node_result(
+        node: Dict[str, Any],
+        status: str,
+        output: Dict[str, Any],
+        request_data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         return {
             "node_id": node.get("node_id"),
             "node_class": node.get("node_class"),
@@ -523,7 +680,30 @@ class WorkflowExecutorService:
             "model_id": WorkflowExecutorService._node_model_id(node),
             "model_name": node.get("model_name"),
             "status": status,
+            "request_meta": WorkflowExecutorService._request_meta(request_data or {}),
             "output": output,
+        }
+
+    @staticmethod
+    def _request_meta(request_data: Dict[str, Any]) -> Dict[str, Any]:
+        videos = request_data.get("videos")
+        images = request_data.get("images")
+        media_objects = request_data.get("media_objects")
+        videos = videos if isinstance(videos, list) else []
+        images = images if isinstance(images, list) else []
+        media_objects = media_objects if isinstance(media_objects, list) else []
+        return {
+            "media_mode": request_data.get("media_mode"),
+            "fallback_to_frames": request_data.get("fallback_to_frames"),
+            "max_frames": request_data.get("max_frames"),
+            "frame_interval_seconds": request_data.get("frame_interval_seconds"),
+            "image_count": len(images),
+            "video_count": len(videos),
+            "media_object_count": len(media_objects),
+            "video_object_count": sum(
+                1 for item in media_objects
+                if isinstance(item, dict) and str(item.get("type") or "").lower() == "video"
+            ),
         }
 
     @staticmethod

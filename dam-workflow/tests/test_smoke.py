@@ -106,6 +106,51 @@ def test_actor_inference():
     print("PASS: actor inference")
 
 
+def test_actor_stage_prompt_preferred():
+    """角色阶段 prompt 优先于旧 actor_library 字段。"""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from src.core.models import Base, ActorLibrary, ActorPromptStage
+    from src.dam_workflow.model_selector import configure_action_node
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[ActorLibrary.__table__, ActorPromptStage.__table__])
+    db = sessionmaker(bind=engine)()
+    try:
+        actor = ActorLibrary(
+            actor_name="自然灾害分析专家",
+            description="test",
+            local_system_prompt="旧本地提示词",
+            cloud_system_prompt="旧云端提示词",
+        )
+        db.add(actor)
+        db.flush()
+        db.add(
+            ActorPromptStage(
+                actor_id=actor.id,
+                stage_code="edge_analysis",
+                model_scope="qwen4b",
+                system_prompt="阶段化 4B 提示词",
+                is_active=1,
+                version="v2",
+            )
+        )
+        db.commit()
+
+        node = {"node_class": "ACTION", "model_category": "local_llm", "node_type": "场景理解"}
+        configure_action_node(node, "洪水", "洪水事件", db, sensor_data={"event_name": "洪水告警"})
+
+        assert node["system_prompt"] == "阶段化 4B 提示词"
+        assert node["system_prompt_source"] == "actor_prompt_stage.edge_analysis.qwen4b.v2"
+        assert node["stage_code"] == "edge_analysis"
+        assert node["prompt_version"] == "v2"
+    finally:
+        db.close()
+        engine.dispose()
+    print("PASS: actor stage prompt preferred")
+
+
 def test_rule_io_matcher():
     """规则 IO 匹配"""
     from src.dam_workflow.tools.rule_io_matcher import rule_based_io_match, START_OUTPUTS, LLM_ACTION_IO
@@ -121,5 +166,6 @@ if __name__ == "__main__":
     test_dag_generation_template_path()
     test_input_parser()
     test_actor_inference()
+    test_actor_stage_prompt_preferred()
     test_rule_io_matcher()
     print("\nAll smoke tests passed!")
