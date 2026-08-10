@@ -24,147 +24,34 @@
     </header>
 
     <section v-if="!isMediaAnalysisRoute" class="command-monitor">
-      <header class="ops-header">
-        <div class="monitor-identity">
-          <div class="monitor-title-row">
-            <span class="mode-control-icon">
-              <el-icon><Monitor /></el-icon>
-            </span>
-            <el-select
-              :model-value="cameraViewMode"
-              class="ops-mode-select"
-              placeholder="选择画面布局"
-              popper-class="vision-select-popper"
-              @change="setCameraViewMode"
-            >
-              <el-option label="单画面" value="single" />
-              <el-option label="四宫格" value="quad" />
-              <el-option label="九宫格" value="nine" />
-            </el-select>
-          </div>
-        </div>
-
-        <div class="ops-header-actions">
-          <el-button
-            class="ops-ghost-button"
-            @click="openMediaAnalysisPage"
-          >
-            <el-icon><DataAnalysis /></el-icon>模拟监测
-          </el-button>
-          <el-button
-            v-if="isMultiCameraMode"
-            class="ops-ghost-button"
-            :class="{ active: assistOverlayVisible }"
-            @click="toggleAssistOverlay"
-          >
-            <el-icon><component :is="assistOverlayVisible ? View : Hide" /></el-icon>{{ assistOverlayLabel }}
-          </el-button>
-        </div>
-      </header>
-
-      <main v-if="isMultiCameraMode" class="multi-camera-layout" :class="`mode-${cameraViewMode}`">
-        <article
-          v-for="slot in gridSlots"
-          :key="slot.slotKey"
-          class="multi-camera-tile"
-          :class="{
-            online: slot.camera?.connected,
-            empty: !slot.camera,
-            active: slot.camera?.id === currentCameraId,
-          }"
-        >
-          <header>
-            <el-select
-              :model-value="slot.camera?.id || ''"
-              class="slot-camera-select"
-              placeholder="不展示摄像头"
-              popper-class="vision-select-popper"
-              @change="setGridSlotCamera(slot.index, $event)"
-            >
-              <el-option label="不展示摄像头" value="" />
-              <el-option
-                v-for="camera in cameras"
-                :key="camera.id"
-                :label="camera.name || camera.id"
-                :value="camera.id"
-              />
-            </el-select>
-            <span :class="slot.camera?.connected ? 'online' : 'offline'">
-              <i></i>{{ slot.camera ? (slot.camera.connected ? '在线' : '离线') : '不展示' }}
-            </span>
-          </header>
-          <div class="tile-video-box">
-            <video
-              v-if="slot.camera && gridStreamModes[slot.camera.id] === 'webrtc'"
-              :ref="(el) => setGridVideoRef(slot.camera.id, el)"
-              class="tile-video"
-              autoplay
-              muted
-              playsinline
-              :controls="false"
-              disablepictureinpicture
-              controlslist="nodownload noplaybackrate noremoteplayback nofullscreen"
-              @loadedmetadata="handleGridVideoLoad(slot.camera.id, $event)"
-              @playing="handleGridVideoLoad(slot.camera.id, $event)"
-            ></video>
-            <img
-              v-if="slot.camera && gridStreamModes[slot.camera.id] === 'mjpeg' && gridStreamUrls[slot.camera.id]"
-              :src="gridStreamUrls[slot.camera.id]"
-              :alt="`${slot.camera.name || slot.camera.id}实时画面`"
-              class="tile-video"
-              @load="handleGridImageLoad(slot.camera.id, $event)"
-              @error="handleGridStreamError(slot.camera.id)"
-            />
-            <svg
-              v-if="gridZoneOverlayVisible(slot.camera)"
-              class="tile-zone-overlay"
-              :viewBox="`0 0 ${gridOverlaySize(slot.camera.id).width} ${gridOverlaySize(slot.camera.id).height}`"
-              preserveAspectRatio="xMidYMid meet"
-            >
-              <g v-for="zone in gridZonesForCamera(slot.camera.id)" :key="zone.id">
-                <polygon
-                  class="ops-zone-polygon"
-                  :points="zonePolygonPointsForSize(zone, gridOverlaySize(slot.camera.id).width, gridOverlaySize(slot.camera.id).height)"
-                  :stroke="zoneStroke(zone)"
-                  :fill="zoneFill(zone)"
-                  :stroke-width="Math.max(2, gridOverlaySize(slot.camera.id).width / 520)"
-                />
-                <text
-                  class="ops-zone-label"
-                  :x="zoneLabelPointForSize(zone, gridOverlaySize(slot.camera.id).width, gridOverlaySize(slot.camera.id).height).x"
-                  :y="zoneLabelPointForSize(zone, gridOverlaySize(slot.camera.id).width, gridOverlaySize(slot.camera.id).height).y"
-                  :fill="zoneStroke(zone)"
-                >
-                  {{ zone.zone_name || zone.name || zoneTypeLabel(zone.type) }}
-                </text>
-              </g>
-            </svg>
-            <div v-if="!gridSlotHasStream(slot)" class="tile-empty">
-              <el-icon><VideoCamera /></el-icon>
-              <span>{{ gridSlotEmptyText(slot) }}</span>
-            </div>
-          </div>
-        </article>
-      </main>
-
-      <main v-else class="ops-layout">
+      <main class="ops-layout" :class="{ 'multi-mode': isMultiCameraMode }">
         <aside class="ops-camera-rail">
           <section class="rail-card camera-list-card">
             <header>
-              <h3>摄像头</h3>
-              <span>{{ cameras.length }} 路</span>
+              <h3>摄像头列表</h3>
+              <span>{{ connectedPointCount }} / 9 路</span>
             </header>
+            <div class="camera-list-view-switch">
+              <button
+                v-for="mode in cameraViewModes"
+                :key="mode.value"
+                type="button"
+                :class="{ active: cameraViewMode === mode.value }"
+                @click="setCameraViewMode(mode.value)"
+              >
+                {{ mode.label }}
+              </button>
+            </div>
             <div class="rail-camera-list">
               <button
-                v-for="camera in cameras"
-                :key="camera.id"
+                v-for="point in cameraPointSlots"
+                :key="point.no"
                 type="button"
-                :class="{ active: camera.id === currentCameraId }"
-                @click="selectCameraFromPanel(camera.id)"
+                :class="{ active: point.no === selectedPointNo, empty: !point.camera }"
+                @click="selectPointFromPanel(point.no)"
               >
-                <i :class="{ online: camera.connected }"></i>
-                <span>{{ camera.name || camera.id }}</span>
-                <em>{{ camera.connected ? '在线' : '离线' }}</em>
+                <span>{{ point.camera?.name || `${point.no}号监测点` }}</span>
+                <em>{{ pointStatusText(point) }}</em>
               </button>
             </div>
           </section>
@@ -172,25 +59,153 @@
           <section class="rail-card camera-map-card">
             <header>
               <h3>点位图</h3>
-              <span>点击切换</span>
+              <button type="button" class="map-expand-button" title="放大地图" @click="mapDialogVisible = true">
+                <el-icon><FullScreen /></el-icon>
+              </button>
             </header>
             <div class="camera-map-stage">
-              <img src="/dammap.png" alt="摄像头点位图" />
-              <button
-                v-for="(camera, index) in cameras"
-                :key="`map-${camera.id}`"
-                type="button"
-                class="camera-map-point"
-                :class="{ active: camera.id === currentCameraId, offline: !camera.connected }"
-                :style="cameraPointStyle(camera, index)"
-                :title="camera.name || camera.id"
-                @click="selectCameraFromPanel(camera.id)"
-              ></button>
+              <div class="camera-map-canvas">
+                <img src="/dam.png" alt="大藤峡摄像头点位图" />
+                <button
+                  v-for="point in cameraPointSlots"
+                  :key="`map-point-${point.no}`"
+                  type="button"
+                  class="camera-map-point"
+                  :class="{ active: point.no === selectedPointNo, offline: !point.camera?.connected, empty: !point.camera }"
+                  :style="cameraPointStyle(point)"
+                  :title="point.camera?.name || `${point.no}号监测点暂未接入`"
+                  @click="selectPointFromPanel(point.no)"
+                >
+                  <span>{{ point.no }}</span>
+                </button>
+              </div>
             </div>
+          </section>
+
+          <section class="rail-card camera-tool-card">
+            <div class="camera-tool-status">
+              <span>{{ selectedPointTitle }}</span>
+              <strong>{{ assistOverlayVisible ? '辅助框已显示' : '辅助框未显示' }}</strong>
+            </div>
+            <div class="camera-tool-actions">
+              <button
+                type="button"
+                class="rail-action-button talk"
+                :disabled="!emergencyBroadcastCamera"
+                @click="openEmergencyBroadcast"
+              >
+                <el-icon><Connection /></el-icon>
+                <span>一键喊话</span>
+              </button>
+              <button
+                type="button"
+                class="rail-action-button"
+                :class="{ active: assistOverlayVisible }"
+                @click="toggleAssistOverlay"
+              >
+                <el-icon><component :is="assistOverlayVisible ? View : Hide" /></el-icon>
+                <span>{{ assistOverlayVisible ? '隐藏辅助' : '显示辅助' }}</span>
+              </button>
+            </div>
+            <button
+              type="button"
+              class="simulation-link-button"
+              @click="openMediaAnalysisPage"
+            >
+              <el-icon><DataAnalysis /></el-icon>
+              <span>模拟监测</span>
+            </button>
           </section>
         </aside>
 
-        <article class="ops-video-panel">
+        <article v-if="isMultiCameraMode" class="ops-video-panel multi-video-panel">
+          <div class="multi-camera-layout" :class="`mode-${cameraViewMode}`">
+            <article
+              v-for="slot in gridSlots"
+              :key="slot.slotKey"
+              class="multi-camera-tile"
+              :class="{
+                online: slot.camera?.connected,
+                empty: !slot.camera,
+                active: slot.camera?.id === currentCameraId,
+              }"
+            >
+              <header>
+                <el-select
+                  :model-value="slot.camera?.id || ''"
+                  class="slot-camera-select"
+                  placeholder="不展示摄像头"
+                  popper-class="vision-select-popper"
+                  @change="setGridSlotCamera(slot.index, $event)"
+                >
+                  <el-option label="不展示摄像头" value="" />
+                  <el-option
+                    v-for="camera in cameras"
+                    :key="camera.id"
+                    :label="camera.name || camera.id"
+                    :value="camera.id"
+                  />
+                </el-select>
+                <span :class="slot.camera?.connected ? 'online' : 'offline'">
+                  <i></i>{{ slot.camera ? (slot.camera.connected ? '在线' : '离线') : '不展示' }}
+                </span>
+              </header>
+              <div class="tile-video-box">
+                <video
+                  v-if="slot.camera && gridStreamModes[slot.camera.id] === 'webrtc'"
+                  :ref="(el) => setGridVideoRef(slot.camera.id, el)"
+                  class="tile-video"
+                  autoplay
+                  muted
+                  playsinline
+                  :controls="false"
+                  disablepictureinpicture
+                  controlslist="nodownload noplaybackrate noremoteplayback nofullscreen"
+                  @loadedmetadata="handleGridVideoLoad(slot.camera.id, $event)"
+                  @playing="handleGridVideoLoad(slot.camera.id, $event)"
+                ></video>
+                <img
+                  v-if="slot.camera && gridStreamModes[slot.camera.id] === 'mjpeg' && gridStreamUrls[slot.camera.id]"
+                  :src="gridStreamUrls[slot.camera.id]"
+                  :alt="`${slot.camera.name || slot.camera.id}实时画面`"
+                  class="tile-video"
+                  @load="handleGridImageLoad(slot.camera.id, $event)"
+                  @error="handleGridStreamError(slot.camera.id)"
+                />
+                <svg
+                  v-if="gridZoneOverlayVisible(slot.camera)"
+                  class="tile-zone-overlay"
+                  :viewBox="`0 0 ${gridOverlaySize(slot.camera.id).width} ${gridOverlaySize(slot.camera.id).height}`"
+                  preserveAspectRatio="xMidYMid meet"
+                >
+                  <g v-for="zone in gridZonesForCamera(slot.camera.id)" :key="zone.id">
+                    <polygon
+                      class="ops-zone-polygon"
+                      :points="zonePolygonPointsForSize(zone, gridOverlaySize(slot.camera.id).width, gridOverlaySize(slot.camera.id).height)"
+                      :stroke="zoneStroke(zone)"
+                      :fill="zoneFill(zone)"
+                      :stroke-width="Math.max(2, gridOverlaySize(slot.camera.id).width / 520)"
+                    />
+                    <text
+                      class="ops-zone-label"
+                      :x="zoneLabelPointForSize(zone, gridOverlaySize(slot.camera.id).width, gridOverlaySize(slot.camera.id).height).x"
+                      :y="zoneLabelPointForSize(zone, gridOverlaySize(slot.camera.id).width, gridOverlaySize(slot.camera.id).height).y"
+                      :fill="zoneStroke(zone)"
+                    >
+                      {{ zone.zone_name || zone.name || zoneTypeLabel(zone.type) }}
+                    </text>
+                  </g>
+                </svg>
+                <div v-if="!gridSlotHasStream(slot)" class="tile-empty">
+                  <el-icon><VideoCamera /></el-icon>
+                  <span>{{ gridSlotEmptyText(slot) }}</span>
+                </div>
+              </div>
+            </article>
+          </div>
+        </article>
+
+        <article v-else class="ops-video-panel">
           <div v-if="false" class="single-camera-select-wrap">
             <el-select
               :model-value="singleCameraSelectValue"
@@ -387,35 +402,6 @@
           </div>
         </article>
 
-        <aside class="ops-action-rail">
-          <section class="rail-card action-card primary">
-            <span>当前点位</span>
-            <strong>{{ currentCamera?.name || '未选择摄像头' }}</strong>
-            <button
-              type="button"
-              class="rail-action-button talk"
-              :disabled="!emergencyBroadcastCamera"
-              @click="openEmergencyBroadcast"
-            >
-              <el-icon><Connection /></el-icon>
-              <span>一键喊话</span>
-            </button>
-          </section>
-
-          <section class="rail-card action-card">
-            <span>画面辅助</span>
-            <strong>{{ assistOverlayVisible ? '辅助框已显示' : '辅助框未显示' }}</strong>
-            <button
-              type="button"
-              class="rail-action-button"
-              :class="{ active: assistOverlayVisible }"
-              @click="toggleAssistOverlay"
-            >
-              <el-icon><component :is="assistOverlayVisible ? View : Hide" /></el-icon>
-              <span>{{ assistOverlayLabel }}</span>
-            </button>
-          </section>
-        </aside>
       </main>
     </section>
 
@@ -867,6 +853,71 @@
       </div>
     </section>
 
+    <el-dialog
+      v-model="mapDialogVisible"
+      class="camera-map-dialog"
+      title="摄像头点位图"
+      width="92vw"
+      top="5vh"
+    >
+      <div class="expanded-map-stage">
+        <img src="/dam.png" alt="大藤峡摄像头点位总览" />
+        <svg
+          v-if="selectedMapRegionPath"
+          class="expanded-map-region-layer"
+          viewBox="0 0 2168 725"
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          <defs>
+            <filter id="camera-region-glow" x="-14%" y="-18%" width="128%" height="136%">
+              <feGaussianBlur stdDeviation="5" result="blur" />
+              <feColorMatrix
+                in="blur"
+                type="matrix"
+                values="0 0 0 0 0.25 0 0 0 0 0.86 0 0 0 0 1 0 0 0 .88 0"
+                result="cyanGlow"
+              />
+              <feMerge>
+                <feMergeNode in="cyanGlow" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+          <path class="expanded-region-fill" :d="selectedMapRegionPath" />
+          <path class="expanded-region-halo" :d="selectedMapRegionPath" />
+          <path class="expanded-region-line" :d="selectedMapRegionPath" />
+          <g v-if="selectedMapRegionCallout" class="expanded-region-callout">
+            <rect
+              :x="selectedMapRegionCallout.x"
+              :y="selectedMapRegionCallout.y"
+              :width="selectedMapRegionCallout.width"
+              :height="34"
+              rx="5"
+            />
+            <text
+              :x="selectedMapRegionCallout.x + selectedMapRegionCallout.width / 2"
+              :y="selectedMapRegionCallout.y + 22"
+            >
+              {{ selectedMapRegionCallout.label }}
+            </text>
+          </g>
+        </svg>
+        <button
+          v-for="point in cameraPointSlots"
+          :key="`expanded-map-point-${point.no}`"
+          type="button"
+          class="expanded-map-point"
+          :class="{ active: point.no === selectedPointNo, offline: !point.camera?.connected, empty: !point.camera }"
+          :style="cameraPointStyle(point)"
+          :title="point.camera?.name || `${point.no}号监测点暂未接入`"
+          @click="selectPointFromPanel(point.no)"
+        >
+          <span>{{ point.no }}</span>
+        </button>
+      </div>
+    </el-dialog>
+
     <BroadcastDialog
       v-model="broadcastDialogVisible"
       :event="broadcastTargetEvent"
@@ -936,7 +987,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  Aim, ArrowLeft, Camera, Connection, Crop, DataAnalysis, Delete, Files, Loading, Monitor,
+  Aim, ArrowLeft, Camera, Connection, Crop, DataAnalysis, Delete, Files, FullScreen, Loading, Monitor,
   Hide, Picture, UploadFilled, VideoCamera, VideoPlay, View,
 } from '@element-plus/icons-vue'
 import {
@@ -963,6 +1014,7 @@ const router = useRouter()
 const showLiveChrome = false
 const currentCameraId = ref('')
 const currentCamera = ref(null)
+const selectedPointNo = ref(9)
 const modelStatus = ref({ loaded: false, models: {} })
 const analysisTask = ref('detect')
 const detectionEnabled = ref(false)
@@ -977,6 +1029,7 @@ const eventActionState = ref({})
 const broadcastDialogVisible = ref(false)
 const broadcastTargetEvent = ref(null)
 const reportDrawerVisible = ref(false)
+const mapDialogVisible = ref(false)
 const reportLoading = ref(false)
 const reportSaving = ref(false)
 const patrolReport = ref(null)
@@ -1006,6 +1059,32 @@ const gridCameraZones = ref({})
 const gridImageMetrics = ref({})
 const assistOverlayVisible = ref(false)
 const singleCameraHidden = ref(false)
+const cameraPointDefinitions = [
+  { no: 1, x: 17.3410, y: 40.8304 },
+  { no: 2, x: 7.3988, y: 15.2249 },
+  { no: 3, x: 41.8497, y: 74.0484 },
+  { no: 4, x: 47.3988, y: 38.0623 },
+  { no: 5, x: 49.2486, y: 38.0623 },
+  { no: 6, x: 66.3584, y: 52.5952 },
+  { no: 7, x: 68.2081, y: 52.5952 },
+  { no: 8, x: 57.3410, y: 75.4325 },
+  { no: 9, x: 91.7919, y: 24.2215 },
+]
+const cameraViewModes = [
+  { label: '单画面', value: 'single' },
+  { label: '四宫格', value: 'quad' },
+  { label: '九宫格', value: 'nine' },
+]
+const cameraRegionPaths = {
+  1: 'M371 317 L297 320 L259 324 L230 336 L191 363 L176 386 L179 425 L179 453 L181 487 L178 536 L200 549 L214 554 L231 554 L244 557 L262 556 L272 560 L295 557 L298 558 L327 560 L351 567 L372 570 L374 577 L383 583 L395 581 L408 578 L422 576 L436 571 L449 569 L463 561 L477 555 L489 552 L502 553 L511 546 L521 535 L524 521 L540 510 L538 492 L542 483 L539 466 L539 450 L538 433 L541 425 L542 406 L542 391 L539 380 L539 368 L537 358 L536 347 L531 340 L524 334 L514 332 L494 330 L470 339 L448 339 L427 343 L416 339 Z',
+  3: 'M847 460 L831 450 L830 424 L972 423 L1032 430 L1051 456 L1047 477 L1044 504 L1030 518 L1024 525 L927 544 L856 533 L852 523 L844 524 Z',
+  4: 'M844 255 L847 296 L831 304 L829 413 L867 415 L968 415 L1031 422 L1043 405 L1046 376 L1044 355 L1043 335 L1038 319 L1039 302 L1033 291 L1006 276 L952 262 L928 257 Z',
+  5: 'M1058 300 L1053 328 L1054 339 L1054 360 L1053 376 L1053 395 L1051 413 L1066 428 L1089 437 L1136 439 L1226 447 L1256 442 L1258 435 L1266 416 L1274 393 L1276 379 L1276 364 L1272 358 L1221 351 L1194 346 L1159 337 Z',
+  6: 'M1439 335 L1383 352 L1367 353 L1355 361 L1343 365 L1332 368 L1318 362 L1299 361 L1288 361 L1283 379 L1282 396 L1279 415 L1279 436 L1279 445 L1279 466 L1283 483 L1283 495 L1286 510 L1296 514 L1304 516 L1318 510 L1334 512 L1367 508 L1367 497 L1390 486 L1398 488 L1424 476 L1432 468 L1441 471 L1464 457 Z',
+  7: 'M1447 335 L1576 287 L1617 282 L1649 283 L1730 280 L1749 271 L1778 271 L1792 263 L1799 278 L1804 299 L1812 330 L1809 360 L1809 374 L1798 385 L1781 393 L1671 406 L1589 415 L1519 444 L1514 441 L1474 450 Z',
+  8: 'M1273 520 L1259 521 L1230 526 L1193 540 L1178 541 L1165 530 L1147 545 L1049 523 L1049 513 L1051 498 L1054 486 L1055 467 L1061 456 L1073 445 L1090 444 L1126 445 L1165 451 L1199 452 L1224 454 L1249 456 L1261 453 L1269 461 L1274 479 L1279 503 L1280 517 Z',
+  9: 'M2127 373 L2108 370 L2104 375 L2084 378 L2066 375 L2030 377 L1984 376 L1944 378 L1915 379 L1897 381 L1872 384 L1843 385 L1836 385 L1826 389 L1823 398 L1824 408 L1838 418 L1877 412 L1898 408 L1922 411 L1944 415 L1974 419 L2005 422 L2025 412 L2041 409 L2056 407 L2066 410 L2088 410 L2104 408 L2121 410 L2134 406 L2142 393 L2141 381 L2142 373 Z',
+}
 
 const imageUploading = ref(false)
 const uploadResult = ref(null)
@@ -1074,6 +1153,12 @@ const emergencyBroadcastCamera = computed(() => currentCamera.value || cameras.v
 const isMultiCameraMode = computed(() => cameraViewMode.value !== 'single')
 const gridCameraLimit = computed(() => cameraViewMode.value === 'nine' ? 9 : 4)
 const cameraById = computed(() => new Map(cameras.value.map((camera) => [camera.id, camera])))
+const cameraPointSlots = computed(() => buildCameraPointSlots())
+const connectedPointCount = computed(() => cameraPointSlots.value.filter((point) => point.camera).length)
+const selectedPointSlot = computed(() => cameraPointSlots.value.find((point) => point.no === selectedPointNo.value) || cameraPointSlots.value[0])
+const selectedPointTitle = computed(() => selectedPointSlot.value?.camera?.name || `${selectedPointNo.value}号监测点`)
+const selectedMapRegionPath = computed(() => cameraRegionPaths[selectedPointNo.value] || regionPathFromPoint(selectedPointSlot.value))
+const selectedMapRegionCallout = computed(() => regionCalloutFromPath(selectedMapRegionPath.value, selectedPointNo.value))
 const gridSlots = computed(() => Array.from({ length: gridCameraLimit.value }, (_, index) => {
   const cameraId = gridSlotCameraIds.value[index]
   const camera = cameraId ? cameraById.value.get(cameraId) : null
@@ -1499,6 +1584,7 @@ function applyCameraList(nextCameras) {
     currentCameraId.value = cameras.value[0].id
   }
   currentCamera.value = cameras.value.find((item) => item.id === currentCameraId.value) || null
+  syncSelectedPointFromCamera(currentCamera.value)
   syncGridSlots()
 }
 
@@ -1528,8 +1614,73 @@ async function fetchCameras(options = {}) {
   }
 }
 
+function cameraPointNo(camera) {
+  const direct = Number(camera?.point_no ?? camera?.pointNo ?? camera?.monitor_point_no)
+  if (Number.isInteger(direct) && direct >= 1 && direct <= 9) return direct
+  const text = [
+    camera?.name,
+    camera?.camera_name,
+    camera?.install_address,
+    camera?.description,
+  ].filter(Boolean).join(' ')
+  const match = text.match(/([1-9])\s*号/)
+  return match ? Number(match[1]) : null
+}
+
+function buildCameraPointSlots() {
+  const assigned = new Map()
+  const unassigned = []
+  cameras.value.forEach((camera) => {
+    const no = cameraPointNo(camera)
+    if (no && !assigned.has(no)) assigned.set(no, camera)
+    else unassigned.push(camera)
+  })
+  if (!assigned.has(9) && unassigned.length) assigned.set(9, unassigned[0])
+  return cameraPointDefinitions.map((point) => {
+    return { ...point, camera: assigned.get(point.no) || null }
+  })
+}
+
+function syncSelectedPointFromCamera(camera) {
+  const no = cameraPointNo(camera)
+  if (no) {
+    selectedPointNo.value = no
+    return
+  }
+  const fallbackPoint = cameraPointSlots.value.find((point) => point.camera?.id === camera?.id)
+  if (fallbackPoint) selectedPointNo.value = fallbackPoint.no
+}
+
+function pointStatusText(point) {
+  if (!point.camera) return '未接入'
+  return point.camera.connected ? '在线' : '离线'
+}
+
+async function selectPointFromPanel(pointNo) {
+  const slot = cameraPointSlots.value.find((point) => point.no === pointNo)
+  selectedPointNo.value = pointNo
+  if (!slot?.camera) {
+    mapDialogVisible.value = true
+    ElMessage.info(`${pointNo}号监测点暂未接入摄像头`)
+    return
+  }
+  currentCameraId.value = slot.camera.id
+  currentCamera.value = slot.camera
+  if (isMultiCameraMode.value) {
+    gridSlotCameraIds.value = [
+      slot.camera.id,
+      ...gridSlotCameraIds.value.filter((cameraId) => cameraId && cameraId !== slot.camera.id),
+    ].slice(0, gridCameraLimit.value)
+    await refreshGridStreams(true)
+    await activateGridCamera(slot.camera.id)
+    return
+  }
+  await selectCameraFromPanel(slot.camera.id)
+}
+
 function syncGridSlots() {
   const limit = gridCameraLimit.value
+  const orderedCameras = cameraPointSlots.value.map((point) => point.camera).filter(Boolean)
   const validIds = new Set(cameras.value.map((camera) => camera.id))
   const nextSlots = gridSlotCameraIds.value
     .slice(0, limit)
@@ -1542,16 +1693,16 @@ function syncGridSlots() {
 
   for (let index = 0; index < limit; index += 1) {
     if (nextSlots[index] !== null && nextSlots[index] !== undefined) continue
-    while (cameraIndex < cameras.value.length && usedIds.has(cameras.value[cameraIndex].id)) {
+    while (cameraIndex < orderedCameras.length && usedIds.has(orderedCameras[cameraIndex].id)) {
       cameraIndex += 1
     }
-    const cameraId = cameras.value[cameraIndex]?.id || ''
+    const cameraId = orderedCameras[cameraIndex]?.id || ''
     nextSlots[index] = cameraId
     if (cameraId) usedIds.add(cameraId)
   }
 
   while (nextSlots.length < limit) {
-    const camera = cameras.value.find((item) => !usedIds.has(item.id))
+    const camera = orderedCameras.find((item) => !usedIds.has(item.id))
     nextSlots.push(camera?.id || '')
     if (camera) usedIds.add(camera.id)
   }
@@ -1874,6 +2025,7 @@ async function activateCamera(cameraId) {
   selectedZoneId.value = ''
   zoneVertexDragging.value = null
   currentCamera.value = cameras.value.find((camera) => camera.id === cameraId) || null
+  syncSelectedPointFromCamera(currentCamera.value)
   detectionEnabled.value = false
   stopDetectionSubscription()
   await fetchCameraZones(cameraId).catch(() => {
@@ -1987,21 +2139,62 @@ async function selectCameraFromPanel(cameraId) {
   await activateCamera(cameraId)
 }
 
-function cameraPointStyle(camera, index) {
-  const x = Number(camera.map_x ?? camera.mapX ?? camera.point_x ?? camera.longitude_percent)
-  const y = Number(camera.map_y ?? camera.mapY ?? camera.point_y ?? camera.latitude_percent)
+function cameraPointStyle(point) {
+  const camera = point.camera
+  const x = Number(camera?.map_x ?? camera?.mapX ?? camera?.point_x ?? camera?.longitude_percent ?? point.x)
+  const y = Number(camera?.map_y ?? camera?.mapY ?? camera?.point_y ?? camera?.latitude_percent ?? point.y)
   if (Number.isFinite(x) && Number.isFinite(y)) {
     return { left: `${Math.max(4, Math.min(96, x))}%`, top: `${Math.max(6, Math.min(94, y))}%` }
   }
-  const fallback = [
-    [74, 28],
-    [58, 42],
-    [44, 56],
-    [68, 66],
-    [34, 36],
-    [82, 52],
-  ][index % 6]
-  return { left: `${fallback[0]}%`, top: `${fallback[1]}%` }
+  return { left: '50%', top: '50%' }
+}
+
+function regionPathFromPoint(point) {
+  if (!point) return ''
+  const centerX = Number(point.x) / 100 * 2168
+  const centerY = Number(point.y) / 100 * 725
+  if (!Number.isFinite(centerX) || !Number.isFinite(centerY)) return ''
+  const width = 150
+  const height = 76
+  const left = Math.max(24, Math.min(2168 - width - 24, centerX - width / 2))
+  const top = Math.max(24, Math.min(725 - height - 24, centerY - height / 2))
+  const right = left + width
+  const bottom = top + height
+  return [
+    `M${left} ${top + 18}`,
+    `L${left + 18} ${top}`,
+    `L${right - 26} ${top + 4}`,
+    `L${right} ${top + 28}`,
+    `L${right - 14} ${bottom - 8}`,
+    `L${left + 32} ${bottom}`,
+    `L${left} ${bottom - 22}`,
+    'Z',
+  ].join(' ')
+}
+
+function pointsFromRegionPath(path) {
+  const values = String(path || '').match(/-?\d+(\.\d+)?/g)?.map(Number) || []
+  const points = []
+  for (let index = 0; index < values.length; index += 2) {
+    points.push({ x: values[index], y: values[index + 1] })
+  }
+  return points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+}
+
+function regionCalloutFromPath(path, pointNo) {
+  const points = pointsFromRegionPath(path)
+  if (!points.length) return null
+  const minX = Math.min(...points.map((point) => point.x))
+  const maxX = Math.max(...points.map((point) => point.x))
+  const minY = Math.min(...points.map((point) => point.y))
+  const label = `${pointNo}号摄像头监测区域`
+  const width = Math.max(170, label.length * 14)
+  return {
+    label,
+    width,
+    x: Math.max(16, Math.min(2168 - width - 16, (minX + maxX) / 2 - width / 2)),
+    y: Math.max(18, minY - 58),
+  }
 }
 
 function gridSlotEmptyText(slot) {
@@ -2034,6 +2227,7 @@ async function setGridSlotCamera(slotIndex, cameraId) {
 async function activateGridCamera(cameraId) {
   currentCameraId.value = cameraId
   currentCamera.value = cameras.value.find((camera) => camera.id === cameraId) || null
+  syncSelectedPointFromCamera(currentCamera.value)
   if (cameraViewMode.value === 'single') await activateCamera(cameraId)
 }
 
@@ -3147,15 +3341,17 @@ h1, h2, h3, p { margin-top: 0; }
 }
 .ops-layout {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr) 220px;
-  gap: 12px;
-  margin-top: 12px;
+  grid-template-columns: minmax(390px, 460px) minmax(0, 1fr);
+  align-items: stretch;
+  gap: 14px;
+  margin-top: 0;
 }
-.ops-camera-rail,
-.ops-action-rail {
+.ops-camera-rail {
   min-width: 0;
-  display: grid;
-  align-content: start;
+  height: min(760px, calc(100vh - 36px));
+  min-height: 540px;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
 }
 .rail-card {
@@ -3184,20 +3380,52 @@ h1, h2, h3, p { margin-top: 0; }
   color: #7897a8;
   font-size: 11px;
 }
+.camera-list-card {
+  min-height: 0;
+  flex: 0 0 244px;
+  display: flex;
+  flex-direction: column;
+}
+.camera-list-view-switch {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  padding: 10px 10px 0;
+}
+.camera-list-view-switch button {
+  height: 30px;
+  border: 1px solid rgba(137, 174, 184, 0.18);
+  border-radius: 6px;
+  color: #91adb2;
+  background: rgba(2, 12, 16, 0.68);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.camera-list-view-switch button.active {
+  color: #041417;
+  border-color: rgba(72, 216, 255, 0.62);
+  background: #48d8ff;
+}
 .rail-camera-list {
-  max-height: 300px;
+  min-height: 0;
+  flex: 1 1 auto;
   overflow-y: auto;
-  padding: 8px;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-content: start;
+  gap: 6px;
 }
 .rail-camera-list button {
   width: 100%;
-  min-height: 44px;
+  min-height: 38px;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
-  padding: 0 10px;
+  gap: 2px;
+  margin-bottom: 0;
+  padding: 5px 8px;
   border: 1px solid transparent;
   border-radius: 7px;
   color: #bdd5e1;
@@ -3209,77 +3437,278 @@ h1, h2, h3, p { margin-top: 0; }
   border-color: rgba(72, 216, 255, 0.38);
   background: rgba(18, 68, 88, 0.72);
 }
-.rail-camera-list i {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #728996;
-}
-.rail-camera-list i.online {
-  background: #62d7b1;
-  box-shadow: 0 0 9px rgba(98, 215, 177, 0.55);
+.rail-camera-list button.empty {
+  color: #829aa5;
+  background: rgba(7, 24, 34, 0.46);
 }
 .rail-camera-list span {
   min-width: 0;
   overflow: hidden;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 900;
+  text-align: center;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .rail-camera-list em {
   color: #7f9bad;
   font-size: 11px;
+  text-align: center;
   font-style: normal;
 }
 .camera-map-card {
-  align-self: end;
+  flex: 0 0 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.map-expand-button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(72, 216, 255, 0.24);
+  border-radius: 6px;
+  color: #8ddcf0;
+  background: rgba(9, 35, 50, 0.62);
+  cursor: pointer;
 }
 .camera-map-stage {
   position: relative;
-  height: 190px;
+  width: 100%;
+  flex: 0 0 auto;
+  aspect-ratio: 2168 / 725;
+  min-height: 148px;
   overflow: hidden;
   background: #02080d;
 }
-.camera-map-stage img {
+.camera-map-canvas {
+  position: absolute;
+  inset: 0;
+}
+.camera-map-canvas img {
   width: 100%;
   height: 100%;
   display: block;
-  object-fit: cover;
-  opacity: .86;
+  object-fit: contain;
+  filter: saturate(1.08) contrast(1.06) brightness(.72);
+  opacity: .96;
 }
 .camera-map-point {
   position: absolute;
-  width: 13px;
-  height: 13px;
-  margin: -6px 0 0 -6px;
-  border: 2px solid #06141b;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  margin: -12px 0 0 -12px;
+  border: 2px solid rgba(255, 255, 255, 0.48);
   border-radius: 50%;
-  background: #62d7b1;
-  box-shadow: 0 0 0 4px rgba(98, 215, 177, 0.18), 0 0 12px rgba(98, 215, 177, 0.68);
+  color: #fff;
+  background: #d93a4b;
+  box-shadow: 0 0 0 6px rgba(217, 58, 75, 0.18), 0 0 16px rgba(217, 58, 75, 0.72);
+  font: 900 13px/1 "Consolas", "Monaco", monospace;
   cursor: pointer;
 }
 .camera-map-point.offline {
-  background: #7c919c;
-  box-shadow: 0 0 0 4px rgba(124, 145, 156, 0.14);
+  background: #526977;
+  box-shadow: 0 0 0 5px rgba(82, 105, 119, 0.16);
+}
+.camera-map-point.empty {
+  opacity: .78;
 }
 .camera-map-point.active {
-  width: 17px;
-  height: 17px;
-  margin: -8px 0 0 -8px;
+  width: 30px;
+  height: 30px;
+  margin: -15px 0 0 -15px;
+  color: #041417;
+  border-color: rgba(230, 250, 255, 0.92);
   background: #48d8ff;
-  box-shadow: 0 0 0 5px rgba(72, 216, 255, 0.24), 0 0 16px rgba(72, 216, 255, 0.82);
+  box-shadow: 0 0 0 8px rgba(72, 216, 255, 0.24), 0 0 22px rgba(72, 216, 255, 0.88);
+}
+:global(.camera-map-dialog.el-dialog) {
+  border: 1px solid rgba(72, 216, 255, 0.24);
+  border-radius: 8px;
+  background: #07131a;
+  box-shadow: 0 24px 60px rgba(0, 7, 18, 0.46);
+}
+:global(.camera-map-dialog .el-dialog__header) {
+  margin: 0;
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(137, 174, 184, 0.14);
+}
+:global(.camera-map-dialog .el-dialog__title) {
+  color: #e9f7ff;
+  font-weight: 900;
+}
+:global(.camera-map-dialog .el-dialog__body) {
+  padding: 14px;
+}
+.expanded-map-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 2168 / 725;
+  max-height: 78vh;
+  overflow: hidden;
+  border: 1px solid rgba(137, 174, 184, 0.16);
+  border-radius: 8px;
+  background: #02080d;
+}
+.expanded-map-stage img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  filter: saturate(1.08) contrast(1.06) brightness(.76);
+}
+.expanded-map-region-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.expanded-region-fill {
+  fill: rgba(67, 220, 255, .14);
+  stroke: transparent;
+}
+.expanded-region-halo {
+  fill: none;
+  stroke: rgba(81, 229, 255, .48);
+  stroke-width: 13;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  filter: url(#camera-region-glow);
+}
+.expanded-region-line {
+  fill: none;
+  stroke: rgba(126, 238, 255, .96);
+  stroke-width: 2.2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  filter: url(#camera-region-glow);
+}
+.expanded-region-callout rect {
+  fill: rgba(7, 42, 55, .86);
+  stroke: rgba(126, 238, 255, .74);
+  stroke-width: 1.5;
+  filter: drop-shadow(0 0 8px rgba(72, 216, 255, .5));
+}
+.expanded-region-callout text {
+  fill: #e9f7ff;
+  font-size: 18px;
+  font-weight: 900;
+  text-anchor: middle;
+}
+.expanded-map-point {
+  position: absolute;
+  z-index: 3;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  margin: -14px 0 0 -14px;
+  border: 2px solid rgba(255, 255, 255, 0.62);
+  border-radius: 50%;
+  color: #fff;
+  background: #d93a4b;
+  box-shadow: 0 0 0 8px rgba(217, 58, 75, 0.18), 0 0 16px rgba(217, 58, 75, 0.72);
+  font: 900 14px/1 "Consolas", "Monaco", monospace;
+  cursor: pointer;
+}
+.expanded-map-point.offline {
+  background: #526977;
+  box-shadow: 0 0 0 7px rgba(82, 105, 119, 0.16);
+}
+.expanded-map-point.active {
+  width: 34px;
+  height: 34px;
+  margin: -17px 0 0 -17px;
+  color: #041417;
+  border-color: rgba(230, 250, 255, 0.92);
+  background: #48d8ff;
+  box-shadow: 0 0 0 10px rgba(72, 216, 255, 0.24), 0 0 24px rgba(72, 216, 255, 0.88);
+}
+.camera-tool-card {
+  flex: 0 0 auto;
+  padding: 12px;
+}
+.camera-tool-status {
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.camera-tool-status span {
+  min-width: 0;
+  overflow: hidden;
+  color: #e0f3fb;
+  font-size: 13px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.camera-tool-status strong {
+  flex: 0 0 auto;
+  color: #89aab6;
+  font-size: 11px;
+  font-weight: 700;
+}
+.camera-tool-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.simulation-link-button {
+  width: 100%;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 8px;
+  border: 1px solid rgba(72, 216, 255, 0.18);
+  border-radius: 7px;
+  color: #91dcec;
+  background: rgba(7, 28, 38, 0.58);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.simulation-link-button:hover {
+  color: #061412;
+  background: #48d8ff;
 }
 .action-card {
+  flex: 1 1 0;
+  min-height: 0;
   padding: 14px;
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 10px;
 }
-.action-card strong {
-  min-height: 34px;
+.action-card-head {
+  min-height: 30px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.action-card-head span {
+  color: #7897a8;
+  font-size: 12px;
+}
+.action-card-head strong {
+  min-width: 0;
+  overflow: hidden;
   color: #e0f3fb;
-  font-size: 15px;
-  line-height: 1.45;
+  font-size: 13px;
+  line-height: 1.35;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .rail-action-group {
   display: grid;
@@ -3287,25 +3716,36 @@ h1, h2, h3, p { margin-top: 0; }
   gap: 8px;
 }
 .rail-action-button {
-  min-height: 76px;
+  min-height: 0;
+  height: 58px;
   display: grid;
   place-items: center;
-  gap: 7px;
+  gap: 5px;
   border: 1px solid rgba(72, 216, 255, 0.26);
   border-radius: 8px;
   color: #cae8f2;
   background: rgba(14, 55, 72, 0.72);
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 800;
   cursor: pointer;
 }
 .rail-action-button .el-icon {
-  font-size: 24px;
+  font-size: 20px;
 }
 .rail-action-button.talk {
   color: #061412;
   border-color: rgba(98, 215, 177, 0.72);
-  background: #62d7b1;
+  background: linear-gradient(135deg, #67e0bc, #42d9c3);
+  box-shadow: 0 14px 30px rgba(66, 217, 195, 0.2);
+  font-size: 14px;
+}
+.rail-action-button.talk .el-icon {
+  font-size: 22px;
+}
+.rail-action-button.simulation {
+  color: #061412;
+  border-color: rgba(72, 216, 255, 0.72);
+  background: #48d8ff;
 }
 .rail-action-button.active {
   color: #061412;
@@ -3319,9 +3759,10 @@ h1, h2, h3, p { margin-top: 0; }
   position: relative;
   display: grid;
   gap: 12px;
-  margin-top: 12px;
-  height: min(760px, calc(100vh - 132px));
-  min-height: 540px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
 }
 .view-mode-select-wrap {
   position: absolute;
@@ -3516,6 +3957,10 @@ h1, h2, h3, p { margin-top: 0; }
 }
 .ops-video-panel {
   position: relative;
+  height: min(760px, calc(100vh - 36px));
+  min-height: 540px;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 .single-camera-select-wrap {
@@ -3545,8 +3990,9 @@ h1, h2, h3, p { margin-top: 0; }
 }
 .ops-video-stage,
 .ops-video-empty {
-  height: min(760px, calc(100vh - 132px));
-  min-height: 540px;
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
   border-radius: 8px;
 }
 .ops-video-stage {
@@ -3739,6 +4185,11 @@ h1, h2, h3, p { margin-top: 0; }
   border-radius: 5px;
   background: rgba(137, 174, 184, 0.1);
   font-size: 11px;
+}
+.detection-card {
+  background:
+    radial-gradient(circle at 50% 18%, rgba(72, 216, 255, 0.12), transparent 42%),
+    rgba(5, 24, 34, 0.72);
 }
 .risk-panel {
   min-height: 0;
@@ -4898,6 +5349,14 @@ h1, h2, h3, p { margin-top: 0; }
   .ops-header { grid-template-columns: 1fr; align-items: stretch; }
   .ops-header-actions { justify-content: space-between; }
   .ops-layout { grid-template-columns: 1fr; }
+  .ops-camera-rail,
+  .ops-action-rail {
+    height: auto;
+    min-height: 0;
+  }
+  .action-card {
+    min-height: 150px;
+  }
   .risk-panel {
     grid-template-columns: 1fr;
     grid-template-rows: none;

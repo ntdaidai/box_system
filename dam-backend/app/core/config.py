@@ -104,6 +104,22 @@ class Settings:
     DAM_MODEL_LIBRARY_WORKFLOW_MODE: str = _get_env(
         "DAM_MODEL_LIBRARY_WORKFLOW_MODE", "run"
     )
+    SENSOR_EVENT_VIDEO_EVIDENCE_ENABLED: bool = (
+        _get_env("SENSOR_EVENT_VIDEO_EVIDENCE_ENABLED", "true").lower() == "true"
+    )
+    SENSOR_EVENT_VIDEO_EVIDENCE_SECONDS: float = float(
+        _get_env("SENSOR_EVENT_VIDEO_EVIDENCE_SECONDS", "4")
+    )
+    SENSOR_EVENT_VIDEO_EVIDENCE_CAMERA_ID: str = _get_env(
+        "SENSOR_EVENT_VIDEO_EVIDENCE_CAMERA_ID", ""
+    ).strip()
+    SENSOR_EVENT_VIDEO_EVIDENCE_TIMEOUT_SECONDS: float = float(
+        _get_env("SENSOR_EVENT_VIDEO_EVIDENCE_TIMEOUT_SECONDS", "10")
+    )
+    SENSOR_EVENT_VIDEO_EVIDENCE_OBJECT_PREFIX: str = _get_env(
+        "SENSOR_EVENT_VIDEO_EVIDENCE_OBJECT_PREFIX",
+        "sensor-events/evidence-videos",
+    ).strip("/")
 
     # ── CORS ───────────────────────────────────────────────────
     CORS_ORIGINS: List[str] = _get_env("CORS_ORIGINS", "*").split(",")

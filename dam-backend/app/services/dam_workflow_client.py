@@ -57,7 +57,16 @@ DEFAULT_ACTOR_NAME = "自然灾害分析专家"
 ACTOR_RULES = (
     ("自然灾害分析专家", ("自然灾害", "泥石流", "滑坡", "洪水", "地震", "landslide", "debris", "flood", "earthquake", "natural_disaster")),
     ("人员行为分析专家", ("人员", "入侵", "滩涂", "游玩", "电鱼", "捕鱼", "船只", "行为", "intrusion", "person", "people", "fishing", "behavior")),
-    ("极端天气分析专家", ("极端天气", "台风", "暴雨", "高温", "低温", "风速", "雨量", "气象", "typhoon", "rainstorm", "weather", "temperature")),
+    (
+        "极端天气分析专家",
+        (
+            "极端天气", "台风", "飓风", "暴风", "狂风", "烈风", "大风",
+            "暴雨", "高温", "低温", "极高温", "极低温", "冰冻",
+            "高湿", "低湿", "风速", "风力", "雨量", "气象", "湿度",
+            "typhoon", "hurricane", "gale", "rainstorm", "weather",
+            "temperature", "humidity", "wind",
+        ),
+    ),
 )
 
 

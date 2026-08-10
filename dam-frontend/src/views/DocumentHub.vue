@@ -1,16 +1,41 @@
 <template>
   <div class="document-hub">
+    <div class="stats-cards">
+      <article class="stat-card tone-total">
+        <el-icon class="stat-icon"><Document /></el-icon>
+        <div class="stat-info">
+          <span class="stat-label">文档总数</span>
+          <span class="stat-value">{{ documents.length }}</span>
+          <small>当前文档中心</small>
+        </div>
+      </article>
+      <article class="stat-card tone-category">
+        <el-icon class="stat-icon"><FolderOpened /></el-icon>
+        <div class="stat-info">
+          <span class="stat-label">文档分类</span>
+          <span class="stat-value">{{ categories.length }}</span>
+          <small>按文件类型归档</small>
+        </div>
+      </article>
+      <article class="stat-card tone-month">
+        <el-icon class="stat-icon"><Clock /></el-icon>
+        <div class="stat-info">
+          <span class="stat-label">本月文档</span>
+          <span class="stat-value">{{ currentMonthCount }}</span>
+          <small>最近更新统计</small>
+        </div>
+      </article>
+      <article class="stat-card tone-selected">
+        <el-icon class="stat-icon"><Download /></el-icon>
+        <div class="stat-info">
+          <span class="stat-label">已选择</span>
+          <span class="stat-value">{{ selectedDocumentIds.length }}</span>
+          <small>可批量导出</small>
+        </div>
+      </article>
+    </div>
+
     <div class="filter-section">
-      <div class="filter-field search-field">
-        <span class="filter-label">搜索</span>
-        <el-input
-          v-model="searchQuery"
-          placeholder="输入文件名"
-          :prefix-icon="Search"
-          clearable
-          class="search-input"
-        />
-      </div>
       <div class="filter-field">
         <span class="filter-label">文档分类</span>
         <el-select v-model="selectedCategory" placeholder="全部分类" clearable class="category-select">
@@ -41,7 +66,37 @@
           <el-option label="文件大小" value="size" />
         </el-select>
       </div>
+      <div class="filter-field month-field">
+        <span class="filter-label">导出月份</span>
+        <el-date-picker
+          v-model="exportMonth"
+          type="month"
+          value-format="YYYY-MM"
+          placeholder="选择月份"
+          class="month-picker"
+          popper-class="document-month-popper"
+        />
+      </div>
+      <div class="filter-field search-field">
+        <span class="filter-label">搜索</span>
+        <el-input
+          v-model="searchQuery"
+          placeholder="输入文件名"
+          :prefix-icon="Search"
+          clearable
+          class="search-input"
+        />
+      </div>
       <div class="filter-actions">
+        <el-button
+          class="batch-button"
+          :disabled="!exportMonth"
+          :loading="exportingMonth"
+          @click="exportMonthDocuments"
+        >
+          <el-icon><Download /></el-icon>
+          导出该月
+        </el-button>
         <el-button
           type="primary"
           class="export-selected-button"
@@ -55,135 +110,82 @@
       </div>
     </div>
 
-    <div class="stats-cards">
-      <el-card class="stat-card">
-        <div class="stat-content">
-          <el-icon class="stat-icon" style="color: #409eff"><Document /></el-icon>
-          <div class="stat-info">
-            <span class="stat-value">{{ documents.length }}</span>
-            <span class="stat-label">文档总数</span>
+    <section class="document-table-panel" :class="{ 'is-empty': !filteredDocuments.length }" v-loading="loading">
+      <div v-if="filteredDocuments.length" class="document-list">
+        <div class="document-header">
+          <div class="row-select">
+            <el-checkbox
+              :model-value="isCurrentPageAllSelected"
+              :indeterminate="isCurrentPageIndeterminate"
+              @change="toggleCurrentPageSelection"
+            />
           </div>
+          <div class="row-index">序号</div>
+          <div class="row-name">原始文件名</div>
+          <div class="row-type">文件类型</div>
+          <div class="row-size">文件大小</div>
+          <div class="row-date">创建时间</div>
+          <div class="row-date">最后更新时间</div>
+          <div class="row-actions">操作</div>
         </div>
-      </el-card>
-      <el-card class="stat-card">
-        <div class="stat-content">
-          <el-icon class="stat-icon" style="color: #67c23a"><FolderOpened /></el-icon>
-          <div class="stat-info">
-            <span class="stat-value">{{ categories.length }}</span>
-            <span class="stat-label">文档分类</span>
-          </div>
-        </div>
-      </el-card>
-      <el-card class="stat-card">
-        <div class="stat-content">
-          <el-icon class="stat-icon" style="color: #e6a23c"><Clock /></el-icon>
-          <div class="stat-info">
-            <span class="stat-value">{{ currentMonthCount }}</span>
-            <span class="stat-label">本月文档</span>
-          </div>
-        </div>
-      </el-card>
-    </div>
-
-    <div class="batch-toolbar">
-      <div class="batch-status">
-        已选择 <strong>{{ selectedDocumentIds.length }}</strong> 个文档
-      </div>
-      <div class="month-export">
-        <el-date-picker
-          v-model="exportMonth"
-          type="month"
-          value-format="YYYY-MM"
-          placeholder="选择月份"
-          class="month-picker"
-          popper-class="document-month-popper"
-        />
-        <el-button
-          class="batch-button"
-          :disabled="!exportMonth"
-          :loading="exportingMonth"
-          @click="exportMonthDocuments"
+        <div
+          v-for="(doc, index) in paginatedDocuments"
+          :key="doc.document_id"
+          class="document-row"
         >
-          <el-icon><Download /></el-icon>
-          导出该月
-        </el-button>
-      </div>
-    </div>
-
-    <div v-loading="loading" class="document-list">
-      <div class="document-header">
-        <div class="row-select">
-          <el-checkbox
-            :model-value="isCurrentPageAllSelected"
-            :indeterminate="isCurrentPageIndeterminate"
-            @change="toggleCurrentPageSelection"
-          />
-        </div>
-        <div class="row-index">序号</div>
-        <div class="row-name">原始文件名</div>
-        <div class="row-type">文件类型</div>
-        <div class="row-size">文件大小</div>
-        <div class="row-date">创建时间</div>
-        <div class="row-date">最后更新时间</div>
-        <div class="row-actions">操作</div>
-      </div>
-      <div
-        v-for="(doc, index) in paginatedDocuments"
-        :key="doc.document_id"
-        class="document-row"
-      >
-        <div class="row-select">
-          <el-checkbox
-            :model-value="selectedDocumentIds.includes(doc.document_id)"
-            @change="(checked) => toggleDocumentSelection(doc.document_id, checked)"
-          />
-        </div>
-        <div class="row-index">{{ pageStartIndex + index + 1 }}</div>
-        <div class="row-name" @click="editDoc(doc)">
-          <el-icon class="doc-icon" :class="getIconClass(doc.type)">
-            <Document />
-          </el-icon>
-          <span class="doc-name" :title="doc.name">{{ doc.name }}</span>
-        </div>
-        <div class="row-type">
-          <span class="type-badge" :class="getTypeBadgeClass(doc.type)">
-            {{ getTypeLabel(doc.file_type) }}
-          </span>
-        </div>
-        <div class="row-size">{{ formatSize(doc.size) }}</div>
-        <div class="row-date">{{ formatDateTime(doc.created_at) }}</div>
-        <div class="row-date">{{ formatDateTime(doc.updatedAt) }}</div>
-        <div class="row-actions">
-          <el-button class="action-button edit-button" size="small" @click="editDoc(doc)">编辑</el-button>
-          <el-button class="action-button download-button" size="small" @click="downloadDoc(doc)">下载</el-button>
-          <el-button class="action-button preview-button" size="small" @click="previewDoc(doc)">预览</el-button>
-          <el-button
-            class="action-button delete-button"
-            size="small"
-            :loading="deletingDocumentIds.includes(doc.document_id)"
-            @click="deleteDoc(doc)"
-          >
-            删除
-          </el-button>
+          <div class="row-select">
+            <el-checkbox
+              :model-value="selectedDocumentIds.includes(doc.document_id)"
+              @change="(checked) => toggleDocumentSelection(doc.document_id, checked)"
+            />
+          </div>
+          <div class="row-index">{{ pageStartIndex + index + 1 }}</div>
+          <div class="row-name" @click="editDoc(doc)">
+            <el-icon class="doc-icon" :class="getIconClass(doc.type)">
+              <Document />
+            </el-icon>
+            <span class="doc-name" :title="doc.name">{{ doc.name }}</span>
+          </div>
+          <div class="row-type">
+            <span class="type-badge" :class="getTypeBadgeClass(doc.type)">
+              {{ getTypeLabel(doc.file_type) }}
+            </span>
+          </div>
+          <div class="row-size">{{ formatSize(doc.size) }}</div>
+          <div class="row-date">{{ formatDateTime(doc.created_at) }}</div>
+          <div class="row-date">{{ formatDateTime(doc.updatedAt) }}</div>
+          <div class="row-actions">
+            <el-button class="action-button edit-button" size="small" @click="editDoc(doc)">编辑</el-button>
+            <el-button class="action-button download-button" size="small" @click="downloadDoc(doc)">下载</el-button>
+            <el-button class="action-button preview-button" size="small" @click="previewDoc(doc)">预览</el-button>
+            <el-button
+              class="action-button delete-button"
+              size="small"
+              :loading="deletingDocumentIds.includes(doc.document_id)"
+              @click="deleteDoc(doc)"
+            >
+              删除
+            </el-button>
+          </div>
         </div>
       </div>
-    </div>
 
-    <div v-if="!loading && filteredDocuments.length > 0" class="pagination-bar">
-      <el-pagination
-        v-model:current-page="currentPage"
-        :page-size="pageSize"
-        :total="filteredDocuments.length"
-        background
-        layout="prev, pager, next"
-      />
-    </div>
+      <div v-if="!loading && filteredDocuments.length === 0" class="empty-state">
+        <el-icon class="empty-icon"><FolderOpened /></el-icon>
+        <h3>暂无文档</h3>
+        <p>暂无可导出的文档</p>
+      </div>
 
-    <div v-if="!loading && filteredDocuments.length === 0" class="empty-state">
-      <el-icon class="empty-icon"><FolderOpened /></el-icon>
-      <h3>暂无文档</h3>
-      <p>暂无可导出的文档</p>
-    </div>
+      <div v-if="!loading && filteredDocuments.length > 0" class="pagination-bar">
+        <el-pagination
+          v-model:current-page="currentPage"
+          :page-size="pageSize"
+          :total="filteredDocuments.length"
+          background
+          layout="prev, pager, next"
+        />
+      </div>
+    </section>
 
     <el-dialog
       v-model="exportFormatDialogVisible"
@@ -297,9 +299,7 @@ const currentUser = ref({
 
 const businessTypes = [
   { label: '全部文档', value: '' },
-  { label: '事件报告', value: 'event' },
-  { label: '巡查文档', value: 'inspection' },
-  { label: '监测文档', value: 'monitoring' }
+  { label: '事件报告', value: 'event' }
 ]
 
 const categories = computed(() => {
@@ -747,200 +747,258 @@ onActivated(() => {
 
 <style scoped>
 .document-hub {
-  padding: 20px;
-  background: transparent;
   min-height: 100%;
+  padding: 22px;
+  color: #d9e8f8;
+  background: #071422;
 }
 
 .stats-cards {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
   gap: 16px;
-  margin-bottom: 24px;
 }
 
 .stat-card {
+  position: relative;
+  min-height: 124px;
+  padding: 18px 18px 16px;
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(104, 161, 200, .26);
   border-radius: 8px;
+  background:
+    linear-gradient(145deg, rgba(28, 68, 103, .72), rgba(8, 25, 42, .92)),
+    #0b1d30;
+  box-shadow: 0 18px 34px rgba(0, 0, 0, .22);
 }
 
-.stat-content {
-  display: flex;
-  align-items: center;
-  gap: 16px;
+.stat-card::after {
+  content: "";
+  position: absolute;
+  inset: auto 16px 0;
+  height: 3px;
+  border-radius: 3px 3px 0 0;
+  background: #48d8ff;
+  opacity: .72;
 }
 
 .stat-icon {
-  font-size: 40px;
+  width: 52px;
+  height: 52px;
+  border-radius: 8px;
+  color: #48d8ff;
+  background: rgba(72, 216, 255, .12);
+  font-size: 25px;
+  box-shadow: inset 0 0 0 1px rgba(72, 216, 255, .18);
+}
+
+.stat-card.tone-category::after {
+  background: #62d7b1;
+}
+
+.stat-card.tone-category .stat-icon {
+  color: #62d7b1;
+  background: rgba(98, 215, 177, .12);
+  box-shadow: inset 0 0 0 1px rgba(98, 215, 177, .22);
+}
+
+.stat-card.tone-month::after {
+  background: #f0c75d;
+}
+
+.stat-card.tone-month .stat-icon {
+  color: #f0c75d;
+  background: rgba(240, 199, 93, .13);
+  box-shadow: inset 0 0 0 1px rgba(240, 199, 93, .22);
+}
+
+.stat-card.tone-selected::after {
+  background: #8ab7ff;
+}
+
+.stat-card.tone-selected .stat-icon {
+  color: #8ab7ff;
+  background: rgba(138, 183, 255, .12);
+  box-shadow: inset 0 0 0 1px rgba(138, 183, 255, .2);
 }
 
 .stat-info {
-  display: flex;
-  flex-direction: column;
+  min-width: 0;
+}
+
+.stat-label,
+.stat-info small {
+  display: block;
+  color: #8fb1c8;
+  font-size: 13px;
 }
 
 .stat-value {
-  font-size: 28px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.stat-label {
-  font-size: 14px;
-  color: var(--text-muted);
+  display: block;
+  margin: 4px 0;
+  color: #f6fbff;
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 36px;
 }
 
 .filter-section {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   flex-wrap: wrap;
-  gap: 16px;
-  margin-bottom: 16px;
-  padding: 16px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border-color);
+  gap: 12px;
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid rgba(104, 161, 200, .22);
   border-radius: 8px;
+  background: #0b1d30;
 }
 
 .filter-field {
   display: flex;
-  flex-direction: column;
   flex: 0 0 auto;
-  gap: 6px;
-  min-width: 180px;
+  min-width: 150px;
 }
 
 .search-field {
-  min-width: 260px;
+  min-width: 300px;
 }
 
 .filter-label {
-  font-size: 12px;
-  line-height: 1;
-  color: var(--text-muted);
+  display: none;
 }
 
 .search-input {
-  width: 300px;
+  width: 360px;
 }
 
 .category-select,
 .business-type-select,
 .sort-select {
-  width: 260px;
+  width: 150px;
+}
+
+.month-field {
+  min-width: 286px;
+}
+
+.month-picker {
+  width: 286px;
+}
+
+.filter-section :deep(.el-select),
+.filter-section :deep(.el-date-editor),
+.filter-section :deep(.el-input) {
+  height: 44px;
+  border: 0;
+  background: transparent;
 }
 
 .filter-section :deep(.el-input__wrapper),
 .filter-section :deep(.el-select__wrapper) {
-  min-height: 48px;
+  min-height: 44px;
   border-radius: 6px;
-  background: rgba(9, 30, 56, 0.88);
-  box-shadow: 0 0 0 1px rgba(77, 145, 210, 0.32) inset;
+  background: rgba(6, 25, 42, .82);
+  box-shadow: inset 0 0 0 1px rgba(60, 150, 214, .46) !important;
 }
 
+.filter-section :deep(.el-input__wrapper:hover),
+.filter-section :deep(.el-select__wrapper:hover),
 .filter-section :deep(.el-input__wrapper.is-focus),
-.filter-section :deep(.el-select__wrapper.is-focused) {
-  box-shadow: 0 0 0 1px #3da4ff inset, 0 0 0 2px rgba(61, 164, 255, 0.16);
+.filter-section :deep(.el-select__wrapper.is-focused),
+.filter-section :deep(.el-select__wrapper.is-focus),
+.filter-section :deep(.el-input__wrapper.is-focused) {
+  box-shadow: inset 0 0 0 1px rgba(87, 190, 255, .82), 0 0 0 2px rgba(72, 216, 255, .08) !important;
 }
 
 .filter-section :deep(.el-input__inner),
 .filter-section :deep(.el-select__selected-item),
-.filter-section :deep(.el-select__placeholder) {
-  color: #dce9fa;
+.filter-section :deep(.el-select__placeholder),
+.filter-section :deep(.el-range-input) {
+  color: #d9e8f8;
 }
 
-.filter-section :deep(.el-input__inner::placeholder) {
-  color: #8ea8c9;
+.filter-section :deep(.el-input__inner::placeholder),
+.filter-section :deep(.el-range-input::placeholder) {
+  color: #7898ad;
+}
+
+.filter-section :deep(.el-input__prefix),
+.filter-section :deep(.el-input__suffix),
+.filter-section :deep(.el-select__caret) {
+  color: #7898ad;
 }
 
 .filter-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-left: auto;
+  gap: 12px;
   white-space: nowrap;
 }
 
 .export-selected-button {
-  height: 48px;
-  min-width: 174px;
-  padding: 0 24px;
-  font-size: 15px;
-  font-weight: 700;
-  color: #d9eeff;
-  background: rgba(9, 75, 117, 0.92);
-  border-color: rgba(68, 164, 224, 0.62);
+  height: 44px;
+  min-width: 166px;
+  padding: 0 20px;
+  border-color: rgba(82, 181, 244, .72);
   border-radius: 6px;
+  color: #fff;
+  background: #3d8ed8;
+  font-weight: 700;
 }
 
 .export-selected-button:hover,
 .export-selected-button:focus {
-  color: #fff;
-  background: rgba(13, 96, 148, 0.98);
-  border-color: rgba(96, 188, 242, 0.9);
-}
-
-.batch-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 12px;
-  padding: 12px 14px;
-  background: rgba(16, 38, 72, 0.42);
-  border: 1px solid var(--border-light);
-  border-radius: 8px;
-}
-
-.batch-status {
-  color: var(--text-secondary);
-  font-size: 14px;
-  white-space: nowrap;
-}
-
-.batch-status strong {
-  color: var(--accent-color);
+  border-color: #8cd5ff;
+  background: #4aa0ed;
 }
 
 .batch-button {
-  height: 34px;
-  color: var(--text-primary);
-  background: rgba(0, 200, 255, 0.12);
-  border-color: rgba(0, 200, 255, 0.32);
+  height: 44px;
+  border-color: rgba(72, 216, 255, .32);
+  color: #c8f0ff;
+  background: rgba(72, 216, 255, .08);
 }
 
-.month-export {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-left: auto;
+.document-table-panel {
+  margin-top: 18px;
+  overflow: hidden;
+  border: 1px solid rgba(104, 161, 200, .18);
+  border-radius: 8px;
+  background: rgba(11, 29, 48, .72);
 }
 
-.month-picker {
-  width: 150px;
+.document-table-panel.is-empty {
+  min-height: 300px;
+  border-color: transparent;
+  background: transparent;
 }
 
 .document-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  min-height: 120px;
+  min-height: 100%;
 }
 
 .document-header,
 .document-row {
   display: grid;
-  grid-template-columns: 34px 48px minmax(260px, 3fr) 80px 104px 150px 150px 210px;
+  grid-template-columns: 34px 48px minmax(260px, 3fr) 86px 104px 150px 150px 210px;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
 }
 
 .document-header {
-  min-height: 54px;
+  min-height: 50px;
   padding: 0 22px;
-  color: var(--text-primary);
-  background: #24527e;
-  border-radius: 2px;
-  border: 1px solid rgba(0, 200, 255, 0.18);
-  font-size: 15px;
+  color: #f3f8fd;
+  background: rgba(30, 58, 95, .58);
+  font-size: 14px;
   font-weight: 700;
 }
 
@@ -950,7 +1008,7 @@ onActivated(() => {
 .document-header .row-date,
 .document-header .row-actions {
   cursor: default;
-  color: var(--text-primary);
+  color: #f3f8fd;
 }
 
 .document-header .row-actions {
@@ -960,33 +1018,34 @@ onActivated(() => {
 .document-header .row-index,
 .document-header .row-size,
 .document-header .row-date {
-  color: var(--text-primary);
+  color: #f3f8fd;
 }
 
 .document-row {
-  min-height: 82px;
-  padding: 14px 22px;
+  min-height: 72px;
+  padding: 12px 22px;
   color: #d8e7ff;
-  background: #213e64;
-  border-radius: 2px;
-  box-shadow: inset 0 0 0 1px rgba(103, 164, 217, 0.08);
+  border-top: 1px solid rgba(104, 161, 200, .1);
+  background: rgba(10, 28, 47, .38);
+  transition: background .16s ease;
 }
 
-.document-row:nth-child(even) {
-  background: #25466f;
+.document-row:hover {
+  background: rgba(30, 74, 112, .46);
 }
 
 .row-index,
 .row-size,
 .row-date {
   font-size: 14px;
-  font-weight: 600;
-  color: #d7e4f7;
+  font-weight: 500;
+  color: #9cb6ca;
   overflow-wrap: anywhere;
 }
 
 .row-index {
-  color: #f2f7ff;
+  color: #f3f8fd;
+  font-weight: 700;
 }
 
 .row-name {
@@ -1004,7 +1063,7 @@ onActivated(() => {
 
 .doc-icon {
   flex: 0 0 auto;
-  font-size: 26px;
+  font-size: 24px;
 }
 
 .word-icon { color: #3d8cff; }
@@ -1015,12 +1074,16 @@ onActivated(() => {
 
 .doc-name {
   min-width: 0;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 700;
-  color: #f3f600;
+  color: #f3f8fd;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.row-name:hover .doc-name {
+  color: #7dd7ff;
 }
 
 .row-type {
@@ -1032,20 +1095,46 @@ onActivated(() => {
   align-items: center;
   justify-content: center;
   min-width: 48px;
-  height: 30px;
+  height: 26px;
   padding: 0 12px;
-  border-radius: 3px;
+  border: 1px solid rgba(72, 216, 255, .22);
+  border-radius: 5px;
   font-size: 12px;
   font-weight: 700;
   line-height: 1;
-  color: #fff;
+  color: #aee8ff;
+  background: rgba(72, 216, 255, .08);
 }
 
-.word-badge { background: #3977dc; }
-.excel-badge { background: #2f9e5a; }
-.ppt-badge { background: #d9852f; }
-.pdf-badge { background: #ff4057; }
-.default-badge { background: #617a99; }
+.word-badge {
+  border-color: rgba(61, 140, 255, .3);
+  color: #b9d5ff;
+  background: rgba(61, 140, 255, .1);
+}
+
+.excel-badge {
+  border-color: rgba(98, 215, 177, .24);
+  color: #b8f3dc;
+  background: rgba(98, 215, 177, .08);
+}
+
+.ppt-badge {
+  border-color: rgba(240, 199, 93, .26);
+  color: #ffe4a5;
+  background: rgba(240, 199, 93, .1);
+}
+
+.pdf-badge {
+  border-color: rgba(255, 107, 118, .3);
+  color: #ffbdc4;
+  background: rgba(255, 107, 118, .1);
+}
+
+.default-badge {
+  border-color: rgba(126, 152, 170, .24);
+  color: #b6c7d4;
+  background: rgba(126, 152, 170, .08);
+}
 
 .row-actions {
   display: flex;
@@ -1063,11 +1152,11 @@ onActivated(() => {
   min-width: 44px;
   height: 30px;
   padding: 0 9px;
-  border: 1px solid rgba(127, 178, 221, 0.24);
-  border-radius: 6px;
+  border: 1px solid rgba(127, 178, 221, .24);
+  border-radius: 5px;
   font-weight: 600;
   color: #dce9fa;
-  background: rgba(37, 70, 106, 0.62);
+  background: rgba(37, 70, 106, .38);
 }
 
 .edit-button {
@@ -1080,14 +1169,14 @@ onActivated(() => {
 
 .preview-button {
   color: #35e5f2;
-  border-color: rgba(53, 229, 242, 0.34);
-  background: rgba(7, 148, 166, 0.26);
+  border-color: rgba(53, 229, 242, .34);
+  background: rgba(7, 148, 166, .18);
 }
 
 .delete-button {
   color: #ffb8ca;
-  border-color: rgba(255, 92, 128, 0.35);
-  background: rgba(189, 49, 95, 0.24);
+  border-color: rgba(255, 92, 128, .35);
+  background: rgba(189, 49, 95, .18);
 }
 
 .action-button:hover,
@@ -1101,33 +1190,30 @@ onActivated(() => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  min-height: 300px;
   padding: 80px 20px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
 }
 
 .empty-icon {
   font-size: 64px;
-  color: #c0c4cc;
+  color: #68849a;
   margin-bottom: 20px;
 }
 
 .empty-state h3 {
   margin: 0 0 8px 0;
-  color: var(--text-primary);
+  color: #d9e8f8;
 }
 
 .empty-state p {
   margin: 0;
-  color: var(--text-muted);
+  color: #68849a;
 }
 
 .pagination-bar {
   display: flex;
   justify-content: center;
-  margin-top: 14px;
-  padding: 8px 12px;
+  padding: 18px;
   background: transparent;
   border: 0;
 }
@@ -1135,19 +1221,25 @@ onActivated(() => {
 .pagination-bar :deep(.el-pagination.is-background .btn-prev),
 .pagination-bar :deep(.el-pagination.is-background .btn-next),
 .pagination-bar :deep(.el-pagination.is-background .el-pager li) {
-  min-width: 38px;
-  height: 34px;
-  margin: 0 5px;
-  color: var(--text-secondary);
-  background: rgba(16, 54, 87, 0.62);
-  border: 1px solid rgba(80, 165, 200, 0.58);
-  border-radius: 4px;
+  width: 48px;
+  height: 42px;
+  min-width: 48px;
+  margin: 0;
+  border: 1px solid #214766;
+  border-radius: 5px;
+  color: #7893aa;
+  background: #0a1a2c;
+}
+
+.pagination-bar :deep(.el-pager) {
+  display: flex;
+  gap: 10px;
 }
 
 .pagination-bar :deep(.el-pagination.is-background .el-pager li.is-active) {
   color: #fff;
-  background: rgba(64, 158, 255, 0.8);
-  border-color: rgba(94, 180, 255, 0.95);
+  background: #3d8ed8;
+  border-color: #61b5ff;
 }
 
 .pagination-bar :deep(.el-pagination.is-background .btn-prev:disabled),
@@ -1252,15 +1344,15 @@ onActivated(() => {
   line-height: 1.45;
 }
 
-.document-list :deep(.el-loading-mask) {
+.document-table-panel :deep(.el-loading-mask) {
   background: rgba(8, 20, 38, 0.72);
 }
 
-.document-list :deep(.el-loading-spinner .path) {
+.document-table-panel :deep(.el-loading-spinner .path) {
   stroke: var(--accent-color);
 }
 
-.document-list :deep(.el-loading-spinner .el-loading-text) {
+.document-table-panel :deep(.el-loading-spinner .el-loading-text) {
   color: var(--text-secondary);
 }
 
@@ -1405,7 +1497,17 @@ onActivated(() => {
   white-space: nowrap;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1200px) {
+  .stats-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .document-hub {
+    padding: 14px;
+  }
+
   .stats-cards {
     grid-template-columns: 1fr;
   }
@@ -1416,6 +1518,7 @@ onActivated(() => {
   }
 
   .filter-field,
+  .month-field,
   .search-field {
     width: 100%;
     min-width: 0;
@@ -1426,6 +1529,8 @@ onActivated(() => {
   }
 
   .category-select,
+  .business-type-select,
+  .month-picker,
   .sort-select {
     width: 100%;
   }
@@ -1441,18 +1546,6 @@ onActivated(() => {
     width: 100%;
   }
 
-  .batch-toolbar,
-  .month-export {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .month-export {
-    width: 100%;
-    margin-left: 0;
-  }
-
-  .month-picker,
   .batch-button {
     width: 100%;
   }

@@ -3,7 +3,8 @@
     class="indexBox"
     :class="{
       'dashboard-shell': isDashboard,
-      'bigscreen-shell': isBigScreenPreview
+      'bigscreen-shell': isBigScreenPreview,
+      'annotator-shell': isRegionAnnotator
     }"
   >
     <!-- 顶栏 -->
@@ -33,6 +34,7 @@
       <aside v-if="showSiderbar" class="siderBox">
         <el-menu
           :default-active="sidebarActivePath"
+          :default-openeds="sidebarDefaultOpeneds"
           router
           :style="{ '--el-menu-level-padding': '0px' }"
         >
@@ -47,7 +49,10 @@
                 :key="child.path"
                 :index="child.path"
               >
-                <el-icon :size="18"><component :is="child.icon" /></el-icon>
+                <el-icon v-if="typeof child.icon !== 'string'" :size="18"><component :is="child.icon" /></el-icon>
+                <el-icon v-else :size="18" class="custom-menu-icon-wrap">
+                  <img :src="getCustomIcon(child.icon)" class="custom-menu-icon" />
+                </el-icon>
                 {{ child.name }}
               </el-menu-item>
             </el-sub-menu>
@@ -64,7 +69,7 @@
 
       <!-- 内容区 -->
       <main class="contentBox flexBox">
-        <div v-if="!isBigScreenPreview" class="routerBox flexBox">
+        <div v-if="showBreadcrumbBar" class="routerBox flexBox">
           <el-icon :size="18"><SystemOverviewIcon /></el-icon>
           <span>
             <span v-for="(item, index) in breadcrumbs" :key="index">
@@ -86,7 +91,7 @@ import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores'
 import {
-  ArrowDown, DataAnalysis, Setting, VideoCamera,
+  ArrowDown, Connection, DataAnalysis, Setting, VideoCamera,
 } from '@element-plus/icons-vue'
 import {
   AlarmTriangleIcon,
@@ -157,9 +162,23 @@ const menuMap = {
   ],
   '/system': [
     { name: '数据源管理', path: '/system/devices', icon: Setting },
-    { name: '视频检测', path: '/system/video-detection', icon: VideoCamera },
-    { name: '联动系统', path: '/system/linkage', icon: Setting },
-    { name: '无人机监测', path: '/system/drone', icon: 'drone-custom-icon' },
+    {
+      name: '场景测试',
+      icon: DataAnalysis,
+      children: [
+        { name: '视频测试', path: '/system/video-detection', icon: VideoCamera },
+        { name: '传感器测试', path: '/system/sensor-event-test', icon: SensorChipIcon },
+      ],
+    },
+    {
+      name: '联动系统',
+      icon: Setting,
+      children: [
+        { name: '联动设备', path: '/system/linkage/devices', icon: Connection },
+        { name: '联动规则', path: '/system/linkage/rules', icon: DataAnalysis },
+        { name: '无人机监测', path: '/system/linkage/drone', icon: 'drone-custom-icon' },
+      ],
+    },
     { name: '模型管理', path: '/system/models', icon: DataAnalysis },
   ],
   '/document': [
@@ -180,7 +199,9 @@ const currentNav = computed(() => {
 })
 
 const isDashboard = computed(() => route.path === '/dashboard')
-const isBigScreenPreview = computed(() => route.path === '/overview-bigscreen-preview')
+const isBigScreenPreview = computed(() => route.path === '/dashboard')
+const isRegionAnnotator = computed(() => route.path === '/overview-camera-region-annotator')
+const showBreadcrumbBar = computed(() => !isBigScreenPreview.value && !isRegionAnnotator.value && !route.meta.hideBreadcrumbBar)
 
 // 需要显示侧边栏的模块
 const showSiderbar = computed(() => {
@@ -197,6 +218,12 @@ const sidebarActivePath = computed(() => {
   if (route.path === '/monitor/camera/image' || route.path === '/monitor/camera/video') return '/monitor/camera'
   if (route.path.startsWith('/alarm/safety-events')) return '/alarm/safety-events'
   return route.path
+})
+
+const sidebarDefaultOpeneds = computed(() => {
+  return currentMenu.value
+    .filter(item => item.children?.some(child => child.path === sidebarActivePath.value))
+    .map(item => item.name)
 })
 
 // 面包屑
@@ -225,5 +252,47 @@ const handleNavClick = (item) => {
   height: 16px;
   object-fit: contain;
   display: block;
+}
+
+.siderBox :deep(.el-menu-item),
+.siderBox :deep(.el-sub-menu__title) {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.siderBox :deep(.el-menu > .el-menu-item),
+.siderBox :deep(.el-menu > .el-sub-menu > .el-sub-menu__title) {
+  padding-left: 22px !important;
+  padding-right: 22px !important;
+}
+
+.siderBox :deep(.el-menu > .el-menu-item > .el-icon),
+.siderBox :deep(.el-menu > .el-sub-menu > .el-sub-menu__title > .el-icon) {
+  width: 22px;
+  margin-right: 16px;
+}
+
+.siderBox :deep(.el-menu > .el-sub-menu > .el-sub-menu__title .el-sub-menu__icon-arrow) {
+  right: 18px;
+  margin-top: -6px;
+}
+
+.siderBox :deep(.el-sub-menu .el-menu-item) {
+  height: 48px !important;
+  line-height: 48px !important;
+  padding-left: 70px !important;
+  font-size: 16px;
+  font-weight: 500;
+  margin: 0 0 6px;
+  background: transparent !important;
+}
+
+.siderBox :deep(.el-sub-menu .el-menu-item .el-icon) {
+  margin-right: 12px;
+  font-size: 18px;
+}
+
+.siderBox :deep(.el-sub-menu .el-menu-item.is-active) {
+  font-weight: 600;
 }
 </style>

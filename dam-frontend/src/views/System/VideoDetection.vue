@@ -2,8 +2,8 @@
   <div class="screening-page">
     <header class="page-header">
       <div>
-        <p>系统管理 / 视频检测</p>
-        <h2>视频检测</h2>
+        <p>系统管理 / 场景测试 / 视频测试</p>
+        <h2>视频测试</h2>
       </div>
       <div class="source-control">
         <span>模拟数据源</span>
@@ -59,14 +59,6 @@
               <i :class="{ live: simulationActive }"></i>
               {{ mediaStatus }}
             </div>
-            <el-upload
-              :auto-upload="false"
-              :show-file-list="false"
-              accept="video/mp4,video/quicktime,video/webm,.m4v"
-              :on-change="handleVideoFile"
-            >
-              <el-button :icon="FolderOpened">选择视频</el-button>
-            </el-upload>
             <el-button
               type="primary"
               :icon="simulationActive ? VideoPause : VideoPlay"
@@ -79,6 +71,13 @@
         </header>
 
         <div class="video-stage">
+          <input
+            ref="fileInputRef"
+            class="hidden-file-input"
+            type="file"
+            accept="video/mp4,video/quicktime,video/webm,.m4v"
+            @change="handleNativeVideoFile"
+          />
           <video
             v-if="videoUrl"
             ref="videoRef"
@@ -88,7 +87,7 @@
             @ended="handleVideoEnded"
             @pause="handleNativePause"
           />
-          <button v-else class="empty-stage" type="button" @click="triggerVideoPickerHint">
+          <button v-else class="empty-stage" type="button" @click="openVideoPicker">
             <el-icon><VideoCamera /></el-icon>
             <strong>选择本地视频</strong>
             <span>MP4、MOV、WEBM 或 M4V</span>
@@ -100,11 +99,12 @@
         </div>
 
         <div class="evidence-strip">
-          <div class="strip-title"><span>模型抽帧证据</span><b>{{ evidenceFrames.length }} / {{ FRAME_COUNT }} 帧</b></div>
+          <div class="strip-title"><span>初筛采样帧</span><b>{{ evidenceFrames.length }} / {{ FRAME_COUNT }} 帧</b></div>
           <div class="frame-strip">
             <figure v-for="(frame, index) in evidenceFrames" :key="frame.id">
-              <img :src="frame.url" :alt="`关键帧 ${index + 1}`" />
-              <span>抽帧 {{ index + 1 }}</span>
+              <img v-if="!frame.failed" :src="frame.url" :alt="`关键帧 ${index + 1}`" @error="markFrameFailed(frame)" />
+              <div v-else class="frame-error">关键帧加载失败</div>
+              <span>初筛帧 {{ index + 1 }}</span>
             </figure>
             <div v-for="slot in Math.max(0, 4 - evidenceFrames.length)" :key="`slot-${slot}`" class="frame-slot">
               {{ String(evidenceFrames.length + slot).padStart(2, '0') }}
@@ -117,9 +117,9 @@
         <header class="panel-header">
           <div>
             <span class="section-index">02</span>
-            <div><small>QWEN</small><h3>初筛判定</h3></div>
+            <div><small>CHAIN</small><h3>链路结果</h3></div>
           </div>
-          <el-tag :type="result ? riskTag : 'info'" effect="dark">{{ result ? riskLabel : '待检测' }}</el-tag>
+          <el-tag :type="result ? riskTag : 'info'" effect="dark">{{ result ? riskLabel : '待触发' }}</el-tag>
         </header>
 
         <div v-if="screening" class="processing-state">
@@ -134,10 +134,18 @@
             <p>{{ result.summary || '模型未返回摘要' }}</p>
           </div>
 
+          <div class="chain-steps">
+            <div v-for="step in chainSteps" :key="step.label" :class="['chain-step', step.state]">
+              <i></i>
+              <span>{{ step.label }}</span>
+              <strong>{{ step.value }}</strong>
+            </div>
+          </div>
+
           <div class="metric-row">
             <div>
-              <span>证据帧</span>
-              <strong>{{ result.image_urls?.length || 0 }}</strong>
+              <span>初筛帧</span>
+              <strong>{{ resultImageUrls.length }}</strong>
             </div>
             <div>
               <span>触发场景</span>
@@ -170,8 +178,14 @@
           </div>
 
           <div class="result-meta">
-            <span><el-icon><Files /></el-icon>{{ result.image_urls?.length || 0 }} 张证据已存 MinIO</span>
+            <span><el-icon><Files /></el-icon>{{ resultImageUrls.length }} 张初筛采样帧已存 MinIO</span>
             <span :class="{ ok: result.eca_dispatched }"><el-icon><CircleCheck /></el-icon>{{ result.eca_dispatched ? '已提交 ECA' : 'ECA 未确认' }}</span>
+            <span v-if="result.event_instance_id" class="ok"><el-icon><CircleCheck /></el-icon>4B 视频理解将在事件 {{ result.instance_no }} 中生成 8 帧候选和代表帧</span>
+            <span v-if="eventReportId" class="ok"><el-icon><CircleCheck /></el-icon>分析报告已生成</span>
+          </div>
+          <div v-if="result.event_instance_id" class="result-actions">
+            <el-button type="primary" link @click="openEventDetail(result.event_instance_id)">查看事件详情</el-button>
+            <el-button v-if="eventReportId" type="success" link @click="openReport">打开报告</el-button>
           </div>
           <el-collapse class="json-collapse">
             <el-collapse-item title="JSON 结果" name="json">
@@ -181,8 +195,8 @@
         </div>
         <div v-else class="result-empty">
           <el-icon><DataAnalysis /></el-icon>
-          <strong>等待初筛任务</strong>
-          <span>结果将在这里显示</span>
+          <strong>等待链路任务</strong>
+          <span>Qwen 初筛、ECA 提交和事件结果将在这里显示</span>
         </div>
 
         <div v-if="lastError" class="error-banner">
@@ -193,15 +207,18 @@
 
     <section class="history-panel">
       <header class="panel-header compact">
-        <div><span class="section-index">03</span><div><small>SESSION</small><h3>检测记录</h3></div></div>
+        <div><span class="section-index">03</span><div><small>SESSION</small><h3>场景测试记录</h3></div></div>
         <span>{{ history.length }} 条</span>
       </header>
       <el-table :data="history" empty-text="暂无检测记录" class="history-table">
-        <el-table-column label="时间" width="180"><template #default="{ row }">{{ formatResultTime(row.timestamp) }}</template></el-table-column>
-        <el-table-column label="数据源" min-width="150"><template #default>{{ selectedCameraName }}</template></el-table-column>
-        <el-table-column label="风险" width="110"><template #default="{ row }"><el-tag :type="tagForRisk(row.risk_level)">{{ labelForRisk(row.risk_level) }}</el-tag></template></el-table-column>
-        <el-table-column prop="summary" label="Qwen 摘要" min-width="360" show-overflow-tooltip />
+        <el-table-column label="序号" width="72"><template #default="{ $index }"><span class="event-no">{{ $index + 1 }}</span></template></el-table-column>
+        <el-table-column label="触发场景" min-width="150"><template #default="{ row }"><strong class="event-name">{{ rowPrimarySceneLabel(row) }}</strong></template></el-table-column>
+        <el-table-column label="摘要" min-width="360" show-overflow-tooltip><template #default="{ row }"><span class="event-summary">{{ row.summary || '暂无摘要' }}</span></template></el-table-column>
+        <el-table-column label="风险" width="110"><template #default="{ row }"><el-tag :type="tagForRisk(row.risk_level)" effect="dark">{{ labelForRisk(row.risk_level) }}</el-tag></template></el-table-column>
+        <el-table-column label="初筛帧" width="96"><template #default="{ row }">{{ (row.image_urls || []).length }} 帧</template></el-table-column>
         <el-table-column label="ECA" width="120"><template #default="{ row }"><span class="eca-cell"><i :class="{ ok: row.eca_dispatched }"></i>{{ row.eca_dispatched ? '已提交' : '未确认' }}</span></template></el-table-column>
+        <el-table-column label="时间" width="180"><template #default="{ row }">{{ formatResultTime(row.timestamp) }}</template></el-table-column>
+        <el-table-column label="操作" width="92" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="selectHistory(row)">查看</el-button></template></el-table-column>
       </el-table>
     </section>
   </div>
@@ -209,16 +226,19 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  CircleCheck, DataAnalysis, Files, FolderOpened, Loading,
+  CircleCheck, DataAnalysis, Files, Loading,
   Refresh, VideoCamera, VideoPause, VideoPlay, Warning,
 } from '@element-plus/icons-vue'
 import { getCameraList, simulateCameraVideoScreening } from '@/api/camera'
+import { getUnifiedSafetyEventDetail } from '@/api/integration'
 import { camerasFromPayload } from '@/utils/cameraSnapshots'
 
 const FRAME_COUNT = 4
 const WINDOW_SECONDS = 10
+const router = useRouter()
 const sceneDefinitions = [
   ['mudslide_detected', 'mudslide_confidence', '泥石流'],
   ['landslide_detected', 'landslide_confidence', '滑坡'],
@@ -231,6 +251,7 @@ const sceneDefinitions = [
 const cameras = ref([])
 const cameraId = ref('')
 const cameraLoading = ref(false)
+const fileInputRef = ref(null)
 const videoRef = ref(null)
 const videoUrl = ref('')
 const videoName = ref('')
@@ -239,8 +260,10 @@ const evidenceFrames = ref([])
 const simulationActive = ref(false)
 const screening = ref(false)
 const result = ref(null)
+const eventDetail = ref(null)
 const history = ref([])
 const lastError = ref('')
+const pollTimer = ref(null)
 
 const selectedCameraName = computed(() => {
   const camera = cameras.value.find(item => item.id === cameraId.value)
@@ -272,12 +295,31 @@ const primarySceneLabel = computed(() => {
 const riskLabel = computed(() => labelForRisk(result.value?.risk_level))
 const riskTag = computed(() => tagForRisk(result.value?.risk_level))
 const riskClass = computed(() => `risk-${String(result.value?.risk_level || 'LOW').toLowerCase()}`)
+const resultImageUrls = computed(() => normalizeMediaUrls(result.value?.image_urls || []))
+const detailEvent = computed(() => eventDetail.value?.event || null)
+const eventReportId = computed(() => detailEvent.value?.analysis_report_id || result.value?.analysis_report_id || null)
 const ecaStatusText = computed(() => {
   if (screening.value) return '分析中'
+  if (eventReportId.value) return '报告已生成'
   if (result.value?.eca_dispatched) return '已提交'
   if (result.value) return '未确认'
   return '待触发'
 })
+const chainSteps = computed(() => [
+  { label: '视频输入', value: videoName.value || '已上传', state: videoFile.value ? 'done' : 'pending' },
+  { label: 'Qwen 初筛', value: result.value ? primarySceneLabel.value : '等待', state: result.value ? 'done' : 'pending' },
+  { label: 'ECA 提交', value: result.value?.eca_dispatched ? '已提交' : '未确认', state: result.value?.eca_dispatched ? 'done' : 'pending' },
+  {
+    label: '4B 视频理解',
+    value: detailEvent.value?.status === 'COMPLETED' ? '工作流已完成' : (result.value?.event_instance_id ? '工作流处理中' : (result.value?.eca_dispatched ? '等待事件回写' : '等待触发')),
+    state: detailEvent.value?.status === 'COMPLETED' ? 'done' : (result.value?.event_instance_id ? 'active' : 'pending'),
+  },
+  {
+    label: '报告生成',
+    value: eventReportId.value ? '已生成' : (result.value?.event_instance_id ? '生成中' : '等待事件'),
+    state: eventReportId.value ? 'done' : (result.value?.event_instance_id ? 'active' : 'pending'),
+  },
+])
 const formattedResult = computed(() => JSON.stringify(result.value, null, 2))
 
 async function loadCameras() {
@@ -295,19 +337,30 @@ async function loadCameras() {
   }
 }
 
-function handleVideoFile(file) {
-  const raw = file.raw
+function handleVideoFile(raw) {
   if (!raw) return
   if (raw.size > 200 * 1024 * 1024) return ElMessage.error('视频大小不能超过 200MB')
   stopSimulation(false)
+  stopEventPolling()
   if (videoUrl.value) URL.revokeObjectURL(videoUrl.value)
   videoFile.value = raw
   videoUrl.value = URL.createObjectURL(raw)
   videoName.value = raw.name
   result.value = null
+  eventDetail.value = null
   lastError.value = ''
   evidenceFrames.value = []
   nextTick(() => videoRef.value?.load())
+}
+
+function handleNativeVideoFile(event) {
+  const raw = event.target?.files?.[0]
+  handleVideoFile(raw)
+  if (event.target) event.target.value = ''
+}
+
+function openVideoPicker() {
+  fileInputRef.value?.click()
 }
 
 async function toggleSimulation() {
@@ -345,14 +398,23 @@ async function submitVideoFile() {
       videoFile.value,
       { windowSeconds: WINDOW_SECONDS },
     )
-    result.value = response.data
-    evidenceFrames.value = (response.data?.image_urls || []).slice(0, FRAME_COUNT).map((url, index) => ({
+    const normalizedResult = {
+      ...response.data,
+      image_urls: normalizeMediaUrls(response.data?.image_urls || []),
+    }
+    result.value = normalizedResult
+    evidenceFrames.value = normalizedResult.image_urls.slice(0, FRAME_COUNT).map((url, index) => ({
       id: `server-frame-${Date.now()}-${index}`,
       blob: null,
       url,
+      failed: false,
       timeLabel: `FRAME ${String(index + 1).padStart(2, '0')}`,
     }))
-    history.value = [response.data, ...history.value].slice(0, 20)
+    history.value = [normalizedResult, ...history.value].slice(0, 20)
+    if (normalizedResult.event_instance_id) {
+      await refreshEventDetail(normalizedResult.event_instance_id)
+      startEventPolling(normalizedResult.event_instance_id)
+    }
     ElMessage.success('Qwen 视频初筛完成，结果已提交 ECA')
   } catch (error) {
     lastError.value = error?.response?.data?.detail || error?.message || '视频初筛请求失败'
@@ -362,7 +424,106 @@ async function submitVideoFile() {
   }
 }
 
-function triggerVideoPickerHint() { ElMessage.info('请点击右上方“选择视频”') }
+async function refreshEventDetail(id = result.value?.event_instance_id) {
+  if (!id) return
+  try {
+    const response = await getUnifiedSafetyEventDetail(id)
+    eventDetail.value = response.data
+    const event = response.data?.event || {}
+    result.value = {
+      ...(result.value || {}),
+      event_status: event.status,
+      event_state: event.state,
+      analysis_report_id: event.analysis_report_id,
+    }
+    if (event.analysis_report_id) {
+      stopEventPolling()
+    }
+  } catch (error) {
+    lastError.value = error?.response?.data?.detail || error?.message || '事件详情刷新失败'
+  }
+}
+
+function startEventPolling(id) {
+  stopEventPolling()
+  pollTimer.value = window.setInterval(() => refreshEventDetail(id), 3000)
+}
+
+function stopEventPolling() {
+  if (pollTimer.value) window.clearInterval(pollTimer.value)
+  pollTimer.value = null
+}
+
+function normalizeMediaUrls(urls) {
+  return (urls || []).map(normalizeMediaUrl).filter(Boolean)
+}
+
+function normalizeMediaUrl(url) {
+  if (!url) return ''
+  const raw = String(url)
+  if (raw.startsWith('data:') || raw.startsWith('blob:') || raw.startsWith('/')) return raw
+  try {
+    const parsed = new URL(raw)
+    const isMinio = parsed.port === '9000' || ['localhost', '127.0.0.1', '172.17.0.1', 'minio'].includes(parsed.hostname)
+    if (isMinio && parsed.pathname.startsWith('/dam/')) {
+      return `/api/v1/camera/media/minio-proxy?url=${encodeURIComponent(raw)}`
+    }
+  } catch (_) {
+    return raw
+  }
+  return raw
+}
+
+function markFrameFailed(frame) {
+  frame.failed = true
+}
+
+function sceneItemsFor(row) {
+  return sceneDefinitions.map(([key, confidenceKey, label]) => ({
+    key,
+    label,
+    detected: Number(row?.scene?.[key] || 0) === 1,
+    percent: Math.round(Number(row?.confidence?.[confidenceKey] || 0) * 100),
+  })).sort((a, b) => {
+    if (a.detected !== b.detected) return a.detected ? -1 : 1
+    return b.percent - a.percent
+  })
+}
+
+function rowPrimarySceneLabel(row) {
+  const items = sceneItemsFor(row)
+  const detected = items.find(item => item.detected)
+  if (detected) return `${detected.label}疑似触发`
+  const top = items[0]
+  return top?.percent ? `${top.label}关注度最高` : '未发现明确异常'
+}
+
+function selectHistory(row) {
+  stopEventPolling()
+  result.value = row
+  eventDetail.value = null
+  evidenceFrames.value = normalizeMediaUrls(row.image_urls || []).slice(0, FRAME_COUNT).map((url, index) => ({
+    id: `history-frame-${Date.now()}-${index}`,
+    url,
+    failed: false,
+  }))
+  if (row.event_instance_id) {
+    refreshEventDetail(row.event_instance_id)
+    startEventPolling(row.event_instance_id)
+  }
+}
+
+function openEventDetail(id) {
+  if (!id) return
+  router.push({ name: 'AlarmSafetyEventDetail', params: { id } })
+}
+
+function openReport() {
+  const instanceNo = result.value?.instance_no || detailEvent.value?.instance_no
+  if (!instanceNo) return
+  window.open(`/api/onlyoffice/document/dam_event_report_${instanceNo}`, '_blank')
+}
+
 function labelForRisk(level) { return ({ HIGH: '高风险', MEDIUM: '中风险', LOW: '低风险' })[level] || '低风险' }
 function tagForRisk(level) { return ({ HIGH: 'danger', MEDIUM: 'warning', LOW: 'success' })[level] || 'info' }
 function formatResultTime(timestamp) {
@@ -380,6 +541,7 @@ function formatVideoTime(value) {
 
 onMounted(loadCameras)
 onBeforeUnmount(() => {
+  stopEventPolling()
   stopSimulation(false)
   if (videoUrl.value) URL.revokeObjectURL(videoUrl.value)
   evidenceFrames.value.forEach(item => {
@@ -563,6 +725,13 @@ h3 {
   overflow: hidden;
   background: #02070d;
 }
+.hidden-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
 .video-stage video {
   width: 100%;
   height: 100%;
@@ -600,6 +769,15 @@ h3 {
   color: #7895aa;
   background: transparent;
   cursor: pointer;
+}
+.empty-stage:hover,
+.empty-stage:focus-visible {
+  outline: none;
+  background: rgba(79, 208, 232, .05);
+}
+.empty-stage:hover .el-icon,
+.empty-stage:focus-visible .el-icon {
+  color: var(--cyan);
 }
 .empty-stage .el-icon {
   color: #426d87;
@@ -649,6 +827,15 @@ h3 {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+.frame-error {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  color: #7895aa;
+  background: #03101a;
+  font-size: 12px;
 }
 .frame-strip figure span {
   position: absolute;
@@ -729,6 +916,51 @@ h3 {
   margin: 8px 0 0;
   color: #d8e8f2;
   line-height: 1.65;
+}
+.chain-steps {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+.chain-step {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(127,168,198,.18);
+  border-radius: 6px;
+  background: #071725;
+}
+.chain-step i {
+  display: block;
+  width: 8px;
+  height: 8px;
+  margin-bottom: 8px;
+  border-radius: 50%;
+  background: #5d7182;
+}
+.chain-step.done i {
+  background: var(--green);
+  box-shadow: 0 0 0 5px rgba(66,198,166,.1);
+}
+.chain-step.active i {
+  background: var(--cyan);
+  box-shadow: 0 0 0 5px rgba(79,208,232,.1);
+}
+.chain-step span,
+.chain-step strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chain-step span {
+  color: #7895aa;
+  font-size: 11px;
+}
+.chain-step strong {
+  margin-top: 5px;
+  color: #eaf5fc;
+  font-size: 13px;
 }
 .metric-row {
   display: grid;
@@ -812,6 +1044,11 @@ h3 {
 .result-meta span.ok {
   color: var(--green);
 }
+.result-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
 .json-collapse {
   margin-top: 12px;
   border-color: var(--line);
@@ -879,6 +1116,24 @@ pre {
 .history-table :deep(.el-table__row:hover > td.el-table__cell) {
   background: #0e273d;
 }
+.event-no {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid rgba(79,208,232,.28);
+  border-radius: 6px;
+  color: var(--cyan);
+  background: rgba(79,208,232,.08);
+  font-weight: 700;
+}
+.event-name {
+  color: #e8f5fd;
+  font-weight: 700;
+}
+.event-summary {
+  color: #bed3e2;
+}
 .eca-cell {
   gap: 7px;
 }
@@ -893,6 +1148,9 @@ pre {
 }
 @media (max-width: 1180px) {
   .status-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .chain-steps {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .workspace {

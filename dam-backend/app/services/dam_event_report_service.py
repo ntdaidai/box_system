@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+import shutil
+import subprocess
 import tempfile
 import urllib.request
 from pathlib import Path
@@ -85,6 +87,36 @@ STATUS_NAMES = {
     "PROCESSING": "处理中",
     "COMPLETED": "已完成",
     "FALSE_ALARM": "误报",
+}
+SYSTEM_FACT_FIELDS = {
+    "report_date",
+    "report_time",
+    "event_name",
+    "instance_no",
+    "instance_no_prefix",
+    "instance_no_suffix",
+    "risk_label",
+    "result_label",
+    "occur_time",
+    "occur_time_display",
+    "completed_at",
+    "event_duration",
+    "source_label",
+    "location",
+    "evidence_count",
+    "timeline_count",
+    "timeline_summary",
+    "evidence_caption",
+    "evidence_image",
+    "handling_summary",
+    "conclusion",
+    "summary",
+    "key_observation",
+    "source_summary",
+    "screening_summary",
+    "model_route_summary",
+    "frame_evidence_summary",
+    "evidence_summary",
 }
 
 
@@ -392,6 +424,13 @@ class DamEventReportService:
         video_items = self.collect_video_items(workflow_payload, visual, evidence)
         selected_text = self.clean_report_text(selected["text"])
         workflow_insight = self.workflow_insight(workflow_payload, visual, selected_text)
+        if not image_items and video_items:
+            image_items = self.extract_frame_items_from_videos(
+                video_items,
+                event_name=getattr(event, "event_name", None) or instance.summary or "安全事件",
+                analysis_text=selected_text,
+                workflow_insight=workflow_insight,
+            )
         timeline_summary = self.timeline_summary(timeline)
         evidence_image_path = self.download_first_image(image_items)
 
@@ -411,8 +450,8 @@ class DamEventReportService:
             "result_label": self.result_label(instance),
             "occur_time": self.format_datetime(instance.started_at),
             "occur_time_display": self.format_datetime(instance.started_at).replace(" ", "\n"),
-            "completed_at": self.format_datetime(instance.resolved_at) if instance.resolved_at else "—",
-            "event_duration": self.event_duration(instance),
+            "completed_at": self.completed_at(instance, timeline),
+            "event_duration": self.event_duration(instance, timeline),
             "emergency_level": self.emergency_level(instance),
             "confidence_label": self.confidence_label(selected),
             "source_label": source_label,
@@ -455,10 +494,16 @@ class DamEventReportService:
             "evidence_summary": self.evidence_summary(image_items, video_items),
             "evidence_caption": self.evidence_caption(image_items, video_items),
             "evidence_image": evidence_image_path,
-            "conclusion": self.build_conclusion(workflow_insight, cloud_note),
+            "conclusion": self.build_conclusion(selected, workflow_insight, cloud_note),
         }
-        context.update(self.extract_template_overrides(selected.get("raw_output")))
+        overrides = self.extract_template_overrides(selected.get("raw_output"))
+        context.update({
+            key: value
+            for key, value in overrides.items()
+            if key not in SYSTEM_FACT_FIELDS
+        })
         context["report_date"] = report_date
+        context["report_time"] = self.format_datetime(dt.datetime.now(LOCAL_TIMEZONE))
         context["event_name"] = getattr(event, "event_name", None) or instance.summary or "安全事件"
         context["instance_no"] = instance.instance_no
         context["instance_no_prefix"], context["instance_no_suffix"] = self.instance_no_parts(instance.instance_no)
@@ -466,8 +511,11 @@ class DamEventReportService:
         context["result_label"] = self.result_label(instance)
         context["occur_time"] = self.format_datetime(instance.started_at)
         context["occur_time_display"] = self.format_datetime(instance.started_at).replace(" ", "\n")
-        context["completed_at"] = self.format_datetime(instance.resolved_at) if instance.resolved_at else "—"
+        context["completed_at"] = self.completed_at(instance, timeline)
+        context["event_duration"] = self.event_duration(instance, timeline)
         context["evidence_count"] = len(image_items)
+        context["timeline_count"] = len(timeline)
+        context["timeline_summary"] = timeline_summary
         context["evidence_caption"] = self.evidence_caption(image_items, video_items)
         context["evidence_image"] = evidence_image_path
         if selected.get("source") == "qwen4b":
@@ -482,7 +530,9 @@ class DamEventReportService:
                     image_items=image_items,
                     video_items=video_items,
                 )
-            context["conclusion"] = self.build_conclusion(workflow_insight, cloud_note)
+            context["conclusion"] = self.build_conclusion(selected, workflow_insight, cloud_note)
+        else:
+            context["conclusion"] = self.build_conclusion(selected, workflow_insight, cloud_note)
         return context
 
     def render_docx(self, context: dict[str, Any]) -> bytes:
@@ -568,6 +618,8 @@ class DamEventReportService:
         self.extend_media_items(items, visual.get("images"))
         self.extend_media_items(items, screening.get("qwen_image_urls"))
         self.extend_media_items(items, screening.get("image_urls"))
+        self.extend_media_items(items, self.find_nested_values(workflow_payload, "representative_frame"))
+        self.extend_media_items(items, self.find_nested_values(workflow_payload, "representative_frames"))
         self.extend_media_items(items, self.find_nested_values(workflow_payload, "key_frames"))
         self.extend_media_items(items, self.find_nested_values(workflow_payload, "images"))
         self.extend_media_items(items, self.find_nested_values(workflow_payload, "image_urls"))
@@ -664,7 +716,175 @@ class DamEventReportService:
                 return Path(tmp.name)
         return None
 
-    def read_minio_or_http_bytes(self, value: str) -> Optional[bytes]:
+    def extract_frame_items_from_videos(
+        self,
+        video_items: list[dict[str, Any]],
+        *,
+        event_name: str,
+        analysis_text: str,
+        workflow_insight: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Legacy fallback for reports generated before the workflow returned representative frames."""
+        items: list[dict[str, Any]] = []
+        for index, item in enumerate(video_items[:2], 1):
+            frame_path = self.extract_video_frame(str(item.get("url") or ""))
+            if frame_path:
+                items.append({
+                    "url": str(frame_path),
+                    "caption": item.get("caption") or f"事件证据视频兜底抽帧{index}",
+                    "source": "legacy_video_frame_fallback",
+                })
+        return items
+
+    def extract_video_frame(self, value: str) -> Optional[Path]:
+        candidates = self.extract_video_candidate_frames(value)
+        if not candidates:
+            return None
+        middle = candidates[len(candidates) // 2]
+        selected_path = Path(str(middle["path"]))
+        for candidate in candidates:
+            path = Path(str(candidate.get("path") or ""))
+            if path != selected_path:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        return selected_path if selected_path.exists() else None
+
+    def extract_video_candidate_frames(self, value: str, count: int = 4) -> list[dict[str, Any]]:
+        video_bytes = self.read_minio_or_http_bytes(
+            value,
+            allowed_suffixes={".mp4", ".mov", ".m4v", ".webm"},
+            allowed_content_prefixes={"video/"},
+        )
+        if not video_bytes:
+            return []
+        ffmpeg = shutil.which(settings.FFMPEG_BIN) or shutil.which("ffmpeg")
+        if not ffmpeg:
+            logger.warning("未找到 FFmpeg，无法从事件视频抽帧")
+            return []
+        input_path: Optional[Path] = None
+        output_paths: list[Path] = []
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as video_tmp:
+                video_tmp.write(video_bytes)
+                input_path = Path(video_tmp.name)
+            duration = self.probe_video_duration(input_path)
+            timestamps = self.candidate_frame_timestamps(duration, count=count)
+            candidates: list[dict[str, Any]] = []
+            for frame_index, timestamp in enumerate(timestamps, 1):
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as frame_tmp:
+                    output_path = Path(frame_tmp.name)
+                output_paths.append(output_path)
+                command = [
+                    ffmpeg,
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-ss",
+                    f"{timestamp:.3f}",
+                    "-i",
+                    str(input_path),
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    "scale='if(gte(iw,ih),min(iw,1280),-2)':'if(gte(iw,ih),-2,min(ih,720))'",
+                    "-q:v",
+                    "4",
+                    "-y",
+                    str(output_path),
+                ]
+                result = subprocess.run(
+                    command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=12,
+                    check=False,
+                )
+                if result.returncode == 0 and output_path.exists() and output_path.stat().st_size > 0:
+                    candidates.append({
+                        "index": frame_index,
+                        "timestamp": round(timestamp, 3),
+                        "path": output_path,
+                    })
+                else:
+                    message = result.stderr.decode("utf-8", errors="replace").strip()
+                    logger.debug("候选代表帧抽取失败 {} @{}s: {}", value, timestamp, message[:200])
+            return candidates
+        except Exception as exc:
+            logger.warning("事件视频抽帧异常 {}: {}", value, exc)
+        finally:
+            if input_path:
+                try:
+                    input_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        for output_path in output_paths:
+            try:
+                output_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return []
+
+    @staticmethod
+    def probe_video_duration(input_path: Path) -> float:
+        ffprobe = shutil.which("ffprobe")
+        if not ffprobe:
+            return 0.0
+        try:
+            result = subprocess.run(
+                [
+                    ffprobe,
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    str(input_path),
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=5,
+                check=False,
+            )
+            return max(0.0, float((result.stdout or b"").decode().strip() or 0.0))
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def candidate_frame_timestamps(duration: float, count: int = 4) -> list[float]:
+        count = max(1, min(int(count or 4), 6))
+        if duration > 1.2:
+            start = min(0.6, duration * 0.12)
+            end = max(start, duration - min(0.4, duration * 0.08))
+            if count == 1:
+                return [duration / 2]
+            return [
+                start + (end - start) * index / (count - 1)
+                for index in range(count)
+            ]
+        return [0.2 + index * 0.8 for index in range(count)]
+
+    def read_minio_or_http_bytes(
+        self,
+        value: str,
+        *,
+        allowed_suffixes: Optional[set[str]] = None,
+        allowed_content_prefixes: Optional[set[str]] = None,
+    ) -> Optional[bytes]:
+        allowed_suffixes = allowed_suffixes or {".jpg", ".jpeg", ".png", ".webp"}
+        allowed_content_prefixes = allowed_content_prefixes or {"image/"}
+        local_path = Path(str(value or ""))
+        if local_path.is_absolute() and local_path.exists():
+            suffix = local_path.suffix.lower()
+            if suffix in allowed_suffixes:
+                try:
+                    return local_path.read_bytes()
+                except OSError as exc:
+                    logger.debug("读取本地图像失败 {}: {}", value, exc)
         bucket, object_name = self.parse_minio_reference(value)
         if bucket and object_name and not minio_service.client:
             try:
@@ -692,7 +912,10 @@ class DamEventReportService:
                     with urllib.request.urlopen(url, timeout=5) as response:
                         content_type = response.headers.get("Content-Type") or ""
                         data = response.read()
-                    if data and (content_type.startswith("image/") or Path(parsed.path).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}):
+                    if data and (
+                        any(content_type.startswith(prefix) for prefix in allowed_content_prefixes)
+                        or Path(parsed.path).suffix.lower() in allowed_suffixes
+                    ):
                         return data
                 except Exception as exc:
                     logger.debug("HTTP读取图像失败 {}: {}", url, exc)
@@ -735,9 +958,21 @@ class DamEventReportService:
             return "已闭环"
         return STATUS_NAMES.get(str(instance.status or "").upper(), "处理中")
 
-    def event_duration(self, instance: SafetyEventInstance) -> str:
+    def completed_at(
+        self,
+        instance: SafetyEventInstance,
+        timeline: Optional[list[SafetyEventTimelineLog]] = None,
+    ) -> str:
+        end = self.completion_time(instance, timeline)
+        return self.format_datetime(end) if end else "—"
+
+    def event_duration(
+        self,
+        instance: SafetyEventInstance,
+        timeline: Optional[list[SafetyEventTimelineLog]] = None,
+    ) -> str:
         start = instance.started_at
-        end = instance.resolved_at or instance.last_observed_at or dt.datetime.now()
+        end = self.completion_time(instance, timeline) or instance.last_observed_at or dt.datetime.now()
         if not start or not end:
             return "—"
         seconds = max(0, int((end - start).total_seconds()))
@@ -748,6 +983,22 @@ class DamEventReportService:
         if minutes:
             return f"{minutes}分钟{sec}秒"
         return f"{sec}秒"
+
+    @staticmethod
+    def completion_time(
+        instance: SafetyEventInstance,
+        timeline: Optional[list[SafetyEventTimelineLog]] = None,
+    ) -> Optional[dt.datetime]:
+        if timeline:
+            candidates = [
+                row.create_time
+                for row in timeline
+                if row.create_time
+                and str(row.log_type or "").upper() in {"ACTION", "REPORT", "DAM_WORKFLOW"}
+            ]
+            if candidates:
+                return max(candidates)
+        return instance.resolved_at
 
     def instance_no_parts(self, instance_no: str) -> tuple[str, str]:
         text = str(instance_no or "").strip()
@@ -779,8 +1030,13 @@ class DamEventReportService:
         camera_name = visual.get("camera_name") or getattr(source, "source_name", None) or "现场摄像头"
         event_name = getattr(event, "event_name", None) or instance.summary or "安全事件"
         qwen_summary = insight.get("qwen_summary")
+        if self.looks_like_model_thinking(str(qwen_summary or "")):
+            qwen_summary = ""
+        qwen4b_summary = self.compact(str(insight.get("qwen4b_conclusion") or ""), 120)
+        if qwen4b_summary and qwen4b_summary != "—":
+            return self.compact(f"{camera_name}触发{event_name}，智能分析结论：{qwen4b_summary}", 170)
         if qwen_summary:
-            return f"{camera_name}触发{event_name}，初筛摘要：{qwen_summary}。"
+            return self.compact(f"{camera_name}触发{event_name}，初筛摘要：{qwen_summary}。", 180)
         detected = insight.get("specialized_class_label")
         if detected:
             return f"{camera_name}触发{event_name}，专有模型复核结果为{detected}。"
@@ -796,8 +1052,10 @@ class DamEventReportService:
         insight = insight or {}
         parts = []
         screening = visual.get("screening") if isinstance(visual.get("screening"), dict) else {}
-        if screening.get("summary"):
+        if screening.get("summary") and not self.looks_like_model_thinking(str(screening.get("summary"))):
             parts.append(str(screening.get("summary")))
+        if not parts and insight.get("qwen4b_risk_reasoning"):
+            parts.append(self.compact(str(insight.get("qwen4b_risk_reasoning")), 220))
         main_class = insight.get("specialized_class")
         confidence = insight.get("specialized_confidence")
         if main_class:
@@ -1086,14 +1344,36 @@ class DamEventReportService:
             rows.append(f"{time_text} {row.log_type}/{row.status}：{row.message}")
         return "\n".join(rows)
 
-    def build_conclusion(self, selected_text: str, cloud_note: str) -> str:
-        if isinstance(selected_text, dict):
-            insight = selected_text
-            conclusion = insight.get("conclusion") or "当前事件已完成智能分析，建议结合现场水位、降雨和坝体状态持续跟踪。"
-        else:
-            sentences = re.split(r"(?<=[。！？])\s*", str(selected_text or "").strip())
-            useful = [sentence.strip() for sentence in sentences if sentence.strip() and not sentence.strip().endswith("专")]
-            conclusion = useful[-1] if useful else "当前事件已完成智能分析，建议结合现场水位、降雨和坝体状态持续跟踪。"
+    def build_conclusion(
+        self,
+        selected: dict[str, Any],
+        workflow_insight: dict[str, Any],
+        cloud_note: str,
+    ) -> str:
+        conclusion = self.final_report_field(selected, "conclusion", "")
+        if self.looks_like_model_thinking(conclusion):
+            conclusion = "—"
+        if conclusion == "—":
+            impact = self.final_report_field(selected, "impact_assessment", "")
+            monitoring = self.final_report_field(selected, "monitoring_suggestions", "")
+            if self.looks_like_model_thinking(impact):
+                impact = str(workflow_insight.get("qwen4b_impact_assessment") or "").strip() or "—"
+            if self.looks_like_model_thinking(monitoring):
+                monitoring = str(workflow_insight.get("qwen4b_monitoring_suggestions") or "").strip() or "—"
+            if impact != "—" and monitoring != "—":
+                conclusion = f"{impact} 后续应{monitoring.lstrip('建议')}"
+            elif impact != "—":
+                conclusion = impact
+            else:
+                event_text = (
+                    workflow_insight.get("qwen4b_conclusion")
+                    or workflow_insight.get("qwen_summary")
+                    or ""
+                )
+                conclusion = (
+                    f"本次事件已完成智能路由分析和证据归档。{self.compact(str(event_text or ''), 180)}"
+                    "建议结合现场巡查与连续监测结果确认最终处置等级。"
+                )
         if cloud_note:
             return f"{cloud_note}\n{conclusion}"
         return conclusion
@@ -1159,6 +1439,18 @@ class DamEventReportService:
             "sampled_frames": classify.get("sampled_frames"),
             "classification_report": classify.get("report"),
         })
+        reasoning = self.find_node_inference(workflow_payload, "action_reasoning")
+        result.update({
+            "qwen4b_detailed_scene_analysis": self.find_in_value(reasoning, "detailed_scene_analysis"),
+            "qwen4b_risk_reasoning": self.find_in_value(reasoning, "risk_reasoning"),
+            "qwen4b_impact_assessment": self.find_in_value(reasoning, "impact_assessment"),
+            "qwen4b_response_plan": self.find_in_value(reasoning, "response_plan"),
+            "qwen4b_monitoring_suggestions": self.find_in_value(reasoning, "monitoring_suggestions"),
+            "qwen4b_conclusion": (
+                self.find_in_value(reasoning, "impact_assessment")
+                or self.find_in_value(reasoning, "monitoring_suggestions")
+            ),
+        })
         return result
 
     def find_node_inference(self, workflow_payload: dict[str, Any], node_id: str) -> dict[str, Any]:
@@ -1220,8 +1512,12 @@ class DamEventReportService:
         image_items: list[dict[str, Any]],
         video_items: list[dict[str, Any]],
     ) -> str:
-        if selected.get("source") == "qwen35b" and not self.looks_truncated(selected_text):
-            return self.clean_report_text(selected_text)
+        detailed = self.selected_detailed_summary(selected)
+        if detailed:
+            return detailed
+        detailed = self.workflow_detailed_summary(workflow_insight)
+        if detailed:
+            return detailed
 
         event_name = getattr(event, "event_name", None) or instance.summary or "安全事件"
         qwen_summary = workflow_insight.get("qwen_summary") or "初筛未提供明确文字摘要"
@@ -1239,10 +1535,47 @@ class DamEventReportService:
         lines = [
             f"一、事件复核：系统触发{event_name}，当前风险等级为{risk_text}。{cloud_text}",
             f"二、现场证据：摄像头初筛摘要为“{qwen_summary}”。本次关联事件证据视频{len(video_items)}段、关键帧/检测图像{len(image_items)}张。",
-            f"三、模型研判：专有分类模型复核类别为{class_label}，置信度{confidence_text}，采样帧数{sampled_frames}。边缘侧4B分析认为现场水流状态异常，需按洪水风险持续跟踪。",
-            "四、处置建议：保持摄像头连续取证，联动水位、雨量和坝体安全监测数据；对现场临水区域进行人工复核；如水位继续上涨或出现人员靠近，应升级告警并启动现场处置。",
+            f"三、模型研判：专有模型复核类别为{class_label}，置信度{confidence_text}，采样帧数{sampled_frames}。边缘侧4B和云端增强节点已结合视频证据、事件类型和上下文完成复核。",
+            "四、处置建议：保持摄像头连续取证，联动相关传感器和现场巡查记录；如风险指标持续升高或现场出现人员、设施受威胁情况，应升级告警并启动现场处置。",
         ]
         return "\n".join(lines)
+
+    def selected_detailed_summary(self, selected: dict[str, Any]) -> str:
+        fields = [
+            ("一、现场场景", self.final_report_field(selected, "detailed_scene_analysis", "")),
+            ("二、风险研判", self.final_report_field(selected, "risk_reasoning", "")),
+            ("三、影响评估", self.final_report_field(selected, "impact_assessment", "")),
+            ("四、处置建议", self.final_report_field(selected, "response_plan", "")),
+            ("五、持续监测", self.final_report_field(selected, "monitoring_suggestions", "")),
+        ]
+        lines = [
+            f"{label}：{text}"
+            for label, text in fields
+            if text and text != "—" and not self.looks_like_model_thinking(text)
+        ]
+        return "\n".join(lines) if len(lines) >= 2 else ""
+
+    @staticmethod
+    def workflow_detailed_summary(workflow_insight: dict[str, Any]) -> str:
+        fields = [
+            ("一、现场场景", workflow_insight.get("qwen4b_detailed_scene_analysis")),
+            ("二、风险研判", workflow_insight.get("qwen4b_risk_reasoning")),
+            ("三、影响评估", workflow_insight.get("qwen4b_impact_assessment")),
+            ("四、处置建议", workflow_insight.get("qwen4b_response_plan")),
+            ("五、持续监测", workflow_insight.get("qwen4b_monitoring_suggestions")),
+        ]
+        lines = [f"{label}：{str(text).strip()}" for label, text in fields if str(text or "").strip()]
+        return "\n".join(lines) if len(lines) >= 2 else ""
+
+    @staticmethod
+    def looks_like_model_thinking(text: str) -> bool:
+        value = str(text or "").strip()
+        return (
+            value.startswith(("好的，我现在", "首先，我", "<think>"))
+            or "</think>" in value
+            or "需要处理用户" in value[:120]
+            or "生成一个关于" in value[:160]
+        )
 
     def looks_truncated(self, text: str) -> bool:
         stripped = str(text or "").strip()

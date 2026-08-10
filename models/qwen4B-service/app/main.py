@@ -53,6 +53,8 @@ WORKFLOW_VIDEO_PROXY_MAX_FRAMES = int(os.getenv("WORKFLOW_VIDEO_PROXY_MAX_FRAMES
 WORKFLOW_VIDEO_PROXY_WIDTH = int(os.getenv("WORKFLOW_VIDEO_PROXY_WIDTH", "448"))
 WORKFLOW_VIDEO_PROXY_CRF = int(os.getenv("WORKFLOW_VIDEO_PROXY_CRF", "35"))
 EDGE_PROXY_MEDIA_PREFIX = os.getenv("EDGE_PROXY_MEDIA_PREFIX", "qwen4b-proxy-media")
+REPRESENTATIVE_FRAME_ENABLED = os.getenv("REPRESENTATIVE_FRAME_ENABLED", "true").lower() == "true"
+REPRESENTATIVE_FRAME_CANDIDATE_COUNT = int(os.getenv("REPRESENTATIVE_FRAME_CANDIDATE_COUNT", "4"))
 
 CLOUD_MINIO_ENDPOINT = os.getenv("CLOUD_MINIO_ENDPOINT", os.getenv("A100_MINIO_ENDPOINT", "10.196.85.11:9469"))
 CLOUD_MINIO_ACCESS_KEY = os.getenv("CLOUD_MINIO_ACCESS_KEY", os.getenv("A100_MINIO_ACCESS_KEY", "minioadmin"))
@@ -420,6 +422,18 @@ def parse_scene_analysis(content: str) -> SceneAnalysis:
     )
 
 
+def parse_model_json(content: str) -> Dict[str, Any]:
+    """解析模型输出中的 JSON 对象，失败时返回空对象。"""
+    try:
+        json_match = re.search(r'\{[\s\S]*\}', content or "")
+        if json_match:
+            parsed = json.loads(json_match.group())
+            return parsed if isinstance(parsed, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+    return {}
+
+
 def determine_cloud_enhancement(scene_analysis: SceneAnalysis, request: InferRequest) -> bool:
     """判断是否需要云端增强"""
     # 高风险场景建议云端增强
@@ -656,6 +670,7 @@ async def build_workflow_media_content(request: WorkflowInferRequest) -> tuple[L
         "mode": "none",
         "source": None,
         "proxy": None,
+        "representative_frame_candidates": [],
         "errors": [],
     }
 
@@ -672,6 +687,9 @@ async def build_workflow_media_content(request: WorkflowInferRequest) -> tuple[L
                         "source_kind": ref.get("source_kind"),
                     }
                     transform["proxy"] = selected_ref.get("proxy_info")
+                    transform["representative_frame_candidates"] = (
+                        selected_ref.get("representative_frame_candidates") or []
+                    )
                 except Exception as e:
                     message = f"生成 4B 代理视频失败，回退原始视频: {e}"
                     transform["errors"].append(message)
@@ -679,6 +697,10 @@ async def build_workflow_media_content(request: WorkflowInferRequest) -> tuple[L
             url = media_ref_url(selected_ref)
             if url:
                 content.append({"type": "video_url", "video_url": {"url": url}})
+            for candidate in selected_ref.get("representative_frame_candidates") or []:
+                candidate_url = media_ref_url(candidate)
+                if candidate_url:
+                    content.append({"type": "image_url", "image_url": {"url": candidate_url}})
         if content:
             return content, transform
 
@@ -876,11 +898,119 @@ async def transcode_video_proxy(data: bytes, source_name: str) -> bytes:
         return output_path.read_bytes()
 
 
+async def probe_video_duration(input_path: Path) -> float:
+    process = await asyncio.create_subprocess_exec(
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(input_path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, _ = await process.communicate()
+    if process.returncode != 0:
+        return 0.0
+    try:
+        return max(0.0, float((stdout or b"").decode().strip() or 0.0))
+    except ValueError:
+        return 0.0
+
+
+def candidate_frame_timestamps(duration: float, count: int) -> List[float]:
+    count = max(1, min(int(count or 4), 8))
+    if duration > 1.2:
+        start = min(0.6, duration * 0.12)
+        end = max(start, duration - min(0.4, duration * 0.08))
+        if count == 1:
+            return [duration / 2]
+        return [start + (end - start) * index / (count - 1) for index in range(count)]
+    return [0.2 + index * 0.8 for index in range(count)]
+
+
+async def extract_representative_frame_candidates(
+    proxy_data: bytes,
+    request: WorkflowInferRequest,
+    source_name: str,
+) -> List[Dict[str, Any]]:
+    """从 4B 实际使用的代理视频中抽候选帧并上传，供同一次模型调用选择。"""
+    if not REPRESENTATIVE_FRAME_ENABLED:
+        return []
+
+    count = max(1, min(REPRESENTATIVE_FRAME_CANDIDATE_COUNT, WORKFLOW_VIDEO_PROXY_MAX_FRAMES, 8))
+    task_key = task_key_from_request(request)
+    stem = Path(source_name).stem or "evidence"
+    candidates: List[Dict[str, Any]] = []
+
+    with tempfile.TemporaryDirectory(prefix="qwen4b_repr_frame_") as tmpdir:
+        input_path = Path(tmpdir) / "proxy.mp4"
+        input_path.write_bytes(proxy_data)
+        duration = await probe_video_duration(input_path)
+        timestamps = candidate_frame_timestamps(duration, count)
+
+        for frame_index, timestamp in enumerate(timestamps, 1):
+            output_path = Path(tmpdir) / f"frame_{frame_index:02d}.jpg"
+            process = await asyncio.create_subprocess_exec(
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-ss",
+                f"{timestamp:.3f}",
+                "-i",
+                str(input_path),
+                "-frames:v",
+                "1",
+                "-vf",
+                "scale='if(gte(iw,ih),min(iw,1280),-2)':'if(gte(iw,ih),-2,min(ih,720))'",
+                "-q:v",
+                "4",
+                str(output_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await process.communicate()
+            if process.returncode != 0 or not output_path.exists() or output_path.stat().st_size <= 0:
+                logger.warning(
+                    "代表帧候选抽取失败 index={} timestamp={} error={}",
+                    frame_index,
+                    timestamp,
+                    stderr.decode("utf-8", errors="replace")[:300],
+                )
+                continue
+
+            data = output_path.read_bytes()
+            object_name = (
+                f"{EDGE_PROXY_MEDIA_PREFIX}/{task_key}/representative-frames/"
+                f"{int(time.time() * 1000)}_{stem}_frame_{frame_index:02d}.jpg"
+            )
+            await upload_bytes_to_edge(data, object_name, "image/jpeg")
+            candidates.append({
+                "index": frame_index,
+                "timestamp_seconds": round(timestamp, 3),
+                "type": "image",
+                "source_kind": "minio",
+                "bucket": EDGE_MINIO_BUCKET,
+                "object_name": object_name,
+                "object_key": object_name,
+                "path": f"{EDGE_MINIO_BUCKET}/{object_name}",
+                "content_type": "image/jpeg",
+                "source": "qwen4b_representative_frame_candidate",
+            })
+
+    return candidates
+
+
 async def create_video_proxy_ref(request: WorkflowInferRequest, ref: Dict[str, Any]) -> Dict[str, Any]:
     """生成并上传 4B 使用的轻量代理视频，返回可签名的边缘 MinIO 引用。"""
     data = await load_media_bytes(ref)
     source_name = Path(str(ref.get("object_name") or "evidence.mp4")).name or "evidence.mp4"
     proxy_data = await transcode_video_proxy(data, source_name)
+    representative_candidates = await extract_representative_frame_candidates(proxy_data, request, source_name)
     task_key = task_key_from_request(request)
     stem = Path(source_name).stem or "evidence"
     object_name = (
@@ -905,6 +1035,7 @@ async def create_video_proxy_ref(request: WorkflowInferRequest, ref: Dict[str, A
             "width": WORKFLOW_VIDEO_PROXY_WIDTH,
             "content_type": "video/mp4",
         },
+        "representative_frame_candidates": representative_candidates,
     }
 
 
@@ -1280,6 +1411,9 @@ def build_workflow_prompt(request: WorkflowInferRequest) -> str:
         "输出必须是一个合法 JSON 对象，并额外包含以下详细字段："
         "detailed_scene_analysis、risk_reasoning、impact_assessment、response_plan、monitoring_suggestions。"
         "这些字段要用于正式报告，不能只写短语；每项请写成完整中文段落。"
+        "如果输入中包含候选代表帧图片，请同时输出 representative_frame 对象："
+        "{\"selected_index\":候选帧编号,\"reason\":\"为什么该帧最适合作为报告代表画面\"}。"
+        "代表帧应选择最能体现事件证据、现场状态、风险特征且画面清晰的一帧。"
     )
 
 
@@ -1302,6 +1436,39 @@ def workflow_system_prompt_source(request: WorkflowInferRequest) -> Optional[str
 def workflow_meta_value(request: WorkflowInferRequest, key: str) -> Optional[Any]:
     inputs = request.inputs if isinstance(request.inputs, dict) else {}
     return getattr(request, key, None) or inputs.get(key)
+
+
+def selected_representative_frame(content: str, media_transform: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    candidates = media_transform.get("representative_frame_candidates") or []
+    if not candidates:
+        return None
+
+    parsed = parse_model_json(content)
+    raw_frame = parsed.get("representative_frame") if isinstance(parsed, dict) else None
+    selected_index = None
+    reason = ""
+    if isinstance(raw_frame, dict):
+        selected_index = raw_frame.get("selected_index") or raw_frame.get("index")
+        reason = str(raw_frame.get("reason") or raw_frame.get("caption") or "").strip()
+    elif isinstance(raw_frame, (int, float, str)):
+        selected_index = raw_frame
+
+    try:
+        selected_index = int(float(selected_index))
+    except (TypeError, ValueError):
+        selected_index = int(candidates[len(candidates) // 2].get("index") or 1)
+        if not reason:
+            reason = "模型未明确返回代表帧编号，使用候选帧中部画面作为报告代表帧。"
+
+    selected = next(
+        (item for item in candidates if int(item.get("index") or 0) == selected_index),
+        candidates[len(candidates) // 2],
+    )
+    result = dict(selected)
+    result["caption"] = reason or f"4B 场景理解节点选择的事件视频代表帧，约 {result.get('timestamp_seconds')} 秒。"
+    result["description"] = result["caption"]
+    result["selected_by"] = "qwen4b_action_reasoning"
+    return result
 
 
 # ==================== API 接口 ====================
@@ -1445,6 +1612,19 @@ async def workflow_infer(request: WorkflowInferRequest):
 
         system_prompt = workflow_system_prompt(request)
         media_content, media_transform = await build_workflow_media_content(request)
+        frame_candidates = media_transform.get("representative_frame_candidates") or []
+        if frame_candidates:
+            prompt += "\n\n候选代表帧编号如下，请结合视频和这些候选图片选择 representative_frame.selected_index：\n"
+            prompt += json.dumps(
+                [
+                    {
+                        "index": item.get("index"),
+                        "timestamp_seconds": item.get("timestamp_seconds"),
+                    }
+                    for item in frame_candidates
+                ],
+                ensure_ascii=False,
+            )
         user_content: Any = prompt
         if media_content:
             user_content = media_content + [{"type": "text", "text": prompt}]
@@ -1459,6 +1639,7 @@ async def workflow_infer(request: WorkflowInferRequest):
         )
         content = response.choices[0].message.content or ""
         scene_analysis = parse_scene_analysis(content)
+        representative_frame = selected_representative_frame(content, media_transform)
         cloud_media_objects = media_upload.get("objects") or []
         media_objects_for_next_node = cloud_media_objects or request.media_objects
         final_report = build_local_final_report(scene_analysis)
@@ -1485,6 +1666,9 @@ async def workflow_infer(request: WorkflowInferRequest):
             "template_fields": template_fields,
             "template_tables": template_tables,
             "docx_context": template_data,
+            "representative_frame": representative_frame,
+            "key_frames": [representative_frame] if representative_frame else [],
+            "image_urls": [representative_frame["path"]] if representative_frame else [],
             "result_source": "local_qwen4b",
             "actor_name": workflow_actor_name(request),
             "system_prompt_source": workflow_system_prompt_source(request),

@@ -156,7 +156,7 @@ services:
       - "/dev/ttyCH341USB0:/dev/ttyCH341USB0"
       - "/dev/ttyCH341USB1:/dev/ttyCH341USB1"
       - "/dev/ttyCH341USB2:/dev/ttyCH341USB2"
-      - "/dev/ttyCH341USB3:/dev/ttyCH341USB3"
+      - "/dev/ttyCH341USB4:/dev/ttyCH341USB3"
     network_mode: host
 
   # ========== 轻量级模型库服务 ==========

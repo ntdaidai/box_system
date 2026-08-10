@@ -6,7 +6,6 @@
         v-for="sensor in sensors"
         :key="sensor.name"
         class="sensor-card"
-        @click="goTo(sensor.path)"
       >
         <img :src="sensor.icon" class="sensor-icon" />
         <div class="sensor-name">{{ sensor.name }}</div>
@@ -21,7 +20,6 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
 import { getCameraList } from '@/api/camera'
 import { getDeviceStatus } from '@/api/sensor'
 import tempIcon from '@/assets/images/sensors/temp_humidity.png'
@@ -30,19 +28,16 @@ import rainIcon from '@/assets/images/sensors/rain.png'
 import vibrationIcon from '@/assets/images/sensors/vibration.png'
 import cameraIcon from '@/assets/images/sensors/camera.png'
 
-const router = useRouter()
 const deviceStatus = ref({})
 
 const sensors = [
-  { name: '温湿度传感器', key: 'temp_humidity', path: '/monitor/temp', icon: tempIcon },
-  { name: '风速风向传感器', key: 'wind', path: '/monitor/wind', icon: windIcon },
-  { name: '雨量计', key: 'rain', path: '/monitor/rain', icon: rainIcon },
-  { name: '振动传感器', key: 'vibration', path: '/monitor/vibration', icon: vibrationIcon },
-  { name: '视频监控', key: 'camera', path: '/monitor/camera', icon: cameraIcon },
-  { name: 'AGX 边缘计算盒', key: 'agx', path: '/monitor/overview', icon: '/agx.jpg' },
+  { name: '温湿度传感器', key: 'temp_humidity', icon: tempIcon },
+  { name: '风速风向传感器', key: 'wind', icon: windIcon },
+  { name: '雨量计', key: 'rain', icon: rainIcon },
+  { name: '振动传感器', key: 'vibration', icon: vibrationIcon },
+  { name: '视频监控', key: 'camera', icon: cameraIcon },
+  { name: 'AGX 边缘计算盒', key: 'agx', icon: '/agx.jpg' },
 ]
-
-const goTo = (path) => router.push(path)
 
 const getStatusClass = (key) => {
   if (key === 'agx') return deviceStatus.value.agx?.status || 'online'
@@ -156,14 +151,12 @@ onMounted(() => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
   transition: all 0.3s ease;
 }
 
 .sensor-card:hover {
-  transform: scale(1.08);
-  box-shadow: 0 0 40px rgba(0, 255, 255, 0.6), 0 0 80px rgba(0, 200, 255, 0.3);
-  border-color: #00ffff;
+  box-shadow: 0 0 26px rgba(0, 170, 255, 0.45), inset 0 0 30px rgba(0, 100, 200, 0.14);
+  border-color: rgba(0, 220, 255, 0.52);
 }
 
 .sensor-icon {

@@ -13,10 +13,10 @@ const routes = [
         meta: { title: '综合态势' }
       },
       {
-        path: 'overview-bigscreen-preview',
-        name: 'OverviewBigScreenPreview',
-        component: () => import('@/views/OverviewBigScreenPreview.vue'),
-        meta: { title: '总览页数字大屏预览' }
+        path: 'overview-camera-region-annotator',
+        name: 'OverviewCameraRegionAnnotator',
+        component: () => import('@/views/OverviewCameraRegionAnnotator.vue'),
+        meta: { title: '摄像头区域标注' }
       },
       // ========== 实时监控模块 ==========
       {
@@ -82,7 +82,7 @@ const routes = [
             path: 'camera/devices',
             name: 'CameraDeviceManagement',
             component: () => import('@/views/Monitor/DeviceManagement.vue'),
-            meta: { title: '数据源管理' }
+            meta: { title: '数据源管理', hideBreadcrumbBar: true }
           },
           {
             path: 'camera/zones',
@@ -105,7 +105,7 @@ const routes = [
           {
             path: 'drone',
             name: 'MonitorDroneRedirect',
-            redirect: '/system/drone',
+            redirect: '/system/linkage/drone',
             meta: { title: '无人机监测' }
           },
           {
@@ -150,32 +150,59 @@ const routes = [
         children: [
           {
             path: 'devices',
-            name: 'SystemDeviceManagement',
             component: () => import('@/views/Monitor/DeviceManagement.vue'),
+            meta: { title: '数据源管理', hideBreadcrumbBar: true }
+          },
+          {
+            path: 'devices/cameras',
+            redirect: '/system/devices',
             meta: { title: '数据源管理' }
           },
           {
             path: 'video-detection',
             name: 'SystemVideoDetection',
             component: () => import('@/views/System/VideoDetection.vue'),
-            meta: { title: '视频检测' }
+            meta: { title: '视频测试' }
+          },
+          {
+            path: 'sensor-event-test',
+            name: 'SystemSensorEventTest',
+            component: () => import('@/views/System/SensorEventTest.vue'),
+            meta: { title: '传感器测试' }
           },
           {
             path: 'config',
             name: 'SystemInformationConfig',
-            redirect: '/system/linkage',
+            redirect: '/system/linkage/rules',
             meta: { title: '联动系统' }
           },
           {
             path: 'linkage',
-            name: 'SystemLinkageManagement',
-            component: () => import('@/views/System/LinkageManagement.vue'),
+            redirect: '/system/linkage/devices',
             meta: { title: '联动系统' }
           },
           {
-            path: 'drone',
-            name: 'SystemDroneView',
+            path: 'linkage/devices',
+            name: 'SystemLinkageDevices',
+            component: () => import('@/views/System/LinkageManagement.vue'),
+            meta: { title: '联动设备', linkageModule: 'devices' }
+          },
+          {
+            path: 'linkage/rules',
+            name: 'SystemLinkageRules',
+            component: () => import('@/views/System/LinkageManagement.vue'),
+            meta: { title: '联动规则', linkageModule: 'rules' }
+          },
+          {
+            path: 'linkage/drone',
+            name: 'SystemLinkageDroneView',
             component: () => import('@/views/Monitor/DroneView.vue'),
+            meta: { title: '无人机监测' }
+          },
+          {
+            path: 'drone',
+            name: 'SystemDroneViewRedirect',
+            redirect: '/system/linkage/drone',
             meta: { title: '无人机监测' }
           },
           {

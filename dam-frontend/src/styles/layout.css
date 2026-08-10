@@ -194,7 +194,15 @@
   padding: 0;
 }
 
+.annotator-shell .contentBox {
+  padding: 0;
+}
+
 .bigscreen-shell .viewBox {
+  overflow: hidden;
+}
+
+.annotator-shell .viewBox {
   overflow: hidden;
 }
 

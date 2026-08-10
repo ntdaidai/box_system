@@ -7,6 +7,7 @@ import asyncio
 import base64
 import datetime as dt
 import json
+import mimetypes
 import re
 import shutil
 import subprocess
@@ -30,6 +31,9 @@ from app.core.cache import cached, invalidate_cache
 from app.core.database import SessionLocal, get_db
 from app.core.security import require_auth
 from app.models.camera import Camera
+from app.models.data_source import DataSource
+from app.models.event_library import EventLibrary
+from app.models.safety_integration import SafetyEventInstance
 from app.models.user import User
 from app.services.camera_stream import CameraStream, camera_manager
 from app.services.camera_live_relay import camera_live_relay_manager, camera_preview_source
@@ -37,6 +41,7 @@ from app.services.camera_snapshot import camera_snapshot_service
 from app.services.camera_source import camera_rtsp_path, camera_source_from_row
 from app.services.camera_web_proxy import camera_web_proxy_manager
 from app.services.camera_zone_store import get_camera_zone_store
+from app.services.minio_service import minio_service
 from app.services.qwen_camera_screening import qwen_camera_screening_service
 from app.services.stream_ticket import stream_ticket_store
 from app.services.video_detection import video_detection_service
@@ -395,6 +400,102 @@ def _camera_reserved_proxy_ports(db: Session, camera_device_id: Optional[int] = 
     if camera_device_id is not None:
         query = query.filter(Camera.id != camera_device_id)
     return {int(port) for (port,) in query.all() if port}
+
+
+def _parse_dam_minio_object(value: str) -> Optional[str]:
+    if not value:
+        return None
+    raw = value.strip()
+    parsed = urlparse(raw)
+    if parsed.scheme in {"http", "https"}:
+        parts = parsed.path.lstrip("/").split("/", 1)
+        if len(parts) == 2 and parts[0] == minio_service.bucket_name:
+            return parts[1]
+        return None
+    clean = raw.lstrip("/")
+    if clean.startswith(f"{minio_service.bucket_name}/"):
+        return clean.split("/", 1)[1]
+    return clean or None
+
+
+async def _wait_latest_camera_event(
+    db: Session,
+    camera_id: str,
+    since: dt.datetime,
+    *,
+    timeout_seconds: float = 2.5,
+) -> Optional[dict]:
+    if not str(camera_id).isdigit():
+        return None
+    deadline = time.time() + max(0.2, timeout_seconds)
+    source = db.query(DataSource).filter(
+        DataSource.source_type == "camera",
+        DataSource.is_activate == True,  # noqa: E712
+        DataSource.device_id == int(camera_id),
+    ).first()
+    if not source:
+        return None
+
+    while time.time() < deadline:
+        db.expire_all()
+        row = (
+            db.query(SafetyEventInstance, EventLibrary)
+            .join(EventLibrary, EventLibrary.id == SafetyEventInstance.current_event_id)
+            .filter(
+                SafetyEventInstance.data_source_id == source.id,
+                SafetyEventInstance.source_type == "camera",
+                SafetyEventInstance.source_id == int(camera_id),
+                SafetyEventInstance.started_at >= since,
+            )
+            .order_by(SafetyEventInstance.id.desc())
+            .first()
+        )
+        if row:
+            instance, event = row
+            return {
+                "event_instance_id": instance.id,
+                "instance_no": instance.instance_no,
+                "event_id": instance.current_event_id,
+                "event_name": event.event_name if event else instance.summary,
+                "event_status": instance.status,
+                "event_state": instance.state,
+                "analysis_report_id": instance.analysis_report_id,
+            }
+        await asyncio.sleep(0.2)
+    return None
+
+
+@router.get("/media/minio-proxy", summary="代理读取 MinIO 媒体对象")
+def proxy_minio_media(
+    url: str = Query(..., description="MinIO URL 或 dam 桶对象路径"),
+    _user: User = Depends(require_auth),
+):
+    object_name = _parse_dam_minio_object(url)
+    if not object_name:
+        raise HTTPException(status_code=400, detail="只支持 dam 桶媒体对象")
+    if not minio_service.client:
+        minio_service.connect()
+    if not minio_service.client:
+        raise HTTPException(status_code=503, detail="MinIO 未连接")
+    try:
+        stat = minio_service.client.stat_object(minio_service.bucket_name, object_name)
+        response = minio_service.client.get_object(minio_service.bucket_name, object_name)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=f"媒体对象不存在: {object_name}") from exc
+
+    media_type = (
+        getattr(stat, "content_type", None)
+        or mimetypes.guess_type(object_name)[0]
+        or "application/octet-stream"
+    )
+    return StreamingResponse(
+        response.stream(32 * 1024),
+        media_type=media_type,
+        headers={
+            "Cache-Control": "private, max-age=300",
+            "Content-Disposition": f"inline; filename*=UTF-8''{quote(Path(object_name).name)}",
+        },
+    )
 
 
 def _camera_status_by_id() -> dict:
@@ -1006,6 +1107,7 @@ async def simulate_camera_screening(
         for upload in frames:
             await upload.close()
 
+    triggered_since = dt.datetime.now() - dt.timedelta(seconds=1)
     result = await qwen_camera_screening_service.screen_frames(
         str(row.id),
         normalized_frames,
@@ -1014,9 +1116,10 @@ async def simulate_camera_screening(
     )
     if result is None:
         raise HTTPException(status_code=502, detail="Qwen 初筛未返回有效 JSON")
+    event_ref = await _wait_latest_camera_event(db, str(row.id), triggered_since)
     return DetectResponse(
         code=200,
-        data={**result, "eca_dispatched": True},
+        data={**result, "eca_dispatched": True, **(event_ref or {})},
         message="模拟画面已完成 Qwen 初筛并提交 ECA",
     )
 
@@ -1061,6 +1164,7 @@ async def simulate_camera_screening_video(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+        triggered_since = dt.datetime.now() - dt.timedelta(seconds=1)
         result = await qwen_camera_screening_service.screen_video_file(
             str(row.id),
             str(temp_path),
@@ -1073,9 +1177,10 @@ async def simulate_camera_screening_video(
 
     if result is None:
         raise HTTPException(status_code=502, detail="Qwen 视频初筛未返回有效 JSON")
+    event_ref = await _wait_latest_camera_event(db, str(row.id), triggered_since)
     return DetectResponse(
         code=200,
-        data={**result, "eca_dispatched": True},
+        data={**result, "eca_dispatched": True, **(event_ref or {})},
         message="模拟视频已完成 Qwen 初筛并提交 ECA",
     )
 

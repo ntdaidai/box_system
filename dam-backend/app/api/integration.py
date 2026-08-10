@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
-from sqlalchemy import or_
+from sqlalchemy import case, or_
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -16,6 +17,7 @@ from app.models.camera import Camera
 from app.models.condition_library import ConditionLibrary
 from app.models.event_action import EventActionConfig
 from app.models.event_library import EventLibrary
+from app.models.analysis_report import AnalysisReport
 from app.models.safety_event_task import SafetyEventTask
 from app.models.safety_integration import (
     SafetyEventEvidence,
@@ -35,6 +37,11 @@ ACTION_LABELS = {
     "broadcast": "自动广播",
     "drone_dispatch": "无人机派飞取证驱离",
     "staff_task": "生成人工处置任务",
+}
+EVENT_CATEGORY_LABELS = {
+    "environment": "环境事件",
+    "PERSON_SAFETY": "人员安全",
+    "ILLEGAL_FISHING": "非法捕鱼",
 }
 
 
@@ -88,13 +95,27 @@ class SafetyEventOperation(BaseModel):
     evidence_url: Optional[str] = Field(None, max_length=1024)
 
 
-def _event_dict(row: SafetyEventInstance, event: Optional[EventLibrary] = None) -> dict:
+def _report_document_id(row: SafetyEventInstance) -> Optional[str]:
+    if not row.analysis_report_id:
+        return None
+    return f"dam_event_report_{row.instance_no}"
+
+
+def _event_dict(
+    row: SafetyEventInstance,
+    event: Optional[EventLibrary] = None,
+    report: Optional[AnalysisReport] = None,
+) -> dict:
     event = event or getattr(row, "event", None)
+    report_document_id = _report_document_id(row)
     return {
         "id": row.id,
         "instance_no": row.instance_no,
         "event_id": row.current_event_id,
         "analysis_report_id": row.analysis_report_id,
+        "analysis_report_title": report.report_title if report else None,
+        "analysis_report_url": report.file_url if report else None,
+        "analysis_report_document_id": report_document_id,
         "event_name": event.event_name if event else row.summary,
         "event_category": row.event_category,
         "source_type": row.source_type,
@@ -344,25 +365,84 @@ def update_flow_config(
 def list_safety_events(
     status: Optional[str] = Query(None),
     risk_level: Optional[str] = Query(None),
+    source_type: Optional[str] = Query(None),
+    event_category: Optional[str] = Query(None, max_length=64),
+    event_id: Optional[int] = Query(None, ge=1),
+    event_date: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    sort_by: Optional[str] = Query(None, pattern="^(index|risk|time)$"),
+    sort_order: Optional[str] = Query(None, pattern="^(asc|desc)$"),
     keyword: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    query = db.query(SafetyEventInstance, EventLibrary).join(
+    query = db.query(SafetyEventInstance, EventLibrary, AnalysisReport).join(
         EventLibrary, EventLibrary.id == SafetyEventInstance.current_event_id
+    ).outerjoin(
+        AnalysisReport, AnalysisReport.id == SafetyEventInstance.analysis_report_id
     )
     if status:
         query = query.filter(SafetyEventInstance.status == status)
     if risk_level:
         query = query.filter(SafetyEventInstance.risk_level == risk_level)
+    if source_type in {"sensor", "camera"}:
+        query = query.filter(SafetyEventInstance.source_type == source_type)
+    if event_category:
+        query = query.filter(SafetyEventInstance.event_category == event_category)
+    if event_id:
+        query = query.filter(SafetyEventInstance.current_event_id == event_id)
+    if event_date:
+        day = dt.date.fromisoformat(event_date)
+        start_at = dt.datetime.combine(day, dt.time.min)
+        end_at = start_at + dt.timedelta(days=1)
+        query = query.filter(SafetyEventInstance.started_at >= start_at, SafetyEventInstance.started_at < end_at)
     if keyword:
         like = f"%{keyword}%"
         query = query.filter(or_(SafetyEventInstance.instance_no.like(like), SafetyEventInstance.summary.like(like), EventLibrary.event_name.like(like)))
     total = query.count()
-    rows = query.order_by(SafetyEventInstance.started_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
-    return {"code": 200, "data": {"items": [_event_dict(instance, event) for instance, event in rows], "total": total}}
+    risk_order = case(
+        (SafetyEventInstance.risk_level == "LOW", 1),
+        (SafetyEventInstance.risk_level == "MEDIUM", 2),
+        (SafetyEventInstance.risk_level == "HIGH", 3),
+        else_=0,
+    )
+    sort_expr = {
+        "index": SafetyEventInstance.id,
+        "risk": risk_order,
+        "time": SafetyEventInstance.started_at,
+    }.get(sort_by or "time", SafetyEventInstance.started_at)
+    order_method = sort_expr.asc if sort_order == "asc" else sort_expr.desc
+    rows = (
+        query.order_by(order_method(), SafetyEventInstance.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return {"code": 200, "data": {"items": [_event_dict(instance, event, report) for instance, event, report in rows], "total": total}}
+
+
+@router.get("/safety-events/categories", summary="获取安全事件类型")
+def list_safety_event_categories(
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_auth),
+):
+    rows = (
+        db.query(SafetyEventInstance.event_category)
+        .filter(SafetyEventInstance.event_category.isnot(None))
+        .distinct()
+        .order_by(SafetyEventInstance.event_category.asc())
+        .all()
+    )
+    items = [
+        {
+            "value": category,
+            "label": EVENT_CATEGORY_LABELS.get(category, category),
+        }
+        for (category,) in rows
+        if category
+    ]
+    return {"code": 200, "data": {"items": items}}
 
 
 @router.get("/patrol-report/today", summary="获取今日巡查报告状态")

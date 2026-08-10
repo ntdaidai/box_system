@@ -27,6 +27,7 @@ from app.core.config import settings
 from app.services.dam_event_report_service import dam_event_report_service
 from app.services.dam_model_library_client import dam_model_library_client
 from app.services.dam_workflow_client import dam_workflow_client
+from app.services.sensor_event_video_evidence import sensor_event_video_evidence_service
 from app.services.unified_sensor_event_service import unified_sensor_event_service
 from app.services.safety_event_runtime_service import safety_event_runtime_service
 
@@ -777,6 +778,12 @@ class ECAEngine:
 
             # 获取事件对象（用于判断告警类型）
             event = db.query(EventLibrary).filter(EventLibrary.id == event_id).first()
+            if event and instance.source_type == "sensor":
+                sensor_data = self._attach_sensor_event_video_evidence(
+                    db,
+                    instance,
+                    sensor_data,
+                )
             if event:
                 await self.plan_dam_workflow(instance, event, sensor_data, db)
 
@@ -818,6 +825,67 @@ class ECAEngine:
                     db.rollback()
         finally:
             db.close()
+
+    def _attach_sensor_event_video_evidence(
+        self,
+        db: Session,
+        instance: SafetyEventInstance,
+        sensor_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Attach a short camera clip to sensor events without blocking the event flow."""
+        enriched = dict(sensor_data or {})
+        if self._has_video_evidence(enriched):
+            enriched.setdefault("evidence_video_status", "READY")
+            return enriched
+        try:
+            media_object = sensor_event_video_evidence_service.capture_for_event(
+                db,
+                instance,
+                enriched,
+            )
+        except Exception as exc:
+            logger.warning(
+                "传感器事件证据视频获取失败: instance={}, error={}",
+                instance.instance_no,
+                exc,
+            )
+            enriched["evidence_video_status"] = "FAILED"
+            enriched["evidence_video_error"] = str(exc)
+            return enriched
+
+        if not media_object:
+            return enriched
+
+        media_objects = list(enriched.get("media_objects") or [])
+        media_objects.append(media_object)
+        videos = list(enriched.get("videos") or [])
+        videos.append(media_object)
+        video_ref = media_object.get("path") or media_object.get("url")
+        if video_ref:
+            video_urls = list(enriched.get("video_urls") or [])
+            video_urls.append(video_ref)
+            enriched["video_urls"] = list(dict.fromkeys(video_urls))
+            enriched["source_video_url"] = video_ref
+            enriched["video_url"] = video_ref
+
+        enriched["videos"] = videos
+        enriched["media_objects"] = media_objects
+        enriched["evidence_video_status"] = "READY"
+        enriched["evidence_video"] = media_object
+        return enriched
+
+    @staticmethod
+    def _has_video_evidence(sensor_data: Dict[str, Any]) -> bool:
+        for key in ("source_video_url", "video_url", "minio_video_url", "videos", "video_urls"):
+            value = sensor_data.get(key)
+            if isinstance(value, str) and value:
+                return True
+            if isinstance(value, list) and value:
+                return True
+        for item in sensor_data.get("media_objects") or []:
+            if isinstance(item, dict) and str(item.get("type") or "").lower() == "video":
+                return True
+        return False
 
     async def plan_dam_workflow(
         self,

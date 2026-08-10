@@ -1,6 +1,11 @@
 """ECA规则引擎API — 事件-条件-动作管理"""
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import json
+import mimetypes
+import tempfile
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel
@@ -16,6 +21,7 @@ from app.models.condition_library import ConditionLibrary
 from app.models.event_library import EventLibrary
 from app.models.event_condition import EventCondition
 from app.models.event_action import EventActionConfig
+from app.services.minio_service import minio_service
 
 router = APIRouter(tags=["ECA规则引擎"])
 
@@ -337,6 +343,153 @@ async def set_scheduler_interval(
     eca_scheduler.set_interval(seconds)
     await invalidate_cache("eca:scheduler:*")
     return {"code": 200, "message": f"轮询间隔已设置为 {seconds} 秒"}
+
+
+async def _upload_sensor_evidence_video(upload: UploadFile, sensor_name: str) -> Optional[dict]:
+    if not upload or not upload.filename:
+        return None
+
+    suffix = Path(upload.filename).suffix or ".mp4"
+    content_type = upload.content_type or mimetypes.guess_type(upload.filename)[0] or "video/mp4"
+    now = datetime.now()
+    object_name = (
+        f"safety-events/sensor-simulate-videos/{now:%Y-%m-%d}/"
+        f"{sensor_name}_{now:%H%M%S_%f}{suffix}"
+    )
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp_path = Path(tmp.name)
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                tmp.write(chunk)
+
+        if not minio_service.client:
+            minio_service.connect()
+        url = minio_service.upload_file(
+            str(tmp_path),
+            object_name=object_name,
+            content_type=content_type,
+        )
+        if not url:
+            raise HTTPException(status_code=500, detail="证据视频上传 MinIO 失败")
+        return {
+            "type": "video",
+            "url": url,
+            "path": url,
+            "object_name": object_name,
+            "name": upload.filename,
+            "content_type": content_type,
+            "source": "sensor_simulation_upload",
+            "captured_at": now.isoformat(),
+        }
+    finally:
+        if tmp_path:
+            tmp_path.unlink(missing_ok=True)
+
+
+def _condition_preview(event_id: int, sensor_data: dict, db: Session) -> List[dict]:
+    from app.services.eca_engine import eca_engine
+
+    rows = (
+        db.query(EventCondition)
+        .filter(EventCondition.event_id == event_id)
+        .order_by(EventCondition.group_id.asc(), EventCondition.sort_order.asc(), EventCondition.id.asc())
+        .all()
+    )
+    previews = []
+    for row in rows:
+        condition = db.query(ConditionLibrary).filter(ConditionLibrary.id == row.condition_id).first()
+        if not condition:
+            continue
+        matched = False
+        if condition.expression:
+            matched = eca_engine._evaluate_expression(condition.expression, sensor_data)
+        previews.append({
+            "condition_id": condition.id,
+            "condition_name": condition.condition_name,
+            "expression": condition.expression,
+            "logic_type": row.logic_type,
+            "group_id": row.group_id,
+            "matched": matched,
+        })
+    return previews
+
+
+@router.post("/sensor/simulate", summary="模拟传感器触发 ECA")
+async def simulate_sensor_event(
+    event_id: int = Form(..., description="要触发的 ECA 事件ID"),
+    sensor_name: str = Form("sensor", description="模拟传感器名称"),
+    sensor_data_json: str = Form("{}", description="传感器数据 JSON"),
+    camera_id: Optional[int] = Form(None, description="证据视频关联摄像头ID"),
+    force: bool = Form(True, description="测试时是否跳过冷却期"),
+    file: Optional[UploadFile] = File(None, description="可选现场证据视频"),
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_auth),
+):
+    """用于系统管理页面测试“传感器触发 + 摄像头视频证据”的完整 ECA 链路。"""
+    from app.services.eca_engine import eca_engine
+
+    event = db.query(EventLibrary).filter(EventLibrary.id == event_id).first()
+    if not event or not event.is_activate:
+        raise HTTPException(status_code=404, detail="事件不存在或未启用")
+
+    try:
+        sensor_data = json.loads(sensor_data_json or "{}")
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"传感器数据 JSON 格式错误: {exc}") from exc
+    if not isinstance(sensor_data, dict):
+        raise HTTPException(status_code=400, detail="传感器数据必须是 JSON 对象")
+
+    sensor_data.setdefault("sensor_name", sensor_name)
+    sensor_data.setdefault("source_type", "sensor")
+    sensor_data.setdefault("trigger_channel", "manual_sensor_simulation")
+    sensor_data.setdefault("simulated_at", datetime.now().isoformat())
+    if camera_id is not None:
+        sensor_data["camera_id"] = camera_id
+
+    media_object = await _upload_sensor_evidence_video(file, sensor_name)
+    if media_object:
+        video_url = media_object["url"]
+        media_objects = list(sensor_data.get("media_objects") or [])
+        media_objects.append(media_object)
+        video_urls = list(sensor_data.get("video_urls") or [])
+        video_urls.append(video_url)
+        sensor_data["media_objects"] = media_objects
+        sensor_data["videos"] = list(dict.fromkeys(list(sensor_data.get("videos") or []) + [video_url]))
+        sensor_data["video_urls"] = list(dict.fromkeys(video_urls))
+        sensor_data["source_video_url"] = video_url
+        sensor_data["video_url"] = video_url
+        sensor_data["evidence_video_status"] = "READY"
+
+    conditions = _condition_preview(event_id, sensor_data, db)
+    conditions_met = all(item["matched"] for item in conditions) if conditions else False
+
+    if force:
+        eca_engine.event_last_trigger.pop(event_id, None)
+
+    instance = eca_engine.trigger_event(event_id, sensor_data, db)
+    if not instance:
+        raise HTTPException(status_code=409, detail="事件未触发，可能仍在冷却期或缺少有效传感器数据源")
+
+    return {
+        "code": 200,
+        "message": "传感器 ECA 已触发",
+        "data": {
+            "event_instance_id": instance.id,
+            "instance_no": instance.instance_no,
+            "event": event.to_dict(),
+            "sensor_data": sensor_data,
+            "condition_check": {
+                "matched": conditions_met,
+                "conditions": conditions,
+            },
+            "evidence_video": media_object,
+            "workflow_dispatched": True,
+        },
+    }
 
 
 @router.post("/check", summary="手动触发事件检查")
