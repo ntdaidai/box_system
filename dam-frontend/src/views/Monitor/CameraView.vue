@@ -31,17 +31,6 @@
               <h3>摄像头列表</h3>
               <span>{{ connectedPointCount }} / 9 路</span>
             </header>
-            <div class="camera-list-view-switch">
-              <button
-                v-for="mode in cameraViewModes"
-                :key="mode.value"
-                type="button"
-                :class="{ active: cameraViewMode === mode.value }"
-                @click="setCameraViewMode(mode.value)"
-              >
-                {{ mode.label }}
-              </button>
-            </div>
             <div class="rail-camera-list">
               <button
                 v-for="point in cameraPointSlots"
@@ -59,8 +48,9 @@
           <section class="rail-card camera-map-card">
             <header>
               <h3>点位图</h3>
-              <button type="button" class="map-expand-button" title="放大地图" @click="mapDialogVisible = true">
+              <button type="button" class="map-expand-button" title="详情大图" @click="mapDialogVisible = true">
                 <el-icon><FullScreen /></el-icon>
+                <span>详情大图</span>
               </button>
             </header>
             <div class="camera-map-stage">
@@ -83,10 +73,6 @@
           </section>
 
           <section class="rail-card camera-tool-card">
-            <div class="camera-tool-status">
-              <span>{{ selectedPointTitle }}</span>
-              <strong>{{ assistOverlayVisible ? '辅助框已显示' : '辅助框未显示' }}</strong>
-            </div>
             <div class="camera-tool-actions">
               <button
                 type="button"
@@ -107,14 +93,6 @@
                 <span>{{ assistOverlayVisible ? '隐藏辅助' : '显示辅助' }}</span>
               </button>
             </div>
-            <button
-              type="button"
-              class="simulation-link-button"
-              @click="openMediaAnalysisPage"
-            >
-              <el-icon><DataAnalysis /></el-icon>
-              <span>模拟监测</span>
-            </button>
           </section>
         </aside>
 
@@ -1070,11 +1048,6 @@ const cameraPointDefinitions = [
   { no: 8, x: 57.3410, y: 75.4325 },
   { no: 9, x: 91.7919, y: 24.2215 },
 ]
-const cameraViewModes = [
-  { label: '单画面', value: 'single' },
-  { label: '四宫格', value: 'quad' },
-  { label: '九宫格', value: 'nine' },
-]
 const cameraRegionPaths = {
   1: 'M371 317 L297 320 L259 324 L230 336 L191 363 L176 386 L179 425 L179 453 L181 487 L178 536 L200 549 L214 554 L231 554 L244 557 L262 556 L272 560 L295 557 L298 558 L327 560 L351 567 L372 570 L374 577 L383 583 L395 581 L408 578 L422 576 L436 571 L449 569 L463 561 L477 555 L489 552 L502 553 L511 546 L521 535 L524 521 L540 510 L538 492 L542 483 L539 466 L539 450 L538 433 L541 425 L542 406 L542 391 L539 380 L539 368 L537 358 L536 347 L531 340 L524 334 L514 332 L494 330 L470 339 L448 339 L427 343 L416 339 Z',
   3: 'M847 460 L831 450 L830 424 L972 423 L1032 430 L1051 456 L1047 477 L1044 504 L1030 518 L1024 525 L927 544 L856 533 L852 523 L844 524 Z',
@@ -1660,7 +1633,6 @@ async function selectPointFromPanel(pointNo) {
   const slot = cameraPointSlots.value.find((point) => point.no === pointNo)
   selectedPointNo.value = pointNo
   if (!slot?.camera) {
-    mapDialogVisible.value = true
     ElMessage.info(`${pointNo}号监测点暂未接入摄像头`)
     return
   }
@@ -3341,9 +3313,9 @@ h1, h2, h3, p { margin-top: 0; }
 }
 .ops-layout {
   display: grid;
-  grid-template-columns: minmax(390px, 460px) minmax(0, 1fr);
+  grid-template-columns: minmax(360px, 3fr) minmax(0, 7fr);
   align-items: stretch;
-  gap: 14px;
+  gap: 16px;
   margin-top: 0;
 }
 .ops-camera-rail {
@@ -3382,50 +3354,25 @@ h1, h2, h3, p { margin-top: 0; }
 }
 .camera-list-card {
   min-height: 0;
-  flex: 0 0 244px;
+  flex: 0 0 248px;
   display: flex;
   flex-direction: column;
-}
-.camera-list-view-switch {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 7px;
-  padding: 10px 10px 0;
-}
-.camera-list-view-switch button {
-  height: 30px;
-  border: 1px solid rgba(137, 174, 184, 0.18);
-  border-radius: 6px;
-  color: #91adb2;
-  background: rgba(2, 12, 16, 0.68);
-  font-size: 12px;
-  font-weight: 800;
-  cursor: pointer;
-}
-.camera-list-view-switch button.active {
-  color: #041417;
-  border-color: rgba(72, 216, 255, 0.62);
-  background: #48d8ff;
 }
 .rail-camera-list {
   min-height: 0;
   flex: 1 1 auto;
   overflow-y: auto;
-  padding: 10px;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  align-content: start;
-  gap: 6px;
+  padding: 10px 12px 12px;
 }
 .rail-camera-list button {
   width: 100%;
-  min-height: 38px;
+  min-height: 40px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: 30px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 2px;
-  margin-bottom: 0;
-  padding: 5px 8px;
+  gap: 10px;
+  margin-bottom: 6px;
+  padding: 0 10px;
   border: 1px solid transparent;
   border-radius: 7px;
   color: #bdd5e1;
@@ -3441,19 +3388,37 @@ h1, h2, h3, p { margin-top: 0; }
   color: #829aa5;
   background: rgba(7, 24, 34, 0.46);
 }
+.rail-camera-list button::before {
+  content: counter(camera-point);
+  counter-increment: camera-point;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #061412;
+  background: #48d8ff;
+  font-size: 13px;
+  font-weight: 900;
+}
+.rail-camera-list button.empty::before {
+  color: #c5d6de;
+  background: #526977;
+}
+.rail-camera-list {
+  counter-reset: camera-point;
+}
 .rail-camera-list span {
   min-width: 0;
   overflow: hidden;
   font-size: 13px;
   font-weight: 900;
-  text-align: center;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .rail-camera-list em {
   color: #7f9bad;
   font-size: 11px;
-  text-align: center;
   font-style: normal;
 }
 .camera-map-card {
@@ -3463,14 +3428,18 @@ h1, h2, h3, p { margin-top: 0; }
   flex-direction: column;
 }
 .map-expand-button {
-  width: 28px;
-  height: 28px;
-  display: grid;
-  place-items: center;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 10px;
   border: 1px solid rgba(72, 216, 255, 0.24);
   border-radius: 6px;
   color: #8ddcf0;
   background: rgba(9, 35, 50, 0.62);
+  font-size: 12px;
+  font-weight: 800;
   cursor: pointer;
 }
 .camera-map-stage {
@@ -3478,7 +3447,7 @@ h1, h2, h3, p { margin-top: 0; }
   width: 100%;
   flex: 0 0 auto;
   aspect-ratio: 2168 / 725;
-  min-height: 148px;
+  min-height: 150px;
   overflow: hidden;
   background: #02080d;
 }
@@ -3631,55 +3600,12 @@ h1, h2, h3, p { margin-top: 0; }
 }
 .camera-tool-card {
   flex: 0 0 auto;
-  padding: 12px;
-}
-.camera-tool-status {
-  min-height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-.camera-tool-status span {
-  min-width: 0;
-  overflow: hidden;
-  color: #e0f3fb;
-  font-size: 13px;
-  font-weight: 900;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.camera-tool-status strong {
-  flex: 0 0 auto;
-  color: #89aab6;
-  font-size: 11px;
-  font-weight: 700;
+  padding: 10px;
 }
 .camera-tool-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
-}
-.simulation-link-button {
-  width: 100%;
-  height: 32px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  margin-top: 8px;
-  border: 1px solid rgba(72, 216, 255, 0.18);
-  border-radius: 7px;
-  color: #91dcec;
-  background: rgba(7, 28, 38, 0.58);
-  font-size: 12px;
-  font-weight: 800;
-  cursor: pointer;
-}
-.simulation-link-button:hover {
-  color: #061412;
-  background: #48d8ff;
 }
 .action-card {
   flex: 1 1 0;
@@ -3717,7 +3643,7 @@ h1, h2, h3, p { margin-top: 0; }
 }
 .rail-action-button {
   min-height: 0;
-  height: 58px;
+  height: 48px;
   display: grid;
   place-items: center;
   gap: 5px;
@@ -5343,6 +5269,12 @@ h1, h2, h3, p { margin-top: 0; }
 .compact-events {
   grid-column: 1 / -1;
   border-top: 1px solid rgba(137, 174, 184, 0.12);
+}
+
+@media (min-width: 1600px) {
+  .ops-layout {
+    grid-template-columns: minmax(360px, 28fr) minmax(0, 72fr);
+  }
 }
 
 @media (max-width: 1200px) {

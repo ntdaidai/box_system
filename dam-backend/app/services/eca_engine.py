@@ -898,8 +898,21 @@ class ECAEngine:
         if not settings.DAM_WORKFLOW_ENABLED:
             return None
 
-        action_key = f"dam-workflow:{instance.instance_no}"
+        plan_action_key = f"dam-workflow-plan:{instance.instance_no}"
+        execute_action_key = f"dam-workflow-execute:{instance.instance_no}"
         try:
+            safety_event_runtime_service.append_timeline(
+                db,
+                instance,
+                action_key=plan_action_key,
+                log_type="DAM_WORKFLOW",
+                trigger_type="AUTO",
+                status="PROCESSING",
+                title="智能路由规划",
+                message="智能路由正在根据事件类型、传感器数据和摄像头证据生成工作流",
+                payload={"instance_no": instance.instance_no, "event_name": event.event_name},
+            )
+            db.commit()
             result = await dam_workflow_client.analyze_event(
                 event=event,
                 instance=instance,
@@ -911,9 +924,45 @@ class ECAEngine:
                 instance=instance,
                 sensor_data=sensor_data,
             )
+            node_count = len(final_dag.get("nodes") or [])
+            edge_count = len(final_dag.get("edges") or [])
+            safety_event_runtime_service.append_timeline(
+                db,
+                instance,
+                action_key=plan_action_key,
+                log_type="DAM_WORKFLOW",
+                trigger_type="AUTO",
+                status="SUCCESS",
+                title="智能路由规划",
+                message=f"智能路由已生成工作流：{node_count}个节点，{edge_count}条边",
+                payload={
+                    "instance_no": instance.instance_no,
+                    "event_type": result.get("event_type"),
+                    "node_count": node_count,
+                    "edge_count": edge_count,
+                    "visual_tasks": result.get("visual_tasks") or [],
+                },
+            )
+            db.commit()
             execution_result = None
             execution_error = None
             if settings.DAM_MODEL_LIBRARY_WORKFLOW_EXECUTE_ENABLED:
+                safety_event_runtime_service.append_timeline(
+                    db,
+                    instance,
+                    action_key=execute_action_key,
+                    log_type="DAM_WORKFLOW",
+                    trigger_type="AUTO",
+                    status="PROCESSING",
+                    title="模型库工作流执行",
+                    message="模型库正在按 DAG 启动按需模型并执行视频理解链路",
+                    payload={
+                        "instance_no": instance.instance_no,
+                        "event_type": result.get("event_type"),
+                        "node_count": node_count,
+                    },
+                )
+                db.commit()
                 try:
                     execution_result = await dam_model_library_client.execute_workflow(
                         dag=final_dag,
@@ -929,8 +978,6 @@ class ECAEngine:
                     logger.warning(
                         f"DAM工作流提交模型库执行失败: event={event.event_name}, error={execute_error}"
                     )
-            node_count = len(final_dag.get("nodes") or [])
-            edge_count = len(final_dag.get("edges") or [])
             execution_status = (
                 (execution_result or {}).get("status")
                 if execution_result is not None
@@ -947,13 +994,14 @@ class ECAEngine:
             safety_event_runtime_service.append_timeline(
                 db,
                 instance,
-                action_key=action_key,
+                action_key=execute_action_key,
                 log_type="DAM_WORKFLOW",
                 trigger_type="AUTO",
                 status="SUCCESS" if not execution_error else "FAILED",
+                title="模型库工作流执行",
                 message=(
-                    f"智能路由生成完成：{node_count}个节点，{edge_count}条边；"
-                    f"模型库执行状态 {execution_status}"
+                    f"模型库工作流执行完成：{node_count}个节点，{edge_count}条边；"
+                    f"执行状态 {execution_status}"
                 ),
                 payload=workflow_payload,
             )
@@ -966,10 +1014,11 @@ class ECAEngine:
             safety_event_runtime_service.append_timeline(
                 db,
                 instance,
-                action_key=action_key,
+                action_key=plan_action_key,
                 log_type="DAM_WORKFLOW",
                 trigger_type="AUTO",
                 status="FAILED",
+                title="智能路由规划",
                 message="智能路由生成失败",
                 payload={
                     "instance_no": instance.instance_no,
@@ -989,12 +1038,38 @@ class ECAEngine:
     ) -> None:
         """Generate a report from DAM workflow output without breaking ECA execution."""
         try:
+            safety_event_runtime_service.append_timeline(
+                db,
+                instance,
+                action_key=f"dam-event-report:{instance.instance_no}",
+                log_type="REPORT",
+                trigger_type="AUTO",
+                status="PROCESSING",
+                title="事件报告生成",
+                message="正在根据模型链路输出填充事件处置报告",
+                payload={"instance_no": instance.instance_no},
+            )
+            db.commit()
             report = dam_event_report_service.generate_from_workflow(
                 db,
                 instance=instance,
                 event=event,
                 workflow_payload=workflow_payload,
             )
+            if not report:
+                safety_event_runtime_service.append_timeline(
+                    db,
+                    instance,
+                    action_key=f"dam-event-report:{instance.instance_no}",
+                    log_type="REPORT",
+                    trigger_type="AUTO",
+                    status="FAILED",
+                    title="事件报告生成",
+                    message="未获得可用于生成报告的大模型分析结果，报告暂未生成",
+                    payload={"instance_no": instance.instance_no},
+                )
+                db.commit()
+                return
             if report:
                 logger.info(
                     "DAM事件处置报告已生成 instance={} report_id={}",
@@ -1814,6 +1889,18 @@ class ECAEngine:
         except ValueError:
             recovery_started = now
         if (now - recovery_started).total_seconds() < max(int(event.recovery_duration or 0), 0):
+            return instance
+
+        running_workflow = db.query(SafetyEventTimelineLog).filter(
+            SafetyEventTimelineLog.event_instance_id == instance.id,
+            SafetyEventTimelineLog.log_type == "DAM_WORKFLOW",
+            SafetyEventTimelineLog.status == "PROCESSING",
+        ).first()
+        if running_workflow:
+            latest["recovery_observation"] = camera_data
+            latest["recovery_deferred_reason"] = "workflow_processing"
+            instance.latest_observation = latest
+            db.commit()
             return instance
 
         instance.state = "RESOLVED"

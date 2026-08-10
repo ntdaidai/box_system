@@ -1,667 +1,939 @@
 <template>
   <div class="knowledge-base">
-    <section class="kb-command">
-      <div class="kb-copy">
-        <span class="kb-kicker">INTELLIGENT DATA HUB</span>
-        <h1>知识库</h1>
-        <p>汇聚巡查报告、监测规范、历史告警和处置经验，形成可检索、可问答、可追溯的坝区智能知识中台。</p>
-      </div>
-      <div class="kb-orchestrator" aria-label="知识库能力概览">
-        <div
-          v-for="metric in metrics"
-          :key="metric.label"
-          class="kb-metric"
-        >
-          <el-icon><component :is="metric.icon" /></el-icon>
-          <span>{{ metric.label }}</span>
-          <strong>{{ metric.value }}</strong>
+    <div class="stats-cards">
+      <article class="stat-card tone-total">
+        <el-icon class="stat-icon"><Collection /></el-icon>
+        <div class="stat-info">
+          <span class="stat-label">知识库</span>
+          <span class="stat-value">{{ stats.baseCount }}</span>
+          <small>当前启用范围</small>
         </div>
-      </div>
-    </section>
-
-    <section class="kb-search-band">
-      <div class="semantic-input">
-        <el-icon><Search /></el-icon>
-        <input v-model="question" type="text" placeholder="搜索知识、提问告警处置方案、查询巡查依据..." />
-      </div>
-      <el-button type="primary" class="ask-button">
-        <el-icon><MagicStick /></el-icon>
-        智能问答
-      </el-button>
-      <el-button class="index-button">
-        <el-icon><Upload /></el-icon>
-        导入知识
-      </el-button>
-    </section>
-
-    <div class="kb-layout">
-      <section class="kb-panel knowledge-map">
-        <div class="panel-title">
-          <div>
-            <span>知识网络</span>
-            <small>Document + Event + Sensor + Action</small>
-          </div>
-          <el-tag effect="dark" type="success">架构设计</el-tag>
+      </article>
+      <article class="stat-card tone-category">
+        <el-icon class="stat-icon"><Document /></el-icon>
+        <div class="stat-info">
+          <span class="stat-label">知识文档</span>
+          <span class="stat-value">{{ stats.documentCount }}</span>
+          <small>已导入文件</small>
         </div>
-        <div class="graph-stage">
-          <span class="graph-link link-doc"></span>
-          <span class="graph-link link-rule"></span>
-          <span class="graph-link link-event"></span>
-          <span class="graph-link link-action"></span>
-          <div class="graph-core">
-            <el-icon><Collection /></el-icon>
-            <strong>坝区知识中枢</strong>
-            <span>可信问答 / 引用溯源</span>
-          </div>
-          <div
-            v-for="domain in domains"
-            :key="domain.name"
-            class="graph-node"
-            :class="domain.className"
-          >
-            <el-icon><component :is="domain.icon" /></el-icon>
-            <div>
-              <strong>{{ domain.name }}</strong>
-              <span>{{ domain.desc }}</span>
-            </div>
-          </div>
+      </article>
+      <article class="stat-card tone-month">
+        <el-icon class="stat-icon"><Files /></el-icon>
+        <div class="stat-info">
+          <span class="stat-label">知识片段</span>
+          <span class="stat-value">{{ stats.chunkCount }}</span>
+          <small>可被模型检索</small>
         </div>
-      </section>
-
-      <section class="kb-panel pipeline-panel">
-        <div class="panel-title">
-          <div>
-            <span>知识入库流水线</span>
-            <small>从文件到可问答知识</small>
-          </div>
-          <el-icon><Operation /></el-icon>
+      </article>
+      <article class="stat-card tone-selected">
+        <el-icon class="stat-icon"><CircleCheck /></el-icon>
+        <div class="stat-info">
+          <span class="stat-label">索引完成率</span>
+          <span class="stat-value">{{ indexedRate }}%</span>
+          <small>{{ indexedCount }}/{{ documents.length }} 已索引</small>
         </div>
-        <div class="pipeline">
-          <div
-            v-for="step in pipeline"
-            :key="step.name"
-            class="pipeline-item"
-          >
-            <div class="pipeline-icon">
-              <el-icon><component :is="step.icon" /></el-icon>
-            </div>
-            <div class="pipeline-copy">
-              <strong>{{ step.name }}</strong>
-              <span>{{ step.desc }}</span>
-            </div>
-            <em>{{ step.state }}</em>
-          </div>
-        </div>
-      </section>
-
-      <section class="kb-panel qa-panel">
-        <div class="panel-title">
-          <div>
-            <span>智能问答预览</span>
-            <small>答案必须带来源</small>
-          </div>
-          <el-icon><ChatLineRound /></el-icon>
-        </div>
-        <div class="answer-preview">
-          <div class="question-chip">坝体渗压异常时优先排查什么？</div>
-          <div class="answer-card">
-            <p>优先核对传感器最近 24 小时趋势、雨量变化、巡查记录和历史处置单，并给出可执行排查顺序。</p>
-            <div class="source-row">
-              <span>引用：巡查日报</span>
-              <span>引用：监测规范</span>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="kb-panel capability-panel">
-        <div class="panel-title">
-          <div>
-            <span>能力矩阵</span>
-            <small>智能数据中台基础能力</small>
-          </div>
-          <el-icon><TrendCharts /></el-icon>
-        </div>
-        <div class="capability-grid">
-          <div v-for="item in capabilities" :key="item.name">
-            <span>{{ item.name }}</span>
-            <strong>{{ item.value }}</strong>
-          </div>
-        </div>
-      </section>
-
+      </article>
     </div>
+
+    <div class="filter-section">
+      <div class="filter-field">
+        <el-select v-model="selectedBaseId" placeholder="选择知识库" class="base-select" @change="handleBaseChange">
+          <el-option
+            v-for="base in bases"
+            :key="base.id"
+            :label="base.name"
+            :value="base.id"
+          />
+        </el-select>
+      </div>
+      <div class="filter-field">
+        <el-select v-model="selectedType" placeholder="全部类型" clearable class="type-select">
+          <el-option
+            v-for="type in fileTypes"
+            :key="type"
+            :label="type.toUpperCase()"
+            :value="type"
+          />
+        </el-select>
+      </div>
+      <div class="filter-field">
+        <el-select v-model="sortBy" placeholder="排序方式" class="sort-select">
+          <el-option label="最近更新" value="updated" />
+          <el-option label="文件名称" value="name" />
+          <el-option label="文件大小" value="size" />
+        </el-select>
+      </div>
+      <div class="filter-field search-field">
+        <el-input
+          v-model="keyword"
+          placeholder="搜索知识文档"
+          :prefix-icon="Search"
+          clearable
+          class="search-input"
+        />
+      </div>
+      <div class="filter-actions">
+        <el-upload
+          :show-file-list="false"
+          :http-request="uploadKnowledge"
+          accept=".txt,.md,.pdf,.docx,.xlsx,.xls,.csv,.json,.log"
+        >
+          <el-button class="batch-button" :loading="uploading">
+            <el-icon><Upload /></el-icon>
+            导入知识
+          </el-button>
+        </el-upload>
+        <el-button class="batch-button" :loading="loadingDocuments" @click="loadAll">
+          <el-icon><Refresh /></el-icon>
+          刷新
+        </el-button>
+      </div>
+    </div>
+
+    <section class="document-table-panel" :class="{ 'is-empty': !filteredDocuments.length }" v-loading="loadingDocuments">
+      <div v-if="filteredDocuments.length" class="document-list">
+        <div class="document-header">
+          <div class="row-index">序号</div>
+          <div class="row-name">知识文档 / 文件名</div>
+          <div class="row-type">类型</div>
+          <div class="row-size">大小</div>
+          <div class="row-date">更新时间</div>
+          <div class="row-status">状态</div>
+          <div class="row-actions">操作</div>
+        </div>
+
+        <div
+          v-for="(doc, index) in paginatedDocuments"
+          :key="doc.id"
+          class="document-row"
+        >
+          <div class="row-index">{{ pageStartIndex + index + 1 }}</div>
+          <div class="row-name" @click="openDocument(doc)">
+            <el-icon class="doc-icon" :class="getIconClass(doc.file_type)">
+              <Document />
+            </el-icon>
+            <span class="doc-title-stack" :title="doc.title">
+              <strong class="doc-name">{{ doc.title }}</strong>
+              <small>{{ doc.filename }}</small>
+            </span>
+          </div>
+          <div class="row-type">
+            <span class="type-badge" :class="getTypeBadgeClass(doc.file_type)">
+              {{ getTypeLabel(doc.file_type) }}
+            </span>
+          </div>
+          <div class="row-size">{{ formatFileSize(doc.file_size) }}</div>
+          <div class="row-date">{{ formatTime(doc.update_time || doc.create_time) }}</div>
+          <div class="row-status">
+            <el-tag :type="statusType(doc.status)" size="small" effect="plain">
+              {{ statusLabel(doc.status) }}
+            </el-tag>
+          </div>
+          <div class="row-actions">
+            <el-button
+              class="action-button preview-button"
+              size="small"
+              :disabled="!supportsOnlyOffice(doc)"
+              @click="openDocument(doc)"
+            >
+              查看
+            </el-button>
+            <el-button class="action-button download-button" size="small" @click="downloadDocument(doc)">
+              下载
+            </el-button>
+            <el-button class="action-button delete-button" size="small" @click="deleteDocument(doc)">
+              删除
+            </el-button>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="!loadingDocuments && filteredDocuments.length === 0" class="empty-state">
+        <el-icon class="empty-icon"><Collection /></el-icon>
+        <h3>暂无知识文档</h3>
+        <p>导入巡查规范、应急预案或设备手册后，模型即可检索引用。</p>
+      </div>
+
+      <div v-if="!loadingDocuments && filteredDocuments.length > 0" class="pagination-bar">
+        <el-pagination
+          v-model:current-page="currentPage"
+          :page-size="pageSize"
+          :total="filteredDocuments.length"
+          background
+          layout="prev, pager, next"
+        />
+      </div>
+    </section>
+
+    <el-dialog
+      v-model="previewDialogVisible"
+      class="knowledge-preview-dialog"
+      fullscreen
+      :show-close="false"
+      destroy-on-close
+      @closed="resetPreview"
+    >
+      <template #header>
+        <div class="preview-header">
+          <el-button class="preview-back-button" :icon="ArrowLeft" @click="closePreview">返回</el-button>
+          <div class="preview-title-stack">
+            <span class="preview-kicker">知识文档预览</span>
+            <h2 class="preview-title" :title="previewTitle">{{ previewTitle }}</h2>
+          </div>
+        </div>
+      </template>
+
+      <div v-loading="previewLoading" class="preview-shell">
+        <template v-if="previewDocument">
+          <div v-loading="officeLoading" class="preview-editor-shell">
+            <OnlyOfficeEditor
+              v-if="officeConfig"
+              :config="officeConfig"
+              mode="view"
+              editor-height="100%"
+              @error="onOfficeError"
+            />
+            <el-empty v-else-if="officeError" :description="officeError" />
+          </div>
+        </template>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  ChatLineRound,
+  ArrowLeft,
+  CircleCheck,
   Collection,
-  Cpu,
-  DataAnalysis,
   Document,
   Files,
-  MagicStick,
-  Operation,
-  Reading,
+  Refresh,
   Search,
-  Share,
-  TrendCharts,
   Upload,
 } from '@element-plus/icons-vue'
+import OnlyOfficeEditor from '@/components/OnlyOfficeEditor.vue'
+import request from '@/utils/request'
 
-const question = ref('')
+const bases = ref([])
+const selectedBaseId = ref(null)
+const documents = ref([])
+const keyword = ref('')
+const selectedType = ref('')
+const sortBy = ref('updated')
+const loadingDocuments = ref(false)
+const uploading = ref(false)
+const currentPage = ref(1)
+const pageSize = 8
 
-const metrics = [
-  { label: '文档资产', value: 'DOC', icon: Files },
-  { label: '知识索引', value: 'RAG', icon: Cpu },
-  { label: '引用溯源', value: 'TRACE', icon: Share },
-]
+const previewDialogVisible = ref(false)
+const previewLoading = ref(false)
+const previewDocument = ref(null)
+const officeLoading = ref(false)
+const officeConfig = ref(null)
+const officeError = ref('')
 
-const domains = [
-  { name: '巡查报告', desc: '日报、月报、专项检查', icon: Reading, className: 'node-doc' },
-  { name: '监测规范', desc: '阈值、制度、处置标准', icon: Document, className: 'node-rule' },
-  { name: '历史告警', desc: '事件、等级、处置过程', icon: DataAnalysis, className: 'node-event' },
-  { name: '处置经验', desc: '预案、任务、复盘结论', icon: Share, className: 'node-action' },
-]
+const onlyOfficeExtensions = new Set([
+  'doc', 'docx', 'odt', 'rtf', 'txt',
+  'xls', 'xlsx', 'ods', 'csv',
+  'ppt', 'pptx', 'odp', 'pdf',
+])
 
-const pipeline = [
-  { name: '解析', desc: '提取正文、表格、图片说明和元数据', state: '待接入', icon: Files },
-  { name: '切片', desc: '按章节、语义和业务对象拆分知识片段', state: '待接入', icon: Operation },
-  { name: '索引', desc: '写入全文索引和向量索引，保留来源', state: '待接入', icon: Cpu },
-  { name: '问答', desc: '检索增强生成，答案绑定原文证据', state: '待接入', icon: MagicStick },
-]
+const stats = computed(() => bases.value.reduce(
+  (acc, base) => {
+    acc.baseCount += 1
+    acc.documentCount += Number(base.document_count || 0)
+    acc.chunkCount += Number(base.chunk_count || 0)
+    return acc
+  },
+  { baseCount: 0, documentCount: 0, chunkCount: 0 }
+))
 
-const capabilities = [
-  { name: '语义检索', value: 'Hybrid' },
-  { name: '权限继承', value: 'RBAC' },
-  { name: '答案来源', value: '段落级' },
-  { name: '增量更新', value: '实时' },
-]
+const fileTypes = computed(() => Array.from(new Set(documents.value.map((doc) => doc.file_type).filter(Boolean))).sort())
 
+const filteredDocuments = computed(() => {
+  const query = keyword.value.trim().toLowerCase()
+  let rows = [...documents.value]
+  if (query) {
+    rows = rows.filter((doc) => `${doc.title} ${doc.filename}`.toLowerCase().includes(query))
+  }
+  if (selectedType.value) {
+    rows = rows.filter((doc) => doc.file_type === selectedType.value)
+  }
+  rows.sort((a, b) => {
+    if (sortBy.value === 'name') return String(a.title || '').localeCompare(String(b.title || ''))
+    if (sortBy.value === 'size') return Number(b.file_size || 0) - Number(a.file_size || 0)
+    return new Date(b.update_time || b.create_time || 0) - new Date(a.update_time || a.create_time || 0)
+  })
+  return rows
+})
+
+const pageStartIndex = computed(() => (currentPage.value - 1) * pageSize)
+const paginatedDocuments = computed(() => filteredDocuments.value.slice(pageStartIndex.value, pageStartIndex.value + pageSize))
+const previewTitle = computed(() => previewDocument.value?.title || '知识文档')
+const indexedCount = computed(() => documents.value.filter((doc) => doc.status === 'indexed').length)
+const indexedRate = computed(() => {
+  if (!documents.value.length) return 0
+  return Math.round((indexedCount.value / documents.value.length) * 100)
+})
+
+watch([keyword, selectedType, sortBy], () => {
+  currentPage.value = 1
+})
+
+watch(filteredDocuments, (rows) => {
+  const maxPage = Math.max(1, Math.ceil(rows.length / pageSize))
+  if (currentPage.value > maxPage) currentPage.value = maxPage
+})
+
+onMounted(loadAll)
+
+async function loadAll() {
+  await loadBases()
+  await loadDocuments()
+}
+
+async function loadBases() {
+  const response = await request.get('/v1/knowledge/bases')
+  bases.value = response.data || []
+  if (!selectedBaseId.value && bases.value.length) {
+    selectedBaseId.value = bases.value[0].id
+  }
+}
+
+async function handleBaseChange() {
+  await loadDocuments()
+}
+
+async function loadDocuments() {
+  loadingDocuments.value = true
+  try {
+    const response = await request.get('/v1/knowledge/documents', {
+      params: {
+        base_id: selectedBaseId.value || undefined,
+        page_size: 100,
+      },
+    })
+    documents.value = response.data?.records || []
+  } finally {
+    loadingDocuments.value = false
+  }
+}
+
+async function uploadKnowledge(options) {
+  uploading.value = true
+  try {
+    const formData = new FormData()
+    formData.append('file', options.file)
+    if (selectedBaseId.value) formData.append('base_id', selectedBaseId.value)
+    formData.append('category', 'inspection')
+    await request.post('/v1/knowledge/documents/upload', formData, {
+      timeout: 120000,
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    ElMessage.success('知识文档已导入并完成索引')
+    await loadAll()
+  } catch (error) {
+    options.onError?.(error)
+  } finally {
+    uploading.value = false
+  }
+}
+
+async function openDocument(row) {
+  if (!supportsOnlyOffice(row)) {
+    ElMessage.warning('该文件类型暂不支持 OnlyOffice 原文预览，可下载后查看')
+    return
+  }
+  previewDialogVisible.value = true
+  previewLoading.value = true
+  previewDocument.value = null
+  officeConfig.value = null
+  officeError.value = ''
+  try {
+    const response = await request.get(`/v1/knowledge/documents/${row.id}`)
+    previewDocument.value = response.data
+    await loadOfficePreview(previewDocument.value.id)
+  } finally {
+    previewLoading.value = false
+  }
+}
+
+async function loadOfficePreview(documentId) {
+  if (!documentId || officeConfig.value || officeLoading.value) return
+  officeLoading.value = true
+  officeError.value = ''
+  try {
+    const response = await request.get(`/v1/knowledge/documents/${documentId}/onlyoffice-config`, {
+      params: {
+        user_id: 'knowledge_user',
+        user_name: '知识库用户',
+      },
+      localCacheAllowStale: false,
+    })
+    officeConfig.value = response.data
+  } catch (error) {
+    officeError.value = error.response?.data?.detail || 'OnlyOffice 暂时无法预览该文档'
+  } finally {
+    officeLoading.value = false
+  }
+}
+
+function closePreview() {
+  previewDialogVisible.value = false
+}
+
+function resetPreview() {
+  previewDocument.value = null
+  officeConfig.value = null
+  officeError.value = ''
+}
+
+function onOfficeError(error) {
+  officeError.value = error || 'OnlyOffice 预览失败'
+}
+
+function supportsOnlyOffice(document) {
+  return onlyOfficeExtensions.has(String(document?.file_type || '').toLowerCase())
+}
+
+async function downloadDocument(row) {
+  const link = document.createElement('a')
+  link.href = `/api/v1/knowledge/documents/${row.id}/file`
+  link.download = row.filename || row.title || 'knowledge-document'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+}
+
+async function deleteDocument(row) {
+  await ElMessageBox.confirm(`确定删除「${row.title}」吗？`, '删除知识文档', {
+    type: 'warning',
+    confirmButtonText: '删除',
+    cancelButtonText: '取消',
+  })
+  await request.delete(`/v1/knowledge/documents/${row.id}`)
+  ElMessage.success('知识文档已删除')
+  await loadAll()
+}
+
+function getDisplayType(extension) {
+  const ext = String(extension || '').toLowerCase()
+  if (['doc', 'docx', 'odt', 'rtf', 'txt', 'md'].includes(ext)) return 'word'
+  if (['xls', 'xlsx', 'ods', 'csv'].includes(ext)) return 'excel'
+  if (['ppt', 'pptx', 'odp'].includes(ext)) return 'powerpoint'
+  if (ext === 'pdf') return 'pdf'
+  return 'default'
+}
+
+function getIconClass(extension) {
+  return {
+    word: 'word-icon',
+    excel: 'excel-icon',
+    powerpoint: 'ppt-icon',
+    pdf: 'pdf-icon',
+    default: 'default-icon',
+  }[getDisplayType(extension)]
+}
+
+function getTypeBadgeClass(extension) {
+  return {
+    word: 'word-badge',
+    excel: 'excel-badge',
+    powerpoint: 'ppt-badge',
+    pdf: 'pdf-badge',
+    default: 'default-badge',
+  }[getDisplayType(extension)]
+}
+
+function getTypeLabel(extension) {
+  return String(extension || '').toUpperCase() || 'FILE'
+}
+
+function statusLabel(status) {
+  return {
+    uploaded: '待索引',
+    indexed: '已索引',
+    failed: '失败',
+  }[status] || status
+}
+
+function statusType(status) {
+  return {
+    uploaded: 'warning',
+    indexed: 'success',
+    failed: 'danger',
+  }[status] || 'info'
+}
+
+function formatTime(value) {
+  if (!value) return '-'
+  return String(value).replace('T', ' ').slice(0, 16)
+}
+
+function formatFileSize(value) {
+  const size = Number(value || 0)
+  if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`
+  if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${size} B`
+}
 </script>
 
 <style scoped>
 .knowledge-base {
   min-height: 100%;
-  padding: 20px;
-  color: #e7f3ff;
+  padding: 22px;
+  color: #d9e8f8;
+  background: #071422;
 }
 
-.kb-command {
+.stats-cards {
   display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(360px, 0.8fr);
-  gap: 18px;
-  margin-bottom: 16px;
-  padding: 24px;
-  overflow: hidden;
-  background:
-    linear-gradient(135deg, rgba(8, 27, 47, 0.98), rgba(16, 50, 73, 0.9)),
-    radial-gradient(circle at 80% 14%, rgba(51, 218, 186, 0.22), transparent 34%);
-  border: 1px solid rgba(91, 191, 232, 0.34);
-  border-radius: 8px;
-  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.24);
-}
-
-.kb-copy {
-  min-width: 0;
-}
-
-.kb-kicker {
-  display: inline-flex;
-  align-items: center;
-  height: 24px;
-  padding: 0 10px;
-  color: #7ae9ff;
-  background: rgba(122, 233, 255, 0.1);
-  border: 1px solid rgba(122, 233, 255, 0.26);
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.kb-copy h1 {
-  margin: 10px 0 8px;
-  color: #f7fbff;
-  font-size: 30px;
-  font-weight: 800;
-  letter-spacing: 0;
-}
-
-.kb-copy p {
-  max-width: 760px;
-  margin: 0;
-  color: #b8cce4;
-  font-size: 14px;
-  line-height: 1.7;
-}
-
-.kb-orchestrator {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.kb-metric {
-  display: flex;
-  min-width: 0;
-  min-height: 120px;
-  flex-direction: column;
-  justify-content: space-between;
-  padding: 14px;
-  background: rgba(5, 19, 34, 0.58);
-  border: 1px solid rgba(119, 190, 226, 0.22);
-  border-radius: 8px;
-}
-
-.kb-metric .el-icon {
-  color: #75e8ff;
-  font-size: 24px;
-}
-
-.kb-metric span {
-  color: #a9c2dc;
-  font-size: 13px;
-}
-
-.kb-metric strong {
-  color: #fff;
-  font-size: 24px;
-  font-weight: 800;
-}
-
-.kb-search-band {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 10px;
-  align-items: center;
-  margin-bottom: 16px;
-  padding: 12px;
-  background: rgba(11, 31, 52, 0.82);
-  border: 1px solid rgba(91, 191, 232, 0.24);
-  border-radius: 8px;
-}
-
-.semantic-input {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  height: 46px;
-  padding: 0 14px;
-  background: rgba(4, 18, 32, 0.76);
-  border: 1px solid rgba(107, 178, 220, 0.22);
-  border-radius: 6px;
-}
-
-.semantic-input .el-icon {
-  flex: 0 0 auto;
-  color: #75e8ff;
-}
-
-.semantic-input input {
-  min-width: 0;
-  width: 100%;
-  color: #ecf7ff;
-  background: transparent;
-  border: 0;
-  outline: 0;
-  font-size: 14px;
-}
-
-.semantic-input input::placeholder {
-  color: #85a5c4;
-}
-
-.ask-button,
-.index-button {
-  height: 46px;
-  min-width: 118px;
-  font-weight: 800;
-}
-
-.index-button {
-  color: #dcefff;
-  background: rgba(122, 233, 255, 0.08);
-  border-color: rgba(122, 233, 255, 0.26);
-}
-
-.kb-layout {
-  display: grid;
-  grid-template-columns: minmax(440px, 1.25fr) minmax(320px, 0.8fr);
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
   gap: 16px;
 }
 
-.kb-panel {
-  min-width: 0;
-  padding: 18px;
-  background: rgba(13, 37, 62, 0.84);
-  border: 1px solid rgba(96, 177, 224, 0.24);
+.stat-card {
+  position: relative;
+  min-height: 124px;
+  padding: 18px 18px 16px;
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(104, 161, 200, .26);
   border-radius: 8px;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  background:
+    linear-gradient(145deg, rgba(28, 68, 103, .72), rgba(8, 25, 42, .92)),
+    #0b1d30;
+  box-shadow: 0 18px 34px rgba(0, 0, 0, .22);
 }
 
-.knowledge-map {
-  grid-row: span 3;
+.stat-card::after {
+  content: "";
+  position: absolute;
+  inset: auto 16px 0;
+  height: 3px;
+  border-radius: 3px 3px 0 0;
+  background: #48d8ff;
+  opacity: .72;
 }
 
-.panel-title {
+.stat-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 8px;
+  color: #48d8ff;
+  background: rgba(72, 216, 255, .12);
+  font-size: 25px;
+  box-shadow: inset 0 0 0 1px rgba(72, 216, 255, .18);
+}
+
+.tone-category::after { background: #62d7b1; }
+.tone-category .stat-icon { color: #62d7b1; background: rgba(98, 215, 177, .12); }
+.tone-month::after { background: #f0c75d; }
+.tone-month .stat-icon { color: #f0c75d; background: rgba(240, 199, 93, .13); }
+.tone-selected::after { background: #8ab7ff; }
+.tone-selected .stat-icon { color: #8ab7ff; background: rgba(138, 183, 255, .12); }
+
+.stat-label,
+.stat-info small {
+  display: block;
+  color: #8fb1c8;
+  font-size: 13px;
+}
+
+.stat-value {
+  display: block;
+  margin: 4px 0;
+  color: #f6fbff;
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 36px;
+}
+
+.filter-section {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid rgba(104, 161, 200, .22);
+  border-radius: 8px;
+  background: #0b1d30;
 }
 
-.panel-title span {
-  display: block;
-  color: #eef8ff;
-  font-size: 16px;
-  font-weight: 800;
+.filter-field {
+  display: flex;
+  flex: 0 0 auto;
 }
 
-.panel-title small {
-  display: block;
-  margin-top: 4px;
-  color: #89a7c4;
+.base-select { width: 240px; }
+.type-select,
+.sort-select { width: 150px; }
+.search-field { flex: 1 1 260px; min-width: 260px; }
+.search-input { width: 100%; }
+
+.filter-section :deep(.el-select),
+.filter-section :deep(.el-input) {
+  height: 44px;
+  background: transparent;
+}
+
+.filter-section :deep(.el-input__wrapper),
+.filter-section :deep(.el-select__wrapper) {
+  min-height: 44px;
+  border-radius: 6px;
+  background: rgba(6, 25, 42, .82);
+  box-shadow: inset 0 0 0 1px rgba(60, 150, 214, .46) !important;
+}
+
+.filter-section :deep(.el-input__inner),
+.filter-section :deep(.el-select__selected-item),
+.filter-section :deep(.el-select__placeholder) {
+  color: #d9e8f8;
+}
+
+.filter-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.batch-button {
+  height: 44px;
+  border-color: rgba(72, 216, 255, .32);
+  color: #c8f0ff;
+  background: rgba(72, 216, 255, .08);
+}
+
+.document-table-panel {
+  margin-top: 18px;
+  overflow: hidden;
+  border: 1px solid rgba(104, 161, 200, .18);
+  border-radius: 8px;
+  background: rgba(11, 29, 48, .72);
+}
+
+.document-table-panel.is-empty {
+  min-height: 360px;
+}
+
+.document-header,
+.document-row {
+  display: grid;
+  grid-template-columns: 48px minmax(260px, 2.4fr) 78px 92px 138px 86px 178px;
+  align-items: center;
+  gap: 12px;
+}
+
+.document-header {
+  min-height: 50px;
+  padding: 0 20px;
+  color: #f3f8fd;
+  background: rgba(30, 58, 95, .58);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.document-row {
+  min-height: 72px;
+  padding: 12px 20px;
+  color: #d8e7ff;
+  border-top: 1px solid rgba(104, 161, 200, .1);
+  background: rgba(10, 28, 47, .38);
+  transition: background .16s ease;
+}
+
+.document-row:hover {
+  background: rgba(30, 74, 112, .46);
+}
+
+.row-index,
+.row-size,
+.row-date {
+  color: #9cb6ca;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.row-index {
+  color: #f3f8fd;
+  font-weight: 700;
+}
+
+.row-name {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.doc-icon {
+  flex: 0 0 auto;
+  font-size: 24px;
+}
+
+.word-icon { color: #3d8cff; }
+.excel-icon { color: #58d36f; }
+.ppt-icon { color: #f0a043; }
+.pdf-icon { color: #ff5967; }
+.default-icon { color: #9bb6d5; }
+
+.doc-title-stack {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.doc-name,
+.doc-title-stack small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-name {
+  color: #f3f8fd;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.doc-title-stack small {
+  color: #8fb0c7;
   font-size: 12px;
 }
 
-.panel-title .el-icon {
-  color: #75e8ff;
-  font-size: 21px;
+.row-name:hover .doc-name {
+  color: #7dd7ff;
 }
 
-.graph-stage {
-  position: relative;
-  min-height: 560px;
-  overflow: hidden;
-  background:
-    linear-gradient(rgba(111, 183, 230, 0.08) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(111, 183, 230, 0.08) 1px, transparent 1px);
-  background-size: 34px 34px;
-  border: 1px solid rgba(104, 174, 220, 0.16);
-  border-radius: 8px;
-}
-
-.graph-core {
-  position: absolute;
-  z-index: 2;
-  top: 50%;
-  left: 50%;
-  display: flex;
-  width: 184px;
-  min-height: 112px;
-  flex-direction: column;
+.type-badge {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  color: #061b2c;
-  text-align: center;
-  background: linear-gradient(135deg, #86f1ff, #82f3bf);
-  border: 1px solid rgba(255, 255, 255, 0.65);
-  border-radius: 8px;
-  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.3);
-  transform: translate(-50%, -50%);
-}
-
-.graph-core .el-icon {
-  font-size: 26px;
-}
-
-.graph-core strong {
-  font-size: 15px;
-  font-weight: 900;
-}
-
-.graph-core span {
+  min-width: 48px;
+  height: 26px;
+  padding: 0 12px;
+  border: 1px solid rgba(72, 216, 255, .22);
+  border-radius: 5px;
+  color: #aee8ff;
+  background: rgba(72, 216, 255, .08);
   font-size: 12px;
   font-weight: 700;
 }
 
-.graph-node {
-  position: absolute;
-  z-index: 2;
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  gap: 10px;
-  align-items: center;
-  width: 190px;
-  min-height: 72px;
-  padding: 12px;
-  color: #eaf7ff;
-  background: rgba(10, 42, 70, 0.96);
-  border: 1px solid rgba(122, 233, 255, 0.35);
-  border-radius: 8px;
-  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.24);
-}
+.word-badge { border-color: rgba(61, 140, 255, .3); color: #b9d5ff; background: rgba(61, 140, 255, .1); }
+.excel-badge { border-color: rgba(98, 215, 177, .24); color: #b8f3dc; background: rgba(98, 215, 177, .08); }
+.ppt-badge { border-color: rgba(240, 199, 93, .26); color: #ffe4a5; background: rgba(240, 199, 93, .1); }
+.pdf-badge { border-color: rgba(255, 107, 118, .3); color: #ffbdc4; background: rgba(255, 107, 118, .1); }
+.default-badge { border-color: rgba(126, 152, 170, .24); color: #b6c7d4; background: rgba(126, 152, 170, .08); }
 
-.graph-node .el-icon {
-  color: #7ae9ff;
-  font-size: 24px;
-}
-
-.graph-node strong,
-.graph-node span {
-  display: block;
-}
-
-.graph-node strong {
-  color: #f6fbff;
-  font-size: 14px;
-  font-weight: 800;
-}
-
-.graph-node span {
-  margin-top: 4px;
-  color: #9fb9d3;
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.node-doc { top: 13%; left: 8%; }
-.node-rule { top: 14%; right: 8%; }
-.node-event { bottom: 16%; left: 10%; }
-.node-action { right: 10%; bottom: 15%; }
-
-.graph-link {
-  position: absolute;
-  z-index: 1;
-  top: 50%;
-  left: 50%;
-  width: 35%;
-  height: 1px;
-  background: linear-gradient(90deg, rgba(122, 233, 255, 0.04), rgba(122, 233, 255, 0.58));
-  transform-origin: left center;
-}
-
-.link-doc { transform: rotate(220deg); }
-.link-rule { transform: rotate(320deg); }
-.link-event { transform: rotate(142deg); }
-.link-action { transform: rotate(38deg); }
-
-.pipeline {
+.row-actions {
   display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.row-actions .el-button + .el-button {
+  margin-left: 0;
+}
+
+.action-button {
+  min-width: 44px;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid rgba(127, 178, 221, .24);
+  border-radius: 5px;
+  color: #dce9fa;
+  background: rgba(37, 70, 106, .38);
+  font-weight: 600;
+}
+
+.download-button { color: #c8f0ff; }
+.preview-button { color: #35e5f2; border-color: rgba(53, 229, 242, .34); background: rgba(7, 148, 166, .18); }
+.delete-button { color: #ffb8ca; border-color: rgba(255, 92, 128, .35); background: rgba(189, 49, 95, .18); }
+
+.empty-state {
+  display: flex;
+  min-height: 300px;
   flex-direction: column;
-  gap: 12px;
-}
-
-.pipeline-item {
-  display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) auto;
-  gap: 12px;
-  align-items: center;
-  min-height: 64px;
-  padding: 10px 12px;
-  background: rgba(5, 19, 34, 0.46);
-  border: 1px solid rgba(104, 174, 220, 0.14);
-  border-radius: 8px;
-}
-
-.pipeline-icon {
-  display: flex;
   align-items: center;
   justify-content: center;
-  width: 42px;
-  height: 42px;
-  color: #86f1ff;
-  background: rgba(122, 233, 255, 0.1);
-  border-radius: 8px;
+  padding: 40px 20px;
+  color: #68849a;
+  text-align: center;
 }
 
-.pipeline-copy strong,
-.pipeline-copy span {
-  display: block;
+.empty-icon {
+  margin-bottom: 14px;
+  color: #68849a;
+  font-size: 52px;
 }
 
-.pipeline-copy strong {
-  color: #f2f9ff;
-  font-size: 14px;
-  font-weight: 800;
+.empty-state h3 {
+  margin: 0 0 8px;
+  color: #d9e8f8;
 }
 
-.pipeline-copy span {
-  margin-top: 4px;
-  color: #9db7d2;
-  font-size: 12px;
-  line-height: 1.45;
+.empty-state p {
+  margin: 0;
+  color: #68849a;
 }
 
-.pipeline-item em {
-  display: inline-flex;
-  align-items: center;
-  height: 26px;
-  padding: 0 10px;
-  color: #82f3bf;
-  background: rgba(130, 243, 191, 0.1);
-  border: 1px solid rgba(130, 243, 191, 0.22);
-  border-radius: 4px;
-  font-size: 12px;
-  font-style: normal;
-  font-weight: 800;
+.pagination-bar {
+  display: flex;
+  justify-content: center;
+  padding: 18px;
 }
 
-.answer-preview {
+.preview-shell,
+.preview-editor-shell {
+  width: 100%;
+  height: calc(100vh - 60px);
+  min-height: 520px;
+  overflow: hidden;
+  background: #eef2f6;
+}
+
+.preview-editor-shell :deep(.onlyoffice-editor),
+.preview-editor-shell :deep(#onlyoffice-editor),
+.preview-editor-shell :deep(iframe) {
+  height: 100% !important;
+}
+
+.preview-editor-shell :deep(.onlyoffice-editor) {
+  border: 0;
+  border-radius: 0;
+}
+
+:global(.knowledge-preview-dialog.el-dialog.is-fullscreen) {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-}
-
-.question-chip {
-  align-self: flex-start;
-  max-width: 92%;
-  padding: 10px 12px;
-  color: #07192a;
-  background: #86f1ff;
-  border-radius: 8px 8px 8px 2px;
-  font-size: 13px;
-  font-weight: 800;
-}
-
-.answer-card {
-  padding: 14px;
-  background: rgba(5, 19, 34, 0.46);
-  border: 1px solid rgba(104, 174, 220, 0.14);
-  border-radius: 8px;
-}
-
-.answer-card p {
+  width: 100vw;
+  height: 100vh;
   margin: 0;
-  color: #c7daec;
-  font-size: 13px;
-  line-height: 1.7;
+  border-radius: 0 !important;
 }
 
-.source-row {
+:global(.knowledge-preview-dialog .el-dialog__header) {
+  flex: 0 0 auto;
+  min-height: 60px;
+  margin: 0;
+  padding: 0 18px;
+  background: #0b2138;
+  border-bottom: 1px solid rgba(0, 200, 255, .2);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .24);
+}
+
+:global(.knowledge-preview-dialog .el-dialog__body) {
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  background: #071625;
+}
+
+.preview-header {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.source-row span {
-  display: inline-flex;
   align-items: center;
-  height: 26px;
-  padding: 0 9px;
-  color: #ffe39b;
-  background: rgba(255, 227, 155, 0.1);
-  border: 1px solid rgba(255, 227, 155, 0.24);
-  border-radius: 4px;
+  gap: 14px;
+  min-height: 60px;
+}
+
+.preview-back-button {
+  flex: 0 0 auto;
+  height: 36px;
+  color: #dce9fa;
+  background: rgba(10, 30, 48, .68);
+  border-color: rgba(88, 156, 222, .42);
+}
+
+.preview-title-stack {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.preview-kicker {
+  display: block;
+  margin-bottom: 3px;
+  color: #8fb1c8;
   font-size: 12px;
-  font-weight: 800;
 }
 
-.capability-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+.preview-title {
+  max-width: min(52vw, 860px);
+  margin: 0;
+  overflow: hidden;
+  color: #f3f8fd;
+  font-size: 17px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.capability-grid div {
-  min-height: 78px;
-  padding: 14px;
-  background: rgba(5, 19, 34, 0.46);
-  border: 1px solid rgba(104, 174, 220, 0.14);
-  border-radius: 8px;
+@media (max-width: 1280px) {
+  .document-header,
+  .document-row {
+    grid-template-columns: 48px minmax(220px, 1fr) 78px 92px 138px 86px 178px;
+  }
 }
 
-.capability-grid span {
-  display: block;
-  color: #9db7d2;
-  font-size: 13px;
-}
-
-.capability-grid strong {
-  display: block;
-  margin-top: 10px;
-  color: #f7fbff;
-  font-size: 20px;
-  font-weight: 800;
-}
-
-@media (max-width: 920px) {
-  .kb-command,
-  .kb-search-band,
-  .kb-layout {
-    grid-template-columns: 1fr;
+@media (max-width: 900px) {
+  .stats-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .kb-orchestrator {
-    grid-template-columns: 1fr;
-  }
-
-  .ask-button,
-  .index-button {
-    width: 100%;
-  }
-
-  .knowledge-map {
-    grid-row: auto;
-  }
-
-  .graph-stage {
-    min-height: 430px;
-  }
-
-  .graph-node {
-    width: 152px;
-    grid-template-columns: 1fr;
-    text-align: center;
-  }
-
-  .pipeline-item {
-    grid-template-columns: 1fr;
-  }
-
-  .pipeline-icon {
+  .document-header {
     display: none;
   }
 
-  .capability-grid {
+  .document-row {
+    grid-template-columns: 40px minmax(0, 1fr);
+  }
+
+  .row-type,
+  .row-size,
+  .row-date,
+  .row-status,
+  .row-actions {
+    grid-column: 2;
+  }
+
+  .row-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 640px) {
+  .knowledge-base {
+    padding: 14px;
+  }
+
+  .stats-cards {
     grid-template-columns: 1fr;
+  }
+
+  .filter-section {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .base-select,
+  .type-select,
+  .sort-select {
+    width: 100%;
+  }
+
+  .filter-actions {
+    flex-direction: column;
+    align-items: stretch;
   }
 }
 </style>

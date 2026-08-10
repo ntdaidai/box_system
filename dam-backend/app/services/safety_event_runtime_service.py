@@ -77,6 +77,10 @@ class SafetyEventRuntimeService:
                 existing.status = status.upper()
                 existing.message = message[:500]
                 existing.operator = operator
+                existing.trigger_type = trigger_type.upper()
+                existing.stage = stage or self.stage_for_log_type(log_type)
+                existing.title = title if title is not None else existing.title
+                existing.risk_level = risk_level or existing.risk_level
                 existing.payload = {**(existing.payload or {}), **(payload or {})}
                 existing.update_time = dt.datetime.now()
                 return existing

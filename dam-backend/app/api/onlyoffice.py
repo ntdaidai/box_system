@@ -18,13 +18,16 @@ from typing import Literal, Optional
 from urllib.parse import quote, unquote
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from jose import jwt
 from minio import Minio
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.database import get_db
+from app.models.safety_integration import SafetyEventInstance
 
 router = APIRouter(prefix="/api/onlyoffice", tags=["OnlyOffice 文档编辑"])
 
@@ -73,6 +76,12 @@ def get_minio_client() -> Minio:
         if not minio_client.bucket_exists(BUCKET_NAME):
             minio_client.make_bucket(BUCKET_NAME)
     return minio_client
+
+
+def event_instance_no_from_document_id(document_id: str) -> str:
+    prefix = "dam_event_report_"
+    text = str(document_id or "")
+    return text[len(prefix):] if text.startswith(prefix) else ""
 
 
 def get_file_extension(filename: str) -> str:
@@ -607,9 +616,11 @@ async def list_documents(
     user_id: str = "user_001",
     page: int = 1,
     page_size: int = 20,
+    db: Session = Depends(get_db),
 ):
     client = get_minio_client()
     docs = []
+    event_instance_nos: set[str] = set()
     prefix = f"{OBJECT_PREFIX}/{user_id}/"
     for obj in client.list_objects(BUCKET_NAME, prefix=prefix, recursive=True):
         if obj.object_name.endswith(".bak"):
@@ -618,6 +629,9 @@ async def list_documents(
             document_id, filename, ext = parse_object_name(obj.object_name)
         except ValueError:
             continue
+        event_instance_no = event_instance_no_from_document_id(document_id)
+        if event_instance_no:
+            event_instance_nos.add(event_instance_no)
         try:
             stat = client.stat_object(BUCKET_NAME, obj.object_name)
             title = get_original_title(stat, filename)
@@ -639,6 +653,23 @@ async def list_documents(
             "created_at": created_at,
             "updated_at": updated_at,
         })
+
+    event_by_instance_no = {}
+    if event_instance_nos:
+        rows = db.query(SafetyEventInstance).filter(
+            SafetyEventInstance.instance_no.in_(event_instance_nos)
+        ).all()
+        event_by_instance_no = {row.instance_no: row for row in rows}
+
+    for doc in docs:
+        event_instance_no = event_instance_no_from_document_id(doc["document_id"])
+        if not event_instance_no:
+            continue
+        event = event_by_instance_no.get(event_instance_no)
+        doc["event_instance_no"] = event_instance_no
+        if event:
+            doc["event_instance_id"] = event.id
+            doc["event_started_at"] = event.started_at.isoformat() if event.started_at else None
 
     docs.sort(key=lambda item: item["updated_at"], reverse=True)
     total = len(docs)

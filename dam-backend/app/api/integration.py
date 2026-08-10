@@ -519,10 +519,12 @@ def get_safety_event_detail(
             "confidence": float(visual["confidence"]) if visual.get("confidence") is not None else None,
         },
         "timeline": [{
-            "id": row.id, "stage": row.stage, "title": row.title,
+            "id": row.id, "action_key": row.action_key, "action_id": row.action_key or f"timeline:{row.id}",
+            "stage": row.stage, "title": row.title,
             "log_type": row.log_type, "trigger_type": row.trigger_type,
             "risk_level": row.risk_level, "status": row.status, "message": row.message,
             "operator": row.operator, "create_time": row.create_time.isoformat() if row.create_time else None,
+            "payload": row.payload or {},
             "has_evidence": any(item.timeline_log_id == row.id for item in evidence),
         } for row in timeline],
         "evidence": [{

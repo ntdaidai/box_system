@@ -10,13 +10,17 @@
           </div>
           <div class="today-grid">
             <article v-for="metric in todayMetrics" :key="metric.key" class="today-card" :class="metric.tone">
-              <span class="metric-icon" :class="`metric-icon-${metric.key}`" aria-hidden="true"></span>
-              <div>
-                <span>{{ metric.label }}</span>
+              <div class="metric-head">
+                <span class="metric-icon" aria-hidden="true">
+                  <component :is="metric.icon" />
+                </span>
+                <span class="metric-label">{{ metric.label }}</span>
+              </div>
+              <div class="metric-value-row">
                 <strong>{{ metric.value }}</strong>
-                <em>
+                <em class="metric-compare">
+                  <span>较昨日</span>
                   <i :class="metric.trend.tone">{{ metric.trend.icon }} {{ metric.trend.delta }}</i>
-                  较昨日
                 </em>
               </div>
             </article>
@@ -238,34 +242,30 @@
       </main>
 
       <aside class="right-column">
-        <section class="screen-panel clock-panel">
-          <div class="clock-block">
-            <span>{{ currentDate }} {{ currentWeek }}</span>
-            <strong>{{ currentTime }}</strong>
-            <em><i></i>{{ loading ? '同步中' : '实时刷新' }}</em>
-          </div>
-        </section>
-
         <section class="screen-panel progress-panel">
-          <div class="panel-heading">
-            <h2>实时告警进度 <span class="help-tip" title="最近最高风险">?</span></h2>
+          <div class="panel-heading progress-heading">
+            <h2>实时告警进度</h2>
+            <div class="clock-block progress-clock">
+              <span>{{ currentDate }} {{ currentWeek }}</span>
+              <strong>{{ currentTime }}</strong>
+            </div>
           </div>
-          <div v-if="priorityAlert" class="priority-summary">
+          <div v-if="displayedPriorityAlert" class="priority-summary">
             <div class="priority-topline">
-              <strong :class="riskClass(priorityAlert)">{{ riskLabel(priorityAlert) }}</strong>
+              <strong :class="riskClass(displayedPriorityAlert)">{{ riskLabel(displayedPriorityAlert) }}</strong>
               <button type="button" class="detail-button" @click.stop="handleAlarmDetailClick">查看详情</button>
             </div>
-            <span>{{ alertTitle(priorityAlert) }}</span>
+            <span>{{ alertTitle(displayedPriorityAlert) }}</span>
             <small>
-              <i>开始 {{ formatDateTime(priorityAlert.started_at || priorityAlert.last_observed_at) }}</i>
-              <b :class="statusClass(priorityAlert.status)">{{ statusLabel(priorityAlert.status) }}</b>
+              <i>开始 {{ formatDateTime(displayedPriorityAlert.started_at || displayedPriorityAlert.last_observed_at) }}</i>
+              <b :class="statusClass(displayedPriorityAlert.status)">{{ statusLabel(displayedPriorityAlert.status) }}</b>
             </small>
           </div>
           <div v-else class="priority-summary empty">
             <strong>无告警</strong>
             <span>当前无未处理告警</span>
           </div>
-          <div v-if="!priorityAlert" class="alarm-idle">
+          <div v-if="!displayedPriorityAlert" class="alarm-idle flow-idle-visual">
             <div class="idle-orbit">
               <span></span>
               <i></i>
@@ -274,25 +274,28 @@
               <strong>告警监听中</strong>
               <span>风险事件触发后将在此同步处置进度</span>
             </div>
-            <div class="idle-status-grid">
-              <span>事件触发<i>待触发</i></span>
-              <span>处置流程<i>待启动</i></span>
-              <span>刷新状态<i>{{ loading ? '同步中' : '实时' }}</i></span>
-            </div>
           </div>
-          <ol v-if="priorityAlert" class="progress-timeline">
+          <ol class="progress-timeline flow-timeline" :class="{ idle: !displayedPriorityAlert }">
             <li
-              v-for="item in alarmTimeline"
+              v-for="item in alarmFlowSteps"
               :key="item.key"
-              :class="[item.tone, { active: item.active }]"
+              :class="[item.tone, item.state, item.connectorClass, { active: item.active }]"
             >
-              <i></i>
+              <i class="flow-node-icon">
+                <component :is="item.icon" />
+              </i>
               <article>
                 <header>
-                  <strong>{{ item.label }}</strong>
+                  <strong :title="item.label">{{ item.label }}</strong>
                   <time>{{ item.time }}</time>
                 </header>
-                <p>{{ item.message }}</p>
+                <p :title="item.message">{{ item.message }}</p>
+                <ul v-if="item.active && item.logs.length" class="flow-node-logs">
+                  <li v-for="log in item.logs" :key="log.key">
+                    <b :title="log.title">{{ log.title }}</b>
+                    <span :title="log.message">{{ log.message }}</span>
+                  </li>
+                </ul>
                 <footer>
                   <span>{{ item.operator }}</span>
                   <b :class="item.statusClass">{{ item.statusText }}</b>
@@ -335,9 +338,10 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as echarts from 'echarts'
 import { ElMessage } from 'element-plus'
+import { BellFilled, CircleCheckFilled, Connection, Promotion, Ship, UserFilled, WarningFilled } from '@element-plus/icons-vue'
 import { getUnifiedSafetyEventDetail, getUnifiedSafetyEventStatistics, getUnifiedSafetyEvents } from '@/api/integration'
 import { getDeviceStatus } from '@/api/sensor'
 import { getCameraList } from '@/api/camera'
@@ -389,6 +393,20 @@ const riskLevels = [
   { key: 'HIGH', label: '高风险', shortLabel: '高风险' },
 ]
 
+const todayMetricIcons = {
+  person: markRaw(UserFilled),
+  boat: markRaw(Ship),
+  other: markRaw(BellFilled),
+  unhandled: markRaw(WarningFilled),
+}
+
+const alarmFlowDefinitions = [
+  { key: 'trigger', label: '事件触发', idleText: '等待事件触发', icon: markRaw(WarningFilled), logTypes: ['TRIGGER', 'RISK_CHANGE'], tone: 'is-primary' },
+  { key: 'route', label: '智能路由', idleText: '等待匹配处置流程', icon: markRaw(Promotion), logTypes: ['DAM_WORKFLOW', 'WORKFLOW'], tone: 'is-warning' },
+  { key: 'linkage', label: '联动处理', idleText: '等待联动动作执行', icon: markRaw(Connection), logTypes: ['ACTION', 'MANUAL', 'REPORT'], tone: 'is-success' },
+  { key: 'archive', label: '闭环归档', idleText: '等待闭环归档', icon: markRaw(CircleCheckFilled), logTypes: ['RESOLVE'], tone: 'is-info' },
+]
+
 const trendModes = [
   { key: 'today', label: '今日' },
   { key: 'week', label: '本周' },
@@ -421,6 +439,8 @@ const loading = ref(false)
 const eventStats = ref({})
 const events = ref([])
 const priorityDetail = ref({ timeline: [] })
+const retainedPriorityAlert = ref(null)
+const retainedPriorityUntil = ref(0)
 const deviceStatus = ref({})
 const cameraSummary = ref({ online: 0, total: 0 })
 const mapBoardRef = ref(null)
@@ -452,6 +472,7 @@ let riskResumeTimer
 let mapResizeObserver
 let currentPriorityDetailId = null
 let mapInitialFocused = false
+const priorityRetentionMs = 12000
 
 const weekLabels = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
 
@@ -481,8 +502,9 @@ const todayMetrics = computed(() => {
     {
       key: 'unhandled',
       label: '未处理告警',
+      icon: todayMetricIcons.unhandled,
       value: formatNumber(unhandledCount.value),
-      tone: 'danger',
+      tone: 'cyan',
       trend: compareNumber(unhandledCount.value, yesterday.filter((event) => !isHandled(event)).length),
     },
   ]
@@ -575,61 +597,90 @@ const priorityAlert = computed(() => events.value
   .filter((event) => !isHandled(event))
   .slice()
   .sort((a, b) => riskRank(b) - riskRank(a) || eventTimestamp(b) - eventTimestamp(a))[0] || null)
+const displayedPriorityAlert = computed(() => {
+  if (priorityAlert.value) return priorityAlert.value
+  if (retainedPriorityAlert.value && Date.now() < retainedPriorityUntil.value) return retainedPriorityAlert.value
+  return null
+})
 
-const alarmTimeline = computed(() => {
+const alarmFlowSteps = computed(() => {
   const rows = priorityDetail.value.timeline || []
-  if (rows.length) {
-    const currentIndex = rows.findIndex((row) => String(row.status || '').toUpperCase() === 'PENDING')
-    const activeIndex = currentIndex >= 0 ? currentIndex : rows.length - 1
-    return rows.map((row, index) => ({
-      key: row.id || `${row.log_type}-${row.create_time || row.created_at || index}`,
-      label: row.title || logTypeLabel(row.log_type),
-      time: formatDateTime(row.create_time || row.created_at),
-      message: row.message || row.action || '暂无处理说明',
-      operator: operatorLabel(row.operator),
-      statusText: timelineStatusLabel(row.status),
-      statusClass: timelineStatusClass(row.status),
-      tone: timelineTone(row.log_type),
-      active: index === activeIndex,
-    }))
-  }
-  if (!priorityAlert.value) return []
-  const startedAt = priorityAlert.value.started_at || priorityAlert.value.last_observed_at
-  return [
-    {
-      key: 'trigger',
-      label: '事件触发',
-      time: formatDateTime(startedAt),
-      message: priorityAlert.value.summary || alertTitle(priorityAlert.value),
-      operator: '系统自动',
-      statusText: '已完成',
-      statusClass: 'is-success',
-      tone: 'is-primary',
-      active: false,
-    },
-    {
-      key: 'workflow',
-      label: 'DAM_WORKFLOW',
-      time: formatDateTime(priorityAlert.value.last_observed_at || startedAt),
-      message: '处置流程等待同步',
-      operator: '系统自动',
-      statusText: '待同步',
-      statusClass: 'is-pending',
-      tone: 'is-warning',
-      active: priorityAlert.value.status !== 'PROCESSING',
-    },
-    {
-      key: 'action',
-      label: priorityAlert.value.status === 'PROCESSING' ? '执行动作' : '等待处置',
-      time: formatDateTime(priorityAlert.value.last_observed_at || startedAt),
-      message: priorityAlert.value.status === 'PROCESSING' ? '处置动作执行中' : '等待值班人员确认',
-      operator: '值班人员',
-      statusText: timelineStatusLabel(priorityAlert.value.status),
-      statusClass: timelineStatusClass(priorityAlert.value.status),
-      tone: 'is-success',
-      active: priorityAlert.value.status === 'PROCESSING',
-    },
-  ]
+  const alert = displayedPriorityAlert.value
+  const grouped = alarmFlowDefinitions.map((definition) => {
+    const logs = rows
+      .filter((row) => definition.logTypes.includes(String(row.log_type || '').toUpperCase()))
+      .map((row, index) => ({
+        key: row.id || `${definition.key}-${row.create_time || row.created_at || index}`,
+        title: row.title || logTypeLabel(row.log_type),
+        status: String(row.status || '').toUpperCase(),
+        statusText: timelineStatusLabel(row.status),
+        message: row.message || row.action || row.title || '暂无处理说明',
+        time: row.create_time || row.created_at,
+        operator: operatorLabel(row.operator),
+      }))
+    return { definition, logs }
+  })
+  const hasAnyLog = grouped.some((item) => item.logs.length)
+  const pendingIndex = grouped.findIndex((item) => item.logs.some((log) => ['PENDING', 'PROCESSING', 'RUNNING'].includes(log.status)))
+  const failedIndex = grouped.findIndex((item) => item.logs.some((log) => ['FAILED', 'ERROR'].includes(log.status)))
+  const firstEmptyIndex = grouped.findIndex((item) => !item.logs.length)
+  const activeIndex = !alert
+    ? -1
+    : isHandled(alert)
+      ? -1
+      : failedIndex >= 0
+      ? failedIndex
+      : pendingIndex >= 0
+        ? pendingIndex
+        : firstEmptyIndex >= 0
+          ? firstEmptyIndex
+          : -1
+  const flowEndIndex = !alert
+    ? -1
+    : activeIndex >= 0
+      ? activeIndex
+      : grouped.length
+
+  return grouped.map(({ definition, logs }, index) => {
+    const latest = logs[logs.length - 1]
+    const hasLog = logs.length > 0
+    const active = index === activeIndex
+    const failed = logs.some((log) => ['FAILED', 'ERROR'].includes(log.status))
+    const done = hasLog && !active && !failed
+    const idle = !alert
+    const state = idle ? 'idle' : failed ? 'failed' : active ? 'running' : done ? 'done' : 'pending'
+    const fallbackMessage = alert
+      ? index === 0
+        ? (alert.summary || alertTitle(alert))
+        : definition.idleText
+      : definition.idleText
+    const summaryMessage = done ? `已完成${definition.label}` : fallbackMessage
+    const message = active || failed
+      ? (latest?.message || fallbackMessage)
+      : summaryMessage
+    const connectorClass = !alert
+      ? 'connector-idle'
+      : index < flowEndIndex - 1
+        ? 'connector-done'
+        : index === flowEndIndex - 1
+          ? 'connector-running'
+          : 'connector-pending'
+    return {
+      key: definition.key,
+      label: definition.label,
+      icon: definition.icon,
+      tone: failed ? 'is-failed' : definition.tone,
+      state,
+      connectorClass,
+      active,
+      logs,
+      time: latest?.time ? formatDateTime(latest.time) : alert && index === 0 ? formatDateTime(alert.started_at || alert.last_observed_at) : '--',
+      message,
+      operator: latest?.operator || (hasAnyLog ? '系统自动' : '待机监听'),
+      statusText: idle ? '待机' : failed ? '异常' : active ? '执行中' : done ? '已完成' : '未开始',
+      statusClass: idle || !hasLog ? 'is-muted' : failed ? 'is-failed' : active ? 'is-processing' : 'is-success',
+    }
+  })
 })
 
 const deviceRows = computed(() => {
@@ -687,6 +738,7 @@ function buildTodayMetric(key, label, today, yesterday) {
   return {
     key,
     label,
+    icon: todayMetricIcons[key],
     value: formatNumber(value),
     tone: key === 'person' ? 'danger' : key === 'boat' ? 'boat' : 'purple',
     trend: compareNumber(value, previous),
@@ -1284,7 +1336,10 @@ function rangeStart(type) {
 
 function rangeEnd(type) {
   const end = new Date()
-  if (type === 'yesterday') end.setDate(end.getDate() - 1)
+  if (type === 'yesterday') {
+    end.setDate(end.getDate() - 1)
+    end.setHours(23, 59, 59, 999)
+  }
   if (type === 'lastWeek') {
     const start = rangeStart('week')
     return start
@@ -1561,14 +1616,16 @@ function updateClock() {
 }
 
 async function fetchPriorityDetail() {
-  const id = priorityAlert.value?.id
+  const id = displayedPriorityAlert.value?.id
   if (!id) {
     currentPriorityDetailId = null
     priorityDetail.value = { timeline: [] }
     return
   }
-  if (id === currentPriorityDetailId) return
-  currentPriorityDetailId = id
+  if (id !== currentPriorityDetailId) {
+    currentPriorityDetailId = id
+    priorityDetail.value = { timeline: [] }
+  }
   try {
     const res = await getUnifiedSafetyEventDetail(id)
     priorityDetail.value = { timeline: res.data?.timeline || [] }
@@ -1579,6 +1636,7 @@ async function fetchPriorityDetail() {
 
 async function fetchData() {
   loading.value = true
+  const previousDisplayedAlert = displayedPriorityAlert.value
   const [statsResult, eventsResult, statusResult, cameraResult] = await Promise.allSettled([
     getUnifiedSafetyEventStatistics(),
     fetchOverviewEvents(),
@@ -1591,6 +1649,7 @@ async function fetchData() {
   }
   if (eventsResult.status === 'fulfilled') {
     events.value = (eventsResult.value || []).slice().sort((a, b) => eventTimestamp(b) - eventTimestamp(a))
+    updateRetainedPriorityAlert(previousDisplayedAlert)
   }
   if (statusResult.status === 'fulfilled' && statusResult.value?.data) {
     deviceStatus.value = statusResult.value.data || {}
@@ -1607,6 +1666,29 @@ async function fetchData() {
   loading.value = false
   await nextTick()
   renderAllCharts()
+}
+
+function updateRetainedPriorityAlert(previousDisplayedAlert) {
+  if (priorityAlert.value) {
+    retainedPriorityAlert.value = null
+    retainedPriorityUntil.value = 0
+    return
+  }
+
+  const previousId = previousDisplayedAlert?.id
+  const updatedPrevious = previousId
+    ? events.value.find((event) => event.id === previousId) || previousDisplayedAlert
+    : null
+  if (updatedPrevious && isHandled(updatedPrevious)) {
+    retainedPriorityAlert.value = updatedPrevious
+    retainedPriorityUntil.value = Date.now() + priorityRetentionMs
+    return
+  }
+
+  if (Date.now() >= retainedPriorityUntil.value) {
+    retainedPriorityAlert.value = null
+    retainedPriorityUntil.value = 0
+  }
 }
 
 async function fetchOverviewEvents() {
@@ -1646,7 +1728,7 @@ onMounted(() => {
   }
   restartRiskTimer()
   fetchData()
-  refreshTimer = window.setInterval(fetchData, 30000)
+  refreshTimer = window.setInterval(fetchData, 5000)
   window.addEventListener('resize', resizeCharts)
   nextTick(renderAllCharts)
 })
@@ -1846,7 +1928,7 @@ onBeforeUnmount(() => {
 }
 
 .right-column {
-  grid-template-rows: 74px minmax(0, 1fr) 202px;
+  grid-template-rows: minmax(0, 1fr) 202px;
 }
 
 .progress-panel {
@@ -1896,6 +1978,43 @@ onBeforeUnmount(() => {
   border-radius: 8px;
   background: linear-gradient(90deg, rgba(10, 45, 73, .5), rgba(3, 22, 40, .22));
   padding: 0 4px;
+}
+
+.progress-heading {
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.progress-heading h2 {
+  flex: 0 0 auto;
+}
+
+.progress-clock {
+  width: auto;
+  height: auto;
+  flex: 1 1 auto;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+  padding-top: 1px;
+}
+
+.progress-clock span {
+  overflow: hidden;
+  color: #87abc5;
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+
+.progress-clock strong {
+  flex: 0 0 auto;
+  font-size: 18px;
+  letter-spacing: .5px;
+}
+
+.progress-clock em {
+  flex: 0 0 auto;
+  font-size: 11px;
 }
 
 .panel-heading,
@@ -1987,169 +2106,129 @@ onBeforeUnmount(() => {
 }
 
 .today-card {
+  --metric-color: #43c8ff;
   min-height: 0;
+  position: relative;
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr);
-  align-items: center;
-  gap: 11px;
-  padding: 11px 13px;
-  border: 1px solid rgba(74, 163, 214, .2);
-  border-radius: 10px;
+  grid-template-rows: 36px 1fr;
+  gap: 7px;
+  padding: 12px 15px 11px;
+  border: 1px solid rgba(74, 163, 214, .22);
+  border-radius: 8px;
   background:
-    linear-gradient(135deg, rgba(22, 67, 103, .42), rgba(4, 24, 43, .7)),
-    rgba(4, 23, 42, .72);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05);
+    linear-gradient(180deg, rgba(9, 40, 68, .76), rgba(4, 23, 42, .76)),
+    rgba(4, 22, 39, .8);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04);
   overflow: hidden;
+}
+
+.today-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 14px;
+  bottom: 14px;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--metric-color);
+  opacity: .86;
+}
+
+.metric-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .metric-icon {
   position: relative;
-  width: 38px;
-  height: 38px;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--metric-color);
+  background: rgba(12, 44, 72, .72);
+  border: 1px solid rgba(143, 200, 242, .18);
+}
+
+.metric-icon :deep(svg) {
+  width: 20px;
+  height: 20px;
   display: block;
-  border-radius: 12px;
-  color: currentColor;
-  background:
-    radial-gradient(circle at 32% 26%, rgba(255, 255, 255, .2), transparent 34%),
-    linear-gradient(145deg, color-mix(in srgb, currentColor 30%, rgba(7, 39, 64, .86)), rgba(4, 22, 41, .92));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, .13),
-    0 10px 24px color-mix(in srgb, currentColor 18%, transparent);
 }
 
-.metric-icon::before,
-.metric-icon::after {
-  content: "";
-  position: absolute;
-  box-sizing: border-box;
-}
-
-.metric-icon-person::before {
-  width: 11px;
-  height: 11px;
-  top: 9px;
-  left: 13px;
-  border-radius: 50%;
-  background: currentColor;
-  box-shadow: 0 0 12px color-mix(in srgb, currentColor 60%, transparent);
-}
-
-.metric-icon-person::after {
-  width: 22px;
-  height: 12px;
-  left: 8px;
-  bottom: 7px;
-  border-radius: 13px 13px 5px 5px;
-  background:
-    radial-gradient(circle at 50% 0, rgba(255, 255, 255, .25), transparent 42%),
-    currentColor;
-  opacity: .95;
-}
-
-.metric-icon-boat::before {
-  width: 25px;
-  height: 11px;
-  left: 7px;
-  bottom: 9px;
-  clip-path: polygon(5% 0, 95% 0, 78% 100%, 18% 100%);
-  background: currentColor;
-  box-shadow: 0 0 14px color-mix(in srgb, currentColor 55%, transparent);
-}
-
-.metric-icon-boat::after {
-  width: 9px;
-  height: 18px;
-  left: 15px;
-  top: 7px;
-  clip-path: polygon(50% 0, 96% 100%, 4% 100%);
-  background: currentColor;
-  opacity: .96;
-}
-
-.metric-icon-other::before,
-.metric-icon-other::after {
-  width: 10px;
-  height: 10px;
-  transform: rotate(45deg);
-  border-radius: 3px;
-  background: currentColor;
-  box-shadow: 0 0 12px color-mix(in srgb, currentColor 54%, transparent);
-}
-
-.metric-icon-other::before {
-  left: 9px;
-  top: 9px;
-}
-
-.metric-icon-other::after {
-  right: 9px;
-  bottom: 9px;
-  opacity: .82;
-}
-
-.metric-icon-unhandled::before {
-  width: 26px;
-  height: 26px;
-  left: 6px;
-  top: 6px;
-  border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, .72);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, .14), rgba(255, 255, 255, 0)),
-    currentColor;
-  box-shadow:
-    0 0 0 3px color-mix(in srgb, currentColor 18%, transparent),
-    0 0 18px color-mix(in srgb, currentColor 55%, transparent);
-}
-
-.metric-icon-unhandled::after {
-  content: "!";
-  left: 0;
-  top: 5px;
-  width: 38px;
-  color: #fff;
-  font-size: 23px;
-  line-height: 28px;
-  font-weight: 900;
-  text-align: center;
-  text-shadow: 0 1px 5px rgba(67, 0, 8, .55);
-}
-
-.today-card span:not(.metric-icon),
-.today-card em {
+.metric-label,
+.metric-compare {
   display: block;
   color: #a4d2ee;
   font-size: 13px;
   font-style: normal;
-  line-height: 1.2;
+  line-height: 1;
+}
+
+.metric-label {
+  color: #b7e5ff;
+  font-size: 16px;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metric-value-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-left: 46px;
 }
 
 .today-card strong {
   display: block;
-  margin: 4px 0 5px;
+  margin: 0;
   color: #fff;
-  font-size: 25px;
+  font-size: 29px;
   line-height: 1;
-  letter-spacing: .5px;
+  letter-spacing: 0;
   font-variant-numeric: tabular-nums;
 }
 
-.today-card em i {
+.metric-compare {
+  flex: 0 0 auto;
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+  padding-bottom: 0;
+  white-space: nowrap;
+}
+
+.metric-compare span {
+  color: #9ed3f5;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.metric-compare i {
   display: inline-flex;
-  min-width: 34px;
+  min-width: 0;
   align-items: center;
-  justify-content: center;
-  margin-right: 5px;
+  justify-content: flex-end;
+  margin-right: 0;
   font-style: normal;
   line-height: 1.1;
   font-variant-numeric: tabular-nums;
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 800;
 }
 
-.today-card.danger { color: #ff6873; }
-.today-card.boat { color: #41c8ff; }
-.today-card.purple { color: #9b73ff; }
-.today-card.cyan { color: #43c8ff; }
+.today-card.danger { --metric-color: #ff6873; }
+.today-card.boat { --metric-color: #41c8ff; }
+.today-card.purple { --metric-color: #9b73ff; }
+.today-card.cyan { --metric-color: #43c8ff; }
 
 .up,
 .down,
@@ -2885,18 +2964,6 @@ onBeforeUnmount(() => {
 .disposal-list .processing { background: #ffb648; }
 .disposal-list .pending { background: #ff5b68; }
 
-.help-tip {
-  display: inline-grid;
-  width: 18px;
-  height: 18px;
-  place-items: center;
-  border: 1px solid rgba(136, 169, 193, .42);
-  border-radius: 50%;
-  color: rgba(220, 237, 248, .72);
-  font-size: 12px;
-  cursor: help;
-}
-
 .priority-summary {
   display: grid;
   gap: 9px;
@@ -3028,6 +3095,31 @@ onBeforeUnmount(() => {
   background:
     radial-gradient(circle at 36px 40px, rgba(56, 213, 156, .13), transparent 58px),
     rgba(5, 24, 43, .46);
+}
+
+.flow-idle-visual {
+  flex: 0 0 auto;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px 13px;
+  border-color: rgba(67, 200, 255, .14);
+  background:
+    radial-gradient(circle at 34px 36px, rgba(56, 213, 156, .12), transparent 54px),
+    linear-gradient(135deg, rgba(7, 40, 65, .5), rgba(3, 18, 33, .38));
+}
+
+.flow-idle-visual .idle-orbit {
+  width: 54px;
+  height: 54px;
+}
+
+.flow-idle-visual .idle-copy strong {
+  font-size: 15px;
+}
+
+.flow-idle-visual .idle-copy span {
+  font-size: 12px;
 }
 
 .idle-orbit {
@@ -3239,6 +3331,164 @@ onBeforeUnmount(() => {
   -webkit-box-orient: vertical;
 }
 
+.flow-timeline {
+  gap: 12px;
+  margin-top: 12px;
+  padding-left: 52px;
+}
+
+.flow-timeline::before {
+  content: none;
+  display: none;
+}
+
+.flow-timeline > li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: -27px;
+  top: 47px;
+  bottom: -12px;
+  width: 1px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(143, 200, 242, .16), rgba(143, 200, 242, .06));
+  pointer-events: none;
+  z-index: 0;
+}
+
+.flow-timeline > li.connector-done:not(:last-child)::after {
+  background: linear-gradient(180deg, rgba(67, 200, 255, .58), rgba(56, 213, 156, .38));
+}
+
+.flow-timeline > li.connector-running:not(:last-child)::after {
+  background:
+    linear-gradient(180deg, transparent, rgba(100, 223, 255, .98), transparent) 0 -80px / 100% 80px no-repeat,
+    linear-gradient(180deg, rgba(67, 200, 255, .58), rgba(100, 223, 255, .28));
+  animation: flowLineScan 1.7s linear infinite;
+}
+
+.flow-timeline > li.connector-pending:not(:last-child)::after,
+.flow-timeline.idle > li:not(:last-child)::after {
+  background:
+    linear-gradient(180deg, rgba(143, 200, 242, .2), rgba(143, 200, 242, .08));
+  animation: none;
+}
+
+.progress-timeline > li > .flow-node-icon {
+  left: -44px;
+  top: 9px;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(143, 200, 242, .22);
+  border-radius: 9px;
+  color: #8fc8f2;
+  background: #082038;
+  box-shadow: none;
+  z-index: 2;
+}
+
+.flow-node-icon :deep(svg) {
+  width: 18px;
+  height: 18px;
+}
+
+.flow-timeline li.done > .flow-node-icon,
+.flow-timeline li.is-success.done > .flow-node-icon {
+  color: #48e6ae;
+  border-color: rgba(72, 230, 174, .32);
+  background: rgba(9, 45, 41, .92);
+}
+
+.flow-timeline li.running > .flow-node-icon {
+  color: #64dfff;
+  border-color: rgba(100, 223, 255, .68);
+  animation: flowNodePulse 1.6s ease-in-out infinite;
+  box-shadow: 0 0 0 3px rgba(100, 223, 255, .08), 0 0 14px rgba(100, 223, 255, .24);
+}
+
+.flow-timeline li.failed > .flow-node-icon,
+.flow-timeline li.is-failed > .flow-node-icon {
+  color: #ff7f88;
+  border-color: rgba(255, 91, 104, .58);
+  background: rgba(50, 18, 30, .9);
+}
+
+.flow-timeline li.idle > .flow-node-icon,
+.flow-timeline li.pending > .flow-node-icon {
+  opacity: .72;
+}
+
+.flow-timeline li.running article {
+  position: relative;
+  border-color: rgba(100, 223, 255, .44);
+  background:
+    linear-gradient(90deg, rgba(67, 200, 255, .12), rgba(4, 20, 36, .54) 48%, rgba(67, 200, 255, .08)),
+    rgba(4, 20, 36, .52);
+  overflow: hidden;
+  z-index: 1;
+}
+
+.flow-timeline li.running article::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(100, 223, 255, .16), transparent);
+  transform: translateX(-100%);
+  animation: flowScan 2.2s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.flow-timeline.idle article {
+  border-color: rgba(67, 200, 255, .1);
+  background: rgba(4, 20, 36, .36);
+}
+
+.flow-timeline.idle header strong,
+.flow-timeline.idle p {
+  color: #88a9c1;
+}
+
+.flow-node-logs {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.flow-node-logs li {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 8px 9px;
+  border-radius: 6px;
+  color: #b8d4e8;
+  background: rgba(2, 13, 25, .34);
+}
+
+.flow-node-logs b {
+  min-width: 0;
+  overflow: hidden;
+  color: #e7f7ff;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flow-node-logs span {
+  min-width: 0;
+  display: -webkit-box;
+  overflow: hidden;
+  color: #9ed3f5;
+  font-size: 11px;
+  line-height: 1.35;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
 .device-panel.warning {
   border-color: rgba(255, 91, 104, .34);
 }
@@ -3430,6 +3680,25 @@ onBeforeUnmount(() => {
   to { transform: rotate(360deg); }
 }
 
+@keyframes flowNodePulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(100, 223, 255, .18);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(100, 223, 255, .08);
+  }
+}
+
+@keyframes flowScan {
+  0% { transform: translateX(-100%); }
+  55%, 100% { transform: translateX(100%); }
+}
+
+@keyframes flowLineScan {
+  from { background-position: 0 -90px, 0 0; }
+  to { background-position: 0 100%, 0 0; }
+}
+
 @media (max-width: 1280px) {
   .screen-grid {
     grid-template-columns: minmax(230px, 23fr) minmax(520px, 54fr) minmax(230px, 23fr);
@@ -3443,11 +3712,26 @@ onBeforeUnmount(() => {
 
   .today-card {
     min-height: 78px;
-    padding: 10px;
+    padding: 11px 13px 10px;
   }
 
   .today-card strong {
-    font-size: 24px;
+    font-size: 27px;
+  }
+
+  .metric-label {
+    font-size: 14px;
+  }
+
+  .metric-icon {
+    flex-basis: 34px;
+    width: 34px;
+    height: 34px;
+  }
+
+  .metric-value-row {
+    padding-left: 44px;
+    gap: 8px;
   }
 
   .analytics-grid {

@@ -64,9 +64,9 @@
         :default-sort="{ prop: 'started_at', order: 'descending' }"
         @sort-change="handleSortChange"
       >
-        <el-table-column label="序号" prop="id" width="92" sortable="custom">
-          <template #default="{ $index }">
-            <span class="event-no">{{ displayIndex($index) }}</span>
+        <el-table-column label="事件编号" prop="id" width="132" sortable="custom">
+          <template #default="{ row }">
+            <span class="event-no">{{ displayEventNo(row) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="事件名称" min-width="160">
@@ -231,12 +231,29 @@ function handleSortChange({ prop, order }) {
   reloadFromFirstPage()
 }
 
-function displayIndex(index) {
-  const base = (query.page - 1) * query.page_size + index + 1
-  if (query.sort_by === 'index' && query.sort_order === 'desc') {
-    return Math.max(total.value - (query.page - 1) * query.page_size - index, 1)
-  }
-  return base
+function displayEventNo(row) {
+  if (!row) return ''
+  const date = dateToken(row.started_at) || dateToken(row.instance_no)
+  if (!date) return row.instance_no || String(row.id || '')
+  const sequence = instanceSequence(row.instance_no) || row.id
+  return `${date}_${String(sequence || 1).padStart(2, '0')}`
+}
+
+function dateToken(value) {
+  if (!value) return ''
+  const direct = String(value).match(/20\d{6}/)
+  if (direct) return direct[0]
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}${month}${day}`
+}
+
+function instanceSequence(value) {
+  const matched = String(value || '').match(/_(\d{1,4})$/)
+  return matched?.[1] || ''
 }
 
 function riskTag(value) {

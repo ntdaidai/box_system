@@ -18,6 +18,7 @@ from app.models.safety_integration import (
     SafetyEventInstance,
     SafetyEventTimelineLog,
 )
+from app.models.knowledge import KnowledgeBase, KnowledgeChunk, KnowledgeDocument
 
 __all__ = [
     "User",
@@ -39,4 +40,7 @@ __all__ = [
     "SafetyEventEvidence",
     "SafetyEventInstance",
     "SafetyEventTimelineLog",
+    "KnowledgeBase",
+    "KnowledgeDocument",
+    "KnowledgeChunk",
 ]

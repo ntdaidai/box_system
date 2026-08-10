@@ -99,12 +99,12 @@
         </div>
 
         <div class="evidence-strip">
-          <div class="strip-title"><span>初筛采样帧</span><b>{{ evidenceFrames.length }} / {{ FRAME_COUNT }} 帧</b></div>
+          <div class="strip-title"><span>采样帧</span><b>{{ evidenceFrames.length }} / {{ FRAME_COUNT }} 帧</b></div>
           <div class="frame-strip">
             <figure v-for="(frame, index) in evidenceFrames" :key="frame.id">
               <img v-if="!frame.failed" :src="frame.url" :alt="`关键帧 ${index + 1}`" @error="markFrameFailed(frame)" />
               <div v-else class="frame-error">关键帧加载失败</div>
-              <span>初筛帧 {{ index + 1 }}</span>
+              <span>采样帧 {{ index + 1 }}</span>
             </figure>
             <div v-for="slot in Math.max(0, 4 - evidenceFrames.length)" :key="`slot-${slot}`" class="frame-slot">
               {{ String(evidenceFrames.length + slot).padStart(2, '0') }}
@@ -117,78 +117,128 @@
         <header class="panel-header">
           <div>
             <span class="section-index">02</span>
-            <div><small>CHAIN</small><h3>链路结果</h3></div>
+            <div><small>PROCESS</small><h3>处理链路</h3></div>
           </div>
           <el-tag :type="result ? riskTag : 'info'" effect="dark">{{ result ? riskLabel : '待触发' }}</el-tag>
         </header>
 
-        <div v-if="screening" class="processing-state">
-          <el-icon class="is-loading"><Loading /></el-icon>
-          <strong>Qwen 正在分析视频画面</strong>
-          <span>结果返回后自动提交 ECA 条件判断</span>
-        </div>
-        <div v-else-if="result" class="result-content">
-          <div class="decision-card" :class="riskClass">
-            <span>{{ formatResultTime(result.timestamp) }}</span>
-            <strong>{{ primarySceneLabel }}</strong>
-            <p>{{ result.summary || '模型未返回摘要' }}</p>
-          </div>
-
-          <div class="chain-steps">
-            <div v-for="step in chainSteps" :key="step.label" :class="['chain-step', step.state]">
-              <i></i>
-              <span>{{ step.label }}</span>
-              <strong>{{ step.value }}</strong>
-            </div>
-          </div>
-
-          <div class="metric-row">
-            <div>
-              <span>初筛帧</span>
-              <strong>{{ resultImageUrls.length }}</strong>
-            </div>
-            <div>
-              <span>触发场景</span>
-              <strong>{{ detectedSceneCount }}</strong>
-            </div>
-            <div>
-              <span>ECA</span>
-              <strong>{{ result.eca_dispatched ? '已提交' : '未确认' }}</strong>
-            </div>
-          </div>
-
-          <div class="scene-list">
-            <div
-              v-for="item in sortedSceneItems"
-              :key="item.key"
-              :class="['scene-row', { detected: item.detected }]"
-            >
-              <div class="scene-label">
-                <span>{{ item.label }}</span>
-                <b>{{ item.detected ? '触发' : '正常' }}</b>
+        <div v-if="screening && !result" class="result-content detail-result">
+          <ol class="detail-flow">
+            <li v-for="step in chainSteps" :key="step.label" :class="step.state">
+              <span class="flow-dot"><el-icon><component :is="step.icon" /></el-icon></span>
+              <div>
+                <strong>{{ step.label }}</strong>
+                <small>{{ step.value }}</small>
               </div>
-              <el-progress
-                :percentage="item.percent"
-                :stroke-width="7"
-                :show-text="false"
-                :color="item.detected ? '#ff6b6b' : '#40c7a7'"
-              />
-              <small>{{ item.percent }}%</small>
+            </li>
+          </ol>
+          <div class="processing-state inline-processing">
+            <el-icon class="is-loading"><Loading /></el-icon>
+            <strong>正在分析视频画面</strong>
+            <span>结果返回后自动进入条件判断</span>
+          </div>
+        </div>
+        <div v-else-if="screening" class="processing-state">
+          <el-icon class="is-loading"><Loading /></el-icon>
+          <strong>正在分析视频画面</strong>
+          <span>结果返回后自动进入条件判断</span>
+        </div>
+        <div v-else-if="result" class="result-content detail-result">
+          <ol class="detail-flow">
+            <li v-for="step in chainSteps" :key="step.label" :class="step.state">
+              <span class="flow-dot"><el-icon><component :is="step.icon" /></el-icon></span>
+              <div>
+                <strong>{{ step.label }}</strong>
+                <small>{{ step.value }}</small>
+              </div>
+            </li>
+          </ol>
+
+          <section class="detail-summary-card" :class="riskClass">
+            <header>
+              <div>
+                <span>{{ result.event_name || '摄像头场景分析' }}</span>
+                <h3>{{ primarySceneLabel }}</h3>
+              </div>
+              <el-tag :type="riskTag" effect="dark">{{ riskLabel }}</el-tag>
+            </header>
+            <p>{{ result.summary || '暂未返回摘要' }}</p>
+          </section>
+
+          <dl class="detail-fields compact-fields">
+            <div v-for="field in chainDetailFields" :key="field.key">
+              <dt>{{ field.label }}</dt>
+              <dd>{{ field.value }}</dd>
             </div>
+          </dl>
+
+          <section class="detail-section">
+            <header class="section-heading">
+              <div><span>执行链路</span><strong>处理阶段</strong></div>
+              <small>{{ eventReportId ? '报告已生成' : result.event_instance_id ? '处理中' : '等待事件' }}</small>
+            </header>
+            <div class="model-route-list">
+              <article v-for="item in routeModules" :key="item.key" :class="item.state">
+                <el-icon><component :is="item.icon" /></el-icon>
+                <div>
+                  <strong>{{ item.title }}</strong>
+                  <span>{{ item.summary }}</span>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="detail-section">
+            <header class="section-heading">
+              <div><span>判定变量</span><strong>场景置信度</strong></div>
+              <small>{{ detectedSceneCount }} 项触发</small>
+            </header>
+            <div class="scene-list compact-scene-list">
+              <div
+                v-for="item in sortedSceneItems"
+                :key="item.key"
+                :class="['scene-row', { detected: item.detected }]"
+              >
+                <div class="scene-label">
+                  <span>{{ item.label }}</span>
+                  <b>{{ item.detected ? '触发' : '正常' }}</b>
+                </div>
+                <el-progress
+                  :percentage="item.percent"
+                  :stroke-width="7"
+                  :show-text="false"
+                  :color="item.detected ? '#ff6b6b' : '#40c7a7'"
+                />
+                <small>{{ item.percent }}%</small>
+              </div>
+            </div>
+          </section>
+
+          <section class="detail-section log-section">
+            <header class="section-heading">
+              <div><span>处理记录</span><strong>Timeline</strong></div>
+              <small>{{ chainTimeline.length }} 条</small>
+            </header>
+            <div v-if="chainTimeline.length" class="mini-log-stream">
+              <article v-for="item in chainTimeline" :key="item.id || item.key" :class="timelineTone(item)">
+                <span>{{ logTypeLabel(item.log_type) }}</span>
+                <div>
+                  <strong>{{ displayLogTitle(item) }}</strong>
+                  <p v-if="displayLogMessage(item)">{{ displayLogMessage(item) }}</p>
+                </div>
+                <time>{{ formatDetailTime(item.create_time) }}</time>
+              </article>
+            </div>
+            <div v-else class="compact-empty-line">事件创建后会显示条件判断、处置链路、报告生成记录</div>
+          </section>
+
+          <div class="result-actions detail-actions">
+            <el-button :disabled="!result.event_instance_id" type="primary" plain @click="openEventDetail(result.event_instance_id)">查看事件详情</el-button>
+            <el-button :disabled="!eventReportId" type="success" @click="openReport">打开报告</el-button>
           </div>
 
-          <div class="result-meta">
-            <span><el-icon><Files /></el-icon>{{ resultImageUrls.length }} 张初筛采样帧已存 MinIO</span>
-            <span :class="{ ok: result.eca_dispatched }"><el-icon><CircleCheck /></el-icon>{{ result.eca_dispatched ? '已提交 ECA' : 'ECA 未确认' }}</span>
-            <span v-if="result.event_instance_id" class="ok"><el-icon><CircleCheck /></el-icon>4B 视频理解将在事件 {{ result.instance_no }} 中生成 8 帧候选和代表帧</span>
-            <span v-if="eventReportId" class="ok"><el-icon><CircleCheck /></el-icon>分析报告已生成</span>
-          </div>
-          <div v-if="result.event_instance_id" class="result-actions">
-            <el-button type="primary" link @click="openEventDetail(result.event_instance_id)">查看事件详情</el-button>
-            <el-button v-if="eventReportId" type="success" link @click="openReport">打开报告</el-button>
-          </div>
           <el-collapse class="json-collapse">
-            <el-collapse-item title="JSON 结果" name="json">
+            <el-collapse-item title="判定 JSON" name="json">
               <pre>{{ formattedResult }}</pre>
             </el-collapse-item>
           </el-collapse>
@@ -196,7 +246,7 @@
         <div v-else class="result-empty">
           <el-icon><DataAnalysis /></el-icon>
           <strong>等待链路任务</strong>
-          <span>Qwen 初筛、ECA 提交和事件结果将在这里显示</span>
+          <span>画面分析、条件提交和事件结果将在这里显示</span>
         </div>
 
         <div v-if="lastError" class="error-banner">
@@ -215,7 +265,7 @@
         <el-table-column label="触发场景" min-width="150"><template #default="{ row }"><strong class="event-name">{{ rowPrimarySceneLabel(row) }}</strong></template></el-table-column>
         <el-table-column label="摘要" min-width="360" show-overflow-tooltip><template #default="{ row }"><span class="event-summary">{{ row.summary || '暂无摘要' }}</span></template></el-table-column>
         <el-table-column label="风险" width="110"><template #default="{ row }"><el-tag :type="tagForRisk(row.risk_level)" effect="dark">{{ labelForRisk(row.risk_level) }}</el-tag></template></el-table-column>
-        <el-table-column label="初筛帧" width="96"><template #default="{ row }">{{ (row.image_urls || []).length }} 帧</template></el-table-column>
+        <el-table-column label="采样帧" width="96"><template #default="{ row }">{{ (row.image_urls || []).length }} 帧</template></el-table-column>
         <el-table-column label="ECA" width="120"><template #default="{ row }"><span class="eca-cell"><i :class="{ ok: row.eca_dispatched }"></i>{{ row.eca_dispatched ? '已提交' : '未确认' }}</span></template></el-table-column>
         <el-table-column label="时间" width="180"><template #default="{ row }">{{ formatResultTime(row.timestamp) }}</template></el-table-column>
         <el-table-column label="操作" width="92" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="selectHistory(row)">查看</el-button></template></el-table-column>
@@ -229,8 +279,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  CircleCheck, DataAnalysis, Files, Loading,
-  Refresh, VideoCamera, VideoPause, VideoPlay, Warning,
+  CircleCheckFilled, Connection, DataAnalysis, Document, Loading,
+  Promotion, Refresh, VideoCamera, VideoPause, VideoPlay, Warning, WarningFilled,
 } from '@element-plus/icons-vue'
 import { getCameraList, simulateCameraVideoScreening } from '@/api/camera'
 import { getUnifiedSafetyEventDetail } from '@/api/integration'
@@ -264,13 +314,16 @@ const eventDetail = ref(null)
 const history = ref([])
 const lastError = ref('')
 const pollTimer = ref(null)
+const pollStartedAt = ref(0)
+const lastDetailSignature = ref('')
+const stablePollCount = ref(0)
 
 const selectedCameraName = computed(() => {
   const camera = cameras.value.find(item => item.id === cameraId.value)
   return camera?.name || camera?.camera_name || (cameraId.value ? `摄像头 ${cameraId.value}` : '--')
 })
 const mediaStatus = computed(() => {
-  if (screening.value) return '模型分析中'
+  if (screening.value) return '分析中'
   if (simulationActive.value) return '实时采集中'
   if (videoUrl.value) return '视频已就绪'
   return '等待输入'
@@ -298,6 +351,10 @@ const riskClass = computed(() => `risk-${String(result.value?.risk_level || 'LOW
 const resultImageUrls = computed(() => normalizeMediaUrls(result.value?.image_urls || []))
 const detailEvent = computed(() => eventDetail.value?.event || null)
 const eventReportId = computed(() => detailEvent.value?.analysis_report_id || result.value?.analysis_report_id || null)
+const planLog = computed(() => latestTimelineLog(item => matchesLog(item, ['dam-workflow-plan', '智能路由规划', '智能路由已生成'])))
+const executeLog = computed(() => latestTimelineLog(item => matchesLog(item, ['dam-workflow-execute', '模型库工作流执行', '视频理解链路'])))
+const reportLog = computed(() => latestTimelineLog(item => matchesLog(item, ['dam-event-report', '事件报告生成', '事件处置报告'])))
+const actionLog = computed(() => latestTimelineLog(item => matchesLog(item, ['eca-flow-result', 'ECA事件动作', '联动'])))
 const ecaStatusText = computed(() => {
   if (screening.value) return '分析中'
   if (eventReportId.value) return '报告已生成'
@@ -306,21 +363,145 @@ const ecaStatusText = computed(() => {
   return '待触发'
 })
 const chainSteps = computed(() => [
-  { label: '视频输入', value: videoName.value || '已上传', state: videoFile.value ? 'done' : 'pending' },
-  { label: 'Qwen 初筛', value: result.value ? primarySceneLabel.value : '等待', state: result.value ? 'done' : 'pending' },
-  { label: 'ECA 提交', value: result.value?.eca_dispatched ? '已提交' : '未确认', state: result.value?.eca_dispatched ? 'done' : 'pending' },
+  { label: '视频输入', value: videoName.value || '已上传', state: videoFile.value ? 'done' : 'pending', icon: VideoCamera },
+  { label: '画面分析', value: result.value ? primarySceneLabel.value : (screening.value ? '分析中' : '等待'), state: result.value ? 'done' : (screening.value ? 'running' : 'pending'), icon: WarningFilled },
+  { label: '条件提交', value: result.value?.eca_dispatched ? '已提交' : '未确认', state: result.value?.eca_dispatched ? 'done' : 'pending', icon: Promotion },
   {
-    label: '4B 视频理解',
-    value: detailEvent.value?.status === 'COMPLETED' ? '工作流已完成' : (result.value?.event_instance_id ? '工作流处理中' : (result.value?.eca_dispatched ? '等待事件回写' : '等待触发')),
-    state: detailEvent.value?.status === 'COMPLETED' ? 'done' : (result.value?.event_instance_id ? 'active' : 'pending'),
+    label: '联动处置',
+    value: stepText(executeLog.value, result.value?.event_instance_id ? '等待执行' : (result.value?.eca_dispatched ? '等待事件回写' : '等待触发')),
+    state: stepState(executeLog.value, result.value?.event_instance_id ? 'active' : 'pending'),
+    icon: Connection,
   },
   {
-    label: '报告生成',
-    value: eventReportId.value ? '已生成' : (result.value?.event_instance_id ? '生成中' : '等待事件'),
-    state: eventReportId.value ? 'done' : (result.value?.event_instance_id ? 'active' : 'pending'),
+    label: '报告归档',
+    value: eventReportId.value ? '已生成' : stepText(reportLog.value, result.value?.event_instance_id ? '等待报告生成' : '等待事件'),
+    state: eventReportId.value ? 'done' : stepState(reportLog.value, result.value?.event_instance_id ? 'active' : 'pending'),
+    icon: CircleCheckFilled,
+  },
+])
+const chainTimeline = computed(() => eventDetail.value?.timeline || [])
+const chainDetailFields = computed(() => [
+  { key: 'instance', label: '事件编号', value: result.value?.instance_no || '--' },
+  { key: 'event', label: '事件名称', value: result.value?.event_name || detailEvent.value?.event_name || primarySceneLabel.value },
+  { key: 'source', label: '摄像头', value: selectedCameraName.value },
+  { key: 'risk', label: '风险等级', value: riskLabel.value },
+  { key: 'status', label: '处置状态', value: statusLabel(detailEvent.value?.status || result.value?.event_status) },
+  { key: 'report', label: '报告状态', value: eventReportId.value ? '已生成' : (result.value?.event_instance_id ? '生成中' : '未触发') },
+])
+const routeModules = computed(() => [
+  {
+    key: 'screening',
+    title: '画面分析',
+    summary: `${FRAME_COUNT} 帧采样，${primarySceneLabel.value}`,
+    state: result.value ? 'done' : 'pending',
+    icon: WarningFilled,
+  },
+  {
+    key: 'eca',
+    title: '条件判断',
+    summary: displayLogMessage(actionLog.value) || (result.value?.eca_dispatched ? '已提交事件入口' : '等待分析结果'),
+    state: result.value?.eca_dispatched ? stepState(actionLog.value, 'done') : 'pending',
+    icon: Promotion,
+  },
+  {
+    key: 'planner',
+    title: '处置方案生成',
+    summary: displayLogMessage(planLog.value) || (result.value?.event_instance_id ? '根据事件生成处置方案' : '触发后启动'),
+    state: stepState(planLog.value, result.value?.event_instance_id ? 'running' : 'pending'),
+    icon: DataAnalysis,
+  },
+  {
+    key: 'workflow',
+    title: '处置链路执行',
+    summary: displayLogMessage(executeLog.value) || (result.value?.event_instance_id ? '正在提取证据并执行处置链路' : '等待处置方案'),
+    state: stepState(executeLog.value, result.value?.event_instance_id ? 'running' : 'pending'),
+    icon: Connection,
+  },
+  {
+    key: 'report',
+    title: '报告归档',
+    summary: eventReportId.value ? `报告 ID ${eventReportId.value}` : (displayLogMessage(reportLog.value) || '等待报告生成'),
+    state: eventReportId.value ? 'done' : stepState(reportLog.value, result.value?.event_instance_id ? 'pending' : 'pending'),
+    icon: Document,
   },
 ])
 const formattedResult = computed(() => JSON.stringify(result.value, null, 2))
+
+function latestTimelineLog(predicate) {
+  const items = Array.isArray(chainTimeline.value) ? chainTimeline.value : []
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (predicate(items[index])) return items[index]
+  }
+  return null
+}
+
+function matchesLog(item, keywords) {
+  const text = [
+    item?.action_key,
+    item?.action_id,
+    item?.log_type,
+    item?.title,
+    item?.message,
+  ].filter(Boolean).join(' ').toLowerCase()
+  return keywords.some(keyword => text.includes(String(keyword).toLowerCase()))
+}
+
+function logStatus(item) {
+  const status = String(item?.status || '').toUpperCase()
+  if (['SUCCESS', 'COMPLETED', 'DONE'].includes(status)) return 'DONE'
+  if (['FAILED', 'ERROR'].includes(status)) return 'FAILED'
+  if (['PROCESSING', 'RUNNING', 'PENDING'].includes(status)) return 'RUNNING'
+  return ''
+}
+
+function stepState(item, fallback = 'pending') {
+  const status = logStatus(item)
+  if (status === 'DONE') return 'done'
+  if (status === 'FAILED') return 'failed'
+  if (status === 'RUNNING') return 'running'
+  return fallback
+}
+
+function stepText(item, fallback) {
+  const status = logStatus(item)
+  if (status === 'DONE') return '已完成'
+  if (status === 'FAILED') return '执行异常'
+  if (status === 'RUNNING') return '执行中'
+  return fallback
+}
+
+function displayLogTitle(item) {
+  const title = item?.title || item?.message || ''
+  return cleanProcessText(title)
+}
+
+function displayLogMessage(item) {
+  if (!item) return ''
+  const message = item.message || ''
+  if (!message || message === item.title) return ''
+  return cleanProcessText(message)
+}
+
+function cleanProcessText(value) {
+  let text = String(value || '').trim()
+  if (!text) return ''
+  const replacements = [
+    [/Qwen3\.6-35B-A3B 云端增强分析/g, '云端复核'],
+    [/Qwen[^\s，。；、]*/gi, '画面分析'],
+    [/4B\s*视频理解工作流/g, '视频理解链路'],
+    [/4B\s*视频理解/g, '视频理解'],
+    [/模型库工作流/g, '处置链路'],
+    [/模型库/g, '处置服务'],
+    [/智能路由/g, '处置方案'],
+    [/\bDAG\b/g, '流程'],
+    [/ECA/g, '条件判断'],
+    [/初筛/g, '分析'],
+  ]
+  replacements.forEach(([pattern, replacement]) => {
+    text = text.replace(pattern, replacement)
+  })
+  return text
+}
 
 async function loadCameras() {
   cameraLoading.value = true
@@ -415,9 +596,9 @@ async function submitVideoFile() {
       await refreshEventDetail(normalizedResult.event_instance_id)
       startEventPolling(normalizedResult.event_instance_id)
     }
-    ElMessage.success('Qwen 视频初筛完成，结果已提交 ECA')
+    ElMessage.success('视频分析完成，结果已提交条件判断')
   } catch (error) {
-    lastError.value = error?.response?.data?.detail || error?.message || '视频初筛请求失败'
+    lastError.value = error?.response?.data?.detail || error?.message || '视频分析请求失败'
   } finally {
     screening.value = false
     stopSimulation(false)
@@ -436,7 +617,8 @@ async function refreshEventDetail(id = result.value?.event_instance_id) {
       event_state: event.state,
       analysis_report_id: event.analysis_report_id,
     }
-    if (event.analysis_report_id) {
+    updatePollingStability(response.data)
+    if (shouldStopEventPolling(event)) {
       stopEventPolling()
     }
   } catch (error) {
@@ -446,12 +628,48 @@ async function refreshEventDetail(id = result.value?.event_instance_id) {
 
 function startEventPolling(id) {
   stopEventPolling()
-  pollTimer.value = window.setInterval(() => refreshEventDetail(id), 3000)
+  pollStartedAt.value = Date.now()
+  lastDetailSignature.value = ''
+  stablePollCount.value = 0
+  refreshEventDetail(id)
+  pollTimer.value = window.setInterval(() => refreshEventDetail(id), 2000)
 }
 
 function stopEventPolling() {
   if (pollTimer.value) window.clearInterval(pollTimer.value)
   pollTimer.value = null
+}
+
+function updatePollingStability(data) {
+  const timeline = Array.isArray(data?.timeline) ? data.timeline : []
+  const lastLog = timeline[timeline.length - 1] || {}
+  const event = data?.event || {}
+  const signature = [
+    event.status,
+    event.state,
+    event.analysis_report_id,
+    timeline.length,
+    lastLog.id,
+    lastLog.status,
+    lastLog.message,
+  ].join('|')
+  if (signature === lastDetailSignature.value) {
+    stablePollCount.value += 1
+  } else {
+    stablePollCount.value = 0
+    lastDetailSignature.value = signature
+  }
+}
+
+function shouldStopEventPolling(event) {
+  const elapsed = Date.now() - pollStartedAt.value
+  if (elapsed > 15 * 60 * 1000) return true
+  const status = String(event?.status || '').toUpperCase()
+  const state = String(event?.state || '').toUpperCase()
+  const reportStatus = logStatus(reportLog.value)
+  const terminalEvent = ['COMPLETED', 'FAILED', 'FALSE_ALARM'].includes(status) || state === 'RESOLVED'
+  const terminalReport = Boolean(event?.analysis_report_id) || ['DONE', 'FAILED'].includes(reportStatus)
+  return terminalEvent && terminalReport && stablePollCount.value >= 3
 }
 
 function normalizeMediaUrls(urls) {
@@ -524,8 +742,35 @@ function openReport() {
   window.open(`/api/onlyoffice/document/dam_event_report_${instanceNo}`, '_blank')
 }
 
+function statusLabel(value) {
+  return ({ PENDING: '待处理', PROCESSING: '处理中', COMPLETED: '已完成', FAILED: '失败', FALSE_ALARM: '误报' })[value] || value || '--'
+}
+
+function logTypeLabel(value) {
+  return ({
+    TRIGGER: '触发',
+    DAM_WORKFLOW: '工作流',
+    ACTION: '动作',
+    REPORT: '报告',
+    RESOLVE: '闭环',
+    MANUAL: '人工',
+  })[value] || value || '记录'
+}
+
+function timelineTone(item) {
+  const status = String(item?.status || '').toUpperCase()
+  if (status === 'FAILED') return 'failed'
+  if (status === 'SUCCESS' || status === 'COMPLETED') return 'done'
+  return 'running'
+}
+
 function labelForRisk(level) { return ({ HIGH: '高风险', MEDIUM: '中风险', LOW: '低风险' })[level] || '低风险' }
 function tagForRisk(level) { return ({ HIGH: 'danger', MEDIUM: 'warning', LOW: 'success' })[level] || 'info' }
+function formatDetailTime(value) {
+  if (!value) return '--'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '--' : date.toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
 function formatResultTime(timestamp) {
   if (!timestamp) return '--'
   const date = new Date(Number(timestamp) * 1000)
@@ -887,6 +1132,246 @@ h3 {
 .result-content {
   padding: 16px;
 }
+.detail-result {
+  display: grid;
+  gap: 14px;
+}
+.detail-flow {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.detail-flow li {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(127,168,198,.18);
+  border-radius: 8px;
+  background: #071725;
+}
+.flow-dot {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  margin-bottom: 8px;
+  place-items: center;
+  border-radius: 50%;
+  color: #7f9ab0;
+  background: rgba(127,154,176,.12);
+}
+.detail-flow li.done .flow-dot {
+  color: #072016;
+  background: var(--green);
+}
+.detail-flow li.active .flow-dot,
+.detail-flow li.running .flow-dot {
+  color: #031720;
+  background: var(--cyan);
+  box-shadow: 0 0 0 5px rgba(79,208,232,.1);
+}
+.detail-flow li.failed .flow-dot {
+  color: #24070b;
+  background: var(--red);
+}
+.detail-flow strong,
+.detail-flow small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.detail-flow strong {
+  color: #eaf5fc;
+  font-size: 13px;
+}
+.detail-flow small {
+  margin-top: 4px;
+  color: #8ba7ba;
+  font-size: 11px;
+}
+.detail-summary-card {
+  padding: 14px;
+  border: 1px solid rgba(127,168,198,.22);
+  border-left: 4px solid var(--green);
+  border-radius: 8px;
+  background: #091a29;
+}
+.detail-summary-card.risk-high {
+  border-left-color: var(--red);
+  background: rgba(112,31,42,.22);
+}
+.detail-summary-card.risk-medium {
+  border-left-color: var(--amber);
+  background: rgba(116,77,29,.18);
+}
+.detail-summary-card header,
+.section-heading,
+.detail-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.detail-summary-card span {
+  color: #7c98ad;
+  font-size: 11px;
+}
+.detail-summary-card h3 {
+  margin-top: 5px;
+  font-size: 20px;
+}
+.detail-summary-card p {
+  margin: 10px 0 0;
+  color: #d8e8f2;
+  line-height: 1.65;
+}
+.detail-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+.detail-fields div {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(127,168,198,.18);
+  border-radius: 6px;
+  background: #0a1928;
+}
+.detail-fields dt {
+  color: #7895aa;
+  font-size: 11px;
+}
+.detail-fields dd {
+  margin: 5px 0 0;
+  overflow: hidden;
+  color: #eaf5fc;
+  font-size: 14px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.detail-section {
+  padding: 12px;
+  border: 1px solid rgba(127,168,198,.18);
+  border-radius: 8px;
+  background: #081827;
+}
+.section-heading {
+  margin-bottom: 10px;
+}
+.section-heading span,
+.section-heading small {
+  color: #7895aa;
+  font-size: 11px;
+}
+.section-heading strong {
+  display: block;
+  margin-top: 3px;
+  color: #eaf5fc;
+  font-size: 15px;
+}
+.model-route-list {
+  display: grid;
+  gap: 8px;
+}
+.model-route-list article {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid rgba(127,168,198,.14);
+  border-radius: 6px;
+  background: #071725;
+}
+.model-route-list .el-icon {
+  color: #7f9ab0;
+  font-size: 20px;
+}
+.model-route-list article.done .el-icon {
+  color: var(--green);
+}
+.model-route-list article.running .el-icon {
+  color: var(--cyan);
+}
+.model-route-list article.failed .el-icon {
+  color: var(--red);
+}
+.model-route-list strong,
+.model-route-list span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-route-list strong {
+  color: #e8f5fd;
+  font-size: 13px;
+}
+.model-route-list span {
+  margin-top: 4px;
+  color: #8ba7ba;
+  font-size: 12px;
+}
+.compact-scene-list {
+  margin-top: 0;
+}
+.mini-log-stream {
+  display: grid;
+  gap: 8px;
+  max-height: 240px;
+  overflow: auto;
+}
+.mini-log-stream article {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr) 92px;
+  gap: 10px;
+  padding: 10px;
+  border-left: 3px solid #5d7182;
+  border-radius: 6px;
+  background: #071725;
+}
+.mini-log-stream article.done {
+  border-left-color: var(--green);
+}
+.mini-log-stream article.failed {
+  border-left-color: var(--red);
+}
+.mini-log-stream article > span,
+.mini-log-stream time {
+  color: #7895aa;
+  font-size: 11px;
+}
+.mini-log-stream strong {
+  display: block;
+  overflow: hidden;
+  color: #eaf5fc;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mini-log-stream p {
+  margin: 4px 0 0;
+  overflow: hidden;
+  color: #9fb7c8;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.compact-empty-line {
+  padding: 16px;
+  border-radius: 6px;
+  color: #8ba7ba;
+  text-align: center;
+  background: #071725;
+  font-size: 12px;
+}
+.detail-actions {
+  justify-content: flex-end;
+}
 .decision-card {
   padding: 14px;
   border: 1px solid rgba(127,168,198,.22);
@@ -1153,6 +1638,9 @@ pre {
   .chain-steps {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .detail-flow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .workspace {
     grid-template-columns: 1fr;
   }
@@ -1182,7 +1670,14 @@ pre {
     min-width: 190px;
   }
   .status-grid,
+  .detail-fields,
   .metric-row {
+    grid-template-columns: 1fr;
+  }
+  .detail-flow {
+    grid-template-columns: 1fr;
+  }
+  .mini-log-stream article {
     grid-template-columns: 1fr;
   }
   .video-stage {

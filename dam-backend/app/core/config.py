@@ -186,6 +186,15 @@ class Settings:
     MINIO_SECURE: bool = _get_env("MINIO_SECURE", "false").lower() == "true"
     DOCUMENT_BUCKET: str = _get_env("DOCUMENT_BUCKET", "documents")
 
+    # ── Qdrant 向量库（知识库检索）────────────────────────────
+    QDRANT_ENABLED: bool = _get_env("QDRANT_ENABLED", "true").lower() == "true"
+    QDRANT_URL: str = _get_env("QDRANT_URL", "http://127.0.0.1:6333")
+    QDRANT_TIMEOUT: float = float(_get_env("QDRANT_TIMEOUT", "5"))
+    QDRANT_KNOWLEDGE_COLLECTION: str = _get_env(
+        "QDRANT_KNOWLEDGE_COLLECTION",
+        "dam_knowledge_chunks",
+    )
+
     # ── MinIO 对象存储（A100 云端）───────────────────────────
     A100_MINIO_ENDPOINT: str = _get_env("A100_MINIO_ENDPOINT", "10.196.85.11:9469")
     A100_MINIO_ACCESS_KEY: str = _get_env("A100_MINIO_ACCESS_KEY", "minioadmin")

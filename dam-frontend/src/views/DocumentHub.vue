@@ -121,7 +121,7 @@
             />
           </div>
           <div class="row-index">序号</div>
-          <div class="row-name">原始文件名</div>
+          <div class="row-name">文档 / 关联编号</div>
           <div class="row-type">文件类型</div>
           <div class="row-size">文件大小</div>
           <div class="row-date">创建时间</div>
@@ -144,7 +144,10 @@
             <el-icon class="doc-icon" :class="getIconClass(doc.type)">
               <Document />
             </el-icon>
-            <span class="doc-name" :title="doc.name">{{ doc.name }}</span>
+            <span class="doc-title-stack" :title="documentTitle(doc)">
+              <strong class="doc-name">{{ documentTitle(doc) }}</strong>
+              <small v-if="documentSubTitle(doc)">{{ documentSubTitle(doc) }}</small>
+            </span>
           </div>
           <div class="row-type">
             <span class="type-badge" :class="getTypeBadgeClass(doc.type)">
@@ -318,7 +321,7 @@ const filteredDocuments = computed(() => {
 
   if (searchQuery.value) {
     const query = searchQuery.value.toLowerCase()
-    result = result.filter((doc) => doc.name.toLowerCase().includes(query))
+    result = result.filter((doc) => doc.searchText.includes(query))
   }
 
   if (selectedCategory.value) {
@@ -430,6 +433,55 @@ const getTypeBadgeClass = (type) => {
 
 const getTypeLabel = (extension) => String(extension || '').toUpperCase() || 'FILE'
 
+const isEventReportDocument = (doc) => (
+  doc?.businessType === 'event' ||
+  String(doc?.document_id || '').startsWith('dam_event_report_')
+)
+
+const eventInstanceNoFromDocumentId = (documentId) => {
+  const text = String(documentId || '')
+  return text.startsWith('dam_event_report_') ? text.slice('dam_event_report_'.length) : ''
+}
+
+const dateToken = (value) => {
+  if (!value) return ''
+  const direct = String(value).match(/20\d{6}/)
+  if (direct) return direct[0]
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}${month}${day}`
+}
+
+const instanceSequence = (value) => {
+  const matched = String(value || '').match(/_(\d{1,4})$/)
+  return matched?.[1] || ''
+}
+
+const formatEventDocumentId = (doc) => {
+  const instanceNo = doc?.event_instance_no || eventInstanceNoFromDocumentId(doc?.document_id)
+  if (!instanceNo) return ''
+  const date = dateToken(doc?.event_started_at) || dateToken(instanceNo) || dateToken(doc?.created_at)
+  if (!date) return instanceNo
+  const sequence = instanceSequence(instanceNo) || doc?.event_instance_id
+  return `${date}_${String(sequence || 1).padStart(2, '0')}`
+}
+
+const documentTitle = (doc) => {
+  if (isEventReportDocument(doc)) return '事件处置报告'
+  return doc?.name || '未命名文档'
+}
+
+const documentSubTitle = (doc) => {
+  if (isEventReportDocument(doc)) {
+    const displayId = formatEventDocumentId(doc)
+    return displayId ? `关联事件 ${displayId}` : ''
+  }
+  return doc?.document_id || ''
+}
+
 const formatSize = (bytes) => {
   if (!bytes) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB']
@@ -505,16 +557,27 @@ const getDocumentMonth = (value) => {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
 }
 
-const normalizeDocument = (doc) => ({
-  ...doc,
-  id: doc.document_id,
-  name: doc.title || doc.document_id || '未命名文档',
-  type: getDisplayType(doc.file_type),
-  category: getCategory(doc.file_type),
-  businessType: detectBusinessType(doc.title || doc.document_id),
-  size: doc.file_size,
-  updatedAt: doc.updated_at
-})
+const normalizeDocument = (doc) => {
+  const normalized = {
+    ...doc,
+    id: doc.document_id,
+    name: doc.title || doc.document_id || '未命名文档',
+    type: getDisplayType(doc.file_type),
+    category: getCategory(doc.file_type),
+    businessType: detectBusinessType(doc.title || doc.document_id),
+    size: doc.file_size,
+    updatedAt: doc.updated_at
+  }
+  normalized.displayTitle = documentTitle(normalized)
+  normalized.displaySubTitle = documentSubTitle(normalized)
+  normalized.searchText = [
+    normalized.name,
+    normalized.document_id,
+    normalized.displayTitle,
+    normalized.displaySubTitle
+  ].filter(Boolean).join(' ').toLowerCase()
+  return normalized
+}
 
 const loadDocuments = async () => {
   try {
@@ -644,7 +707,7 @@ const previewDoc = async (doc) => {
     })
 
     if (response.data.success) {
-      previewTitle.value = doc.name
+      previewTitle.value = documentTitle(doc)
       previewConfig.value = response.data.data
       previewDialogVisible.value = true
     } else {
@@ -665,7 +728,7 @@ const editDoc = (doc) => {
     name: 'DocumentEditor',
     params: { documentId: doc.document_id },
     query: {
-      title: doc.name,
+      title: documentTitle(doc),
       type: doc.file_type
     }
   })
@@ -695,7 +758,7 @@ const deleteDoc = async (doc) => {
   let previousSelection = null
   try {
     await ElMessageBox.confirm(
-      `确定要删除“${doc.name}”吗？此操作不可恢复。`,
+      `确定要删除“${documentTitle(doc)}”吗？此操作不可恢复。`,
       '确认删除',
       {
         confirmButtonText: '删除',
@@ -1077,6 +1140,24 @@ onActivated(() => {
   font-size: 15px;
   font-weight: 700;
   color: #f3f8fd;
+}
+
+.doc-title-stack {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.doc-title-stack small {
+  overflow: hidden;
+  color: #8fb0c7;
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

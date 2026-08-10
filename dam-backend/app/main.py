@@ -20,6 +20,7 @@ from app.api import (
     vision_detect,
     broadcast,
     integration,
+    knowledge,
 )
 from app.core.config import settings
 from app.core.database import SessionLocal
@@ -206,6 +207,7 @@ app.include_router(broadcast.router, prefix="/api/broadcast", tags=["广播联�
 app.include_router(integration.router, prefix="/api/v1/integration", tags=["融合业务配置与安全事件"])
 app.include_router(local_inference.router, prefix="/api/v1/local-inference", tags=["边缘侧本地大模型推理"])
 app.include_router(model_library.router, prefix="/api/v1/model-library", tags=["模型库"])
+app.include_router(knowledge.router, prefix="/api/v1/knowledge", tags=["知识库"])
 app.include_router(miniprogram.router, prefix="/api/miniprogram/v1", tags=["微信小程序V1"])
 app.include_router(onlyoffice.router)
 app.include_router(patrol_report.router)

@@ -23,6 +23,7 @@ import numpy as np
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from loguru import logger
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field, model_validator
 
@@ -423,7 +424,7 @@ async def _wait_latest_camera_event(
     camera_id: str,
     since: dt.datetime,
     *,
-    timeout_seconds: float = 2.5,
+    timeout_seconds: float = 10.0,
 ) -> Optional[dict]:
     if not str(camera_id).isdigit():
         return None
@@ -435,17 +436,22 @@ async def _wait_latest_camera_event(
     ).first()
     if not source:
         return None
+    source_id = source.id
 
     while time.time() < deadline:
+        db.rollback()
         db.expire_all()
         row = (
             db.query(SafetyEventInstance, EventLibrary)
             .join(EventLibrary, EventLibrary.id == SafetyEventInstance.current_event_id)
             .filter(
-                SafetyEventInstance.data_source_id == source.id,
+                SafetyEventInstance.data_source_id == source_id,
                 SafetyEventInstance.source_type == "camera",
                 SafetyEventInstance.source_id == int(camera_id),
-                SafetyEventInstance.started_at >= since,
+                or_(
+                    SafetyEventInstance.started_at >= since,
+                    SafetyEventInstance.last_observed_at >= since,
+                ),
             )
             .order_by(SafetyEventInstance.id.desc())
             .first()
