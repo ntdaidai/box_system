@@ -3,7 +3,11 @@
 from typing import Dict, List, Optional
 
 from src.dam_workflow.state import DamInput
-from src.dam_workflow.tools.keyword_extractor import extract_event_type, get_event_group
+from src.dam_workflow.tools.keyword_extractor import (
+    extract_event_type,
+    get_event_group,
+    get_supported_event_types,
+)
 
 
 def parse_dam_input(
@@ -40,9 +44,8 @@ def parse_dam_input(
     event_type = extract_event_type(user_prompt, sensor_data)
     if not event_type:
         raise ValueError(
-            "无法从 prompt 中识别事件类型，支持的事件类型："
-            "泥石流、滑坡、洪水、地震、人员入侵、滩涂游玩、夜间电鱼捕鱼、"
-            "台风、暴雨、高温、低温"
+            "无法从 prompt 或传感器上下文中识别事件类型，支持的事件类型："
+            + "、".join(get_supported_event_types())
         )
 
     return {

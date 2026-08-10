@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """关键词提取（纯规则，无 LLM）"""
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 # 事件类型关键词映射
 EVENT_KEYWORDS = {
@@ -13,9 +13,21 @@ EVENT_KEYWORDS = {
     "滩涂游玩": ["PERSON_WATERFRONT", "PERSON_WADING", "滩涂游玩", "人员亲水", "人员涉水", "涉水", "亲水", "游玩", "wading", "waterfront"],
     "夜间电鱼捕鱼": ["BOAT_INTRUSION", "BOAT_STAY", "BOAT_ILLEGAL_FISHING", "电鱼", "捕鱼", "偷捕", "非法捕鱼", "船只闯入", "船只停留", "船只偷捕", "fishing"],
     "台风": ["台风", "typhoon"],
+    "飓风": ["飓风", "WIND_LEVEL_12", "hurricane"],
+    "暴风": ["暴风", "WIND_LEVEL_11", "storm wind"],
+    "狂风": ["狂风", "WIND_LEVEL_10", "whole gale"],
+    "烈风": ["烈风", "WIND_LEVEL_9", "strong gale"],
+    "大风": ["大风", "强风", "WIND_LEVEL_6", "WIND_LEVEL_7", "WIND_LEVEL_8", "风速", "风力", "wind_speed", "wind_level", "gale"],
     "暴雨": ["暴雨", "强降雨", "rainstorm"],
+    "极高温": ["极高温", "TEMP_EXTREME_HIGH", "extreme_high_temperature"],
     "高温": ["高温", "heat", "high_temperature"],
+    "极低温": ["极低温", "TEMP_EXTREME_LOW", "extreme_low_temperature"],
     "低温": ["低温", "寒潮", "low_temperature"],
+    "冰冻": ["冰冻", "冻结", "FREEZE_RISK", "freeze"],
+    "极高湿": ["极高湿", "HUMIDITY_VERY_HIGH", "very_high_humidity"],
+    "高湿": ["高湿", "HUMIDITY_HIGH", "high_humidity"],
+    "极低湿": ["极低湿", "HUMIDITY_VERY_LOW", "very_low_humidity"],
+    "低湿": ["低湿", "HUMIDITY_LOW", "low_humidity"],
 }
 
 EVENT_GROUPS = {
@@ -27,9 +39,21 @@ EVENT_GROUPS = {
     "滩涂游玩": "person_behavior",
     "夜间电鱼捕鱼": "person_behavior",
     "台风": "extreme_weather",
+    "飓风": "extreme_weather",
+    "暴风": "extreme_weather",
+    "狂风": "extreme_weather",
+    "烈风": "extreme_weather",
+    "大风": "extreme_weather",
     "暴雨": "extreme_weather",
+    "极高温": "extreme_weather",
     "高温": "extreme_weather",
+    "极低温": "extreme_weather",
     "低温": "extreme_weather",
+    "冰冻": "extreme_weather",
+    "极高湿": "extreme_weather",
+    "高湿": "extreme_weather",
+    "极低湿": "extreme_weather",
+    "低湿": "extreme_weather",
 }
 
 EVENT_CODE_TYPES = {
@@ -47,6 +71,11 @@ EVENT_CODE_TYPES = {
 
 # 支持的事件类型列表
 SUPPORTED_EVENT_TYPES = list(EVENT_KEYWORDS.keys())
+
+
+def get_supported_event_types() -> List[str]:
+    """获取支持的事件类型列表。"""
+    return SUPPORTED_EVENT_TYPES.copy()
 
 
 def _flatten_context(value: Any) -> str:
@@ -95,6 +124,31 @@ def extract_event_type(user_prompt: str, sensor_data: Optional[Dict[str, Any]] =
         for keyword in keywords:
             if keyword.lower() in text_lower:
                 return event_type
+
+    return _infer_weather_type_from_sensor_data(sensor_data, text_lower)
+
+
+def _infer_weather_type_from_sensor_data(sensor_data: Dict[str, Any], text_lower: str) -> Optional[str]:
+    """基于传感器字段做兜底归类，让新事件名也能进入智能路由。"""
+    if not sensor_data:
+        return None
+
+    keys = {str(key).lower() for key in sensor_data.keys()}
+    if {"wind_speed_ms", "wind_speed_kmh", "wind_level"} & keys:
+        return "飓风" if "飓风" in text_lower else "大风"
+
+    if {"rainfall", "rainfall_mm", "rain_intensity", "rain_rate"} & keys:
+        return "暴雨"
+
+    if "temperature" in keys:
+        if any(token in text_lower for token in ("极低温", "低温", "寒潮", "冰冻", "freeze", "low_temperature")):
+            return "极低温" if "极低温" in text_lower else "低温"
+        return "极高温" if "极高温" in text_lower else "高温"
+
+    if "humidity" in keys:
+        if any(token in text_lower for token in ("低湿", "dry", "low_humidity", "very_low_humidity")):
+            return "极低湿" if "极低湿" in text_lower else "低湿"
+        return "极高湿" if "极高湿" in text_lower else "高湿"
 
     return None
 

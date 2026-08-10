@@ -1,290 +1,318 @@
 <template>
-  <div class="system-monitor-page">
-    <header class="page-head">
+  <div class="runtime-monitor-page">
+    <header class="runtime-head">
       <div>
-        <p>系统监测</p>
-        <h2>关键设备与运行链路</h2>
+        <p>感知监测 / 系统监测</p>
+        <h2>System Runtime Digital Twin</h2>
       </div>
-      <div class="head-actions">
-        <span>自动刷新 · {{ currentTimeText }}</span>
-        <el-button :icon="Refresh" :loading="loading" class="refresh-btn" @click="loadAll">刷新</el-button>
+      <div class="runtime-actions">
+        <span>自动刷新 {{ currentTimeText }}</span>
+        <el-button :icon="Refresh" :loading="loading" class="refresh-btn" @click="loadAll">
+          刷新
+        </el-button>
       </div>
     </header>
 
-    <main class="system-grid">
-      <section class="panel health-panel">
-        <header class="panel-head">
+    <main class="runtime-shell">
+      <section class="topology-stage" aria-label="系统实时运行拓扑">
+        <div class="stage-toolbar">
           <div>
-            <span>系统健康摘要</span>
-            <h3>3 秒内看懂系统是否正常</h3>
+            <span>Runtime Topology</span>
+            <strong>{{ topologyHeadline }}</strong>
           </div>
-          <div class="panel-meta">{{ issueCounts.total }} 项待处理</div>
-        </header>
-
-        <div class="health-layout">
-          <div class="health-core">
-            <div class="score-block">
-              <div class="score-value" :class="healthTone">{{ healthScore }}</div>
-              <div class="score-copy">
-                <div class="score-label">{{ healthLabel }}</div>
-                <div class="score-issue">{{ primaryIssue.title }}</div>
-                <p class="score-impact">{{ primaryIssue.impact }}</p>
-              </div>
-            </div>
-
-            <div class="health-meta">
-              <div class="meta-box">
-                <span>异常</span>
-                <strong>{{ issueCounts.total }}</strong>
-              </div>
-              <div class="meta-box">
-                <span>严重</span>
-                <strong>{{ issueCounts.danger }}</strong>
-              </div>
-              <div class="meta-box">
-                <span>AI 服务</span>
-                <strong>{{ aiModelLabel(systemInfo.ai_model) }}</strong>
-              </div>
-            </div>
-          </div>
-
-          <div class="health-side">
-            <div class="side-block primary">
-              <span>当前最严重问题</span>
-              <strong>{{ primaryIssue.current }}</strong>
-              <small>{{ primaryIssue.action }}</small>
-            </div>
-
-            <div class="side-grid">
-              <div>
-                <span>采集器</span>
-                <strong>{{ collectorRunning ? '运行中' : '待确认' }}</strong>
-              </div>
-              <div>
-                <span>资源压力</span>
-                <strong>{{ resourceCriticalCount }} 项临界</strong>
-              </div>
-            </div>
-
-            <div class="side-block">
-              <span>建议优先处理</span>
-              <strong>{{ firstAction.title }}</strong>
-              <small>{{ firstAction.action }}</small>
-            </div>
+          <div class="score-chip" :class="healthTone">
+            <span>System Score</span>
+            <strong>{{ healthScore }} / 100</strong>
           </div>
         </div>
-      </section>
 
-      <section class="panel pipeline-panel">
-        <header class="panel-head">
-          <div>
-            <span>运行链路</span>
-            <h3>感知采集 → 边缘推理 → 云端协同 → 事件处理</h3>
-          </div>
-          <div class="panel-meta">{{ pipelineOkCount }}/4 正常</div>
-        </header>
-
-        <div class="pipeline-rail">
-          <article
-            v-for="(step, index) in runtimeSteps"
-            :key="step.title"
-            class="pipeline-step"
-            :class="step.tone"
+        <div class="topology-canvas">
+          <svg
+            class="runtime-svg"
+            viewBox="0 0 1120 640"
+            preserveAspectRatio="xMidYMid meet"
+            role="img"
+            aria-label="系统运行拓扑"
           >
-            <div class="step-index">{{ String(index + 1).padStart(2, '0') }}</div>
-            <div class="step-icon">
-              <el-icon><component :is="step.icon" /></el-icon>
+            <defs>
+              <marker
+                id="arrow-ok"
+                markerWidth="8"
+                markerHeight="8"
+                refX="7"
+                refY="4"
+                orient="auto"
+                markerUnits="strokeWidth"
+              >
+                <path d="M0,0 L8,4 L0,8 Z" fill="#63d7c1" />
+              </marker>
+              <marker
+                id="arrow-warn"
+                markerWidth="8"
+                markerHeight="8"
+                refX="7"
+                refY="4"
+                orient="auto"
+                markerUnits="strokeWidth"
+              >
+                <path d="M0,0 L8,4 L0,8 Z" fill="#dfb863" />
+              </marker>
+              <marker
+                id="arrow-danger"
+                markerWidth="8"
+                markerHeight="8"
+                refX="7"
+                refY="4"
+                orient="auto"
+                markerUnits="strokeWidth"
+              >
+                <path d="M0,0 L8,4 L0,8 Z" fill="#ef7e8a" />
+              </marker>
+              <marker
+                id="arrow-neutral"
+                markerWidth="8"
+                markerHeight="8"
+                refX="7"
+                refY="4"
+                orient="auto"
+                markerUnits="strokeWidth"
+              >
+                <path d="M0,0 L8,4 L0,8 Z" fill="#6f8292" />
+              </marker>
+              <filter id="node-glow" x="-35%" y="-35%" width="170%" height="170%">
+                <feGaussianBlur stdDeviation="4" result="blur" />
+                <feColorMatrix
+                  in="blur"
+                  type="matrix"
+                  values="0 0 0 0 0.21 0 0 0 0 0.78 0 0 0 0 0.86 0 0 0 0.36 0"
+                />
+                <feMerge>
+                  <feMergeNode />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+            </defs>
+
+            <g class="zones">
+              <rect
+                v-for="zone in zones"
+                :key="zone.key"
+                :x="zone.x"
+                :y="zone.y"
+                :width="zone.width"
+                :height="zone.height"
+                rx="26"
+                class="zone-band"
+              />
+              <text
+                v-for="zone in zones"
+                :key="`${zone.key}-label`"
+                :x="zone.x + 18"
+                :y="zone.y + 28"
+                class="zone-label"
+              >
+                {{ zone.label }}
+              </text>
+            </g>
+
+            <g class="edges">
+              <g
+                v-for="edge in topologyEdges"
+                :key="edge.id"
+                class="edge-group"
+                :class="[edge.tone, { muted: edge.blocked, highlighted: highlightedEdgeIds.includes(edge.id) }]"
+              >
+                <path
+                  :id="`edge-path-${edge.id}`"
+                  :d="edge.path"
+                  class="edge-path"
+                  :marker-end="`url(#arrow-${edgeMarkerTone(edge.tone)})`"
+                />
+                <path :d="edge.path" class="edge-hit" />
+                <circle v-if="edge.active" r="4.5" class="flow-dot">
+                  <animateMotion :dur="edge.duration" repeatCount="indefinite" rotate="auto">
+                    <mpath :href="`#edge-path-${edge.id}`" />
+                  </animateMotion>
+                </circle>
+                <circle v-if="edge.active && edge.secondary" r="3" class="flow-dot secondary">
+                  <animateMotion :dur="edge.secondaryDuration" repeatCount="indefinite" rotate="auto">
+                    <mpath :href="`#edge-path-${edge.id}`" />
+                  </animateMotion>
+                </circle>
+                <g v-if="edge.blocked" class="edge-break" :transform="`translate(${edge.breakX} ${edge.breakY})`">
+                  <line x1="-8" y1="-8" x2="8" y2="8" />
+                  <line x1="8" y1="-8" x2="-8" y2="8" />
+                </g>
+              </g>
+            </g>
+
+            <g class="nodes">
+              <g
+                v-for="node in topologyNodes"
+                :key="node.id"
+                class="runtime-node"
+                :class="[
+                  node.tone,
+                  {
+                    selected: selectedNodeId === node.id,
+                    highlighted: highlightedNodeId === node.id,
+                    impacted: impactedNodeIds.includes(node.id),
+                  },
+                ]"
+                :transform="`translate(${node.x} ${node.y})`"
+                tabindex="0"
+                role="button"
+                @click="inspectNode(node.id)"
+                @keyup.enter="inspectNode(node.id)"
+              >
+                <circle v-if="node.pulse" r="48" class="node-pulse" />
+                <rect
+                  :x="-node.width / 2"
+                  :y="-node.height / 2"
+                  :width="node.width"
+                  :height="node.height"
+                  rx="14"
+                  class="node-body"
+                />
+                <circle :cx="-node.width / 2 + 18" :cy="-node.height / 2 + 18" r="5" class="node-led" />
+                <text class="node-title" text-anchor="middle" y="-7">{{ node.label }}</text>
+                <text class="node-subtitle" text-anchor="middle" y="14">{{ node.sublabel }}</text>
+                <text class="node-status" text-anchor="middle" y="35">{{ node.statusText }}</text>
+              </g>
+            </g>
+          </svg>
+
+          <div class="node-inspector" :class="inspectorNode.tone">
+            <div class="inspector-head">
+              <div>
+                <span>Node Inspector</span>
+                <strong>{{ inspectorNode.label }}</strong>
+              </div>
+              <button type="button" class="icon-text" @click="clearFocus">清除定位</button>
             </div>
-            <div class="step-name">{{ step.title }}</div>
-            <div class="step-state">{{ step.state }}</div>
-            <div class="step-note">{{ step.note }}</div>
-          </article>
+            <p>{{ inspectorNode.description }}</p>
+
+            <div v-if="inspectorNode.id === 'jetson'" class="resource-compact">
+              <div v-for="metric in resourceMetrics" :key="metric.key" class="resource-line" :class="metric.tone">
+                <span>{{ metric.label }}</span>
+                <strong>{{ metric.display }}</strong>
+                <svg viewBox="0 0 100 26" preserveAspectRatio="none">
+                  <polyline :points="sparklinePoints(metric.key)" />
+                </svg>
+              </div>
+              <div class="uptime-line">
+                <span>UPTIME</span>
+                <strong>{{ uptimeText }}</strong>
+              </div>
+            </div>
+
+            <div v-else class="inspector-facts">
+              <div v-for="fact in inspectorNode.facts" :key="fact.label">
+                <span>{{ fact.label }}</span>
+                <strong>{{ fact.value }}</strong>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
-      <section class="monitor-grid">
-        <section class="panel resource-panel">
-          <header class="panel-head">
-            <div>
-              <span>资源监控</span>
-              <h3>{{ resourceHeadline }}</h3>
-            </div>
-            <div class="panel-meta">GPU / 内存 / 磁盘 / CPU</div>
-          </header>
-
-          <div class="resource-list">
-            <el-tooltip
-              v-for="metric in resourceMetrics"
-              :key="metric.key"
-              placement="right"
-              :show-after="200"
-            >
-              <template #content>
-                <div class="metric-tip">
-                  <div>{{ metric.tipTitle }}</div>
-                  <div>{{ metric.detail }}</div>
-                  <div v-if="metric.extra">{{ metric.extra }}</div>
-                </div>
-              </template>
-
-              <div class="resource-row" :class="metric.tone">
-                <div class="resource-head">
-                  <span>{{ metric.label }}</span>
-                  <strong>{{ metric.percent }}%</strong>
-                </div>
-                <div class="resource-bar">
-                  <i :style="{ width: `${metric.percent}%` }" />
-                </div>
-                <div class="resource-foot">{{ metric.detail }}</div>
-              </div>
-            </el-tooltip>
-          </div>
-        </section>
-
-        <section class="panel action-panel">
-          <header class="panel-head">
-            <div>
-              <span>待处理事项</span>
-              <h3>{{ issueCounts.total }} 项需要关注</h3>
-            </div>
-            <div class="panel-meta">
-              <span v-if="issueCounts.danger">{{ issueCounts.danger }} 项严重</span>
-              <span v-else>{{ issueCounts.warn }} 项警告</span>
-            </div>
-          </header>
-
-          <div v-if="issueItems.length" class="issue-list">
-            <article
-              v-for="issue in visibleIssues"
-              :key="issue.key"
-              class="issue-row"
-              :class="issue.tone"
-            >
-              <div class="issue-strip" />
-              <div class="issue-main">
-                <div class="issue-top">
-                  <strong>{{ issue.title }}</strong>
-                  <span class="issue-level">{{ issue.levelLabel }}</span>
-                </div>
-                <div class="issue-current">{{ issue.current }}</div>
-                <div class="issue-impact">{{ issue.impact }}</div>
-                <div class="issue-action">{{ issue.action }}</div>
-              </div>
-              <div class="issue-buttons">
-                <button type="button" class="text-action" @click="openIssue(issue)">
-                  <el-icon><View /></el-icon>
-                  查看详情
-                </button>
-                <button type="button" class="text-action handle" @click="processIssue(issue)">
-                  <el-icon><ArrowRight /></el-icon>
-                  处理
-                </button>
-              </div>
-            </article>
-
-            <button
-              v-if="issueItems.length > visibleIssueLimit"
-              type="button"
-              class="more-issues"
-              @click="openIssue(issueItems[visibleIssueLimit])"
-            >
-              还有 {{ issueItems.length - visibleIssueLimit }} 项更轻问题
-            </button>
-          </div>
-
-          <div v-else class="empty-state">
-            <div>
-              <el-icon><CircleCheck /></el-icon>
-              <strong>当前没有待处理事项</strong>
-              <span>关键链路保持正常，继续观察即可。</span>
-            </div>
-          </div>
-        </section>
-      </section>
-
-      <section class="panel service-panel">
-        <header class="panel-head">
+      <aside class="impact-panel">
+        <div class="impact-summary">
           <div>
-            <span>系统服务</span>
-            <h3>{{ serviceAttentionItems.length }} 项需要关注</h3>
+            <span>Impact Panel</span>
+            <strong>{{ issueCounts.total ? `当前 ${issueCounts.total} 项异常` : '当前无阻断异常' }}</strong>
           </div>
-          <button type="button" class="text-action toggle-action" @click="showAllServices = !showAllServices">
-            <el-icon><component :is="showAllServices ? ArrowDown : ArrowRight" /></el-icon>
-            {{ showAllServices ? '收起全部' : '展开全部' }}
+          <button type="button" class="icon-text" @click="dependencyDrawerVisible = true">
+            依赖服务
           </button>
-        </header>
+        </div>
 
-        <div v-if="serviceAttentionItems.length" class="service-focus-list">
-          <article
-            v-for="service in serviceAttentionItems"
-            :key="`${service.group}-${service.name}`"
-            class="service-item"
-            :class="service.tone"
+        <section class="capability-matrix">
+          <header>
+            <span>业务能力状态</span>
+          </header>
+          <div
+            v-for="capability in capabilityStatus"
+            :key="capability.key"
+            class="capability-row"
+            :class="capability.tone"
+            @click="inspectNode(capability.nodeId)"
           >
-            <div class="service-strip" />
-            <div class="service-content">
-              <div class="service-top">
-                <strong>{{ service.name }}</strong>
-                <span class="service-state">{{ service.status }}</span>
+            <span>{{ capability.label }}</span>
+            <strong>{{ capability.status }}</strong>
+          </div>
+        </section>
+
+        <section class="impact-list">
+          <article
+            v-for="issue in visibleIssues"
+            :key="issue.key"
+            class="impact-item"
+            :class="issue.tone"
+          >
+            <div class="impact-level">{{ issue.levelLabel }}</div>
+            <h3>{{ issue.title }}</h3>
+            <dl>
+              <div>
+                <dt>影响能力</dt>
+                <dd>{{ issue.impactAbility }}</dd>
               </div>
-              <small>{{ service.description }}</small>
+              <div>
+                <dt>受影响链路</dt>
+                <dd>{{ issue.pathLabel }}</dd>
+              </div>
+              <div>
+                <dt>建议动作</dt>
+                <dd>{{ issue.action }}</dd>
+              </div>
+              <div v-if="issue.unaffected?.length">
+                <dt>不影响</dt>
+                <dd>{{ issue.unaffected.join(' / ') }}</dd>
+              </div>
+            </dl>
+            <div class="impact-actions">
+              <button type="button" @click="locateIssue(issue)">定位节点</button>
+              <button v-if="issue.route" type="button" @click="goRoute(issue.route)">前往模块</button>
+              <button v-else type="button" @click="inspectNode(issue.nodeId)">查看资源</button>
             </div>
           </article>
-        </div>
 
-        <div v-if="!showAllServices && serviceQuietItems.length" class="service-quiet">
-          稳定服务 {{ serviceQuietItems.length }} 项
-        </div>
-
-        <transition name="fade">
-          <div v-if="showAllServices" class="service-expanded">
-            <article v-for="group in serviceGroups" :key="group.title" class="service-group">
-              <h4>{{ group.title }}</h4>
-              <div v-for="service in group.items" :key="service.name" class="service-group-row">
-                <span>{{ service.name }}</span>
-                <strong>{{ service.status }}</strong>
-              </div>
-            </article>
+          <div v-if="!issueItems.length" class="no-impact">
+            <strong>主链路可用</strong>
+            <span>数据接入、事件运行与联动执行保持连通。</span>
           </div>
-        </transition>
-      </section>
+        </section>
+      </aside>
     </main>
 
-    <el-drawer v-model="issueDrawerVisible" :with-header="false" size="420px" class="issue-drawer">
-      <div v-if="drawerIssue.key" class="drawer-body">
-        <div class="drawer-head">
-          <div>
-            <span>{{ drawerIssue.group }}</span>
-            <h3>{{ drawerIssue.title }}</h3>
-          </div>
-          <div class="drawer-level" :class="drawerIssue.tone">{{ drawerIssue.levelLabel }}</div>
-        </div>
+    <section class="dependency-strip">
+      <button type="button" class="dependency-summary" @click="dependencyDrawerVisible = true">
+        <span>{{ dependencySummary.online }} services online</span>
+        <span>{{ dependencySummary.degraded }} degraded</span>
+        <span>{{ dependencySummary.offline }} offline</span>
+      </button>
+      <div class="quiet-services">
+        <span v-for="service in serviceAttentionItems" :key="service.key" :class="service.tone">
+          {{ service.name }} {{ service.status }}
+        </span>
+        <span v-if="!serviceAttentionItems.length">依赖服务无阻断告警</span>
+      </div>
+    </section>
 
-        <div class="drawer-block">
-          <span>当前值</span>
-          <strong>{{ drawerIssue.current }}</strong>
-        </div>
-        <div class="drawer-block">
-          <span>影响</span>
-          <strong>{{ drawerIssue.impact }}</strong>
-        </div>
-        <div class="drawer-block">
-          <span>建议操作</span>
-          <strong>{{ drawerIssue.action }}</strong>
-        </div>
-
-        <div class="drawer-actions">
-          <button
-            v-if="drawerIssue.route"
-            type="button"
-            class="drawer-action primary"
-            @click="goToRelatedModule"
-          >
-            <el-icon><ArrowRight /></el-icon>
-            前往相关模块
-          </button>
-          <button type="button" class="drawer-action" @click="issueDrawerVisible = false">关闭</button>
-        </div>
+    <el-drawer v-model="dependencyDrawerVisible" title="Dependency Inspector" size="460px" class="runtime-drawer">
+      <div class="service-matrix">
+        <article
+          v-for="service in serviceItems"
+          :key="service.key"
+          class="service-cell"
+          :class="service.tone"
+          @click="inspectNode(service.nodeId)"
+        >
+          <span>{{ service.group }}</span>
+          <strong>{{ service.name }}</strong>
+          <em>{{ service.status }}</em>
+          <small>{{ service.description }}</small>
+        </article>
       </div>
     </el-drawer>
   </div>
@@ -293,19 +321,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import {
-  ArrowDown,
-  ArrowRight,
-  CircleCheck,
-  Cloudy,
-  Connection,
-  Cpu,
-  Monitor,
-  Operation,
-  Refresh,
-  View,
-  VideoCamera,
-} from '@element-plus/icons-vue'
+import { Refresh } from '@element-plus/icons-vue'
 import { getSystemInfo } from '@/api/dashboard'
 import { getDeviceStatus } from '@/api/sensor'
 import { getCameraList, getModelStatus } from '@/api/camera'
@@ -318,10 +334,189 @@ const deviceStatus = ref({})
 const cameraSummary = ref({ online: 0, total: 0 })
 const modelStatus = ref({ loaded: false, models: {} })
 const currentTime = ref(new Date())
-const showAllServices = ref(false)
-const issueDrawerVisible = ref(false)
-const selectedIssue = ref({})
+const selectedNodeId = ref('jetson')
+const highlightedNodeId = ref('')
+const highlightedEdgeIds = ref([])
+const dependencyDrawerVisible = ref(false)
+const resourceHistory = ref({
+  cpu: [],
+  memory: [],
+  disk: [],
+  gpu: [],
+})
 let clockTimer = null
+let focusTimer = null
+
+const zones = [
+  { key: 'perception', label: '感知层', x: 32, y: 52, width: 210, height: 536 },
+  { key: 'edge', label: '边缘计算层', x: 288, y: 52, width: 240, height: 536 },
+  { key: 'data-ai', label: '数据 / AI 服务层', x: 570, y: 52, width: 244, height: 536 },
+  { key: 'event', label: '事件运行层', x: 842, y: 52, width: 246, height: 238 },
+  { key: 'action', label: '联动执行层', x: 842, y: 326, width: 246, height: 262 },
+]
+
+const topologyDefinition = [
+  {
+    id: 'camera',
+    label: 'Camera',
+    sublabel: '摄像头接入',
+    x: 134,
+    y: 138,
+    width: 148,
+    height: 76,
+    description: '数据库中启用的视频源经后端签发票据进入实时视频链路。',
+  },
+  {
+    id: 'sensor',
+    label: 'Sensors',
+    sublabel: '传感器采集',
+    x: 134,
+    y: 318,
+    width: 148,
+    height: 76,
+    description: '振动、雨量、风速、温湿度等传感器由采集服务汇入实时状态。',
+  },
+  {
+    id: 'manual-source',
+    label: 'Manual / Mini',
+    sublabel: '人工与小程序',
+    x: 134,
+    y: 498,
+    width: 148,
+    height: 76,
+    description: '人工上报与微信小程序接口进入统一业务后端。',
+  },
+  {
+    id: 'ingest',
+    label: 'Perception Ingress',
+    sublabel: '感知接入',
+    x: 374,
+    y: 318,
+    width: 170,
+    height: 82,
+    description: '后端将视频、传感器与人工入口整理为统一运行输入。',
+  },
+  {
+    id: 'jetson',
+    label: 'Jetson AGX',
+    sublabel: '边缘节点',
+    x: 484,
+    y: 168,
+    width: 160,
+    height: 86,
+    description: '当前系统运行与边缘推理所在节点，资源压力会影响检测和事件响应时延。',
+    pulse: true,
+  },
+  {
+    id: 'media',
+    label: 'Media Stream',
+    sublabel: 'MediaMTX / WebRTC',
+    x: 660,
+    y: 168,
+    width: 168,
+    height: 82,
+    description: 'RTSP 视频经 MediaMTX / WebRTC 网关进入浏览器实时播放链路。',
+  },
+  {
+    id: 'ai',
+    label: 'AI Inference',
+    sublabel: 'YOLO / Qwen',
+    x: 660,
+    y: 298,
+    width: 168,
+    height: 82,
+    description: '边缘视觉检测和云边多模态分析共同支撑视频 AI 巡查。',
+  },
+  {
+    id: 'timeseries',
+    label: 'Time Series',
+    sublabel: 'IoTDB',
+    x: 660,
+    y: 428,
+    width: 168,
+    height: 82,
+    description: '传感器实时数据与历史数据写入时序链路，供规则计算和趋势查看使用。',
+  },
+  {
+    id: 'eca',
+    label: 'Rule Runtime',
+    sublabel: 'ECA',
+    x: 660,
+    y: 542,
+    width: 168,
+    height: 72,
+    description: 'ECA 引擎根据传感器、视觉和融合事件触发安全事件运行时。',
+  },
+  {
+    id: 'event',
+    label: 'Safety Event',
+    sublabel: 'Runtime',
+    x: 944,
+    y: 246,
+    width: 172,
+    height: 86,
+    description: '安全事件运行时统一编排广播、无人机、人工任务和报告归档。',
+    pulse: true,
+  },
+  {
+    id: 'broadcast',
+    label: 'Broadcast',
+    sublabel: '广播联动',
+    x: 884,
+    y: 444,
+    width: 132,
+    height: 70,
+    description: '广播服务订阅安全事件动作并执行现场提醒。',
+  },
+  {
+    id: 'drone',
+    label: 'Drone',
+    sublabel: '无人机调度',
+    x: 1002,
+    y: 444,
+    width: 132,
+    height: 70,
+    description: '无人机调度服务根据事件动作执行巡检派发。',
+  },
+  {
+    id: 'staff',
+    label: 'Staff Task',
+    sublabel: '人工任务',
+    x: 884,
+    y: 548,
+    width: 132,
+    height: 70,
+    description: '人工任务服务承接高风险事件处置流转。',
+  },
+  {
+    id: 'report',
+    label: 'Report Archive',
+    sublabel: '报告归档',
+    x: 1002,
+    y: 548,
+    width: 132,
+    height: 70,
+    description: '巡查报告和事件证据进入文档与对象存储链路。',
+  },
+]
+
+const edgeDefinition = [
+  { id: 'camera-ingest', from: 'camera', to: 'ingest', path: 'M208 138 C260 138 280 262 305 296' },
+  { id: 'sensor-ingest', from: 'sensor', to: 'ingest', path: 'M208 318 C244 318 276 318 289 318' },
+  { id: 'manual-ingest', from: 'manual-source', to: 'ingest', path: 'M208 498 C260 498 280 374 305 340' },
+  { id: 'ingest-jetson', from: 'ingest', to: 'jetson', path: 'M404 279 C408 236 424 198 424 178' },
+  { id: 'jetson-media', from: 'jetson', to: 'media', path: 'M564 168 C592 168 606 168 576 168' },
+  { id: 'jetson-ai', from: 'jetson', to: 'ai', path: 'M520 210 C548 250 574 286 576 298' },
+  { id: 'ingest-timeseries', from: 'ingest', to: 'timeseries', path: 'M459 344 C512 378 548 424 576 428' },
+  { id: 'timeseries-eca', from: 'timeseries', to: 'eca', path: 'M660 469 C660 492 660 509 660 506' },
+  { id: 'media-event', from: 'media', to: 'event', path: 'M744 168 C820 166 852 206 858 232' },
+  { id: 'ai-event', from: 'ai', to: 'event', path: 'M744 298 C804 298 828 258 858 250' },
+  { id: 'eca-event', from: 'eca', to: 'event', path: 'M744 542 C826 506 842 334 858 268' },
+  { id: 'event-broadcast', from: 'event', to: 'broadcast', path: 'M924 289 C914 344 897 390 892 409' },
+  { id: 'event-drone', from: 'event', to: 'drone', path: 'M970 289 C982 344 998 390 1002 409' },
+  { id: 'event-staff', from: 'event', to: 'staff', path: 'M915 289 C888 370 875 482 884 513' },
+  { id: 'event-report', from: 'event', to: 'report', path: 'M986 289 C1020 376 1018 484 1008 513' },
+]
 
 const currentTimeText = computed(() => currentTime.value.toLocaleTimeString('zh-CN', {
   hour12: false,
@@ -333,13 +528,19 @@ const systemReachable = computed(() => Object.keys(systemInfo.value || {}).lengt
 const collectorRunning = computed(() => Boolean(systemInfo.value.sensor_collector_running))
 const sensorsOnline = computed(() => {
   const values = Object.values(deviceStatus.value || {})
-  return values.filter((item) => item?.status === 'online').length
+  if (values.length) return values.filter((item) => item?.status === 'online').length
+  return Number(systemInfo.value.sensor_count?.online || 0)
 })
-const sensorsTotal = computed(() => Object.keys(deviceStatus.value || {}).length)
+const sensorsTotal = computed(() => {
+  const count = Object.keys(deviceStatus.value || {}).length
+  return count || Number(systemInfo.value.sensor_count?.total || 0)
+})
 const edgeModelReady = computed(() => Boolean(
   modelStatus.value.loaded || Object.values(modelStatus.value.models || {}).some((item) => item?.loaded),
 ))
 const cloudModelReady = computed(() => systemInfo.value.ai_model === 'healthy')
+const videoReady = computed(() => cameraSummary.value.online > 0 && edgeModelReady.value)
+const eventRuntimeReady = computed(() => systemReachable.value)
 
 function percent(value) {
   return Math.max(0, Math.min(100, Math.round(Number(value || 0))))
@@ -355,91 +556,268 @@ function aiModelLabel(value) {
   return ({ healthy: '正常', unhealthy: '异常', unreachable: '不可达', unknown: '未知' })[value] || '待确认'
 }
 
+function toneRank(tone) {
+  return ({ danger: 4, blocked: 4, warn: 3, neutral: 2, ok: 1 })[tone] || 2
+}
+
+function worstTone(tones) {
+  return tones.reduce((worst, tone) => (toneRank(tone) > toneRank(worst) ? tone : worst), 'ok')
+}
+
 function riskTone(percentValue) {
+  if (!systemReachable.value) return 'neutral'
   if (percentValue >= 85) return 'danger'
   if (percentValue >= 70) return 'warn'
   return 'ok'
 }
 
 function severityLabel(tone) {
-  return ({ danger: '严重', warn: '警告', ok: '正常' })[tone] || '关注'
+  return ({ danger: 'CRITICAL', blocked: 'BLOCKED', warn: 'WARNING', ok: 'NORMAL', neutral: 'UNKNOWN' })[tone] || 'NOTICE'
+}
+
+function nodeStatus(id) {
+  const resourceTone = resourceOverallTone.value
+
+  if (!systemReachable.value && !['camera', 'sensor', 'manual-source'].includes(id)) {
+    return { tone: 'danger', text: '后端不可达' }
+  }
+
+  const cameraTone = cameraSummary.value.total === 0
+    ? 'neutral'
+    : cameraSummary.value.online === 0
+      ? 'danger'
+      : cameraSummary.value.online < cameraSummary.value.total
+        ? 'warn'
+        : 'ok'
+
+  const sensorTone = !collectorRunning.value
+    ? 'danger'
+    : sensorsTotal.value === 0
+      ? 'neutral'
+      : sensorsOnline.value < sensorsTotal.value
+        ? 'warn'
+        : 'ok'
+
+  const statusMap = {
+    camera: {
+      tone: cameraTone,
+      text: cameraSummary.value.total
+        ? `${cameraSummary.value.online}/${cameraSummary.value.total} 在线`
+        : '待配置',
+    },
+    sensor: {
+      tone: sensorTone,
+      text: sensorsTotal.value ? `${sensorsOnline.value}/${sensorsTotal.value} 在线` : '状态待返回',
+    },
+    'manual-source': {
+      tone: systemReachable.value ? 'ok' : 'neutral',
+      text: systemReachable.value ? '可接入' : '待确认',
+    },
+    ingest: {
+      tone: worstTone([cameraTone, sensorTone]),
+      text: collectorRunning.value ? '接入运行中' : '采集阻断',
+    },
+    jetson: {
+      tone: resourceTone,
+      text: resourceTone === 'ok' ? '资源平稳' : resourceTone === 'warn' ? '资源承压' : '资源临界',
+    },
+    media: {
+      tone: cameraTone === 'danger' ? 'blocked' : cameraTone,
+      text: cameraSummary.value.online > 0 ? '流媒体可用' : '无可用视频',
+    },
+    ai: {
+      tone: edgeModelReady.value ? (cloudModelReady.value ? 'ok' : 'warn') : 'danger',
+      text: edgeModelReady.value ? `Qwen ${aiModelLabel(systemInfo.value.ai_model)}` : '推理不可用',
+    },
+    timeseries: {
+      tone: collectorRunning.value ? 'ok' : 'warn',
+      text: collectorRunning.value ? '写入链路可用' : '采集待恢复',
+    },
+    eca: {
+      tone: systemReachable.value ? 'ok' : 'danger',
+      text: systemReachable.value ? '规则运行中' : '不可确认',
+    },
+    event: {
+      tone: eventRuntimeReady.value ? 'ok' : 'danger',
+      text: eventRuntimeReady.value ? '事件总线可用' : '事件阻断',
+    },
+    broadcast: {
+      tone: eventRuntimeReady.value ? 'ok' : 'blocked',
+      text: eventRuntimeReady.value ? '可执行' : 'BLOCKED',
+    },
+    drone: {
+      tone: eventRuntimeReady.value ? 'ok' : 'blocked',
+      text: eventRuntimeReady.value ? '可调度' : 'BLOCKED',
+    },
+    staff: {
+      tone: eventRuntimeReady.value ? 'ok' : 'blocked',
+      text: eventRuntimeReady.value ? '可派发' : 'BLOCKED',
+    },
+    report: {
+      tone: eventRuntimeReady.value ? 'ok' : 'blocked',
+      text: eventRuntimeReady.value ? '可归档' : 'BLOCKED',
+    },
+  }
+
+  return statusMap[id] || { tone: 'neutral', text: '待确认' }
 }
 
 const resourceMetrics = computed(() => {
   const gpu = systemInfo.value.gpu || {}
   const gpuMemory = gpu.memory || {}
+  const gpuPercent = percent(gpu.utilization_percent ?? gpuMemory.percent)
 
-  const items = [
+  return [
     {
       key: 'cpu',
       label: 'CPU',
-      percent: percent(systemInfo.value.cpu_percent),
-      detail: `负载 ${formatNumber(systemInfo.value.cpu_percent)}%`,
-      extra: '',
-      tipTitle: 'CPU 使用率',
+      value: percent(systemInfo.value.cpu_percent),
+      display: `${formatNumber(systemInfo.value.cpu_percent)}%`,
+      tone: riskTone(percent(systemInfo.value.cpu_percent)),
     },
     {
       key: 'memory',
-      label: '内存',
-      percent: percent(systemInfo.value.memory?.percent),
+      label: 'MEM',
+      value: percent(systemInfo.value.memory?.percent),
+      display: `${formatNumber(systemInfo.value.memory?.percent)}%`,
+      tone: riskTone(percent(systemInfo.value.memory?.percent)),
       detail: `${formatNumber(systemInfo.value.memory?.used_gb)} / ${formatNumber(systemInfo.value.memory?.total_gb)} GB`,
-      extra: '',
-      tipTitle: '内存占用',
     },
     {
       key: 'disk',
-      label: '磁盘',
-      percent: percent(systemInfo.value.disk?.percent),
+      label: 'DISK',
+      value: percent(systemInfo.value.disk?.percent),
+      display: `${formatNumber(systemInfo.value.disk?.percent)}%`,
+      tone: riskTone(percent(systemInfo.value.disk?.percent)),
       detail: `${formatNumber(systemInfo.value.disk?.used_gb)} / ${formatNumber(systemInfo.value.disk?.total_gb)} GB`,
-      extra: '',
-      tipTitle: '磁盘占用',
     },
     {
       key: 'gpu',
       label: 'GPU',
-      percent: percent(gpu.utilization_percent ?? gpuMemory.percent),
-      detail: gpuDetail.value,
-      extra: gpuMemory.total_mb
-        ? `显存 ${formatNumber(gpuMemory.used_mb / 1024)} / ${formatNumber(gpuMemory.total_mb / 1024)} GB`
-        : '',
-      tipTitle: 'GPU 运行态',
+      value: gpuPercent,
+      display: gpu.available ? `${formatNumber(gpuPercent)}%` : '待确认',
+      tone: gpu.available ? riskTone(gpuPercent) : 'neutral',
+      detail: gpu.available ? `${formatNumber(gpu.temperature_c)}C / ${formatNumber(gpu.power_w)}W` : 'GPU 信息待确认',
     },
   ]
-
-  return items.map((metric) => ({
-    ...metric,
-    tone: systemReachable.value ? riskTone(metric.percent) : 'neutral',
-  }))
 })
 
-const gpuDetail = computed(() => {
-  const gpu = systemInfo.value.gpu || {}
-  const parts = []
-  if (gpu.utilization_percent != null) parts.push(`利用率 ${formatNumber(gpu.utilization_percent)}%`)
-  if (gpu.temperature_c != null) parts.push(`${formatNumber(gpu.temperature_c)}°C`)
-  if (gpu.power_w != null) parts.push(`${formatNumber(gpu.power_w)}W`)
-  return parts.join(' · ') || (gpu.available ? 'GPU 已检测' : 'GPU 信息待确认')
+const resourceOverallTone = computed(() => worstTone(resourceMetrics.value.map((metric) => metric.tone)))
+
+const resourceIssueMetrics = computed(() => resourceMetrics.value.filter((metric) => metric.tone === 'warn' || metric.tone === 'danger'))
+
+const uptimeText = computed(() => {
+  const hours = Number(systemInfo.value.system_uptime_hours || 0)
+  if (!hours) return '--'
+  if (hours >= 24) return `${formatNumber(hours / 24)}d`
+  return `${formatNumber(hours)}h`
 })
 
-const resourceCriticalCount = computed(() => resourceMetrics.value.filter((metric) => metric.tone !== 'ok' && metric.tone !== 'neutral').length)
-const resourceHeadline = computed(() => {
-  if (!systemReachable.value) return '系统信息待确认'
-  if (!resourceCriticalCount.value) return '资源状态平稳'
-  return `${resourceCriticalCount.value} 项临界`
-})
+const topologyNodes = computed(() => topologyDefinition.map((node) => {
+  const status = nodeStatus(node.id)
+  return {
+    ...node,
+    tone: status.tone,
+    statusText: status.text,
+    facts: nodeFacts(node.id),
+  }
+}))
+
+const topologyNodeMap = computed(() => Object.fromEntries(topologyNodes.value.map((node) => [node.id, node])))
+
+function isEdgeBlocked(edge, from, to) {
+  if (!systemReachable.value && !['camera-ingest', 'sensor-ingest', 'manual-ingest'].includes(edge.id)) return true
+  if (edge.id === 'camera-ingest') return cameraSummary.value.total > 0 && cameraSummary.value.online === 0
+  if (edge.id === 'sensor-ingest') return !collectorRunning.value
+  if (edge.id === 'jetson-ai') return !edgeModelReady.value
+  if (edge.id === 'ai-event') return !edgeModelReady.value
+  if (edge.id === 'media-event') return cameraSummary.value.total > 0 && cameraSummary.value.online === 0
+  return from.tone === 'danger' || from.tone === 'blocked' || to.tone === 'danger' || to.tone === 'blocked'
+}
+
+const topologyEdges = computed(() => edgeDefinition.map((edge, index) => {
+  const from = topologyNodeMap.value[edge.from]
+  const to = topologyNodeMap.value[edge.to]
+  const blocked = isEdgeBlocked(edge, from, to)
+  const tone = blocked ? 'danger' : worstTone([from.tone, to.tone])
+  return {
+    ...edge,
+    tone,
+    blocked,
+    active: !blocked && tone !== 'neutral',
+    duration: `${8 + (index % 4) * 1.3}s`,
+    secondary: index % 2 === 0,
+    secondaryDuration: `${11 + (index % 5) * 1.2}s`,
+    breakX: edgeBreakPoint(edge.path).x,
+    breakY: edgeBreakPoint(edge.path).y,
+  }
+}))
+
+function edgeMarkerTone(tone) {
+  if (tone === 'blocked') return 'danger'
+  return ['ok', 'warn', 'danger'].includes(tone) ? tone : 'neutral'
+}
+
+function edgeBreakPoint(path) {
+  const numbers = path.match(/-?\d+(\.\d+)?/g)?.map(Number) || []
+  if (numbers.length < 4) return { x: 0, y: 0 }
+  const pairs = []
+  for (let index = 0; index < numbers.length; index += 2) {
+    pairs.push({ x: numbers[index], y: numbers[index + 1] })
+  }
+  return pairs[Math.floor(pairs.length / 2)] || pairs[0]
+}
+
+const capabilityStatus = computed(() => [
+  {
+    key: 'video',
+    label: '实时视频',
+    status: cameraSummary.value.online > 0 ? '可用' : '不可用',
+    tone: cameraSummary.value.online > 0 ? 'ok' : 'danger',
+    nodeId: 'media',
+  },
+  {
+    key: 'sensor',
+    label: '传感器采集',
+    status: collectorRunning.value ? '可用' : '不可用',
+    tone: collectorRunning.value ? 'ok' : 'danger',
+    nodeId: 'sensor',
+  },
+  {
+    key: 'ai-video',
+    label: 'AI 视频识别',
+    status: videoReady.value ? '可用' : '不可用',
+    tone: videoReady.value ? 'ok' : 'danger',
+    nodeId: 'ai',
+  },
+  {
+    key: 'event',
+    label: '事件引擎',
+    status: eventRuntimeReady.value ? '可用' : '不可用',
+    tone: eventRuntimeReady.value ? 'ok' : 'danger',
+    nodeId: 'event',
+  },
+  {
+    key: 'action',
+    label: '联动执行',
+    status: eventRuntimeReady.value ? '可用' : '不可用',
+    tone: eventRuntimeReady.value ? 'ok' : 'danger',
+    nodeId: 'broadcast',
+  },
+])
 
 const issueItems = computed(() => {
   if (!systemReachable.value) {
     return [{
       key: 'system-unreachable',
-      title: '系统信息不可达',
-      group: '系统接口',
-      current: '未返回 /v1/system/info',
-      impact: '健康摘要、资源监控和状态判断无法刷新。',
-      action: '先确认后端服务与网络连通性。',
+      title: '后端系统信息不可达',
+      nodeId: 'jetson',
+      edgeIds: ['ingest-jetson', 'jetson-media', 'jetson-ai', 'eca-event'],
       tone: 'danger',
-      levelLabel: '严重',
-      route: null,
+      levelLabel: 'CRITICAL',
+      impactAbility: '系统监测与事件运行确认',
+      pathLabel: 'Jetson AGX → Safety Event Runtime',
+      action: '确认 FastAPI 服务、网络代理与 /v1/system/info。',
     }]
   }
 
@@ -448,13 +826,14 @@ const issueItems = computed(() => {
   if (!collectorRunning.value) {
     items.push({
       key: 'collector',
-      title: '采集服务待确认',
-      group: '感知采集',
-      current: 'sensor_collector 未运行',
-      impact: '实时传感器数据可能中断。',
-      action: '先确认采集器进程与串口链路。',
+      title: '传感器采集服务未运行',
+      nodeId: 'sensor',
+      edgeIds: ['sensor-ingest', 'ingest-timeseries', 'timeseries-eca'],
       tone: 'danger',
-      levelLabel: '严重',
+      levelLabel: 'CRITICAL',
+      impactAbility: '传感器采集、时序入库、ECA 传感器触发',
+      pathLabel: 'Sensors → Perception Ingress → IoTDB → ECA',
+      action: '检查采集器进程、串口链路与 IoTDB 写入状态。',
       route: '/monitor/sensors',
     })
   }
@@ -462,13 +841,14 @@ const issueItems = computed(() => {
   if (sensorsTotal.value > 0 && sensorsOnline.value < sensorsTotal.value) {
     items.push({
       key: 'sensors-offline',
-      title: '感知设备离线',
-      group: '感知采集',
-      current: `${sensorsOnline.value}/${sensorsTotal.value} 设备在线`,
-      impact: '缺失的传感器会削弱告警判断。',
-      action: '先核对离线设备和采集链路。',
+      title: '部分感知设备离线',
+      nodeId: 'sensor',
+      edgeIds: ['sensor-ingest'],
       tone: 'warn',
-      levelLabel: '警告',
+      levelLabel: 'WARNING',
+      impactAbility: '传感器覆盖完整性',
+      pathLabel: 'Sensors → Perception Ingress',
+      action: '核对离线设备、电源和采集通道。',
       route: '/monitor/sensors',
     })
   }
@@ -477,12 +857,13 @@ const issueItems = computed(() => {
     items.push({
       key: 'camera-offline',
       title: '视频通道不完整',
-      group: '视频监测',
-      current: `${cameraSummary.value.online}/${cameraSummary.value.total} 路在线`,
-      impact: '视频联动和取证能力会受影响。',
-      action: '先查看摄像头接入与推流状态。',
-      tone: 'warn',
-      levelLabel: '警告',
+      nodeId: 'camera',
+      edgeIds: ['camera-ingest', 'jetson-media', 'media-event'],
+      tone: cameraSummary.value.online === 0 ? 'danger' : 'warn',
+      levelLabel: cameraSummary.value.online === 0 ? 'CRITICAL' : 'WARNING',
+      impactAbility: '实时视频、视频取证',
+      pathLabel: 'Camera → Media Stream → Safety Event Runtime',
+      action: '检查摄像头连接、RTSP 地址和 WebRTC 信令。',
       route: '/monitor/camera',
     })
   }
@@ -490,14 +871,16 @@ const issueItems = computed(() => {
   if (!edgeModelReady.value) {
     items.push({
       key: 'edge-model',
-      title: '边缘视觉模型待确认',
-      group: 'AI 协同',
-      current: '本地视觉模型不可用',
-      impact: '摄像头目标检测能力可能受限。',
-      action: '先前往模型管理确认边缘模型。',
+      title: '边缘视觉模型未确认',
+      nodeId: 'ai',
+      edgeIds: ['jetson-ai', 'ai-event'],
       tone: 'danger',
-      levelLabel: '严重',
+      levelLabel: 'CRITICAL',
+      impactAbility: '视频 AI 巡查',
+      pathLabel: 'Camera → AI Inference → Detection',
+      action: '检查模型加载状态，必要时重新加载边缘检测模型。',
       route: '/system/models',
+      unaffected: ['传感器采集', 'ECA 规则', '安全事件人工处置'],
     })
   }
 
@@ -505,47 +888,35 @@ const issueItems = computed(() => {
     items.push({
       key: 'cloud-model',
       title: '云边大模型不可达',
-      group: 'AI 协同',
-      current: `当前状态：${aiModelLabel(systemInfo.value.ai_model)}`,
-      impact: '语义分析和辅助研判链路受影响。',
-      action: '先检查云侧模型服务和网络。',
+      nodeId: 'ai',
+      edgeIds: ['ai-event'],
       tone: 'warn',
-      levelLabel: '警告',
+      levelLabel: 'WARNING',
+      impactAbility: '多模态语义研判',
+      pathLabel: 'AI Inference → Safety Event Runtime',
+      action: '检查 Qwen3-VL 服务、模型端口和网络连通性。',
       route: '/system/models',
     })
   }
 
-  for (const metric of resourceMetrics.value) {
-    if (metric.tone === 'warn' || metric.tone === 'danger') {
-      items.push({
-        key: `resource-${metric.key}`,
-        title: `${metric.label} 使用率偏高`,
-        group: '资源监控',
-        current: metric.detail,
-        impact: '高占用会放大页面和推理时延。',
-        action: '先处理高占用资源。',
-        tone: metric.tone,
-        levelLabel: severityLabel(metric.tone),
-        route: null,
-      })
-    }
+  for (const metric of resourceIssueMetrics.value) {
+    items.push({
+      key: `resource-${metric.key}`,
+      title: `${metric.label} 资源压力偏高`,
+      nodeId: 'jetson',
+      edgeIds: ['ingest-jetson', 'jetson-ai'],
+      tone: metric.tone,
+      levelLabel: severityLabel(metric.tone),
+      impactAbility: '边缘推理与页面响应时延',
+      pathLabel: 'Jetson AGX → AI Inference',
+      action: `当前 ${metric.label} ${metric.display}，建议查看进程和资源趋势。`,
+    })
   }
 
   return items
 })
 
-const visibleIssueLimit = 4
-const visibleIssues = computed(() => issueItems.value.slice(0, visibleIssueLimit))
-const firstAction = computed(() => issueItems.value[0] || {
-  key: 'nominal',
-  title: '当前状态正常',
-  current: '暂无异常项',
-  impact: '关键链路保持稳定，继续观察即可。',
-  action: '保持自动刷新并关注资源趋势。',
-  tone: 'ok',
-  levelLabel: '正常',
-  route: null,
-})
+const visibleIssues = computed(() => issueItems.value.slice(0, 4))
 
 const issueCounts = computed(() => issueItems.value.reduce((acc, item) => {
   acc.total += 1
@@ -553,6 +924,14 @@ const issueCounts = computed(() => issueItems.value.reduce((acc, item) => {
   else if (item.tone === 'warn') acc.warn += 1
   return acc
 }, { total: 0, danger: 0, warn: 0 }))
+
+const impactedNodeIds = computed(() => {
+  const ids = new Set()
+  for (const edge of topologyEdges.value) {
+    if (edge.blocked) ids.add(edge.to)
+  }
+  return [...ids]
+})
 
 const healthScore = computed(() => {
   if (!systemReachable.value) return 0
@@ -580,103 +959,201 @@ const healthTone = computed(() => {
   return 'ok'
 })
 
-const healthLabel = computed(() => {
-  if (!systemReachable.value) return '系统待确认'
-  if (healthTone.value === 'danger') return '需要优先处理'
-  if (healthTone.value === 'warn') return '需要关注'
-  return '运行稳定'
+const topologyHeadline = computed(() => {
+  if (!systemReachable.value) return '运行拓扑不可确认'
+  if (issueCounts.value.danger > 0) return '关键链路存在阻断'
+  if (issueCounts.value.warn > 0) return '主链路可用，局部能力降级'
+  return '系统主链路运行中'
 })
 
-const runtimeSteps = computed(() => ([
+const inspectorNode = computed(() => {
+  const node = topologyNodeMap.value[selectedNodeId.value] || topologyNodes.value[0] || {}
+  return {
+    ...node,
+    facts: node.facts || [],
+  }
+})
+
+function nodeFacts(id) {
+  const facts = {
+    camera: [
+      { label: '启用通道', value: `${cameraSummary.value.total}` },
+      { label: '在线通道', value: `${cameraSummary.value.online}` },
+    ],
+    sensor: [
+      { label: '采集器', value: collectorRunning.value ? '运行中' : '待确认' },
+      { label: '在线设备', value: sensorsTotal.value ? `${sensorsOnline.value}/${sensorsTotal.value}` : '待返回' },
+    ],
+    'manual-source': [
+      { label: '后端接口', value: systemReachable.value ? '可达' : '待确认' },
+      { label: '来源', value: '人工 / 小程序' },
+    ],
+    ingest: [
+      { label: '视频输入', value: cameraSummary.value.total ? `${cameraSummary.value.online}/${cameraSummary.value.total}` : '待配置' },
+      { label: '传感器输入', value: sensorsTotal.value ? `${sensorsOnline.value}/${sensorsTotal.value}` : '待返回' },
+    ],
+    media: [
+      { label: 'MediaMTX', value: cameraSummary.value.total ? '已接入' : '待配置' },
+      { label: 'WebRTC', value: cameraSummary.value.online > 0 ? '可用' : '待确认' },
+    ],
+    ai: [
+      { label: '边缘模型', value: edgeModelReady.value ? '已加载' : '未确认' },
+      { label: 'Qwen3-VL', value: aiModelLabel(systemInfo.value.ai_model) },
+    ],
+    timeseries: [
+      { label: 'IoTDB', value: systemReachable.value ? '已配置' : '待确认' },
+      { label: '写入前提', value: collectorRunning.value ? '采集运行中' : '采集待恢复' },
+    ],
+    eca: [
+      { label: '规则引擎', value: systemReachable.value ? '可用' : '待确认' },
+      { label: '触发源', value: '传感器 / 视觉' },
+    ],
+    event: [
+      { label: '事件总线', value: eventRuntimeReady.value ? '可用' : '待确认' },
+      { label: '联动订阅', value: '广播 / 无人机 / 人工任务' },
+    ],
+    broadcast: [{ label: '执行状态', value: eventRuntimeReady.value ? '可执行' : '阻断' }],
+    drone: [{ label: '执行状态', value: eventRuntimeReady.value ? '可调度' : '阻断' }],
+    staff: [{ label: '执行状态', value: eventRuntimeReady.value ? '可派发' : '阻断' }],
+    report: [{ label: '归档状态', value: eventRuntimeReady.value ? '可归档' : '阻断' }],
+  }
+  return facts[id] || []
+}
+
+const serviceItems = computed(() => [
   {
-    title: '感知采集',
-    state: collectorRunning.value ? '正常' : '待确认',
-    note: sensorsTotal.value > 0
-      ? `${sensorsOnline.value}/${sensorsTotal.value} 设备在线`
-      : '传感器状态未返回',
-    tone: collectorRunning.value && sensorsOnline.value > 0 ? 'ok' : 'warn',
-    icon: Monitor,
+    key: 'mysql',
+    name: 'MySQL',
+    group: 'Data',
+    status: systemReachable.value ? 'online' : 'offline',
+    tone: systemReachable.value ? 'ok' : 'danger',
+    nodeId: 'event',
+    description: '业务主库，后端可达时视为可用。',
   },
   {
-    title: '边缘推理',
-    state: edgeModelReady.value ? '可用' : '待确认',
-    note: edgeModelReady.value ? '本地视觉模型在线' : '本地模型能力不可用',
+    key: 'redis',
+    name: 'Redis',
+    group: 'Cache',
+    status: systemReachable.value ? 'online' : 'unknown',
+    tone: systemReachable.value ? 'ok' : 'neutral',
+    nodeId: 'event',
+    description: '缓存与短期队列，当前接口无独立健康字段。',
+  },
+  {
+    key: 'iotdb',
+    name: 'IoTDB',
+    group: 'Time Series',
+    status: collectorRunning.value ? 'online' : 'degraded',
+    tone: collectorRunning.value ? 'ok' : 'warn',
+    nodeId: 'timeseries',
+    description: '时序数据写入依赖采集器运行。',
+  },
+  {
+    key: 'minio',
+    name: 'MinIO',
+    group: 'Object',
+    status: systemReachable.value ? 'configured' : 'unknown',
+    tone: systemReachable.value ? 'ok' : 'neutral',
+    nodeId: 'report',
+    description: '截图、证据和文档对象存储。',
+  },
+  {
+    key: 'mediamtx',
+    name: 'MediaMTX',
+    group: 'Video',
+    status: cameraSummary.value.online > 0 ? 'online' : 'degraded',
+    tone: cameraSummary.value.online > 0 ? 'ok' : 'warn',
+    nodeId: 'media',
+    description: 'RTSP 视频流转发。',
+  },
+  {
+    key: 'webrtc',
+    name: 'WebRTC',
+    group: 'Video',
+    status: cameraSummary.value.online > 0 ? 'online' : 'degraded',
+    tone: cameraSummary.value.online > 0 ? 'ok' : 'warn',
+    nodeId: 'media',
+    description: '浏览器实时视频播放信令。',
+  },
+  {
+    key: 'qwen',
+    name: 'Qwen3-VL',
+    group: 'AI',
+    status: cloudModelReady.value ? 'online' : 'offline',
+    tone: cloudModelReady.value ? 'ok' : 'danger',
+    nodeId: 'ai',
+    description: '多模态语义分析服务。',
+  },
+  {
+    key: 'yolo',
+    name: 'YOLO Detector',
+    group: 'AI',
+    status: edgeModelReady.value ? 'loaded' : 'offline',
     tone: edgeModelReady.value ? 'ok' : 'danger',
-    icon: Cpu,
+    nodeId: 'ai',
+    description: '边缘目标检测 / 分类模型。',
   },
   {
-    title: '云端协同',
-    state: cloudModelReady.value ? '可达' : '不可达',
-    note: `AI 服务：${aiModelLabel(systemInfo.value.ai_model)}`,
-    tone: cloudModelReady.value ? 'ok' : 'warn',
-    icon: Cloudy,
-  },
-  {
-    title: '事件处理',
-    state: systemReachable.value ? '联通' : '待确认',
-    note: systemReachable.value ? '规则编排与联动动作可执行' : '后端系统信息待确认',
-    tone: systemReachable.value ? 'ok' : 'warn',
-    icon: Operation,
-  },
-]))
-
-const pipelineOkCount = computed(() => runtimeSteps.value.filter((step) => step.tone === 'ok').length)
-
-const serviceGroups = computed(() => [
-  {
-    title: '感知与基础服务',
-    items: [
-      { name: 'EMQX', status: collectorRunning.value ? '正常' : '待确认', tone: collectorRunning.value ? 'ok' : 'warn', description: '传感器消息接入通道。' },
-      { name: 'IoTDB', status: systemReachable.value ? '已配置' : '待确认', tone: systemReachable.value ? 'ok' : 'warn', description: '时序数据存储。' },
-      { name: 'MediaMTX', status: cameraSummary.value.total > 0 ? '已接入' : '待配置', tone: cameraSummary.value.total > 0 ? 'ok' : 'warn', description: '视频流转发。' },
-      { name: 'WebRTC Streamer', status: cameraSummary.value.total > 0 ? '已接入' : '待配置', tone: cameraSummary.value.total > 0 ? 'ok' : 'warn', description: '浏览器实时播放。' },
-    ],
-  },
-  {
-    title: '平台数据服务',
-    items: [
-      { name: 'MySQL', status: systemReachable.value ? '正常' : '待确认', tone: systemReachable.value ? 'ok' : 'warn', description: '业务主库。' },
-      { name: 'Redis', status: systemReachable.value ? '正常' : '待确认', tone: systemReachable.value ? 'ok' : 'warn', description: '缓存与短期队列。' },
-      { name: 'MinIO', status: systemReachable.value ? '已配置' : '待确认', tone: systemReachable.value ? 'ok' : 'warn', description: '截图与证据文件。' },
-      { name: 'OnlyOffice', status: '按需', tone: 'neutral', description: '文档预览与编辑。' },
-    ],
-  },
-  {
-    title: 'AI 与业务协同',
-    items: [
-      { name: '边缘视觉推理', status: edgeModelReady.value ? '正常' : '待确认', tone: edgeModelReady.value ? 'ok' : 'warn', description: '本地检测能力。' },
-      { name: '云边大模型', status: cloudModelReady.value ? '正常' : '不可达', tone: cloudModelReady.value ? 'ok' : 'warn', description: '多模态理解。' },
-      { name: '工作流执行服务', status: systemReachable.value ? '已配置' : '待确认', tone: systemReachable.value ? 'ok' : 'warn', description: '规则编排与动作。' },
-      { name: '模型库服务', status: '模型管理查看', tone: 'neutral', description: '模型版本与状态。' },
-    ],
+    key: 'onlyoffice',
+    name: 'OnlyOffice',
+    group: 'Document',
+    status: 'on demand',
+    tone: 'neutral',
+    nodeId: 'report',
+    description: '文档预览与编辑服务。',
   },
 ])
 
-const serviceFlatItems = computed(() => serviceGroups.value.flatMap((group) => group.items.map((item) => ({
-  ...item,
-  group: group.title,
-}))))
+const dependencySummary = computed(() => serviceItems.value.reduce((acc, service) => {
+  if (service.tone === 'ok') acc.online += 1
+  else if (service.tone === 'danger') acc.offline += 1
+  else acc.degraded += 1
+  return acc
+}, { online: 0, degraded: 0, offline: 0 }))
 
-const serviceAttentionItems = computed(() => serviceFlatItems.value.filter((item) => item.tone === 'warn' || item.tone === 'danger'))
-const serviceQuietItems = computed(() => serviceFlatItems.value.filter((item) => item.tone === 'ok' || item.tone === 'neutral'))
+const serviceAttentionItems = computed(() => serviceItems.value.filter((service) => service.tone === 'warn' || service.tone === 'danger').slice(0, 4))
 
-const drawerIssue = computed(() => selectedIssue.value || {})
-
-function openIssue(issue) {
-  selectedIssue.value = { ...issue }
-  issueDrawerVisible.value = true
+function sparklinePoints(key) {
+  const values = resourceHistory.value[key] || []
+  const source = values.length > 1 ? values : [0, resourceMetrics.value.find((metric) => metric.key === key)?.value || 0]
+  const step = 100 / Math.max(1, source.length - 1)
+  return source.map((value, index) => {
+    const x = index * step
+    const y = 24 - (Math.max(0, Math.min(100, value)) / 100) * 20
+    return `${formatNumber(x, 2)},${formatNumber(y, 2)}`
+  }).join(' ')
 }
 
-function processIssue(issue) {
-  if (issue.route) {
-    router.push(issue.route)
-    return
+function pushResourceSample() {
+  const next = { ...resourceHistory.value }
+  for (const metric of resourceMetrics.value) {
+    next[metric.key] = [...(next[metric.key] || []), metric.value].slice(-24)
   }
-  openIssue(issue)
+  resourceHistory.value = next
 }
 
-function goToRelatedModule() {
-  if (drawerIssue.value.route) router.push(drawerIssue.value.route)
+function inspectNode(nodeId) {
+  selectedNodeId.value = nodeId
+  highlightedNodeId.value = nodeId
+}
+
+function locateIssue(issue) {
+  selectedNodeId.value = issue.nodeId
+  highlightedNodeId.value = issue.nodeId
+  highlightedEdgeIds.value = issue.edgeIds || []
+  if (focusTimer) clearTimeout(focusTimer)
+  focusTimer = setTimeout(() => {
+    highlightedEdgeIds.value = []
+  }, 8000)
+}
+
+function clearFocus() {
+  highlightedNodeId.value = ''
+  highlightedEdgeIds.value = []
+}
+
+function goRoute(route) {
+  router.push(route)
 }
 
 function unwrap(response) {
@@ -690,12 +1167,13 @@ async function loadAll() {
       getSystemInfo(),
       getDeviceStatus(),
       getCameraList(),
-      getModelStatus(),
+      getModelStatus({ silentError: true }),
     ])
 
     systemInfo.value = system.status === 'fulfilled' ? unwrap(system.value) : {}
     deviceStatus.value = devices.status === 'fulfilled' ? unwrap(devices.value) : {}
     modelStatus.value = models.status === 'fulfilled' ? unwrap(models.value) : { loaded: false, models: {} }
+
     if (cameras.status === 'fulfilled') {
       const list = unwrap(cameras.value)?.cameras || []
       const enabled = list.filter((camera) => camera.enabled !== false)
@@ -706,6 +1184,8 @@ async function loadAll() {
     } else {
       cameraSummary.value = { online: 0, total: 0 }
     }
+
+    pushResourceSample()
   } finally {
     loading.value = false
   }
@@ -721,789 +1201,714 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (clockTimer) clearInterval(clockTimer)
+  if (focusTimer) clearTimeout(focusTimer)
 })
 </script>
 
 <style scoped>
-.system-monitor-page {
+.runtime-monitor-page {
   min-height: 100%;
   padding: 18px;
-  color: #d8e1e8;
-  background: linear-gradient(180deg, #091018 0%, #0b121a 100%);
+  color: #e8f1f5;
+  background:
+    radial-gradient(circle at 28% 12%, rgba(57, 138, 157, 0.15), transparent 36%),
+    linear-gradient(180deg, #0b1620 0%, #0a141d 50%, #081119 100%);
 }
 
-.system-monitor-page,
-.system-monitor-page * {
+.runtime-monitor-page,
+.runtime-monitor-page * {
   box-sizing: border-box;
 }
 
-.page-head {
+.runtime-head {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 16px;
+  gap: 18px;
   margin-bottom: 14px;
 }
 
-.page-head p {
-  margin: 0 0 4px;
-  color: #7f8b95;
+.runtime-head p,
+.stage-toolbar span,
+.score-chip span,
+.impact-summary span,
+.capability-matrix header span,
+.node-inspector span,
+.resource-line span,
+.uptime-line span,
+.service-cell span {
+  margin: 0;
+  color: #7f95a3;
   font-size: 12px;
 }
 
-.page-head h2 {
-  margin: 0;
-  color: #f3f7fa;
-  font-size: 20px;
-  font-weight: 600;
+.runtime-head h2 {
+  margin: 4px 0 0;
+  color: #f2f7f8;
+  font-size: 22px;
+  font-weight: 650;
   letter-spacing: 0;
 }
 
-.head-actions {
+.runtime-actions {
   display: flex;
   align-items: center;
   gap: 12px;
-  color: #93a0aa;
+  color: #9caab4;
   font-size: 12px;
 }
 
 .refresh-btn {
-  border-radius: 12px;
+  border-radius: 8px;
 }
 
-.system-grid {
+.runtime-shell {
   display: grid;
-  gap: 12px;
+  grid-template-columns: minmax(840px, 1fr) 360px;
+  gap: 14px;
+  align-items: stretch;
 }
 
-.panel {
-  padding: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 14px;
-  background: rgba(13, 19, 27, 0.94);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+.topology-stage,
+.impact-panel,
+.dependency-strip {
+  border: 1px solid rgba(115, 190, 206, 0.16);
+  background: rgba(11, 26, 37, 0.88);
+  box-shadow: 0 18px 40px rgba(0, 8, 16, 0.24);
 }
 
-.panel-head {
+.topology-stage {
+  min-height: calc(100vh - 152px);
+  padding: 14px;
+  border-radius: 10px;
+}
+
+.stage-toolbar,
+.impact-summary {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
-}
-
-.panel-head span {
-  color: #7f8b95;
-  font-size: 12px;
-}
-
-.panel-head h3 {
-  margin: 4px 0 0;
-  color: #f3f7fa;
-  font-size: 16px;
-  font-weight: 600;
-  letter-spacing: 0;
-}
-
-.panel-meta {
-  color: #95a2ac;
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.health-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.9fr);
-  gap: 12px;
-}
-
-.health-core,
-.health-side,
-.pipeline-step,
-.resource-row,
-.issue-row,
-.service-item,
-.service-group,
-.service-quiet {
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.health-core {
-  padding: 16px;
-}
-
-.score-block {
-  display: flex;
-  align-items: flex-start;
   gap: 16px;
 }
 
-.score-value {
-  min-width: 84px;
-  color: #edf4f6;
-  font-size: 32px;
-  font-weight: 600;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-}
-
-.score-value.ok { color: #7ce1c0; }
-.score-value.warn { color: #e2be73; }
-.score-value.danger { color: #ef8690; }
-
-.score-label {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  color: #b6c0c7;
-  font-size: 12px;
-}
-
-.score-issue {
-  margin-top: 10px;
-  color: #f4f8fa;
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.score-impact {
-  margin: 6px 0 0;
-  color: #90a0aa;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.health-meta {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  margin-top: 14px;
-}
-
-.meta-box {
-  padding: 10px 11px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.meta-box span {
-  display: block;
-  color: #7f8b95;
-  font-size: 11px;
-}
-
-.meta-box strong {
+.stage-toolbar strong,
+.impact-summary strong {
   display: block;
   margin-top: 4px;
-  color: #f4f8fa;
-  font-size: 14px;
-  font-weight: 600;
+  color: #f2f7f8;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.score-chip {
+  min-width: 120px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.035);
+  text-align: right;
+}
+
+.score-chip strong {
+  display: block;
+  margin-top: 3px;
+  font-size: 15px;
   font-variant-numeric: tabular-nums;
 }
 
-.health-side {
-  padding: 16px;
-  display: grid;
-  gap: 10px;
-}
+.score-chip.ok strong { color: #69d7bd; }
+.score-chip.warn strong { color: #dfb863; }
+.score-chip.danger strong { color: #ef7e8a; }
 
-.side-block {
-  padding: 12px;
-}
-
-.side-block span,
-.side-grid span {
-  display: block;
-  color: #7f8b95;
-  font-size: 11px;
-}
-
-.side-block strong,
-.side-grid strong {
-  display: block;
-  margin-top: 5px;
-  color: #f4f8fa;
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1.4;
-}
-
-.side-block small {
-  display: block;
-  margin-top: 5px;
-  color: #8d98a2;
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.side-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.side-grid div {
-  padding: 10px 11px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.pipeline-rail {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.pipeline-step {
+.topology-canvas {
   position: relative;
-  min-height: 140px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 14px;
-}
-
-.pipeline-step:not(:last-child)::after {
-  content: '';
-  position: absolute;
-  top: 44px;
-  right: -5px;
-  width: 10px;
-  height: 1px;
-  background: rgba(255, 255, 255, 0.12);
-}
-
-.step-index {
-  color: #7f8b95;
-  font-size: 11px;
-  letter-spacing: 0.06em;
-}
-
-.step-icon {
-  width: 32px;
-  height: 32px;
-  display: grid;
-  place-items: center;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.pipeline-step.ok .step-icon {
-  color: #7ce1c0;
-}
-
-.pipeline-step.warn .step-icon {
-  color: #e2be73;
-}
-
-.pipeline-step.danger .step-icon {
-  color: #ef8690;
-}
-
-.step-name {
-  color: #f4f8fa;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.step-state {
-  display: inline-flex;
-  align-self: flex-start;
-  padding: 3px 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
-  color: #a8b3bb;
-  font-size: 11px;
-}
-
-.pipeline-step.ok .step-state {
-  color: #7ce1c0;
-}
-
-.pipeline-step.warn .step-state {
-  color: #e2be73;
-}
-
-.pipeline-step.danger .step-state {
-  color: #ef8690;
-}
-
-.step-note {
-  color: #8d98a2;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.monitor-grid {
-  display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.resource-panel {
-  grid-column: span 8;
-}
-
-.action-panel {
-  grid-column: span 4;
-}
-
-.resource-list,
-.issue-list,
-.service-focus-list {
-  display: grid;
-  gap: 10px;
-}
-
-.resource-row {
-  padding: 12px;
-}
-
-.resource-row.ok {
-  border-color: rgba(255, 255, 255, 0.06);
-}
-
-.resource-row.warn {
-  border-color: rgba(226, 190, 115, 0.24);
-}
-
-.resource-row.danger {
-  border-color: rgba(239, 134, 144, 0.26);
-}
-
-.resource-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.resource-head span {
-  color: #97a4af;
-  font-size: 12px;
-}
-
-.resource-head strong {
-  color: #f4f8fa;
-  font-size: 14px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.resource-bar {
-  height: 8px;
+  min-height: 650px;
   margin-top: 10px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.05);
   overflow: hidden;
+  border-radius: 8px;
+  background:
+    linear-gradient(rgba(119, 167, 183, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(119, 167, 183, 0.045) 1px, transparent 1px),
+    rgba(7, 18, 27, 0.72);
+  background-size: 34px 34px;
 }
 
-.resource-bar i {
+.runtime-svg {
   display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, rgba(124, 225, 192, 0.9), rgba(124, 225, 192, 0.65));
+  width: 100%;
+  height: min(69vh, 700px);
+  min-height: 560px;
 }
 
-.resource-row.warn .resource-bar i {
-  background: linear-gradient(90deg, rgba(226, 190, 115, 0.95), rgba(226, 190, 115, 0.68));
+.zone-band {
+  fill: rgba(255, 255, 255, 0.018);
+  stroke: rgba(137, 180, 192, 0.12);
+  stroke-dasharray: 6 9;
 }
 
-.resource-row.danger .resource-bar i {
-  background: linear-gradient(90deg, rgba(239, 134, 144, 0.95), rgba(239, 134, 144, 0.68));
+.zone-label {
+  fill: rgba(174, 195, 204, 0.58);
+  font-size: 13px;
+  letter-spacing: 0;
 }
 
-.resource-foot {
-  margin-top: 8px;
-  color: #8d98a2;
-  font-size: 12px;
-  line-height: 1.45;
+.edge-path {
+  fill: none;
+  stroke: rgba(105, 215, 189, 0.58);
+  stroke-width: 2;
+  stroke-linecap: round;
 }
 
-.metric-tip {
-  display: grid;
-  gap: 4px;
-  color: #f4f8fa;
-  font-size: 12px;
-  line-height: 1.5;
+.edge-group.warn .edge-path {
+  stroke: rgba(223, 184, 99, 0.7);
 }
 
-.issue-row {
-  display: grid;
-  grid-template-columns: 4px minmax(0, 1fr) auto;
-  gap: 12px;
-  align-items: start;
-  padding: 12px;
+.edge-group.danger .edge-path,
+.edge-group.blocked .edge-path {
+  stroke: rgba(239, 126, 138, 0.78);
+  stroke-dasharray: 8 10;
 }
 
-.issue-strip {
-  width: 4px;
-  border-radius: 999px;
-  background: #7ce1c0;
+.edge-group.neutral .edge-path,
+.edge-group.muted .edge-path {
+  stroke: rgba(111, 130, 146, 0.48);
 }
 
-.issue-row.warn .issue-strip {
-  background: #e2be73;
+.edge-group.highlighted .edge-path {
+  stroke-width: 4;
+  filter: url(#node-glow);
 }
 
-.issue-row.danger .issue-strip {
-  background: #ef8690;
+.edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 18;
 }
 
-.issue-main {
-  min-width: 0;
+.flow-dot {
+  fill: #bdf8ed;
+  opacity: 0.8;
+  filter: url(#node-glow);
 }
 
-.issue-top {
+.flow-dot.secondary {
+  opacity: 0.48;
+}
+
+.edge-group.warn .flow-dot {
+  fill: #ffe0a1;
+}
+
+.edge-break line {
+  stroke: #ef7e8a;
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.runtime-node {
+  cursor: pointer;
+  outline: none;
+}
+
+.node-body {
+  fill: rgba(13, 34, 48, 0.96);
+  stroke: rgba(132, 164, 177, 0.36);
+  stroke-width: 1.4;
+  transition: fill 0.2s ease, stroke 0.2s ease, stroke-width 0.2s ease;
+}
+
+.runtime-node.ok .node-body {
+  stroke: rgba(105, 215, 189, 0.7);
+}
+
+.runtime-node.warn .node-body {
+  stroke: rgba(223, 184, 99, 0.84);
+}
+
+.runtime-node.danger .node-body,
+.runtime-node.blocked .node-body {
+  stroke: rgba(239, 126, 138, 0.92);
+  fill: rgba(45, 23, 31, 0.96);
+}
+
+.runtime-node.neutral .node-body {
+  stroke: rgba(113, 132, 147, 0.42);
+}
+
+.runtime-node.selected .node-body,
+.runtime-node.highlighted .node-body {
+  stroke-width: 3;
+  filter: url(#node-glow);
+}
+
+.runtime-node.impacted .node-body {
+  stroke-dasharray: 7 6;
+}
+
+.node-led {
+  fill: #6f8292;
+}
+
+.runtime-node.ok .node-led { fill: #69d7bd; }
+.runtime-node.warn .node-led { fill: #dfb863; }
+.runtime-node.danger .node-led,
+.runtime-node.blocked .node-led { fill: #ef7e8a; }
+
+.node-title {
+  fill: #edf6f7;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.node-subtitle {
+  fill: #a9bac4;
+  font-size: 11px;
+}
+
+.node-status {
+  fill: #7f95a3;
+  font-size: 10.5px;
+}
+
+.runtime-node.ok .node-status { fill: #79ddc5; }
+.runtime-node.warn .node-status { fill: #dfb863; }
+.runtime-node.danger .node-status,
+.runtime-node.blocked .node-status { fill: #ef7e8a; }
+
+.node-pulse {
+  fill: rgba(105, 215, 189, 0.08);
+  stroke: rgba(105, 215, 189, 0.22);
+  animation: nodePulse 4.8s ease-in-out infinite;
+}
+
+.runtime-node.danger .node-pulse,
+.runtime-node.blocked .node-pulse {
+  fill: rgba(239, 126, 138, 0.08);
+  stroke: rgba(239, 126, 138, 0.22);
+}
+
+.node-inspector {
+  position: absolute;
+  left: 18px;
+  bottom: 18px;
+  width: min(380px, calc(100% - 36px));
+  padding: 13px;
+  border: 1px solid rgba(115, 190, 206, 0.17);
+  border-radius: 8px;
+  background: rgba(8, 20, 30, 0.9);
+  backdrop-filter: blur(10px);
+}
+
+.inspector-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
 }
 
-.issue-top strong {
-  color: #f4f8fa;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.issue-level {
-  flex-shrink: 0;
-  padding: 3px 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
-  color: #a8b3bb;
-  font-size: 11px;
-}
-
-.issue-row.warn .issue-level {
-  color: #e2be73;
-}
-
-.issue-row.danger .issue-level {
-  color: #ef8690;
-}
-
-.issue-current {
-  margin-top: 6px;
-  color: #bcc6ce;
-  font-size: 12px;
-}
-
-.issue-impact,
-.issue-action {
+.inspector-head strong {
+  display: block;
   margin-top: 4px;
-  color: #8d98a2;
+  color: #f2f7f8;
+  font-size: 15px;
+}
+
+.node-inspector p {
+  margin: 10px 0 0;
+  color: #9badb8;
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 1.5;
 }
 
-.issue-buttons {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  align-items: flex-end;
-  padding-left: 6px;
+.resource-compact {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
 }
 
-.text-action,
-.drawer-action,
-.more-issues,
-.toggle-action {
-  display: inline-flex;
+.resource-line {
+  display: grid;
+  grid-template-columns: 52px 64px minmax(0, 1fr);
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+}
+
+.resource-line strong,
+.uptime-line strong {
+  color: #eaf4f5;
+  font-size: 12px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.resource-line svg {
+  width: 100%;
+  height: 26px;
+}
+
+.resource-line polyline {
+  fill: none;
+  stroke: #69d7bd;
+  stroke-width: 2;
+}
+
+.resource-line.warn polyline { stroke: #dfb863; }
+.resource-line.danger polyline { stroke: #ef7e8a; }
+.resource-line.neutral polyline { stroke: #6f8292; }
+
+.uptime-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.inspector-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.inspector-facts div {
+  min-width: 0;
+  padding: 9px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.inspector-facts strong {
+  display: block;
+  margin-top: 4px;
+  overflow: hidden;
+  color: #eaf4f5;
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.impact-panel {
+  min-height: calc(100vh - 152px);
+  padding: 14px;
+  border-radius: 10px;
+}
+
+.icon-text {
   border: 0;
   padding: 0;
   background: transparent;
-  color: #9dd1d5;
+  color: #90cdd4;
   font-size: 12px;
   cursor: pointer;
 }
 
-.text-action.handle,
-.drawer-action.primary {
-  color: #d8e1e8;
+.icon-text:hover {
+  color: #f2f7f8;
 }
 
-.text-action:hover,
-.drawer-action:hover,
-.toggle-action:hover,
-.more-issues:hover {
-  color: #f3f7fa;
-}
-
-.more-issues {
-  justify-self: start;
-  color: #97a4af;
-}
-
-.empty-state {
-  min-height: 174px;
-  display: grid;
-  place-items: center;
-  text-align: center;
-  color: #93a0aa;
-  border-radius: 12px;
-  border: 1px dashed rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.015);
-}
-
-.empty-state strong {
-  display: block;
-  margin-top: 8px;
-  color: #f3f7fa;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.empty-state span {
-  display: block;
-  margin-top: 4px;
-  color: #93a0aa;
-  font-size: 12px;
-}
-
-.service-panel {
-  grid-column: 1 / -1;
-}
-
-.service-focus-list {
-  margin-bottom: 10px;
-}
-
-.service-item {
-  display: grid;
-  grid-template-columns: 4px minmax(0, 1fr);
-  gap: 12px;
+.capability-matrix {
+  margin-top: 14px;
   padding: 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.028);
 }
 
-.service-item .service-strip {
-  width: 4px;
-  border-radius: 999px;
-  background: #7ce1c0;
-}
-
-.service-item.warn .service-strip {
-  background: #e2be73;
-}
-
-.service-item.neutral .service-strip {
-  background: #8d98a2;
-}
-
-.service-content {
-  min-width: 0;
-}
-
-.service-top {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+.capability-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
+  align-items: center;
+  min-height: 32px;
+  border-top: 1px solid rgba(255, 255, 255, 0.065);
+  cursor: pointer;
 }
 
-.service-top strong {
-  color: #f4f8fa;
-  font-size: 13px;
-  font-weight: 600;
+.capability-row:first-of-type {
+  margin-top: 7px;
 }
 
-.service-state {
-  flex-shrink: 0;
-  color: #a8b3bb;
+.capability-row span {
+  color: #b9c6cc;
   font-size: 12px;
 }
 
-.service-item.warn .service-state {
-  color: #e2be73;
+.capability-row strong {
+  font-size: 12px;
+  font-weight: 650;
 }
 
-.service-item.neutral .service-state {
-  color: #a8b3bb;
+.capability-row.ok strong { color: #69d7bd; }
+.capability-row.warn strong { color: #dfb863; }
+.capability-row.danger strong { color: #ef7e8a; }
+
+.impact-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
 }
 
-.service-content small {
-  display: block;
-  margin-top: 5px;
-  color: #8d98a2;
+.impact-item {
+  padding: 13px;
+  border-left: 3px solid #6f8292;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.impact-item.warn {
+  border-left-color: #dfb863;
+}
+
+.impact-item.danger {
+  border-left-color: #ef7e8a;
+  background: rgba(70, 25, 34, 0.24);
+}
+
+.impact-level {
+  color: #8fa0aa;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.impact-item.warn .impact-level { color: #dfb863; }
+.impact-item.danger .impact-level { color: #ef7e8a; }
+
+.impact-item h3 {
+  margin: 6px 0 10px;
+  color: #f2f7f8;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.impact-item dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.impact-item dt {
+  color: #7f95a3;
+  font-size: 11px;
+}
+
+.impact-item dd {
+  margin: 3px 0 0;
+  color: #bfccd2;
   font-size: 12px;
   line-height: 1.45;
 }
 
-.service-quiet {
-  margin-top: 2px;
-  padding: 10px 12px;
-  color: #97a4af;
+.impact-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.impact-actions button {
+  min-height: 28px;
+  border: 1px solid rgba(144, 205, 212, 0.26);
+  border-radius: 7px;
+  padding: 0 10px;
+  background: rgba(144, 205, 212, 0.07);
+  color: #c7eef1;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.impact-actions button:hover {
+  border-color: rgba(199, 238, 241, 0.48);
+  color: #ffffff;
+}
+
+.no-impact {
+  display: grid;
+  gap: 5px;
+  min-height: 132px;
+  place-content: center;
+  border: 1px dashed rgba(105, 215, 189, 0.28);
+  border-radius: 8px;
+  color: #9badb8;
+  text-align: center;
+}
+
+.no-impact strong {
+  color: #bdf8ed;
+  font-size: 14px;
+}
+
+.no-impact span {
   font-size: 12px;
 }
 
-.service-expanded {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  margin-top: 10px;
-}
-
-.service-group {
-  padding: 12px;
-}
-
-.service-group h4 {
-  margin: 0 0 8px;
-  color: #f3f7fa;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.service-group-row {
+.dependency-strip {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 8px 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  gap: 14px;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
 }
 
-.service-group-row:first-of-type {
-  border-top: 0;
-  padding-top: 0;
-}
-
-.service-group-row span {
-  color: #8d98a2;
-  font-size: 12px;
-}
-
-.service-group-row strong {
-  color: #f4f8fa;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.drawer-body {
-  display: grid;
+.dependency-summary {
+  display: inline-flex;
+  flex-wrap: wrap;
   gap: 10px;
-  color: #d8e1e8;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #c8d8de;
+  font-size: 12px;
+  cursor: pointer;
 }
 
-.drawer-head {
+.quiet-services {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 6px;
-}
-
-.drawer-head span {
-  color: #7f8b95;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  color: #7f95a3;
   font-size: 12px;
 }
 
-.drawer-head h3 {
-  margin: 4px 0 0;
-  color: #f3f7fa;
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.drawer-level {
-  padding: 4px 8px;
+.quiet-services span {
+  padding: 3px 7px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
-  color: #a8b3bb;
-  font-size: 11px;
-  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.035);
 }
 
-.drawer-level.warn {
-  color: #e2be73;
+.quiet-services .warn { color: #dfb863; }
+.quiet-services .danger { color: #ef7e8a; }
+
+.service-matrix {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
-.drawer-level.danger {
-  color: #ef8690;
-}
-
-.drawer-block {
+.service-cell {
+  min-height: 116px;
   padding: 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  cursor: pointer;
 }
 
-.drawer-block span {
+.service-cell.ok { border-color: rgba(105, 215, 189, 0.28); }
+.service-cell.warn { border-color: rgba(223, 184, 99, 0.36); }
+.service-cell.danger { border-color: rgba(239, 126, 138, 0.42); }
+
+.service-cell strong {
   display: block;
-  color: #7f8b95;
-  font-size: 11px;
+  margin-top: 6px;
+  color: #f2f7f8;
+  font-size: 14px;
 }
 
-.drawer-block strong {
+.service-cell em {
   display: block;
   margin-top: 5px;
-  color: #f4f8fa;
-  font-size: 13px;
-  font-weight: 600;
+  color: #69d7bd;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.service-cell.warn em { color: #dfb863; }
+.service-cell.danger em { color: #ef7e8a; }
+.service-cell.neutral em { color: #9badb8; }
+
+.service-cell small {
+  display: block;
+  margin-top: 8px;
+  color: #93a4ae;
+  font-size: 12px;
   line-height: 1.45;
 }
 
-.drawer-actions {
-  display: flex;
-  gap: 10px;
-  margin-top: 4px;
+@keyframes nodePulse {
+  0% {
+    transform: scale(0.86);
+    opacity: 0.2;
+  }
+  52% {
+    transform: scale(1.12);
+    opacity: 0.52;
+  }
+  100% {
+    transform: scale(0.86);
+    opacity: 0.2;
+  }
 }
 
-.drawer-action {
-  padding: 0;
+@media (max-width: 1680px) {
+  .runtime-shell {
+    grid-template-columns: minmax(760px, 1fr) 340px;
+  }
+
+  .runtime-svg {
+    height: min(66vh, 640px);
+    min-height: 520px;
+  }
+
+  .topology-canvas {
+    min-height: 606px;
+  }
 }
 
-@media (max-width: 1320px) {
-  .health-layout,
-  .pipeline-rail,
-  .service-expanded {
+@media (max-width: 1480px) {
+  .runtime-monitor-page {
+    padding: 14px;
+  }
+
+  .runtime-shell {
+    grid-template-columns: minmax(690px, 1fr) 330px;
+    gap: 12px;
+  }
+
+  .topology-stage,
+  .impact-panel {
+    min-height: calc(100vh - 136px);
+  }
+
+  .runtime-svg {
+    height: min(64vh, 600px);
+    min-height: 500px;
+  }
+
+  .topology-canvas {
+    min-height: 584px;
+  }
+
+  .node-inspector {
+    width: 340px;
+  }
+}
+
+@media (max-width: 1180px) {
+  .runtime-shell {
     grid-template-columns: 1fr;
   }
 
-  .resource-panel,
-  .action-panel {
-    grid-column: 1 / -1;
-  }
-}
-
-@media (max-width: 820px) {
-  .page-head,
-  .panel-head,
-  .score-block,
-  .issue-top,
-  .service-top,
-  .drawer-head {
-    align-items: flex-start;
-    flex-direction: column;
+  .impact-panel,
+  .topology-stage {
+    min-height: auto;
   }
 
-  .health-layout,
-  .monitor-grid,
-  .health-meta,
-  .side-grid,
-  .service-expanded {
-    grid-template-columns: 1fr;
+  .impact-panel {
+    display: grid;
+    grid-template-columns: 320px minmax(0, 1fr);
+    gap: 12px;
   }
 
-  .issue-row {
-    grid-template-columns: 4px minmax(0, 1fr);
-  }
-
-  .issue-buttons {
-    grid-column: 2 / -1;
-    flex-direction: row;
-    justify-content: flex-start;
+  .capability-matrix,
+  .impact-list {
+    margin-top: 0;
   }
 }
 </style>

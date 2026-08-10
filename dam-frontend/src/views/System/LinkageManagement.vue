@@ -34,7 +34,7 @@
               <header class="panel-header">
                 <div>
                   <h3>广播设备</h3>
-                  <span>用于应急喊话、自动播报和事件处置动作</span>
+                  <span>用于一键喊话、自动播报和事件处置动作</span>
                 </div>
               </header>
               <el-table :data="broadcastDevices" row-key="id" empty-text="暂无广播设备" class="data-table">

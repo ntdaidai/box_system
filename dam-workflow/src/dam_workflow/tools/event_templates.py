@@ -188,9 +188,21 @@ EVENT_WORKFLOW_TEMPLATES = {
     "滩涂游玩": _person_behavior_template("滩涂游玩"),
     "夜间电鱼捕鱼": _person_behavior_template("夜间电鱼捕鱼"),
     "台风": _extreme_weather_template("台风"),
+    "飓风": _extreme_weather_template("飓风"),
+    "暴风": _extreme_weather_template("暴风"),
+    "狂风": _extreme_weather_template("狂风"),
+    "烈风": _extreme_weather_template("烈风"),
+    "大风": _extreme_weather_template("大风"),
     "暴雨": _extreme_weather_template("暴雨"),
+    "极高温": _extreme_weather_template("极高温"),
     "高温": _extreme_weather_template("高温"),
+    "极低温": _extreme_weather_template("极低温"),
     "低温": _extreme_weather_template("低温"),
+    "冰冻": _extreme_weather_template("冰冻"),
+    "极高湿": _extreme_weather_template("极高湿"),
+    "高湿": _extreme_weather_template("高湿"),
+    "极低湿": _extreme_weather_template("极低湿"),
+    "低湿": _extreme_weather_template("低湿"),
 }
 
 

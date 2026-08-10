@@ -794,12 +794,14 @@ class ECAEngine:
                 message="ECA事件动作执行完成",
                 payload={"instance_no": instance.instance_no, "actions": action_result},
             )
+            instance.status = "COMPLETED"
             db.commit()
 
         except Exception as e:
             logger.error(f"执行事件行为失败: {e}")
             if instance:
                 try:
+                    instance.status = "FAILED"
                     safety_event_runtime_service.append_timeline(
                         db,
                         instance,

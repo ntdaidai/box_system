@@ -1759,6 +1759,9 @@ function handleGridWebRtcStreamFailure(cameraId) {
     ...gridStreamStates.value,
     [cameraId]: 'failed',
   }
+  if (isMultiCameraMode.value) {
+    startGridMjpegStream(cameraId).catch(() => null)
+  }
 }
 
 async function startGridWebRtcStream(camera) {

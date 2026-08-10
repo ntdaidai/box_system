@@ -28,6 +28,9 @@ def test_keyword_extractor():
     assert extract_event_type("PERSON_INTRUSION 人员闯入") == "人员入侵"
     assert extract_event_type("BOAT_ILLEGAL_FISHING 船只偷捕") == "夜间电鱼捕鱼"
     assert extract_event_type("暴雨来袭") == "暴雨"
+    assert extract_event_type("飓风警报", {"wind_speed_ms": 33.0, "wind_level": 12}) == "飓风"
+    assert extract_event_type("极高温告警", {"temperature": 41.0}) == "极高温"
+    assert extract_event_type("高湿事件", {"humidity": 96.0}) == "高湿"
     assert extract_event_type("检测到裂缝") is None
     assert extract_event_type("水位异常") is None
     assert extract_event_type("无关文本") is None
@@ -38,7 +41,7 @@ def test_event_templates():
     """三类新工作流事件模板都存在"""
     from src.dam_workflow.tools.event_templates import get_template, get_supported_event_types
     types = get_supported_event_types()
-    assert len(types) == 11
+    assert len(types) >= 23
     for t in types:
         tpl = get_template(t)
         assert tpl is not None, f"模板缺失: {t}"

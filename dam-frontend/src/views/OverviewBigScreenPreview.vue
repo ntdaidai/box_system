@@ -183,8 +183,15 @@
             <h2>实时告警进度 <span class="help-tip" title="最近最高风险">?</span></h2>
           </div>
           <div v-if="priorityAlert" class="priority-summary">
-            <strong :class="riskClass(priorityAlert)">{{ riskLabel(priorityAlert) }}</strong>
+            <div class="priority-topline">
+              <strong :class="riskClass(priorityAlert)">{{ riskLabel(priorityAlert) }}</strong>
+              <button type="button" class="detail-button" @click.stop="handleAlarmDetailClick">查看详情</button>
+            </div>
             <span>{{ alertTitle(priorityAlert) }}</span>
+            <small>
+              <i>开始 {{ formatDateTime(priorityAlert.started_at || priorityAlert.last_observed_at) }}</i>
+              <b :class="statusClass(priorityAlert.status)">{{ statusLabel(priorityAlert.status) }}</b>
+            </small>
           </div>
           <div v-else class="priority-summary empty">
             <strong>无告警</strong>
@@ -205,10 +212,24 @@
               <span>刷新状态<i>{{ loading ? '同步中' : '实时' }}</i></span>
             </div>
           </div>
-          <ol class="progress-timeline">
-            <li v-for="(item, index) in alarmTimeline" :key="item.key" :class="{ active: index === 0 }">
+          <ol v-if="priorityAlert" class="progress-timeline">
+            <li
+              v-for="item in alarmTimeline"
+              :key="item.key"
+              :class="[item.tone, { active: item.active }]"
+            >
               <i></i>
-              <span>{{ item.label }}</span>
+              <article>
+                <header>
+                  <strong>{{ item.label }}</strong>
+                  <time>{{ item.time }}</time>
+                </header>
+                <p>{{ item.message }}</p>
+                <footer>
+                  <span>{{ item.operator }}</span>
+                  <b :class="item.statusClass">{{ item.statusText }}</b>
+                </footer>
+              </article>
             </li>
           </ol>
         </section>
@@ -473,16 +494,56 @@ const priorityAlert = computed(() => events.value
 const alarmTimeline = computed(() => {
   const rows = priorityDetail.value.timeline || []
   if (rows.length) {
-    return rows.slice(0, 5).map((row) => ({
-      key: row.id || `${row.log_type}-${row.created_at}`,
-      label: logTypeLabel(row.log_type),
+    const currentIndex = rows.findIndex((row) => String(row.status || '').toUpperCase() === 'PENDING')
+    const activeIndex = currentIndex >= 0 ? currentIndex : rows.length - 1
+    return rows.map((row, index) => ({
+      key: row.id || `${row.log_type}-${row.create_time || row.created_at || index}`,
+      label: row.title || logTypeLabel(row.log_type),
+      time: formatDateTime(row.create_time || row.created_at),
+      message: row.message || row.action || '暂无处理说明',
+      operator: operatorLabel(row.operator),
+      statusText: timelineStatusLabel(row.status),
+      statusClass: timelineStatusClass(row.status),
+      tone: timelineTone(row.log_type),
+      active: index === activeIndex,
     }))
   }
-  if (!priorityAlert.value) return [{ key: 'idle', label: '等待事件触发' }]
+  if (!priorityAlert.value) return []
+  const startedAt = priorityAlert.value.started_at || priorityAlert.value.last_observed_at
   return [
-    { key: 'trigger', label: '事件触发' },
-    { key: 'workflow', label: 'DAM_WORKFLOW' },
-    { key: 'action', label: priorityAlert.value.status === 'PROCESSING' ? '执行动作' : '等待处置' },
+    {
+      key: 'trigger',
+      label: '事件触发',
+      time: formatDateTime(startedAt),
+      message: priorityAlert.value.summary || alertTitle(priorityAlert.value),
+      operator: '系统自动',
+      statusText: '已完成',
+      statusClass: 'is-success',
+      tone: 'is-primary',
+      active: false,
+    },
+    {
+      key: 'workflow',
+      label: 'DAM_WORKFLOW',
+      time: formatDateTime(priorityAlert.value.last_observed_at || startedAt),
+      message: '处置流程等待同步',
+      operator: '系统自动',
+      statusText: '待同步',
+      statusClass: 'is-pending',
+      tone: 'is-warning',
+      active: priorityAlert.value.status !== 'PROCESSING',
+    },
+    {
+      key: 'action',
+      label: priorityAlert.value.status === 'PROCESSING' ? '执行动作' : '等待处置',
+      time: formatDateTime(priorityAlert.value.last_observed_at || startedAt),
+      message: priorityAlert.value.status === 'PROCESSING' ? '处置动作执行中' : '等待值班人员确认',
+      operator: '值班人员',
+      statusText: timelineStatusLabel(priorityAlert.value.status),
+      statusClass: timelineStatusClass(priorityAlert.value.status),
+      tone: 'is-success',
+      active: priorityAlert.value.status === 'PROCESSING',
+    },
   ]
 })
 
@@ -836,6 +897,14 @@ function formatNumber(value) {
   return Number.isFinite(number) ? String(Math.max(0, number)).padStart(2, '0') : '--'
 }
 
+function formatDateTime(value) {
+  if (!value) return '--'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '--'
+  const pad = (number) => String(number).padStart(2, '0')
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
 function compareNumber(current, previous) {
   const delta = Number(current || 0) - Number(previous || 0)
   if (delta > 0) return { icon: '↑', delta: delta, tone: 'up' }
@@ -866,6 +935,14 @@ function riskLabel(event) {
 
 function riskClass(event) {
   return ({ LOW: 'low', MEDIUM: 'medium', HIGH: 'high' })[riskLevel(event)] || 'unknown'
+}
+
+function statusLabel(value) {
+  return ({ PENDING: '待处理', PROCESSING: '处理中', COMPLETED: '已完成', FALSE_ALARM: '误报' })[value] || value || '--'
+}
+
+function statusClass(value) {
+  return ({ PENDING: 'is-pending', PROCESSING: 'is-processing', COMPLETED: 'is-completed', FALSE_ALARM: 'is-false-alarm' })[value] || ''
 }
 
 function deviceTypeLabel(key) {
@@ -1001,7 +1078,28 @@ function alertTitle(event) {
 }
 
 function logTypeLabel(value) {
-  return ({ TRIGGER: '事件触发', RISK_CHANGE: '风险变化', ACTION: '执行动作', MANUAL: '人工操作', RESOLVE: '事件闭环', SYSTEM: '系统记录' })[value] || value || '系统记录'
+  return ({ TRIGGER: '事件触发', RISK_CHANGE: '风险变化', ACTION: '执行动作', DAM_WORKFLOW: 'DAM_WORKFLOW', MANUAL: '人工操作', REPORT: 'REPORT', RESOLVE: '事件闭环', SYSTEM: '系统记录' })[value] || value || '系统记录'
+}
+
+function timelineTone(value) {
+  return ({ TRIGGER: 'is-primary', RISK_CHANGE: 'is-warning', ACTION: 'is-success', DAM_WORKFLOW: 'is-warning', REPORT: 'is-info', RESOLVE: 'is-success' })[value] || 'is-info'
+}
+
+function timelineStatusLabel(value) {
+  return ({ PENDING: '待处理', PROCESSING: '处理中', SUCCESS: '已完成', COMPLETED: '已完成', FAILED: '失败', FALSE_ALARM: '误报' })[value] || value || '已记录'
+}
+
+function timelineStatusClass(value) {
+  return ({ PENDING: 'is-pending', PROCESSING: 'is-processing', SUCCESS: 'is-success', COMPLETED: 'is-success', FAILED: 'is-failed', FALSE_ALARM: 'is-muted' })[value] || 'is-muted'
+}
+
+function operatorLabel(value) {
+  if (!value) return '系统记录'
+  return value === 'SYSTEM' ? '系统自动' : value
+}
+
+function handleAlarmDetailClick() {
+  // 跳转目标待后续确定，这里仅保留大屏上的操作入口。
 }
 
 function riskAutoSequence() {
@@ -1439,6 +1537,11 @@ onBeforeUnmount(() => {
 
 .right-column {
   grid-template-rows: 74px minmax(0, 1fr) 202px;
+}
+
+.progress-panel {
+  display: flex;
+  flex-direction: column;
 }
 
 .screen-panel,
@@ -2208,17 +2311,26 @@ onBeforeUnmount(() => {
 
 .priority-summary {
   display: grid;
-  gap: 8px;
-  margin-top: 14px;
-  padding: 14px 16px;
+  gap: 9px;
+  margin-top: 12px;
+  padding: 12px 13px;
   border: 1px solid rgba(255, 91, 104, .34);
   border-radius: 8px;
-  background: linear-gradient(180deg, rgba(255, 91, 104, .12), rgba(255, 91, 104, .055));
+  background: linear-gradient(135deg, rgba(255, 91, 104, .14), rgba(10, 36, 58, .42));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .045);
 }
 
+.priority-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .priority-summary strong {
-  font-size: 15px;
+  font-size: 14px;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .priority-summary strong.low { color: #38d59c; }
@@ -2228,6 +2340,87 @@ onBeforeUnmount(() => {
 .priority-summary span {
   color: #eef7ff;
   font-size: 15px;
+  line-height: 1.35;
+  font-weight: 700;
+}
+
+.priority-summary small {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.priority-summary small i {
+  min-width: 0;
+  color: #8fc8f2;
+  font-size: 12px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.priority-summary small b,
+.progress-timeline footer b {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  color: #9ed3f5;
+  background: rgba(143, 200, 242, .08);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.priority-summary small b.is-pending,
+.progress-timeline footer b.is-pending {
+  color: #ffcf78;
+  background: rgba(255, 182, 72, .12);
+}
+
+.priority-summary small b.is-processing,
+.progress-timeline footer b.is-processing {
+  color: #64dfff;
+  background: rgba(67, 200, 255, .12);
+}
+
+.priority-summary small b.is-completed,
+.priority-summary small b.is-success,
+.progress-timeline footer b.is-success {
+  color: #48e6ae;
+  background: rgba(56, 213, 156, .12);
+}
+
+.priority-summary small b.is-false-alarm,
+.progress-timeline footer b.is-muted {
+  color: #a6b8c8;
+  background: rgba(166, 184, 200, .1);
+}
+
+.progress-timeline footer b.is-failed {
+  color: #ff7f88;
+  background: rgba(255, 91, 104, .13);
+}
+
+.detail-button {
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 11px;
+  border: 1px solid rgba(67, 200, 255, .36);
+  border-radius: 6px;
+  color: #cceeff;
+  background: rgba(22, 84, 134, .32);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background .18s ease, border-color .18s ease;
+}
+
+.detail-button:hover {
+  border-color: rgba(67, 200, 255, .58);
+  background: rgba(34, 112, 176, .42);
 }
 
 .priority-summary.empty {
@@ -2345,45 +2538,117 @@ onBeforeUnmount(() => {
 
 .progress-timeline {
   position: relative;
+  flex: 1 1 auto;
   display: grid;
-  gap: 26px;
-  margin: 22px 0 0;
-  padding: 0 0 0 22px;
+  align-content: start;
+  gap: 10px;
+  margin: 12px 0 0;
+  padding: 0 2px 0 22px;
   list-style: none;
+  overflow: auto;
+  min-height: 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(67, 200, 255, .36) transparent;
 }
 
 .progress-timeline::before {
   content: "";
   position: absolute;
-  top: 9px;
-  bottom: 9px;
+  top: 13px;
+  bottom: 13px;
   left: 7px;
   width: 1px;
-  background: linear-gradient(180deg, #ff5b68, #ffb648, rgba(136, 169, 193, .25));
+  background: linear-gradient(180deg, rgba(255, 91, 104, .86), rgba(255, 182, 72, .64), rgba(104, 161, 200, .22));
 }
 
 .progress-timeline li {
   position: relative;
-  display: flex;
-  align-items: center;
-  min-height: 22px;
+  min-width: 0;
   color: #cfe2f0;
-  font-size: 15px;
 }
 
-.progress-timeline i {
+.progress-timeline > li > i {
   position: absolute;
-  left: -22px;
-  width: 14px;
-  height: 14px;
+  left: -20px;
+  top: 16px;
+  width: 12px;
+  height: 12px;
   border: 2px solid rgba(136, 169, 193, .58);
   border-radius: 50%;
   background: #071a2f;
+  z-index: 1;
 }
 
-.progress-timeline li.active i {
+.progress-timeline li.is-primary > i {
+  border-color: #43c8ff;
+  background: #08243a;
+}
+
+.progress-timeline li.is-warning > i {
+  border-color: #ffb648;
+  background: #2c210d;
+}
+
+.progress-timeline li.is-success > i {
+  border-color: #38d59c;
+  background: #0a2d29;
+}
+
+.progress-timeline li.active > i {
   border-color: #ff5b68;
   box-shadow: 0 0 0 4px rgba(255, 91, 104, .12);
+}
+
+.progress-timeline article {
+  min-width: 0;
+  padding: 10px 11px;
+  border: 1px solid rgba(67, 200, 255, .14);
+  border-radius: 8px;
+  background: rgba(4, 20, 36, .48);
+}
+
+.progress-timeline li.active article {
+  border-color: rgba(255, 91, 104, .32);
+  background: linear-gradient(135deg, rgba(255, 91, 104, .1), rgba(4, 20, 36, .54));
+}
+
+.progress-timeline header,
+.progress-timeline footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.progress-timeline header strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #f1fbff;
+  font-size: 14px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-timeline time,
+.progress-timeline footer span {
+  flex: 0 0 auto;
+  color: #8fc8f2;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.progress-timeline p {
+  display: -webkit-box;
+  margin: 8px 0 10px;
+  overflow: hidden;
+  color: #b7d0e3;
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .device-panel.warning {

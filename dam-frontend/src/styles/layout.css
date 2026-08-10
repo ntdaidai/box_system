@@ -16,14 +16,14 @@
 .headBox {
   width: 100%;
   height: 60px;
-  background: linear-gradient(180deg, #0d1420 0%, #0b1118 100%);
+  background: linear-gradient(180deg, #152642 0%, #1e3a5f 100%);
   padding: 0 30px;
   position: relative;
   z-index: 100;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
 }
 
 .headBox::after {
@@ -32,67 +32,69 @@
   bottom: 0;
   left: 0;
   right: 0;
-  height: 1px;
-  background: rgba(255, 255, 255, 0.06);
+  height: 2px;
+  background: linear-gradient(90deg, transparent 0%, rgba(0, 200, 255, 0.2) 15%, rgba(0, 200, 255, 0.6) 50%, rgba(0, 200, 255, 0.2) 85%, transparent 100%);
+  box-shadow: 0 0 10px rgba(0, 200, 255, 0.5);
 }
 
 .headBox .logo {
-  font-size: 20px;
-  color: #eef3f7;
-  font-weight: 600;
-  letter-spacing: 0.5px;
+  font-size: 26px;
+  color: var(--text-primary);
+  font-weight: bold;
+  letter-spacing: 3px;
   white-space: nowrap;
 }
 
 .headBox .menu {
   height: 60px;
-  gap: 8px;
+  gap: 10px;
 }
 
 .headBox .menu li {
   height: 38px;
-  padding: 0 16px;
-  border-radius: 10px;
+  padding: 0 20px;
+  border-radius: 6px;
   align-items: center;
   gap: 6px;
   cursor: pointer;
   transition: all 0.3s;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(0, 200, 255, 0.2);
+  background: rgba(0, 100, 180, 0.2);
 }
 
-.headBox .menu li .el-icon { color: #8f9ba6; }
-.headBox .menu li .txt { color: #b4bec7; font-size: 14px; line-height: 36px; font-weight: 500; }
+.headBox .menu li .el-icon { color: var(--text-secondary); }
+.headBox .menu li .txt { color: var(--text-secondary); font-size: 16px; line-height: 36px; }
 
 .headBox .menu li:hover {
-  background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(0, 200, 255, 0.15);
+  border-color: rgba(0, 200, 255, 0.5);
 }
 .headBox .menu li:hover .el-icon,
-.headBox .menu li:hover .txt { color: #eef3f7; }
+.headBox .menu li:hover .txt { color: var(--accent-color); }
 
 .headBox .menu li.active {
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 200, 255, 0.2);
+  border: 1px solid rgba(0, 200, 255, 0.7);
+  box-shadow: 0 0 12px rgba(0, 200, 255, 0.3);
 }
 .headBox .menu li.active .el-icon,
 .headBox .menu li.active .txt {
-  color: #eef3f7;
-  text-shadow: none;
+  color: var(--accent-color);
+  text-shadow: 0 0 6px var(--accent-glow);
 }
 
 .headBox .avatar {
   margin-left: 24px;
   cursor: pointer;
-  color: #aeb8c1;
+  color: var(--text-secondary);
   gap: 8px;
   padding: 6px 12px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  border: 1px solid rgba(0, 200, 255, 0.2);
 }
 .headBox .avatar:hover {
-  border-color: rgba(255, 255, 255, 0.16);
-  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(0, 200, 255, 0.5);
+  background: rgba(0, 200, 255, 0.1);
 }
 .headBox .avatar .el-icon:first-child { font-size: 20px; }
 .headBox .avatar .txt { font-size: 14px; }
@@ -110,36 +112,36 @@
   min-width: 260px;
   height: 100%;
   padding: 22px 16px;
-  background: linear-gradient(180deg, rgba(11, 17, 25, 0.98) 0%, rgba(14, 20, 29, 0.98) 100%);
+  background: linear-gradient(180deg, rgba(30, 58, 95, 0.6) 0%, rgba(26, 45, 74, 0.8) 100%);
   overflow-y: auto;
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  border-right: 1px solid rgba(0, 200, 255, 0.1);
 }
 
 .siderBox .el-menu {
   background: transparent;
   border: none;
-  --el-menu-base-level-padding: 14px;
+  --el-menu-base-level-padding: 16px;
   --el-menu-level-padding: 0px;
 }
 
 .siderBox .el-menu-item,
 .siderBox .el-sub-menu__title {
-  height: 50px !important;
-  line-height: 50px !important;
-  color: #aab4bd !important;
-  border-radius: 10px;
-  margin-bottom: 8px;
-  padding: 0 18px !important;
-  font-size: 15px;
-  font-weight: 500;
+  height: 58px !important;
+  line-height: 58px !important;
+  color: var(--text-secondary) !important;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  padding: 0 22px !important;
+  font-size: 18px;
+  font-weight: 600;
 }
 
 .siderBox .el-menu-item .el-icon,
 .siderBox .el-sub-menu__title .el-icon {
-  color: #7f8b95;
-  margin-right: 12px;
+  color: var(--text-muted);
+  margin-right: 16px;
   flex-shrink: 0;
-  font-size: 18px;
+  font-size: 22px;
 }
 
 .siderBox .menu-text {
@@ -148,32 +150,32 @@
 
 .siderBox .el-menu-item:hover,
 .siderBox .el-sub-menu__title:hover {
-  background: rgba(255, 255, 255, 0.04) !important;
+  background: rgba(0, 200, 255, 0.1) !important;
 }
 .siderBox .el-menu-item:hover .el-icon,
 .siderBox .el-sub-menu__title:hover .el-icon {
-  color: #eef3f7;
+  color: var(--accent-color);
 }
 
 .siderBox .el-menu-item.is-active {
-  background: rgba(255, 255, 255, 0.06) !important;
-  color: #eef3f7 !important;
-  border-left: 2px solid var(--accent-color);
+  background: rgba(0, 200, 255, 0.15) !important;
+  color: var(--accent-color) !important;
+  border-left: 4px solid var(--accent-color);
 }
 .siderBox .el-menu-item.is-active .el-icon {
   color: var(--accent-color);
 }
 
 .siderBox .el-sub-menu .el-menu-item {
-  padding-left: 46px !important;
-  height: 44px !important;
-  line-height: 44px !important;
-  font-size: 14px;
-  margin-bottom: 6px;
+  padding-left: 54px !important;
+  height: 52px !important;
+  line-height: 52px !important;
+  font-size: 16px;
+  margin-bottom: 8px;
 }
 
 .siderBox .el-sub-menu .el-menu-item.is-active {
-  color: #eef3f7 !important;
+  color: var(--accent-color) !important;
 }
 
 /* ========== 内容区 ========== */
@@ -181,7 +183,7 @@
   flex: 1;
   flex-direction: column;
   overflow: hidden;
-  padding: 16px 18px 16px 16px;
+  padding: 16px 20px 16px 16px;
 }
 
 .dashboard-shell .contentBox {
@@ -201,13 +203,13 @@
   height: 44px;
   padding: 0 20px;
   line-height: 44px;
-  color: #dde5ea;
-  font-size: 13px;
-  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-primary);
+  font-size: 16px;
+  background: rgba(30, 58, 95, 0.5);
   margin-bottom: 12px;
   flex: 0 0 auto;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  border: 1px solid var(--border-light);
 }
 .routerBox .el-icon { margin-right: 8px; color: var(--accent-color); font-size: 16px; }
 

@@ -137,10 +137,7 @@ const routes = [
           {
             path: 'safety-events/:id',
             name: 'AlarmSafetyEventDetail',
-            redirect: (to) => ({
-              path: '/alarm/safety-events',
-              query: { eventId: to.params.id },
-            }),
+            component: () => import('@/views/Alarm/SafetyEventDetail.vue'),
             meta: { title: '安全事件详情' }
           },
         ],
