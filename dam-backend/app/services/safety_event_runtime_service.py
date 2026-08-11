@@ -48,6 +48,29 @@ class SafetyEventRuntimeService:
             .first()
         )
 
+    @staticmethod
+    def next_instance_no(db: Session, now: dt.datetime, prefix: str = "EVT") -> str:
+        """生成当天序号递增的事件编号，如 EVT_20260811_001（当天第 N 个触发）。
+
+        按 id 倒序取当天最新一条，解析其尾部序号并 +1；当天无记录或历史
+        编号无法解析时从 001 重新开始。编号带 unique 约束，极端并发下
+        若同时撞号会由数据库拦截。
+        """
+        day_pattern = f"{prefix}_{now:%Y%m%d}_"
+        latest = (
+            db.query(SafetyEventInstance.instance_no)
+            .filter(SafetyEventInstance.instance_no.like(f"{day_pattern}%"))
+            .order_by(SafetyEventInstance.id.desc())
+            .first()
+        )
+        seq = 1
+        if latest:
+            try:
+                seq = int(str(latest[0]).rsplit("_", 1)[-1]) + 1
+            except (TypeError, ValueError):
+                seq = 1
+        return f"{day_pattern}{seq:03d}"
+
     def append_timeline(
         self,
         db: Session,

@@ -62,7 +62,7 @@
 
         <section class="screen-panel trend-panel">
           <div class="panel-heading">
-            <h2>闯入趋势</h2>
+            <h2>安全事件记录</h2>
             <div class="segmented">
               <button
                 v-for="item in trendModes"
@@ -78,7 +78,7 @@
             <span><i class="person"></i>人员</span>
             <span><i class="boat"></i>船只</span>
           </div>
-          <div ref="trendChartRef" class="line-chart echarts-chart" aria-label="人员和船只闯入趋势"></div>
+          <div ref="trendChartRef" class="line-chart echarts-chart" aria-label="人员和船只安全事件记录"></div>
         </section>
       </aside>
 
@@ -177,8 +177,19 @@
               </button>
             </div>
             <div class="map-controls" aria-label="地图控制" @pointerdown.stop>
-              <button type="button" title="放大" @click.stop="zoomMapBy(1.18)">+</button>
-              <button type="button" title="缩小" @click.stop="zoomMapBy(0.84)">−</button>
+              <div class="zoom-cluster" :class="{ visible: showZoomTrack }">
+                <button type="button" class="zoom-button" title="放大" @click.stop="zoomMapBy(1.18)">+</button>
+                <div
+                  class="zoom-track"
+                  :style="zoomTrackStyle"
+                  aria-hidden="true"
+                >
+                  <span class="zoom-track-line">
+                    <i></i>
+                  </span>
+                </div>
+                <button type="button" class="zoom-button" title="缩小" @click.stop="zoomMapBy(0.84)">−</button>
+              </div>
               <button type="button" class="locate" title="定位当前点位" @click.stop="focusSelectedMapPoint" aria-label="定位当前点位">
                 <span></span>
               </button>
@@ -196,7 +207,7 @@
           <div class="analytics-grid">
             <article class="analytics-card hourly-card">
               <div class="sub-heading">
-                <h3>告警趋势</h3>
+                <h3>告警记录</h3>
                 <div class="mini-segmented">
                   <button
                     v-for="item in trendModes"
@@ -246,7 +257,7 @@
           <div class="panel-heading progress-heading">
             <h2>实时告警进度</h2>
             <div class="clock-block progress-clock">
-              <span>{{ currentDate }} {{ currentWeek }}</span>
+              <span>{{ currentShortDate }} {{ currentWeek }}</span>
               <strong>{{ currentTime }}</strong>
             </div>
           </div>
@@ -339,6 +350,7 @@
 
 <script setup>
 import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import * as echarts from 'echarts'
 import { ElMessage } from 'element-plus'
 import { BellFilled, CircleCheckFilled, Connection, Promotion, Ship, UserFilled, WarningFilled } from '@element-plus/icons-vue'
@@ -347,15 +359,15 @@ import { getDeviceStatus } from '@/api/sensor'
 import { getCameraList } from '@/api/camera'
 
 const cameraPoints = [
-  { no: 1, x: 17.3410, y: 40.8304, areaType: 'boatForbidden', regionKey: 'boat-1' },
+  { no: 1, cameraId: 4, dataSourceId: 8, x: 17.3410, y: 40.8304, areaType: 'boatForbidden', regionKey: 'boat-1' },
   { no: 2, x: 7.3988, y: 15.2249, areaType: 'toConfirm', regionKey: 'camera-2' },
-  { no: 3, x: 41.8497, y: 74.0484, areaType: 'boatForbidden', regionKey: 'boat-3' },
+  { no: 3, cameraId: 6, dataSourceId: 10, x: 41.8497, y: 74.0484, areaType: 'boatForbidden', regionKey: 'boat-3' },
   { no: 4, x: 47.3988, y: 38.0623, areaType: 'boatForbidden', regionKey: 'boat-4' },
   { no: 5, x: 49.2486, y: 38.0623, areaType: 'boatForbidden', regionKey: 'boat-5' },
   { no: 6, x: 66.3584, y: 52.5952, areaType: 'boatForbidden', regionKey: 'boat-6' },
   { no: 7, x: 68.2081, y: 52.5952, areaType: 'boatForbidden', regionKey: 'boat-7' },
   { no: 8, x: 57.3410, y: 75.4325, areaType: 'boatForbidden', regionKey: 'boat-8' },
-  { no: 9, x: 91.7919, y: 24.2215, areaType: 'personForbidden', regionKey: 'person-9' },
+  { no: 9, cameraId: 1, dataSourceId: 6, x: 91.7919, y: 24.2215, areaType: 'personForbidden', regionKey: 'person-9' },
 ]
 
 const regionGroups = [
@@ -426,7 +438,9 @@ const chartTooltip = {
   textStyle: { color: '#dff5ff', fontSize: 13 },
   extraCssText: 'max-width:240px;white-space:normal;word-break:break-word;border-radius:8px;box-shadow:0 10px 28px rgba(0,0,0,.28);z-index:99999;',
 }
+const router = useRouter()
 const mapFocusScale = 1.38
+const maxMapScale = 4
 const selectedPointNo = ref(9)
 const activeRiskModeKey = ref('today')
 const riskFocusIndex = ref(2)
@@ -454,6 +468,7 @@ const mapBaseSize = ref({ width: 0, height: 0 })
 const mapScale = ref(1)
 const mapOffset = ref({ x: 120, y: 0 })
 const minMapScale = ref(1)
+const showZoomTrack = ref(false)
 const chartInstances = new Map()
 
 const mapDragState = {
@@ -469,6 +484,7 @@ let clockTimer
 let refreshTimer
 let riskTimer
 let riskResumeTimer
+let zoomTrackTimer
 let mapResizeObserver
 let currentPriorityDetailId = null
 let mapInitialFocused = false
@@ -478,15 +494,23 @@ const weekLabels = ['星期日', '星期一', '星期二', '星期三', '星期�
 
 const selectedPoint = computed(() => cameraPoints.find((point) => point.no === selectedPointNo.value) || cameraPoints[0])
 const selectedGroup = computed(() => regionGroups.find((group) => group.key === selectedPoint.value.regionKey) || regionGroups[0])
+const selectedCameraId = computed(() => Number(selectedPoint.value.cameraId || 0) || null)
+const selectedCameraDataSourceId = computed(() => Number(selectedPoint.value.dataSourceId || 0) || null)
 const selectedRegionPath = computed(() => smoothClosedPath(cameraRegionPaths[selectedGroup.value.key]))
 const selectedRegionCallout = computed(() => regionCalloutForRegion(selectedGroup.value.key, selectedPoint.value.no))
 const activeRiskLevel = computed(() => riskLevels[riskFocusIndex.value] || riskLevels[0])
 const activeRiskMode = computed(() => riskModes.find((mode) => mode.key === activeRiskModeKey.value) || riskModes[0])
+const currentShortDate = computed(() => currentDate.value && currentDate.value !== '--' ? currentDate.value.slice(5) : '--')
 const mapSceneStyle = computed(() => ({
   width: `${mapBaseSize.value.width}px`,
   height: `${mapBaseSize.value.height}px`,
   transform: `translate3d(-50%, -50%, 0) translate3d(${mapOffset.value.x}px, ${mapOffset.value.y}px, 0) scale(${mapScale.value})`,
 }))
+const zoomTrackStyle = computed(() => {
+  const range = Math.max(maxMapScale - minMapScale.value, 0.01)
+  const progress = Math.max(0, Math.min(1, (mapScale.value - minMapScale.value) / range))
+  return { '--zoom-thumb-top': `${(1 - progress) * 100}%` }
+})
 
 const todayEvents = computed(() => eventsInWindow('today'))
 const yesterdayEvents = computed(() => eventsInWindow('yesterday'))
@@ -550,12 +574,29 @@ const intrusionTrend = computed(() => {
   }
 })
 
-const selectedEvents = computed(() => {
-  const category = selectedGroup.value.category
-  if (category === 'PERSON_SAFETY') return events.value.filter((event) => getOverviewCategory(event) === 'person')
-  if (category === 'ILLEGAL_FISHING') return events.value.filter((event) => getOverviewCategory(event) === 'boat')
-  return events.value.filter((event) => getOverviewCategory(event) === 'other')
+const selectedCameraEvents = computed(() => {
+  const cameraId = selectedCameraId.value
+  const dataSourceId = selectedCameraDataSourceId.value
+  if (!cameraId && !dataSourceId) return []
+  return events.value.filter((event) => {
+    const sourceType = String(event?.source_type || '').toLowerCase()
+    if (sourceType !== 'camera') return false
+    if (dataSourceId && event?.data_source_id != null) {
+      return Number(event.data_source_id) === dataSourceId
+    }
+    return Number(event?.source_id) === cameraId
+  })
 })
+
+const selectedSensorEventsForNine = computed(() => {
+  if (selectedPointNo.value !== 9) return []
+  return events.value.filter((event) => String(event?.source_type || '').toLowerCase() === 'sensor')
+})
+
+const selectedEvents = computed(() => [
+  ...selectedCameraEvents.value,
+  ...selectedSensorEventsForNine.value,
+])
 
 const selectedData = computed(() => {
   const timeline = eventTimelineBuckets(selectedEvents.value, detailTrendMode.value)
@@ -568,16 +609,23 @@ const selectedData = computed(() => {
 })
 
 const riskCompositionData = computed(() => {
+  const cameraSource = selectedCameraEvents.value
   const rows = [
-    { name: '闯入', events: events.value.filter((event) => ['person', 'boat'].includes(getOverviewCategory(event))) },
-    { name: '灾害', events: events.value.filter((event) => getOverviewCategory(event) === 'disaster') },
-    { name: '其他', events: events.value.filter((event) => getOverviewCategory(event) === 'other') },
+    { name: '安全事件', events: cameraSource.filter((event) => ['person', 'boat'].includes(getOverviewCategory(event))) },
+    { name: '自然灾害', events: cameraSource.filter((event) => getOverviewCategory(event) === 'disaster') },
+    {
+      name: '其他',
+      events: [
+        ...cameraSource.filter((event) => getOverviewCategory(event) === 'other'),
+        ...selectedSensorEventsForNine.value,
+      ],
+    },
   ]
   return {
     labels: rows.map((row) => row.name),
     risk: ['LOW', 'MEDIUM', 'HIGH'].reduce((acc, level) => {
       acc[level] = rows.map((row) => {
-        if (row.name === '灾害' && !row.events.length) return 0
+        if (row.name === '自然灾害' && !row.events.length) return 0
         return row.events.filter((event) => riskLevel(event) === level).length
       })
       return acc
@@ -586,9 +634,10 @@ const riskCompositionData = computed(() => {
 })
 
 const disposalStats = computed(() => {
-  const total = events.value.length
-  const handled = events.value.filter(isHandled).length
-  const processing = events.value.filter((event) => event.status === 'PROCESSING').length
+  const source = selectedEvents.value
+  const total = source.length
+  const handled = source.filter(isHandled).length
+  const processing = source.filter((event) => event.status === 'PROCESSING').length
   const pending = Math.max(total - handled - processing, 0)
   return { total, handled, processing, pending }
 })
@@ -1439,7 +1488,9 @@ function operatorLabel(value) {
 }
 
 function handleAlarmDetailClick() {
-  // 跳转目标待后续确定，这里仅保留大屏上的操作入口。
+  const id = displayedPriorityAlert.value?.id
+  if (!id) return
+  router.push({ name: 'AlarmSafetyEventDetail', params: { id } })
 }
 
 function riskAutoSequence() {
@@ -1503,7 +1554,7 @@ function focusMapPoint(no, options = {}) {
   const point = cameraPoints.find((item) => item.no === no)
   const { width, height } = mapBaseSize.value
   if (!point || !width || !height) return
-  const targetScale = Math.max(minMapScale.value, Math.min(4, options.scale || mapFocusScale))
+  const targetScale = Math.max(minMapScale.value, Math.min(maxMapScale, options.scale || mapFocusScale))
   const pointX = (point.x / 100 - .5) * width
   const pointY = (point.y / 100 - .5) * height
   mapScale.value = targetScale
@@ -1519,7 +1570,8 @@ function focusSelectedMapPoint() {
 }
 
 function zoomMapBy(ratio) {
-  const nextScale = Math.max(minMapScale.value, Math.min(4, mapScale.value * ratio))
+  revealZoomTrack()
+  const nextScale = Math.max(minMapScale.value, Math.min(maxMapScale, mapScale.value * ratio))
   if (nextScale === mapScale.value) return
   const scaleRatio = nextScale / mapScale.value
   mapScale.value = nextScale
@@ -1528,6 +1580,14 @@ function zoomMapBy(ratio) {
     y: mapOffset.value.y * scaleRatio,
   }
   clampMapOffset()
+}
+
+function revealZoomTrack() {
+  showZoomTrack.value = true
+  window.clearTimeout(zoomTrackTimer)
+  zoomTrackTimer = window.setTimeout(() => {
+    showZoomTrack.value = false
+  }, 950)
 }
 
 function updateMapBaseSize() {
@@ -1551,9 +1611,10 @@ function updateMapBaseSize() {
 
 function handleMapWheel(event) {
   if (!mapBaseSize.value.width) return
+  revealZoomTrack()
   const board = mapBoardRef.value
   const rect = board.getBoundingClientRect()
-  const nextScale = Math.max(minMapScale.value, Math.min(4, mapScale.value * (event.deltaY > 0 ? 0.9 : 1.1)))
+  const nextScale = Math.max(minMapScale.value, Math.min(maxMapScale, mapScale.value * (event.deltaY > 0 ? 0.9 : 1.1)))
   if (nextScale === mapScale.value) return
   const pointerX = event.clientX - rect.left - rect.width / 2
   const pointerY = event.clientY - rect.top - rect.height / 2
@@ -1738,6 +1799,7 @@ onBeforeUnmount(() => {
   window.clearInterval(refreshTimer)
   window.clearInterval(riskTimer)
   window.clearTimeout(riskResumeTimer)
+  window.clearTimeout(zoomTrackTimer)
   window.removeEventListener('resize', resizeCharts)
   mapResizeObserver?.disconnect()
   chartInstances.forEach((chart) => chart.dispose())
@@ -1934,6 +1996,7 @@ onBeforeUnmount(() => {
 .progress-panel {
   display: flex;
   flex-direction: column;
+  container: progressPanel / inline-size;
 }
 
 .screen-panel,
@@ -2103,6 +2166,10 @@ onBeforeUnmount(() => {
   gap: 10px;
   height: calc(100% - 32px);
   margin-top: 10px;
+}
+
+.today-panel {
+  container: todayPanel / inline-size;
 }
 
 .today-card {
@@ -2471,15 +2538,89 @@ onBeforeUnmount(() => {
 
 .map-controls {
   position: absolute;
-  right: 14px;
-  bottom: 14px;
+  right: 18px;
+  bottom: 18px;
   z-index: 6;
-  display: grid;
-  gap: 7px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
   pointer-events: auto;
 }
 
-.map-controls button {
+.zoom-cluster {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  opacity: 0;
+  transform: translateY(5px);
+  pointer-events: none;
+  transition: opacity .22s ease, transform .22s ease;
+}
+
+.zoom-cluster.visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.map-controls .zoom-button {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  color: #07111c;
+  background: rgba(247, 249, 252, .94);
+  box-shadow: 0 8px 18px rgba(1, 9, 18, .2);
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .18s ease, transform .18s ease, box-shadow .18s ease;
+}
+
+.map-controls .zoom-button:hover {
+  background: #fff;
+  box-shadow: 0 10px 22px rgba(1, 9, 18, .24);
+  transform: translateY(-1px);
+}
+
+.zoom-track {
+  width: 34px;
+  height: 108px;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.zoom-track-line {
+  position: relative;
+  width: 8px;
+  height: 98px;
+  border-radius: 999px;
+  background: rgba(246, 249, 253, .9);
+  box-shadow: inset 0 0 0 1px rgba(226, 235, 246, .55);
+}
+
+.zoom-track-line i {
+  position: absolute;
+  left: 50%;
+  top: var(--zoom-thumb-top);
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #4a91e2;
+  border: 2px solid rgba(45, 123, 205, .86);
+  box-shadow: 0 6px 15px rgba(55, 139, 232, .42);
+  transform: translate(-50%, -50%);
+}
+
+.map-controls .locate {
+  position: relative;
   width: 34px;
   height: 34px;
   display: grid;
@@ -2490,24 +2631,16 @@ onBeforeUnmount(() => {
   color: #e6f8ff;
   background: rgba(4, 24, 43, .78);
   box-shadow: 0 8px 20px rgba(0, 0, 0, .22), inset 0 1px 0 rgba(255, 255, 255, .08);
-  font-size: 20px;
-  line-height: 1;
+  font-size: 0;
   cursor: pointer;
   transition: background .18s ease, border-color .18s ease, color .18s ease, transform .18s ease;
 }
 
-.map-controls button:hover {
+.map-controls .locate:hover {
   border-color: rgba(111, 214, 255, .72);
   color: #fff;
   background: rgba(19, 71, 111, .82);
   transform: translateY(-1px);
-}
-
-.map-controls .locate {
-  position: relative;
-  margin-top: 3px;
-  color: #e6f8ff;
-  font-size: 0;
 }
 
 .map-controls .locate::before,
@@ -3444,6 +3577,11 @@ onBeforeUnmount(() => {
   background: rgba(4, 20, 36, .36);
 }
 
+.flow-timeline.idle {
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
 .flow-timeline.idle header strong,
 .flow-timeline.idle p {
   color: #88a9c1;
@@ -3699,6 +3837,131 @@ onBeforeUnmount(() => {
   to { background-position: 0 100%, 0 0; }
 }
 
+@container todayPanel (max-width: 460px) {
+  .today-grid {
+    gap: 8px;
+    height: calc(100% - 30px);
+    margin-top: 8px;
+  }
+
+  .today-card {
+    grid-template-rows: 34px minmax(0, 1fr);
+    gap: 5px;
+    padding: 10px 12px 10px;
+  }
+
+  .today-card::before {
+    top: 12px;
+    bottom: 12px;
+  }
+
+  .metric-head {
+    gap: 8px;
+    overflow: visible;
+  }
+
+  .metric-icon {
+    flex-basis: 34px;
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+  }
+
+  .metric-icon :deep(svg) {
+    width: 18px;
+    height: 18px;
+  }
+
+  .metric-label {
+    overflow: visible;
+    font-size: 15px;
+    text-overflow: clip;
+  }
+
+  .metric-value-row {
+    gap: 8px;
+    padding-left: 42px;
+  }
+
+  .today-card strong {
+    font-size: 26px;
+  }
+
+  .metric-compare,
+  .metric-compare span,
+  .metric-compare i {
+    font-size: 12px;
+  }
+}
+
+@container todayPanel (max-width: 390px) {
+  .today-card {
+    grid-template-rows: 32px minmax(0, 1fr);
+    padding: 9px 10px;
+  }
+
+  .metric-icon {
+    flex-basis: 32px;
+    width: 32px;
+    height: 32px;
+  }
+
+  .metric-label {
+    font-size: 14px;
+  }
+
+  .metric-value-row {
+    padding-left: 40px;
+    gap: 6px;
+  }
+
+  .today-card strong {
+    font-size: 24px;
+  }
+}
+
+@container todayPanel (max-width: 350px) {
+  .metric-icon {
+    flex-basis: 30px;
+    width: 30px;
+    height: 30px;
+  }
+
+  .metric-label {
+    font-size: 13px;
+  }
+
+  .metric-value-row {
+    padding-left: 36px;
+  }
+
+  .today-card strong {
+    font-size: 22px;
+  }
+}
+
+@container progressPanel (max-width: 460px) {
+  .progress-clock {
+    gap: 8px;
+  }
+
+  .progress-clock span {
+    flex: 0 1 auto;
+    font-size: 11px;
+    max-width: 94px;
+  }
+
+  .progress-clock strong {
+    font-size: 17px;
+  }
+}
+
+@container progressPanel (max-width: 360px) {
+  .progress-clock span {
+    max-width: 78px;
+  }
+}
+
 @media (max-width: 1280px) {
   .screen-grid {
     grid-template-columns: minmax(230px, 23fr) minmax(520px, 54fr) minmax(230px, 23fr);
@@ -3708,30 +3971,6 @@ onBeforeUnmount(() => {
   .screen-panel,
   .selected-detail {
     padding: 11px;
-  }
-
-  .today-card {
-    min-height: 78px;
-    padding: 11px 13px 10px;
-  }
-
-  .today-card strong {
-    font-size: 27px;
-  }
-
-  .metric-label {
-    font-size: 14px;
-  }
-
-  .metric-icon {
-    flex-basis: 34px;
-    width: 34px;
-    height: 34px;
-  }
-
-  .metric-value-row {
-    padding-left: 44px;
-    gap: 8px;
   }
 
   .analytics-grid {

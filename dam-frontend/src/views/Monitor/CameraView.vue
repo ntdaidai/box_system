@@ -27,9 +27,24 @@
       <main class="ops-layout" :class="{ 'multi-mode': isMultiCameraMode }">
         <aside class="ops-camera-rail">
           <section class="rail-card camera-list-card">
-            <header>
-              <h3>摄像头列表</h3>
-              <span>{{ connectedPointCount }} / 9 路</span>
+            <header class="camera-list-header">
+              <div class="camera-list-title">
+                <h3>摄像头</h3>
+                <span>{{ connectedPointCount }}/9</span>
+              </div>
+              <el-select
+                :model-value="cameraViewMode"
+                class="rail-view-select"
+                popper-class="vision-select-popper"
+                @change="setCameraViewMode"
+              >
+                <el-option
+                  v-for="mode in cameraViewModes"
+                  :key="mode.value"
+                  :label="mode.label"
+                  :value="mode.value"
+                />
+              </el-select>
             </header>
             <div class="rail-camera-list">
               <button
@@ -39,60 +54,56 @@
                 :class="{ active: point.no === selectedPointNo, empty: !point.camera }"
                 @click="selectPointFromPanel(point.no)"
               >
+                <b>{{ point.no.toString().padStart(2, '0') }}</b>
                 <span>{{ point.camera?.name || `${point.no}号监测点` }}</span>
-                <em>{{ pointStatusText(point) }}</em>
+                <em :class="{ online: point.camera?.connected }">
+                  <i></i>{{ pointStatusText(point) }}
+                </em>
               </button>
             </div>
           </section>
 
-          <section class="rail-card camera-map-card">
-            <header>
-              <h3>点位图</h3>
-              <button type="button" class="map-expand-button" title="详情大图" @click="mapDialogVisible = true">
-                <el-icon><FullScreen /></el-icon>
-                <span>详情大图</span>
-              </button>
-            </header>
-            <div class="camera-map-stage">
-              <div class="camera-map-canvas">
-                <img src="/dam.png" alt="大藤峡摄像头点位图" />
+          <section class="camera-point-actions">
+            <div class="rail-section-divider"></div>
+            <div class="point-action-heading">
+              <span>当前点位</span>
+              <strong>{{ selectedPointTitle }}</strong>
+            </div>
+
+            <el-tooltip
+              :disabled="!broadcastUnavailableReason"
+              :content="broadcastUnavailableReason"
+              placement="right"
+            >
+              <div class="talk-action-wrap">
                 <button
-                  v-for="point in cameraPointSlots"
-                  :key="`map-point-${point.no}`"
                   type="button"
-                  class="camera-map-point"
-                  :class="{ active: point.no === selectedPointNo, offline: !point.camera?.connected, empty: !point.camera }"
-                  :style="cameraPointStyle(point)"
-                  :title="point.camera?.name || `${point.no}号监测点暂未接入`"
-                  @click="selectPointFromPanel(point.no)"
+                  class="primary-talk-button"
+                  :disabled="Boolean(broadcastUnavailableReason)"
+                  @click="openEmergencyBroadcast"
                 >
-                  <span>{{ point.no }}</span>
+                  <el-icon><Connection /></el-icon>
+                  <span>一键喊话</span>
                 </button>
               </div>
-            </div>
-          </section>
+            </el-tooltip>
 
-          <section class="rail-card camera-tool-card">
-            <div class="camera-tool-actions">
-              <button
-                type="button"
-                class="rail-action-button talk"
-                :disabled="!emergencyBroadcastCamera"
-                @click="openEmergencyBroadcast"
-              >
-                <el-icon><Connection /></el-icon>
-                <span>一键喊话</span>
-              </button>
-              <button
-                type="button"
-                class="rail-action-button"
-                :class="{ active: assistOverlayVisible }"
-                @click="toggleAssistOverlay"
-              >
-                <el-icon><component :is="assistOverlayVisible ? View : Hide" /></el-icon>
-                <span>{{ assistOverlayVisible ? '隐藏辅助' : '显示辅助' }}</span>
-              </button>
+            <div class="assist-setting-row">
+              <div>
+                <span>画面辅助</span>
+                <strong>显示辅助框</strong>
+              </div>
+              <el-switch
+                :model-value="assistOverlayVisible"
+                size="small"
+                @change="toggleAssistOverlay"
+              />
             </div>
+
+            <button type="button" class="map-nav-entry" @click="mapDialogVisible = true">
+              <span><el-icon><Aim /></el-icon>查看点位地图</span>
+              <b>›</b>
+            </button>
           </section>
         </aside>
 
@@ -108,26 +119,6 @@
                 active: slot.camera?.id === currentCameraId,
               }"
             >
-              <header>
-                <el-select
-                  :model-value="slot.camera?.id || ''"
-                  class="slot-camera-select"
-                  placeholder="不展示摄像头"
-                  popper-class="vision-select-popper"
-                  @change="setGridSlotCamera(slot.index, $event)"
-                >
-                  <el-option label="不展示摄像头" value="" />
-                  <el-option
-                    v-for="camera in cameras"
-                    :key="camera.id"
-                    :label="camera.name || camera.id"
-                    :value="camera.id"
-                  />
-                </el-select>
-                <span :class="slot.camera?.connected ? 'online' : 'offline'">
-                  <i></i>{{ slot.camera ? (slot.camera.connected ? '在线' : '离线') : '不展示' }}
-                </span>
-              </header>
               <div class="tile-video-box">
                 <video
                   v-if="slot.camera && gridStreamModes[slot.camera.id] === 'webrtc'"
@@ -1048,6 +1039,11 @@ const cameraPointDefinitions = [
   { no: 8, x: 57.3410, y: 75.4325 },
   { no: 9, x: 91.7919, y: 24.2215 },
 ]
+const cameraViewModes = [
+  { label: '单画面', value: 'single' },
+  { label: '四宫格', value: 'quad' },
+  { label: '九宫格', value: 'nine' },
+]
 const cameraRegionPaths = {
   1: 'M371 317 L297 320 L259 324 L230 336 L191 363 L176 386 L179 425 L179 453 L181 487 L178 536 L200 549 L214 554 L231 554 L244 557 L262 556 L272 560 L295 557 L298 558 L327 560 L351 567 L372 570 L374 577 L383 583 L395 581 L408 578 L422 576 L436 571 L449 569 L463 561 L477 555 L489 552 L502 553 L511 546 L521 535 L524 521 L540 510 L538 492 L542 483 L539 466 L539 450 L538 433 L541 425 L542 406 L542 391 L539 380 L539 368 L537 358 L536 347 L531 340 L524 334 L514 332 L494 330 L470 339 L448 339 L427 343 L416 339 Z',
   3: 'M847 460 L831 450 L830 424 L972 423 L1032 430 L1051 456 L1047 477 L1044 504 L1030 518 L1024 525 L927 544 L856 533 L852 523 L844 524 Z',
@@ -1122,7 +1118,12 @@ const analysisTaskLabel = computed(() => taskTypeLabel(analysisTask.value))
 const selectedModelReady = computed(() => Boolean(modelStatus.value.models?.[analysisTask.value]?.loaded))
 const canToggleDetection = computed(() => Boolean(currentCamera.value?.configured || currentCamera.value?.connected))
 const canRenderCurrentStream = computed(() => Boolean(currentCamera.value?.configured || currentCamera.value?.connected))
-const emergencyBroadcastCamera = computed(() => currentCamera.value || cameras.value[0] || null)
+const emergencyBroadcastCamera = computed(() => selectedPointSlot.value?.camera || null)
+const broadcastUnavailableReason = computed(() => {
+  if (!selectedPointSlot.value?.camera) return '当前点位未接入摄像头'
+  if (!selectedPointSlot.value.camera.connected) return '当前摄像头离线'
+  return ''
+})
 const isMultiCameraMode = computed(() => cameraViewMode.value !== 'single')
 const gridCameraLimit = computed(() => cameraViewMode.value === 'nine' ? 9 : 4)
 const cameraById = computed(() => new Map(cameras.value.map((camera) => [camera.id, camera])))
@@ -3313,9 +3314,9 @@ h1, h2, h3, p { margin-top: 0; }
 }
 .ops-layout {
   display: grid;
-  grid-template-columns: minmax(360px, 3fr) minmax(0, 7fr);
+  grid-template-columns: minmax(190px, 220px) minmax(0, 1fr);
   align-items: stretch;
-  gap: 16px;
+  gap: 10px;
   margin-top: 0;
 }
 .ops-camera-rail {
@@ -3324,7 +3325,7 @@ h1, h2, h3, p { margin-top: 0; }
   min-height: 540px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 .rail-card {
   min-width: 0;
@@ -3334,165 +3335,147 @@ h1, h2, h3, p { margin-top: 0; }
   background: rgba(5, 24, 34, 0.72);
 }
 .rail-card > header {
-  min-height: 42px;
+  min-height: 40px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 0 12px;
+  gap: 8px;
+  padding: 0 9px;
   border-bottom: 1px solid rgba(137, 174, 184, 0.1);
 }
 .rail-card h3 {
   margin: 0;
   color: #e0f3fb;
-  font-size: 14px;
+  font-size: 13px;
 }
-.rail-card header span,
-.action-card > span {
+.rail-card header span {
   color: #7897a8;
   font-size: 11px;
 }
 .camera-list-card {
   min-height: 0;
-  flex: 0 0 248px;
+  flex: 1 1 0;
   display: flex;
   flex-direction: column;
+}
+.camera-list-header {
+  align-items: center;
+}
+.camera-list-title {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.camera-list-title span {
+  color: #73a6bc;
+  font-size: 10px;
+  font-weight: 800;
+}
+.rail-view-select {
+  width: 82px;
+  flex: 0 0 auto;
+}
+.rail-view-select :deep(.el-select__wrapper) {
+  min-height: 26px;
+  padding: 0 7px;
+  border-radius: 6px;
+  background: rgba(2, 12, 16, 0.72);
+  box-shadow: 0 0 0 1px rgba(72, 216, 255, 0.2) inset;
+}
+.rail-view-select :deep(.el-select__selected-item),
+.rail-view-select :deep(.el-select__placeholder) {
+  color: #d7edf6;
+  font-size: 11px;
+  font-weight: 800;
+}
+.rail-view-select :deep(.el-select__caret) {
+  color: #8ddcf0;
 }
 .rail-camera-list {
   min-height: 0;
   flex: 1 1 auto;
   overflow-y: auto;
-  padding: 10px 12px 12px;
+  padding: 6px 7px 7px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 142, 158, 0.28) transparent;
+}
+.rail-camera-list::-webkit-scrollbar {
+  width: 4px;
+}
+.rail-camera-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.rail-camera-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(100, 142, 158, 0.22);
+}
+.rail-camera-list:hover::-webkit-scrollbar-thumb {
+  background: rgba(100, 180, 210, 0.42);
 }
 .rail-camera-list button {
   width: 100%;
-  min-height: 40px;
+  min-height: 38px;
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr) auto;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 6px;
-  padding: 0 10px;
-  border: 1px solid transparent;
-  border-radius: 7px;
+  gap: 7px;
+  margin-bottom: 3px;
+  padding: 0 7px;
+  border: 0;
+  border-left: 3px solid transparent;
+  border-radius: 5px;
   color: #bdd5e1;
-  background: rgba(9, 35, 50, 0.62);
+  background: transparent;
   cursor: pointer;
 }
 .rail-camera-list button:hover,
 .rail-camera-list button.active {
-  border-color: rgba(72, 216, 255, 0.38);
-  background: rgba(18, 68, 88, 0.72);
+  background: rgba(18, 68, 88, 0.44);
+}
+.rail-camera-list button.active {
+  border-left-color: #48d8ff;
 }
 .rail-camera-list button.empty {
   color: #829aa5;
-  background: rgba(7, 24, 34, 0.46);
+  background: transparent;
 }
-.rail-camera-list button::before {
-  content: counter(camera-point);
-  counter-increment: camera-point;
-  width: 24px;
-  height: 24px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  color: #061412;
-  background: #48d8ff;
-  font-size: 13px;
-  font-weight: 900;
+.rail-camera-list b {
+  color: #7ebbd0;
+  font: 800 10px/1 "Consolas", "Monaco", monospace;
 }
-.rail-camera-list button.empty::before {
-  color: #c5d6de;
-  background: #526977;
-}
-.rail-camera-list {
-  counter-reset: camera-point;
+.rail-camera-list button.empty b {
+  color: #6f8791;
 }
 .rail-camera-list span {
   min-width: 0;
   overflow: hidden;
-  font-size: 13px;
+  color: #bdd5e1;
+  font-size: 12px;
   font-weight: 900;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .rail-camera-list em {
-  color: #7f9bad;
-  font-size: 11px;
-  font-style: normal;
-}
-.camera-map-card {
-  flex: 0 0 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-.map-expand-button {
-  height: 30px;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 5px;
-  padding: 0 10px;
-  border: 1px solid rgba(72, 216, 255, 0.24);
-  border-radius: 6px;
-  color: #8ddcf0;
-  background: rgba(9, 35, 50, 0.62);
-  font-size: 12px;
-  font-weight: 800;
-  cursor: pointer;
+  gap: 4px;
+  color: #7f9bad;
+  font-size: 10px;
+  font-style: normal;
 }
-.camera-map-stage {
-  position: relative;
-  width: 100%;
-  flex: 0 0 auto;
-  aspect-ratio: 2168 / 725;
-  min-height: 150px;
-  overflow: hidden;
-  background: #02080d;
-}
-.camera-map-canvas {
-  position: absolute;
-  inset: 0;
-}
-.camera-map-canvas img {
-  width: 100%;
-  height: 100%;
-  display: block;
-  object-fit: contain;
-  filter: saturate(1.08) contrast(1.06) brightness(.72);
-  opacity: .96;
-}
-.camera-map-point {
-  position: absolute;
-  width: 24px;
-  height: 24px;
-  display: grid;
-  place-items: center;
-  margin: -12px 0 0 -12px;
-  border: 2px solid rgba(255, 255, 255, 0.48);
+.rail-camera-list em i {
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  color: #fff;
-  background: #d93a4b;
-  box-shadow: 0 0 0 6px rgba(217, 58, 75, 0.18), 0 0 16px rgba(217, 58, 75, 0.72);
-  font: 900 13px/1 "Consolas", "Monaco", monospace;
-  cursor: pointer;
+  background: #607985;
 }
-.camera-map-point.offline {
-  background: #526977;
-  box-shadow: 0 0 0 5px rgba(82, 105, 119, 0.16);
+.rail-camera-list em.online {
+  color: #62d7b1;
 }
-.camera-map-point.empty {
-  opacity: .78;
-}
-.camera-map-point.active {
-  width: 30px;
-  height: 30px;
-  margin: -15px 0 0 -15px;
-  color: #041417;
-  border-color: rgba(230, 250, 255, 0.92);
-  background: #48d8ff;
-  box-shadow: 0 0 0 8px rgba(72, 216, 255, 0.24), 0 0 22px rgba(72, 216, 255, 0.88);
+.rail-camera-list em.online i {
+  background: #62d7b1;
+  box-shadow: 0 0 6px rgba(98, 215, 177, 0.64);
 }
 :global(.camera-map-dialog.el-dialog) {
   border: 1px solid rgba(72, 216, 255, 0.24);
@@ -3598,88 +3581,116 @@ h1, h2, h3, p { margin-top: 0; }
   background: #48d8ff;
   box-shadow: 0 0 0 10px rgba(72, 216, 255, 0.24), 0 0 24px rgba(72, 216, 255, 0.88);
 }
-.camera-tool-card {
+.camera-point-actions {
   flex: 0 0 auto;
-  padding: 10px;
+  padding: 0 2px 2px;
 }
-.camera-tool-actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+.rail-section-divider {
+  height: 1px;
+  margin: 0 0 10px;
+  background: rgba(137, 174, 184, 0.14);
 }
-.action-card {
-  flex: 1 1 0;
-  min-height: 0;
-  padding: 14px;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 10px;
+.point-action-heading {
+  margin-bottom: 9px;
 }
-.action-card-head {
-  min-height: 30px;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-}
-.action-card-head span {
+.point-action-heading span,
+.assist-setting-row span {
+  display: block;
   color: #7897a8;
-  font-size: 12px;
+  font-size: 10px;
 }
-.action-card-head strong {
-  min-width: 0;
+.point-action-heading strong {
+  display: block;
+  margin-top: 3px;
   overflow: hidden;
   color: #e0f3fb;
   font-size: 13px;
-  line-height: 1.35;
-  text-align: right;
+  font-weight: 900;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.rail-action-group {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+.talk-action-wrap {
+  width: 100%;
 }
-.rail-action-button {
-  min-height: 0;
-  height: 48px;
-  display: grid;
-  place-items: center;
-  gap: 5px;
-  border: 1px solid rgba(72, 216, 255, 0.26);
-  border-radius: 8px;
-  color: #cae8f2;
-  background: rgba(14, 55, 72, 0.72);
+.primary-talk-button {
+  width: 100%;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 7px;
+  color: #061412;
+  background: linear-gradient(135deg, #48d8ff, #62d7b1);
   font-size: 13px;
+  font-weight: 900;
+  cursor: pointer;
+  box-shadow: 0 10px 22px rgba(72, 216, 255, 0.16);
+}
+.primary-talk-button:hover:not(:disabled) {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+.primary-talk-button:active:not(:disabled) {
+  transform: translateY(0);
+}
+.primary-talk-button:disabled {
+  cursor: not-allowed;
+  opacity: .46;
+  filter: grayscale(.35);
+  box-shadow: none;
+}
+.primary-talk-button .el-icon {
+  font-size: 17px;
+}
+.assist-setting-row {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+}
+.assist-setting-row strong {
+  display: block;
+  margin-top: 2px;
+  color: #c6dce6;
+  font-size: 12px;
+  font-weight: 800;
+}
+.assist-setting-row :deep(.el-switch__core) {
+  min-width: 34px;
+}
+.map-nav-entry {
+  width: 100%;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 0 2px;
+  border: 0;
+  color: #9dc7d6;
+  background: transparent;
+  font-size: 12px;
   font-weight: 800;
   cursor: pointer;
 }
-.rail-action-button .el-icon {
-  font-size: 20px;
+.map-nav-entry:hover {
+  color: #e0f3fb;
 }
-.rail-action-button.talk {
-  color: #061412;
-  border-color: rgba(98, 215, 177, 0.72);
-  background: linear-gradient(135deg, #67e0bc, #42d9c3);
-  box-shadow: 0 14px 30px rgba(66, 217, 195, 0.2);
-  font-size: 14px;
+.map-nav-entry span {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
-.rail-action-button.talk .el-icon {
-  font-size: 22px;
-}
-.rail-action-button.simulation {
-  color: #061412;
-  border-color: rgba(72, 216, 255, 0.72);
-  background: #48d8ff;
-}
-.rail-action-button.active {
-  color: #061412;
-  background: #48d8ff;
-}
-.rail-action-button:disabled {
-  cursor: not-allowed;
-  opacity: .48;
+.map-nav-entry b {
+  color: #76bed8;
+  font-size: 18px;
+  line-height: 1;
 }
 .multi-camera-layout {
   position: relative;
@@ -3745,90 +3756,13 @@ h1, h2, h3, p { margin-top: 0; }
   border-color: rgba(72, 216, 255, 0.62);
   box-shadow: 0 18px 38px rgba(0, 5, 10, 0.28), inset 0 0 0 2px rgba(72, 216, 255, 0.34);
 }
-.multi-camera-tile.active header {
-  background: linear-gradient(90deg, rgba(31, 119, 150, 0.82), rgba(17, 55, 73, 0.82));
-}
 .multi-camera-tile.empty {
   border-style: dashed;
   background: rgba(7, 20, 25, 0.68);
 }
-.multi-camera-tile header {
-  height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 0 12px 0 14px;
-  border-bottom: 1px solid rgba(137, 174, 184, 0.12);
-  background: linear-gradient(90deg, rgba(29, 96, 116, 0.92), rgba(18, 74, 91, 0.86));
-}
-.multi-camera-tile strong {
-  min-width: 0;
-  color: #e9f7ff;
-  font-size: 14px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.multi-camera-tile header span {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  font-size: 12px;
-  font-weight: 800;
-}
-.multi-camera-tile header i {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-.multi-camera-tile header .online { color: #62d7b1; }
-.multi-camera-tile header .online i {
-  background: #62d7b1;
-  box-shadow: 0 0 8px rgba(98, 215, 177, 0.75);
-}
-.multi-camera-tile header .offline { color: #ff6d7b; }
-.multi-camera-tile header .offline i {
-  background: #ff6d7b;
-  box-shadow: 0 0 8px rgba(255, 109, 123, 0.75);
-}
-.multi-camera-tile.empty header .offline { color: #7f9bb0; }
-.multi-camera-tile.empty header .offline i {
-  background: #4b6475;
-  box-shadow: none;
-}
-.slot-camera-select {
-  min-width: 0;
-  width: min(250px, 64%);
-}
-.slot-camera-select :deep(.el-select__wrapper) {
-  min-height: 34px;
-  padding: 0 8px;
-  border-radius: 6px;
-  background: rgba(2, 12, 16, 0.34);
-  box-shadow: none;
-}
-.slot-camera-select :deep(.el-select__wrapper.is-focused),
-.slot-camera-select :deep(.el-select__wrapper:hover) {
-  box-shadow: 0 0 0 1px rgba(72, 216, 255, 0.34) inset;
-}
-.slot-camera-select :deep(.el-select__selected-item) {
-  color: #f1fbff;
-  font-size: 15px;
-  font-weight: 900;
-}
-.slot-camera-select :deep(.el-select__placeholder) {
-  color: #9bb4bb;
-  font-size: 14px;
-  font-weight: 800;
-}
-.slot-camera-select :deep(.el-select__caret) {
-  color: #8ddcf0;
-}
 .tile-video-box {
   position: relative;
-  height: calc(100% - 48px);
+  height: 100%;
   min-height: 0;
   background:
     linear-gradient(90deg, rgba(72, 216, 255, 0.035) 1px, transparent 1px),
@@ -4111,11 +4045,6 @@ h1, h2, h3, p { margin-top: 0; }
   border-radius: 5px;
   background: rgba(137, 174, 184, 0.1);
   font-size: 11px;
-}
-.detection-card {
-  background:
-    radial-gradient(circle at 50% 18%, rgba(72, 216, 255, 0.12), transparent 42%),
-    rgba(5, 24, 34, 0.72);
 }
 .risk-panel {
   min-height: 0;
@@ -5271,23 +5200,13 @@ h1, h2, h3, p { margin-top: 0; }
   border-top: 1px solid rgba(137, 174, 184, 0.12);
 }
 
-@media (min-width: 1600px) {
-  .ops-layout {
-    grid-template-columns: minmax(360px, 28fr) minmax(0, 72fr);
-  }
-}
-
 @media (max-width: 1200px) {
   .ops-header { grid-template-columns: 1fr; align-items: stretch; }
   .ops-header-actions { justify-content: space-between; }
   .ops-layout { grid-template-columns: 1fr; }
-  .ops-camera-rail,
-  .ops-action-rail {
+  .ops-camera-rail {
     height: auto;
     min-height: 0;
-  }
-  .action-card {
-    min-height: 150px;
   }
   .risk-panel {
     grid-template-columns: 1fr;

@@ -5,7 +5,9 @@
 ## 架构说明
 
 ```
-客户端 → 本地推理服务 (localhost:9901) → vLLM 服务 (localhost:8001) → Qwen-VL-4B 模型
+客户端/工作流 → 本地推理服务 (localhost:9901)
+                 ├─ 知识库检索 (dam-backend/Qdrant)
+                 └─ vLLM 服务 (localhost:8001) → Qwen-VL-4B 模型
 ```
 
 ## 目录结构
@@ -47,6 +49,7 @@ qwen4B-service/
      --enable-prefix-caching
    ```
 2. **Docker 环境**：已安装 Docker 和 Docker Compose
+3. **知识库服务可用**：dam-backend 与 Qdrant 已启动，默认访问 `http://localhost:8090/api/v1/knowledge`
 
 ## 快速启动
 
@@ -119,7 +122,7 @@ bash register.sh
 | 模型名称      | `MODEL_NAME`    | `qwen4B`                | vLLM 中注册的模型名称     |
 | 最大 token 数 | `MAX_TOKENS`    | `2048`                  | 模型输出的最大 token 数   |
 | 温度参数      | `TEMPERATURE`   | `0.15`                  | 生成温度，越低越确定      |
-| 请求超时      | `TIMEOUT`       | `60`                    | 请求超时时间（秒）        |
+| 请求超时      | `TIMEOUT`       | `240`                   | 请求超时时间（秒），视频理解建议不低于 180 |
 | 服务端口      | -                 | `9901`                  | 服务监听端口              |
 | 上传媒体到云端 | `UPLOAD_MEDIA_TO_CLOUD` | `true` | `/infer` 是否把图片/视频转存到云端 MinIO |
 | 上传失败是否中断 | `STRICT_MEDIA_UPLOAD` | `false` | `true` 时上传失败直接返回错误 |
@@ -128,6 +131,10 @@ bash register.sh
 | 云端 MinIO 地址 | `CLOUD_MINIO_ENDPOINT` | `10.196.85.11:9469` | A100 云端 MinIO |
 | 云端 MinIO 桶 | `CLOUD_MINIO_BUCKET` | `cloud-tasks` | 上传后供 35B 读取的 bucket |
 | 云端对象前缀 | `CLOUD_MEDIA_PREFIX` | `workflow-media` | 上传对象路径前缀 |
+| 知识库检索开关 | `KNOWLEDGE_RETRIEVAL_ENABLED` | `true` | `/infer` 推理前是否自动检索知识库 |
+| 知识库 API 地址 | `KNOWLEDGE_API_BASE` | `http://localhost:8090/api/v1/knowledge` | dam-backend 知识库接口地址 |
+| 知识命中数量 | `KNOWLEDGE_TOP_K` | `4` | 每次检索注入 prompt 的片段数量 |
+| 知识最低分数 | `KNOWLEDGE_MIN_SCORE` | `0.1` | 低于该相似度分数的片段不注入 |
 
 ## 接口说明
 
@@ -216,6 +223,48 @@ LOCAL_LLM_MODEL_NAME = "qwen4B"
 - `bucket/object`：从 AGX 本地 MinIO 下载后上传
 - `minio://bucket/object` 或 `s3://bucket/object`：按指定 bucket/object 下载后上传
 - `http(s)://...`：下载后上传
+
+### DAG `/infer` 知识库增强
+
+`/infer` 会在调用 Qwen-VL-4B 之前自动构造知识检索问题，调用
+`POST /api/v1/knowledge/search` 获取库坝巡查规范，并把命中的片段作为“知识库依据”
+注入模型 prompt。检索问题优先使用请求中的 `knowledge_query`，为空时会从
+`prompt`、`event_type`、`sensor_data`、`inputs`、`images`、`videos` 自动汇总。
+
+请求可用以下字段控制：
+
+```json
+{
+  "enable_knowledge_retrieval": true,
+  "knowledge_query": "禁航区发现船只闯入如何处置",
+  "knowledge_context": {
+    "results": [],
+    "prompt_context": "上游节点已经检索好的知识文本"
+  }
+}
+```
+
+响应会额外返回：
+
+```json
+{
+  "knowledge_context": {
+    "enabled": true,
+    "query": "禁航区发现船只闯入如何处置",
+    "total": 4,
+    "source": "knowledge_api"
+  },
+  "knowledge_sources": [
+    {
+      "chunk_id": "knowledge:11:0",
+      "document_id": 11,
+      "score": 0.82,
+      "document_title": "02_禁航区域船只闯入处置规范",
+      "filename": "02_禁航区域船只闯入处置规范.docx"
+    }
+  ]
+}
+```
 
 响应会包含给 35B 使用的云端对象引用：
 

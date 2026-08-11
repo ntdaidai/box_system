@@ -138,7 +138,9 @@ class DamEventReportService:
 
         context = self.build_context(db, instance, event, workflow_payload, selected)
         docx_bytes = self.render_docx(context)
-        filename = f"事件处置报告_{instance.instance_no}.docx"
+        # 报告文件名：以 ECA 触发的事件名命名，如「洪水灾害告警处置报告」
+        event_name = getattr(event, "event_name", None) or instance.summary or "安全事件"
+        filename = f"{self.safe_filename_part(event_name)}处置报告_{instance.instance_no}.docx"
         document_id = f"dam_event_report_{instance.instance_no}"
         document = store_generated_document(
             user_id=settings.PATROL_REPORT_USER_ID,
@@ -163,7 +165,7 @@ class DamEventReportService:
             log_type="REPORT",
             trigger_type="AUTO",
             status="SUCCESS",
-            message=f"事件处置报告已生成：{selected['source_label']}",
+            message=f"{event_name}处置报告已生成：{selected['source_label']}",
             payload={
                 "instance_no": instance.instance_no,
                 "analysis_report_id": report.id,
@@ -1392,6 +1394,13 @@ class DamEventReportService:
             return text or "—"
         return text[: max(0, limit - 1)].rstrip() + "…"
 
+    @staticmethod
+    def safe_filename_part(value: str, limit: int = 50) -> str:
+        """清洗事件名，用作报告文件名前缀（去除文件系统非法字符）。"""
+        text = re.sub(r'[\\/:*?"<>|\s]+', "_", str(value or "").strip())
+        text = text.strip("_. ")
+        return text[:limit] or "事件"
+
     def format_datetime(self, value: Optional[dt.datetime]) -> str:
         if not value:
             return "—"
@@ -1440,18 +1449,44 @@ class DamEventReportService:
             "classification_report": classify.get("report"),
         })
         reasoning = self.find_node_inference(workflow_payload, "action_reasoning")
+        knowledge_sources = self.find_in_value(reasoning, "knowledge_sources")
         result.update({
             "qwen4b_detailed_scene_analysis": self.find_in_value(reasoning, "detailed_scene_analysis"),
             "qwen4b_risk_reasoning": self.find_in_value(reasoning, "risk_reasoning"),
             "qwen4b_impact_assessment": self.find_in_value(reasoning, "impact_assessment"),
             "qwen4b_response_plan": self.find_in_value(reasoning, "response_plan"),
             "qwen4b_monitoring_suggestions": self.find_in_value(reasoning, "monitoring_suggestions"),
+            "knowledge_sources": knowledge_sources if isinstance(knowledge_sources, list) else [],
+            "knowledge_sources_summary": self.format_knowledge_sources(knowledge_sources),
             "qwen4b_conclusion": (
                 self.find_in_value(reasoning, "impact_assessment")
                 or self.find_in_value(reasoning, "monitoring_suggestions")
             ),
         })
         return result
+
+    @staticmethod
+    def format_knowledge_sources(sources: Any) -> str:
+        if not isinstance(sources, list):
+            return ""
+        lines = []
+        seen = set()
+        for item in sources:
+            if not isinstance(item, dict):
+                continue
+            title = item.get("document_title") or item.get("filename")
+            chunk_id = item.get("chunk_id")
+            if not title:
+                continue
+            key = (title, chunk_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            suffix = f"（{chunk_id}）" if chunk_id else ""
+            lines.append(f"{len(lines) + 1}. {title}{suffix}")
+            if len(lines) >= 5:
+                break
+        return "\n".join(lines)
 
     def find_node_inference(self, workflow_payload: dict[str, Any], node_id: str) -> dict[str, Any]:
         execution = workflow_payload.get("execution_result") if isinstance(workflow_payload, dict) else {}
@@ -1563,6 +1598,7 @@ class DamEventReportService:
             ("三、影响评估", workflow_insight.get("qwen4b_impact_assessment")),
             ("四、处置建议", workflow_insight.get("qwen4b_response_plan")),
             ("五、持续监测", workflow_insight.get("qwen4b_monitoring_suggestions")),
+            ("六、知识依据", workflow_insight.get("knowledge_sources_summary")),
         ]
         lines = [f"{label}：{str(text).strip()}" for label, text in fields if str(text or "").strip()]
         return "\n".join(lines) if len(lines) >= 2 else ""

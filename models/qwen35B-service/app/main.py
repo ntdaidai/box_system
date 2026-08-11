@@ -1,6 +1,8 @@
 """Qwen3.5-35B 云端增强推理代理服务。"""
 
 import os
+import json
+import re
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Any, Dict
@@ -111,6 +113,79 @@ def _cloud_error_detail(resp: httpx.Response) -> str:
     return f"云端返回错误: {resp.status_code}; detail={text}"
 
 
+def _extract_json_object(text: str) -> dict:
+    """Extract the first balanced JSON object from model text."""
+    if not isinstance(text, str) or not text.strip():
+        return {}
+    content = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    if content.startswith("```"):
+        content = re.sub(r"^```(?:json)?\\s*", "", content)
+        content = re.sub(r"\\s*```$", "", content)
+    start = content.find("{")
+    if start < 0:
+        return {}
+    depth = 0
+    in_string = False
+    escape = False
+    for index in range(start, len(content)):
+        char = content[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    parsed = json.loads(content[start:index + 1])
+                    return parsed if isinstance(parsed, dict) else {}
+                except json.JSONDecodeError:
+                    return {}
+    return {}
+
+
+def _normalize_cloud_response(data: dict) -> dict:
+    """Backfill structured fields when the cloud model returns JSON as text."""
+    if not isinstance(data, dict):
+        return data
+    report_text = (
+        data.get("response")
+        or data.get("report")
+        or data.get("analysis_report")
+        or data.get("result")
+        or ""
+    )
+    parsed = _extract_json_object(report_text)
+    if parsed:
+        final_report = data.get("final_report") if isinstance(data.get("final_report"), dict) else {}
+        data["final_report"] = {**parsed, **final_report} if final_report else parsed
+        for key in (
+            "disaster_type",
+            "risk_level",
+            "confidence",
+            "scene_analysis",
+            "detailed_scene_analysis",
+            "risk_reasoning",
+            "impact_assessment",
+            "response_plan",
+            "monitoring_suggestions",
+            "recommendations",
+            "template_id",
+            "template_data",
+        ):
+            if key in parsed and not data.get(key):
+                data[key] = parsed[key]
+    return data
+
+
 @app.get("/health")
 async def health():
     """健康检查。"""
@@ -168,9 +243,10 @@ async def workflow_infer(request: InferRequest):
             json=payload,
         )
         resp.raise_for_status()
-        data = resp.json()
+        data = _normalize_cloud_response(resp.json())
         report = (
-            data.get("report")
+            data.get("scene_analysis")
+            or data.get("report")
             or data.get("response")
             or data.get("analysis_report")
             or data.get("result")

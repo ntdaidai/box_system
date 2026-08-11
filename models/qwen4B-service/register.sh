@@ -45,6 +45,7 @@ curl -s -X POST "${MODEL_REGISTRY_URL}/api/model-registry/${MODEL_ID}/bind-image
       "MODEL_NAME": "qwen4B",
       "MAX_TOKENS": "2048",
       "TEMPERATURE": "0.15",
+      "TIMEOUT": "240",
       "UPLOAD_MEDIA_TO_CLOUD": "true",
       "STRICT_MEDIA_UPLOAD": "false",
       "EDGE_MINIO_ENDPOINT": "localhost:9000",
@@ -57,7 +58,11 @@ curl -s -X POST "${MODEL_REGISTRY_URL}/api/model-registry/${MODEL_ID}/bind-image
       "CLOUD_MINIO_SECRET_KEY": "minioadmin",
       "CLOUD_MINIO_SECURE": "false",
       "CLOUD_MINIO_BUCKET": "cloud-tasks",
-      "CLOUD_MEDIA_PREFIX": "workflow-media"
+      "CLOUD_MEDIA_PREFIX": "workflow-media",
+      "KNOWLEDGE_RETRIEVAL_ENABLED": "true",
+      "KNOWLEDGE_API_BASE": "http://localhost:8090/api/v1/knowledge",
+      "KNOWLEDGE_TOP_K": "4",
+      "KNOWLEDGE_MIN_SCORE": "0.1"
     }
   }'
 

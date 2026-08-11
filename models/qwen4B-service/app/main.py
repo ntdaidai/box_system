@@ -22,6 +22,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -36,7 +37,7 @@ MODEL_NAME = os.getenv("MODEL_NAME", "qwen4B")
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "2048"))
 WORKFLOW_MAX_TOKENS = int(os.getenv("WORKFLOW_MAX_TOKENS", "2048"))
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.15"))
-TIMEOUT = int(os.getenv("TIMEOUT", "60"))
+TIMEOUT = int(os.getenv("TIMEOUT", "240"))
 UPLOAD_MEDIA_TO_CLOUD = os.getenv("UPLOAD_MEDIA_TO_CLOUD", "true").lower() == "true"
 STRICT_MEDIA_UPLOAD = os.getenv("STRICT_MEDIA_UPLOAD", "false").lower() == "true"
 
@@ -63,6 +64,10 @@ CLOUD_MINIO_SECURE = os.getenv("CLOUD_MINIO_SECURE", os.getenv("A100_MINIO_SECUR
 CLOUD_MINIO_BUCKET = os.getenv("CLOUD_MINIO_BUCKET", os.getenv("A100_MINIO_BUCKET", "cloud-tasks"))
 CLOUD_MEDIA_PREFIX = os.getenv("CLOUD_MEDIA_PREFIX", "workflow-media")
 DEFAULT_TEMPLATE_ID = os.getenv("DEFAULT_TEMPLATE_ID", "dam_patrol_daily_report")
+KNOWLEDGE_RETRIEVAL_ENABLED = os.getenv("KNOWLEDGE_RETRIEVAL_ENABLED", "true").lower() == "true"
+KNOWLEDGE_API_BASE = os.getenv("KNOWLEDGE_API_BASE", "http://localhost:8090/api/v1/knowledge").rstrip("/")
+KNOWLEDGE_TOP_K = int(os.getenv("KNOWLEDGE_TOP_K", "4"))
+KNOWLEDGE_MIN_SCORE = float(os.getenv("KNOWLEDGE_MIN_SCORE", "0.1"))
 DEFAULT_DATA_SOURCES = (
     "SafetyEventInstance, SafetyEventTimelineLog, SafetyEventEvidence, "
     "VisualEventDetail, SensorData, Qwen-VL-4B"
@@ -159,6 +164,12 @@ class WorkflowInferRequest(BaseModel):
         STRICT_MEDIA_UPLOAD,
         description="媒体上传失败时是否直接返回错误",
     )
+    enable_knowledge_retrieval: bool = Field(
+        KNOWLEDGE_RETRIEVAL_ENABLED,
+        description="是否在 4B 推理前自动检索库坝知识库",
+    )
+    knowledge_query: Optional[str] = Field(None, description="显式知识库检索问题；为空时由事件上下文自动生成")
+    knowledge_context: Optional[Dict[str, Any]] = Field(None, description="上游已检索的知识库上下文")
     template_id: str = Field(DEFAULT_TEMPLATE_ID, description="OnlyOffice/docxtpl 模板标识")
     output_profile: str = Field("onlyoffice_template", description="输出剖面：onlyoffice_template=返回模板填充字段")
 
@@ -1389,7 +1400,108 @@ def flatten_template_fields(template_data: Dict[str, Any]) -> Dict[str, Any]:
     return fields
 
 
-def build_workflow_prompt(request: WorkflowInferRequest) -> str:
+def compact_json(value: Any, limit: int = 1200) -> str:
+    """Serialize workflow context for query construction without flooding retrieval."""
+    try:
+        text = json.dumps(value, ensure_ascii=False, default=str)
+    except TypeError:
+        text = str(value)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:limit]
+
+
+def build_knowledge_query(request: WorkflowInferRequest) -> str:
+    """Build a concise retrieval query from DAM workflow context."""
+    explicit = (request.knowledge_query or "").strip()
+    if explicit:
+        return explicit
+
+    inputs = request.inputs if isinstance(request.inputs, dict) else {}
+    sensor_data = request.sensor_data if isinstance(request.sensor_data, dict) else {}
+    nested_sensor_data = inputs.get("sensor_data") if isinstance(inputs.get("sensor_data"), dict) else {}
+    candidates = [
+        request.event_type,
+        inputs.get("event_type"),
+        sensor_data.get("event_name"),
+        nested_sensor_data.get("event_name"),
+        sensor_data.get("event_type"),
+        nested_sensor_data.get("event_type"),
+        sensor_data.get("event_category"),
+        nested_sensor_data.get("event_category"),
+        sensor_data.get("summary"),
+        nested_sensor_data.get("summary"),
+        sensor_data.get("camera_name"),
+        nested_sensor_data.get("camera_name"),
+        sensor_data.get("source_name"),
+        nested_sensor_data.get("source_name"),
+        inputs.get("event_name"),
+        inputs.get("summary"),
+        request.prompt,
+    ]
+    text = " ".join(str(item) for item in candidates if item)
+    if not text.strip():
+        text = compact_json({"inputs": inputs, "sensor_data": sensor_data}, limit=500)
+    return f"{text} 库坝巡查 处置规范 风险研判 应急处置".strip()
+
+
+async def retrieve_knowledge_context(request: WorkflowInferRequest) -> Dict[str, Any]:
+    """Retrieve source-grounded domain knowledge for local 4B reasoning."""
+    if isinstance(request.knowledge_context, dict) and request.knowledge_context:
+        return {
+            **request.knowledge_context,
+            "source": request.knowledge_context.get("source") or "provided",
+        }
+    if not request.enable_knowledge_retrieval:
+        return {"enabled": False, "query": "", "results": [], "prompt_context": "", "source": "disabled"}
+
+    query = build_knowledge_query(request)
+    if not query:
+        return {"enabled": True, "query": "", "results": [], "prompt_context": "", "source": "empty_query"}
+
+    try:
+        async with httpx.AsyncClient(timeout=min(TIMEOUT, 20)) as http_client:
+            response = await http_client.post(
+                f"{KNOWLEDGE_API_BASE}/search",
+                json={"query": query, "top_k": max(1, min(KNOWLEDGE_TOP_K, 12))},
+            )
+            response.raise_for_status()
+            payload = response.json()
+    except Exception as exc:
+        logger.warning(f"知识库检索失败: query={query[:80]}, error={exc}")
+        return {
+            "enabled": True,
+            "query": query,
+            "results": [],
+            "prompt_context": "",
+            "source": "error",
+            "error": str(exc),
+        }
+
+    data = payload.get("data") if isinstance(payload, dict) and payload.get("code") == 200 else payload
+    raw_results = data.get("results") if isinstance(data, dict) else []
+    results = [
+        item for item in raw_results or []
+        if float(item.get("score") or 0) >= KNOWLEDGE_MIN_SCORE
+    ]
+    lines = []
+    for index, item in enumerate(results, start=1):
+        source = item.get("source") or {}
+        title = source.get("document_title") or source.get("filename") or "知识文档"
+        section = source.get("section_title") or ""
+        lines.append(f"[{index}] 来源：{title}{f' / {section}' if section else ''}")
+        lines.append(str(item.get("content") or "").strip())
+    prompt_context = "\n".join(line for line in lines if line)
+    return {
+        "enabled": True,
+        "query": query,
+        "results": results,
+        "total": len(results),
+        "prompt_context": prompt_context,
+        "source": "knowledge_api",
+    }
+
+
+def build_workflow_prompt(request: WorkflowInferRequest, knowledge_context: Optional[Dict[str, Any]] = None) -> str:
     """构建 DAG 工作流文本 prompt。"""
     if request.prompt:
         base_prompt = request.prompt
@@ -1406,11 +1518,21 @@ def build_workflow_prompt(request: WorkflowInferRequest) -> str:
             "请根据以下工作流上下文生成库坝应急巡查分析结果。\n"
             f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
         )
+    knowledge_text = ""
+    if knowledge_context and knowledge_context.get("prompt_context"):
+        knowledge_text = (
+            "\n\n## 知识库依据\n"
+            "以下内容来自库坝巡查知识库。请优先依据这些规范生成处置建议；"
+            "不要编造知识库中没有的制度条款。\n"
+            f"{knowledge_context['prompt_context']}\n"
+        )
     return (
-        f"{base_prompt}\n\n"
+        f"{base_prompt}{knowledge_text}\n\n"
         "输出必须是一个合法 JSON 对象，并额外包含以下详细字段："
         "detailed_scene_analysis、risk_reasoning、impact_assessment、response_plan、monitoring_suggestions。"
         "这些字段要用于正式报告，不能只写短语；每项请写成完整中文段落。"
+        "如果使用了知识库依据，请在 evidence 或 response_plan 中体现关键依据，并在 JSON 中增加 knowledge_sources 数组，"
+        "列出引用的 document_title 和 chunk_id。"
         "如果输入中包含候选代表帧图片，请同时输出 representative_frame 对象："
         "{\"selected_index\":候选帧编号,\"reason\":\"为什么该帧最适合作为报告代表画面\"}。"
         "代表帧应选择最能体现事件证据、现场状态、风险特征且画面清晰的一帧。"
@@ -1598,7 +1720,8 @@ async def workflow_infer(request: WorkflowInferRequest):
     if not client:
         raise HTTPException(status_code=503, detail="推理服务未初始化")
 
-    prompt = build_workflow_prompt(request)
+    knowledge_context = await retrieve_knowledge_context(request)
+    prompt = build_workflow_prompt(request, knowledge_context)
     media_upload = {
         "enabled": False,
         "endpoint": CLOUD_MINIO_ENDPOINT,
@@ -1676,6 +1799,17 @@ async def workflow_infer(request: WorkflowInferRequest):
             "prompt_version": workflow_meta_value(request, "prompt_version"),
             "prompt_model_scope": workflow_meta_value(request, "prompt_model_scope"),
             "cloud_enhancement": final_report["risk_level"] == "high" or scene_analysis.confidence < 0.7,
+            "knowledge_context": knowledge_context,
+            "knowledge_sources": [
+                {
+                    "chunk_id": item.get("chunk_id"),
+                    "document_id": item.get("document_id"),
+                    "score": item.get("score"),
+                    "document_title": (item.get("source") or {}).get("document_title"),
+                    "filename": (item.get("source") or {}).get("filename"),
+                }
+                for item in knowledge_context.get("results", [])
+            ],
             "media_objects": media_objects_for_next_node,
             "cloud_media_objects": cloud_media_objects,
             "uploaded_media_objects": cloud_media_objects,
@@ -1706,6 +1840,7 @@ async def workflow_infer(request: WorkflowInferRequest):
             "response": "",
             "report": "",
             "risk_level": "unknown",
+            "knowledge_context": knowledge_context if "knowledge_context" in locals() else None,
             "media_upload": media_upload,
             "cloud_media_objects": media_upload.get("objects") or [],
         }

@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.models.event_library import EventLibrary
 from app.models.safety_integration import SafetyEventInstance
 
 router = APIRouter(prefix="/api/onlyoffice", tags=["OnlyOffice 文档编辑"])
@@ -656,20 +657,28 @@ async def list_documents(
 
     event_by_instance_no = {}
     if event_instance_nos:
-        rows = db.query(SafetyEventInstance).filter(
+        rows = db.query(SafetyEventInstance, EventLibrary).outerjoin(
+            EventLibrary, EventLibrary.id == SafetyEventInstance.current_event_id
+        ).filter(
             SafetyEventInstance.instance_no.in_(event_instance_nos)
         ).all()
-        event_by_instance_no = {row.instance_no: row for row in rows}
+        event_by_instance_no = {
+            instance.instance_no: (instance, event)
+            for instance, event in rows
+        }
 
     for doc in docs:
         event_instance_no = event_instance_no_from_document_id(doc["document_id"])
         if not event_instance_no:
             continue
-        event = event_by_instance_no.get(event_instance_no)
+        event_pair = event_by_instance_no.get(event_instance_no)
         doc["event_instance_no"] = event_instance_no
-        if event:
+        if event_pair:
+            event, event_def = event_pair
             doc["event_instance_id"] = event.id
             doc["event_started_at"] = event.started_at.isoformat() if event.started_at else None
+            doc["event_name"] = event_def.event_name if event_def else event.summary
+            doc["event_summary"] = event.summary
 
     docs.sort(key=lambda item: item["updated_at"], reverse=True)
     total = len(docs)

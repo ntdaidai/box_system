@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import datetime as dt
-import uuid
 from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
@@ -12,6 +11,7 @@ from app.models.data_source import DataSource
 from app.models.event_condition import EventCondition
 from app.models.event_library import EventLibrary
 from app.models.safety_integration import SafetyEventInstance, SafetyEventTimelineLog
+from app.services.safety_event_runtime_service import safety_event_runtime_service
 
 
 RISK_NAMES = {1: "LOW", 2: "MEDIUM", 3: "HIGH"}
@@ -50,7 +50,7 @@ class UnifiedSensorEventService:
             if instance is None:
                 risk = RISK_NAMES.get(int(event.risk_level or 1), "LOW")
                 instance = SafetyEventInstance(
-                    instance_no=f"EVT_{now:%Y%m%d}_{uuid.uuid4().hex[:12]}",
+                    instance_no=safety_event_runtime_service.next_instance_no(db, now),
                     current_event_id=event.id,
                     event_category=event.event_category or "SENSOR",
                     data_source_id=source.id,

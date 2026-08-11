@@ -1,12 +1,11 @@
 <template>
   <div class="screening-page">
-    <header class="page-header">
-      <div>
-        <p>系统管理 / 场景测试 / 视频测试</p>
+    <header class="page-header admin-header">
+      <div class="title-block">
         <h2>视频测试</h2>
+        <p>上传视频进行画面分析，联动触发事件处置与报告归档</p>
       </div>
       <div class="source-control">
-        <span>模拟数据源</span>
         <el-select
           v-model="cameraId"
           placeholder="选择摄像头"
@@ -27,25 +26,6 @@
         <el-button :icon="Refresh" circle title="刷新摄像头" @click="loadCameras" />
       </div>
     </header>
-
-    <section class="status-grid" aria-label="检测状态">
-      <div class="status-item">
-        <span>任务状态</span>
-        <strong>{{ mediaStatus }}</strong>
-      </div>
-      <div class="status-item">
-        <span>数据源</span>
-        <strong>{{ selectedCameraName }}</strong>
-      </div>
-      <div class="status-item">
-        <span>视频文件</span>
-        <strong>{{ videoName || '未选择' }}</strong>
-      </div>
-      <div class="status-item accent">
-        <span>ECA 链路</span>
-        <strong>{{ ecaStatusText }}</strong>
-      </div>
-    </section>
 
     <section class="workspace">
       <div class="media-panel">
@@ -92,10 +72,6 @@
             <strong>选择本地视频</strong>
             <span>MP4、MOV、WEBM 或 M4V</span>
           </button>
-          <div v-if="videoUrl" class="video-overlay">
-            <span>{{ videoName }}</span>
-            <span>{{ formatVideoTime(videoRef?.currentTime) }} / {{ formatVideoTime(videoRef?.duration) }}</span>
-          </div>
         </div>
 
         <div class="evidence-strip">
@@ -122,131 +98,51 @@
           <el-tag :type="result ? riskTag : 'info'" effect="dark">{{ result ? riskLabel : '待触发' }}</el-tag>
         </header>
 
-        <div v-if="screening && !result" class="result-content detail-result">
-          <ol class="detail-flow">
-            <li v-for="step in chainSteps" :key="step.label" :class="step.state">
-              <span class="flow-dot"><el-icon><component :is="step.icon" /></el-icon></span>
-              <div>
-                <strong>{{ step.label }}</strong>
-                <small>{{ step.value }}</small>
-              </div>
-            </li>
-          </ol>
-          <div class="processing-state inline-processing">
-            <el-icon class="is-loading"><Loading /></el-icon>
-            <strong>正在分析视频画面</strong>
-            <span>结果返回后自动进入条件判断</span>
+        <div class="result-content detail-result">
+          <!-- 空闲轨道动画（未选视频/未分析/无结果时，流程链路待机监听） -->
+          <div v-if="!hasTask" class="alarm-idle flow-idle-visual">
+            <div class="idle-orbit">
+              <span></span>
+              <i></i>
+            </div>
+            <div class="idle-copy">
+              <strong>{{ flowStatusLabel }}</strong>
+              <span>风险事件触发后将在此同步处置进度</span>
+            </div>
           </div>
-        </div>
-        <div v-else-if="screening" class="processing-state">
-          <el-icon class="is-loading"><Loading /></el-icon>
-          <strong>正在分析视频画面</strong>
-          <span>结果返回后自动进入条件判断</span>
-        </div>
-        <div v-else-if="result" class="result-content detail-result">
-          <ol class="detail-flow">
-            <li v-for="step in chainSteps" :key="step.label" :class="step.state">
-              <span class="flow-dot"><el-icon><component :is="step.icon" /></el-icon></span>
-              <div>
-                <strong>{{ step.label }}</strong>
-                <small>{{ step.value }}</small>
-              </div>
+
+          <!-- 处理链路流程时间线（始终渲染；无任务时灰显待机） -->
+          <ol class="progress-timeline flow-timeline" :class="{ idle: !hasTask }">
+            <li
+              v-for="item in flowSteps"
+              :key="item.key"
+              :class="[item.tone, item.state, item.connectorClass, { active: item.active }]"
+            >
+              <i class="flow-node-icon"><component :is="item.icon" /></i>
+              <article>
+                <header>
+                  <strong :title="item.label">{{ item.label }}</strong>
+                  <time>{{ item.time }}</time>
+                </header>
+                <p :title="item.message">{{ item.message }}</p>
+                <ul v-if="item.active && item.logs.length" class="flow-node-logs">
+                  <li v-for="log in item.logs" :key="log.key">
+                    <b :title="log.title">{{ log.title }}</b>
+                    <span :title="log.message">{{ log.message }}</span>
+                  </li>
+                </ul>
+                <footer>
+                  <span>{{ item.operator }}</span>
+                  <b :class="item.statusClass">{{ item.statusText }}</b>
+                </footer>
+              </article>
             </li>
           </ol>
 
-          <section class="detail-summary-card" :class="riskClass">
-            <header>
-              <div>
-                <span>{{ result.event_name || '摄像头场景分析' }}</span>
-                <h3>{{ primarySceneLabel }}</h3>
-              </div>
-              <el-tag :type="riskTag" effect="dark">{{ riskLabel }}</el-tag>
-            </header>
-            <p>{{ result.summary || '暂未返回摘要' }}</p>
-          </section>
-
-          <dl class="detail-fields compact-fields">
-            <div v-for="field in chainDetailFields" :key="field.key">
-              <dt>{{ field.label }}</dt>
-              <dd>{{ field.value }}</dd>
-            </div>
-          </dl>
-
-          <section class="detail-section">
-            <header class="section-heading">
-              <div><span>执行链路</span><strong>处理阶段</strong></div>
-              <small>{{ eventReportId ? '报告已生成' : result.event_instance_id ? '处理中' : '等待事件' }}</small>
-            </header>
-            <div class="model-route-list">
-              <article v-for="item in routeModules" :key="item.key" :class="item.state">
-                <el-icon><component :is="item.icon" /></el-icon>
-                <div>
-                  <strong>{{ item.title }}</strong>
-                  <span>{{ item.summary }}</span>
-                </div>
-              </article>
-            </div>
-          </section>
-
-          <section class="detail-section">
-            <header class="section-heading">
-              <div><span>判定变量</span><strong>场景置信度</strong></div>
-              <small>{{ detectedSceneCount }} 项触发</small>
-            </header>
-            <div class="scene-list compact-scene-list">
-              <div
-                v-for="item in sortedSceneItems"
-                :key="item.key"
-                :class="['scene-row', { detected: item.detected }]"
-              >
-                <div class="scene-label">
-                  <span>{{ item.label }}</span>
-                  <b>{{ item.detected ? '触发' : '正常' }}</b>
-                </div>
-                <el-progress
-                  :percentage="item.percent"
-                  :stroke-width="7"
-                  :show-text="false"
-                  :color="item.detected ? '#ff6b6b' : '#40c7a7'"
-                />
-                <small>{{ item.percent }}%</small>
-              </div>
-            </div>
-          </section>
-
-          <section class="detail-section log-section">
-            <header class="section-heading">
-              <div><span>处理记录</span><strong>Timeline</strong></div>
-              <small>{{ chainTimeline.length }} 条</small>
-            </header>
-            <div v-if="chainTimeline.length" class="mini-log-stream">
-              <article v-for="item in chainTimeline" :key="item.id || item.key" :class="timelineTone(item)">
-                <span>{{ logTypeLabel(item.log_type) }}</span>
-                <div>
-                  <strong>{{ displayLogTitle(item) }}</strong>
-                  <p v-if="displayLogMessage(item)">{{ displayLogMessage(item) }}</p>
-                </div>
-                <time>{{ formatDetailTime(item.create_time) }}</time>
-              </article>
-            </div>
-            <div v-else class="compact-empty-line">事件创建后会显示条件判断、处置链路、报告生成记录</div>
-          </section>
-
-          <div class="result-actions detail-actions">
+          <!-- 操作入口：完整事件信息与分析报告经详情按钮跳转查看 -->
+          <div v-if="result" class="result-actions detail-actions">
             <el-button :disabled="!result.event_instance_id" type="primary" plain @click="openEventDetail(result.event_instance_id)">查看事件详情</el-button>
-            <el-button :disabled="!eventReportId" type="success" @click="openReport">打开报告</el-button>
           </div>
-
-          <el-collapse class="json-collapse">
-            <el-collapse-item title="判定 JSON" name="json">
-              <pre>{{ formattedResult }}</pre>
-            </el-collapse-item>
-          </el-collapse>
-        </div>
-        <div v-else class="result-empty">
-          <el-icon><DataAnalysis /></el-icon>
-          <strong>等待链路任务</strong>
-          <span>画面分析、条件提交和事件结果将在这里显示</span>
         </div>
 
         <div v-if="lastError" class="error-banner">
@@ -254,33 +150,15 @@
         </div>
       </aside>
     </section>
-
-    <section class="history-panel">
-      <header class="panel-header compact">
-        <div><span class="section-index">03</span><div><small>SESSION</small><h3>场景测试记录</h3></div></div>
-        <span>{{ history.length }} 条</span>
-      </header>
-      <el-table :data="history" empty-text="暂无检测记录" class="history-table">
-        <el-table-column label="序号" width="72"><template #default="{ $index }"><span class="event-no">{{ $index + 1 }}</span></template></el-table-column>
-        <el-table-column label="触发场景" min-width="150"><template #default="{ row }"><strong class="event-name">{{ rowPrimarySceneLabel(row) }}</strong></template></el-table-column>
-        <el-table-column label="摘要" min-width="360" show-overflow-tooltip><template #default="{ row }"><span class="event-summary">{{ row.summary || '暂无摘要' }}</span></template></el-table-column>
-        <el-table-column label="风险" width="110"><template #default="{ row }"><el-tag :type="tagForRisk(row.risk_level)" effect="dark">{{ labelForRisk(row.risk_level) }}</el-tag></template></el-table-column>
-        <el-table-column label="采样帧" width="96"><template #default="{ row }">{{ (row.image_urls || []).length }} 帧</template></el-table-column>
-        <el-table-column label="ECA" width="120"><template #default="{ row }"><span class="eca-cell"><i :class="{ ok: row.eca_dispatched }"></i>{{ row.eca_dispatched ? '已提交' : '未确认' }}</span></template></el-table-column>
-        <el-table-column label="时间" width="180"><template #default="{ row }">{{ formatResultTime(row.timestamp) }}</template></el-table-column>
-        <el-table-column label="操作" width="92" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="selectHistory(row)">查看</el-button></template></el-table-column>
-      </el-table>
-    </section>
   </div>
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  CircleCheckFilled, Connection, DataAnalysis, Document, Loading,
-  Promotion, Refresh, VideoCamera, VideoPause, VideoPlay, Warning, WarningFilled,
+  CircleCheckFilled, Connection, Promotion, Refresh, VideoCamera, VideoPause, VideoPlay, Warning, WarningFilled,
 } from '@element-plus/icons-vue'
 import { getCameraList, simulateCameraVideoScreening } from '@/api/camera'
 import { getUnifiedSafetyEventDetail } from '@/api/integration'
@@ -289,15 +167,6 @@ import { camerasFromPayload } from '@/utils/cameraSnapshots'
 const FRAME_COUNT = 4
 const WINDOW_SECONDS = 10
 const router = useRouter()
-const sceneDefinitions = [
-  ['mudslide_detected', 'mudslide_confidence', '泥石流'],
-  ['landslide_detected', 'landslide_confidence', '滑坡'],
-  ['flood_detected', 'flood_confidence', '洪水'],
-  ['earthquake_detected', 'earthquake_confidence', '地震'],
-  ['person_present', 'person_confidence', '人员'],
-  ['boat_present', 'boat_confidence', '船只/捕鱼'],
-]
-
 const cameras = ref([])
 const cameraId = ref('')
 const cameraLoading = ref(false)
@@ -311,7 +180,6 @@ const simulationActive = ref(false)
 const screening = ref(false)
 const result = ref(null)
 const eventDetail = ref(null)
-const history = ref([])
 const lastError = ref('')
 const pollTimer = ref(null)
 const pollStartedAt = ref(0)
@@ -328,104 +196,137 @@ const mediaStatus = computed(() => {
   if (videoUrl.value) return '视频已就绪'
   return '等待输入'
 })
-const sceneItems = computed(() => sceneDefinitions.map(([key, confidenceKey, label]) => ({
-  key,
-  label,
-  detected: Number(result.value?.scene?.[key] || 0) === 1,
-  percent: Math.round(Number(result.value?.confidence?.[confidenceKey] || 0) * 100),
-})))
-const sortedSceneItems = computed(() => [...sceneItems.value].sort((a, b) => {
-  if (a.detected !== b.detected) return a.detected ? -1 : 1
-  return b.percent - a.percent
-}))
-const detectedSceneCount = computed(() => sceneItems.value.filter(item => item.detected).length)
-const primarySceneLabel = computed(() => {
-  const detected = sortedSceneItems.value.find(item => item.detected)
-  if (detected) return `${detected.label}疑似触发`
-  const top = sortedSceneItems.value[0]
-  return top?.percent ? `${top.label}关注度最高` : '未发现明确异常'
-})
 const riskLabel = computed(() => labelForRisk(result.value?.risk_level))
 const riskTag = computed(() => tagForRisk(result.value?.risk_level))
-const riskClass = computed(() => `risk-${String(result.value?.risk_level || 'LOW').toLowerCase()}`)
-const resultImageUrls = computed(() => normalizeMediaUrls(result.value?.image_urls || []))
 const detailEvent = computed(() => eventDetail.value?.event || null)
 const eventReportId = computed(() => detailEvent.value?.analysis_report_id || result.value?.analysis_report_id || null)
-const planLog = computed(() => latestTimelineLog(item => matchesLog(item, ['dam-workflow-plan', '智能路由规划', '智能路由已生成'])))
-const executeLog = computed(() => latestTimelineLog(item => matchesLog(item, ['dam-workflow-execute', '模型库工作流执行', '视频理解链路'])))
+// 事件处置报告日志（shouldStopEventPolling 依赖其状态判断轮询终止）
 const reportLog = computed(() => latestTimelineLog(item => matchesLog(item, ['dam-event-report', '事件报告生成', '事件处置报告'])))
-const actionLog = computed(() => latestTimelineLog(item => matchesLog(item, ['eca-flow-result', 'ECA事件动作', '联动'])))
-const ecaStatusText = computed(() => {
+// ========== 处理链路流程时间线（参考 Dashboard「实时告警进度」设计） ==========
+// 处理链路节点 = Dashboard「实时告警进度」4 节点（事件触发/智能路由/联动处理/闭环归档）+ 首个「视频输入」
+const flowDefinitions = [
+  { key: 'input', label: '视频输入', icon: markRaw(VideoCamera), tone: 'is-primary', logTypes: [], idleText: '等待上传视频', kind: 'input' },
+  { key: 'trigger', label: '事件触发', icon: markRaw(WarningFilled), tone: 'is-primary', logTypes: ['TRIGGER', 'RISK_CHANGE'], idleText: '等待事件触发' },
+  { key: 'route', label: '智能路由', icon: markRaw(Promotion), tone: 'is-warning', logTypes: ['DAM_WORKFLOW', 'WORKFLOW'], idleText: '等待匹配处置流程' },
+  { key: 'linkage', label: '联动处理', icon: markRaw(Connection), tone: 'is-success', logTypes: ['ACTION', 'MANUAL', 'REPORT'], idleText: '等待联动动作执行' },
+  { key: 'archive', label: '闭环归档', icon: markRaw(CircleCheckFilled), tone: 'is-info', logTypes: ['RESOLVE'], idleText: '等待闭环归档' },
+]
+const hasTask = computed(() => Boolean(videoFile.value || screening.value || result.value || eventDetail.value))
+// 流程是否已启动：仅「开始模拟」后（分析中/已提交/已有事件）才进入执行流转；仅上传视频仍为等待状态
+const started = computed(() => Boolean(screening.value || result.value || eventDetail.value))
+const flowStatusLabel = computed(() => {
   if (screening.value) return '分析中'
   if (eventReportId.value) return '报告已生成'
-  if (result.value?.eca_dispatched) return '已提交'
-  if (result.value) return '未确认'
-  return '待触发'
+  if (result.value?.event_instance_id) return '事件处理中'
+  if (result.value) return '已提交'
+  return '链路监听中'
 })
-const chainSteps = computed(() => [
-  { label: '视频输入', value: videoName.value || '已上传', state: videoFile.value ? 'done' : 'pending', icon: VideoCamera },
-  { label: '画面分析', value: result.value ? primarySceneLabel.value : (screening.value ? '分析中' : '等待'), state: result.value ? 'done' : (screening.value ? 'running' : 'pending'), icon: WarningFilled },
-  { label: '条件提交', value: result.value?.eca_dispatched ? '已提交' : '未确认', state: result.value?.eca_dispatched ? 'done' : 'pending', icon: Promotion },
-  {
-    label: '联动处置',
-    value: stepText(executeLog.value, result.value?.event_instance_id ? '等待执行' : (result.value?.eca_dispatched ? '等待事件回写' : '等待触发')),
-    state: stepState(executeLog.value, result.value?.event_instance_id ? 'active' : 'pending'),
-    icon: Connection,
-  },
-  {
-    label: '报告归档',
-    value: eventReportId.value ? '已生成' : stepText(reportLog.value, result.value?.event_instance_id ? '等待报告生成' : '等待事件'),
-    state: eventReportId.value ? 'done' : stepState(reportLog.value, result.value?.event_instance_id ? 'active' : 'pending'),
-    icon: CircleCheckFilled,
-  },
-])
+const flowSteps = computed(() => {
+  const rows = chainTimeline.value
+  const idle = !hasTask.value
+  const grouped = flowDefinitions.map((definition) => {
+    const logs = rows
+      .filter((row) => definition.logTypes.includes(String(row?.log_type || '').toUpperCase()))
+      .map((row, index) => ({
+        key: row.id || `${definition.key}-${row.create_time || row.created_at || index}`,
+        title: row.title || logTypeLabel(row.log_type),
+        status: String(row.status || '').toUpperCase(),
+        statusText: timelineStatusLabel(row.status),
+        message: row.message || row.action || row.title || '暂无处理说明',
+        time: row.create_time || row.created_at,
+        operator: operatorLabel(row.operator),
+      }))
+    return { definition, logs }
+  })
+
+  const stages = grouped.map(({ definition, logs }) => {
+    const base = { definition, logs }
+    // 视频输入：由本地文件状态推导
+    if (definition.kind === 'input') {
+      const done = Boolean(videoFile.value)
+      return {
+        ...base,
+        rawState: done ? 'done' : 'pending',
+        time: done ? formatNow() : '--',
+        message: videoName.value ? `已加载视频文件 ${videoName.value}` : definition.idleText,
+        operator: '本机输入',
+      }
+    }
+    // 事件触发：日志驱动 + ECA 已提交兜底
+    if (definition.key === 'trigger' && !logs.length && result.value?.eca_dispatched) {
+      return {
+        ...base,
+        rawState: 'done',
+        time: formatNow(),
+        message: '已提交事件入口，等待事件创建',
+        operator: '系统自动',
+      }
+    }
+    // 闭环归档：日志驱动 + 报告 ID 兜底
+    if (definition.key === 'archive' && eventReportId.value) {
+      return {
+        ...base,
+        rawState: 'done',
+        time: formatNow(),
+        message: '报告已生成并归档',
+        operator: '系统自动',
+      }
+    }
+    // 其余阶段：按日志聚合判断状态
+    const latest = logs[logs.length - 1] || null
+    const rawState = logs.length
+      ? (logs.some((log) => ['FAILED', 'ERROR'].includes(log.status))
+          ? 'failed'
+          : logs.some((log) => ['PENDING', 'PROCESSING', 'RUNNING'].includes(log.status))
+            ? 'running'
+            : 'done')
+      : 'pending'
+    return {
+      ...base,
+      rawState,
+      time: latest?.time ? formatDetailTime(latest.time) : '--',
+      message: latest?.message || definition.idleText,
+      operator: latest?.operator || '系统自动',
+    }
+  })
+
+  const failedIndex = stages.findIndex((item) => item.rawState === 'failed')
+  const runningIndex = stages.findIndex((item) => item.rawState === 'running')
+  const pendingIndex = stages.findIndex((item) => item.rawState === 'pending')
+  const activeIndex = idle ? -1 : !started.value ? -1 : failedIndex >= 0 ? failedIndex : runningIndex >= 0 ? runningIndex : pendingIndex >= 0 ? pendingIndex : -1
+  const flowEndIndex = idle ? -1 : !started.value ? -1 : activeIndex >= 0 ? activeIndex : stages.length
+
+  return stages.map(({ definition, logs, rawState, ...rest }, index) => {
+    const active = index === activeIndex
+    const failed = rawState === 'failed'
+    const done = rawState === 'done'
+    // 状态优先级仿 Dashboard：idle > failed > active(running) > done > pending（焦点节点即使底层 pending 也呈现 running）
+    const state = idle ? 'idle' : failed ? 'failed' : active ? 'running' : done ? 'done' : 'pending'
+    const connectorClass = idle
+      ? 'connector-idle'
+      : index < flowEndIndex - 1
+        ? 'connector-done'
+        : index === flowEndIndex - 1
+          ? 'connector-running'
+          : 'connector-pending'
+    return {
+      key: definition.key,
+      label: definition.label,
+      icon: definition.icon,
+      tone: failed ? 'is-failed' : definition.tone,
+      state,
+      connectorClass,
+      active,
+      logs,
+      time: rest.time || '--',
+      message: rest.message || (done ? `已完成${definition.label}` : definition.idleText),
+      operator: rest.operator || (logs.length ? '系统自动' : '待机监听'),
+      statusText: idle ? '待机' : failed ? '异常' : done ? '已完成' : active ? '执行中' : '未开始',
+      statusClass: idle ? 'is-muted' : failed ? 'is-failed' : done ? 'is-success' : active ? 'is-processing' : 'is-muted',
+    }
+  })
+})
 const chainTimeline = computed(() => eventDetail.value?.timeline || [])
-const chainDetailFields = computed(() => [
-  { key: 'instance', label: '事件编号', value: result.value?.instance_no || '--' },
-  { key: 'event', label: '事件名称', value: result.value?.event_name || detailEvent.value?.event_name || primarySceneLabel.value },
-  { key: 'source', label: '摄像头', value: selectedCameraName.value },
-  { key: 'risk', label: '风险等级', value: riskLabel.value },
-  { key: 'status', label: '处置状态', value: statusLabel(detailEvent.value?.status || result.value?.event_status) },
-  { key: 'report', label: '报告状态', value: eventReportId.value ? '已生成' : (result.value?.event_instance_id ? '生成中' : '未触发') },
-])
-const routeModules = computed(() => [
-  {
-    key: 'screening',
-    title: '画面分析',
-    summary: `${FRAME_COUNT} 帧采样，${primarySceneLabel.value}`,
-    state: result.value ? 'done' : 'pending',
-    icon: WarningFilled,
-  },
-  {
-    key: 'eca',
-    title: '条件判断',
-    summary: displayLogMessage(actionLog.value) || (result.value?.eca_dispatched ? '已提交事件入口' : '等待分析结果'),
-    state: result.value?.eca_dispatched ? stepState(actionLog.value, 'done') : 'pending',
-    icon: Promotion,
-  },
-  {
-    key: 'planner',
-    title: '处置方案生成',
-    summary: displayLogMessage(planLog.value) || (result.value?.event_instance_id ? '根据事件生成处置方案' : '触发后启动'),
-    state: stepState(planLog.value, result.value?.event_instance_id ? 'running' : 'pending'),
-    icon: DataAnalysis,
-  },
-  {
-    key: 'workflow',
-    title: '处置链路执行',
-    summary: displayLogMessage(executeLog.value) || (result.value?.event_instance_id ? '正在提取证据并执行处置链路' : '等待处置方案'),
-    state: stepState(executeLog.value, result.value?.event_instance_id ? 'running' : 'pending'),
-    icon: Connection,
-  },
-  {
-    key: 'report',
-    title: '报告归档',
-    summary: eventReportId.value ? `报告 ID ${eventReportId.value}` : (displayLogMessage(reportLog.value) || '等待报告生成'),
-    state: eventReportId.value ? 'done' : stepState(reportLog.value, result.value?.event_instance_id ? 'pending' : 'pending'),
-    icon: Document,
-  },
-])
-const formattedResult = computed(() => JSON.stringify(result.value, null, 2))
 
 function latestTimelineLog(predicate) {
   const items = Array.isArray(chainTimeline.value) ? chainTimeline.value : []
@@ -454,53 +355,28 @@ function logStatus(item) {
   return ''
 }
 
-function stepState(item, fallback = 'pending') {
-  const status = logStatus(item)
-  if (status === 'DONE') return 'done'
-  if (status === 'FAILED') return 'failed'
-  if (status === 'RUNNING') return 'running'
-  return fallback
+// 操作人显示名（后端 operator 常为大写标识，映射为友好名称）
+function operatorLabel(value) {
+  const operator = String(value || '').trim()
+  const normalized = operator.toUpperCase()
+  if (!operator) return '系统自动'
+  if (['SYSTEM', 'AUTO', 'ECA', 'DAM', 'RUNTIME'].includes(normalized)) return '系统自动'
+  if (normalized.startsWith('USER')) return '人工确认'
+  return operator
 }
 
-function stepText(item, fallback) {
-  const status = logStatus(item)
-  if (status === 'DONE') return '已完成'
-  if (status === 'FAILED') return '执行异常'
-  if (status === 'RUNNING') return '执行中'
-  return fallback
+// 时间线日志状态显示文案（对齐 Dashboard 徽章语义）
+function timelineStatusLabel(value) {
+  const status = String(value || '').toUpperCase()
+  if (['SUCCESS', 'COMPLETED', 'DONE'].includes(status)) return '已完成'
+  if (['FAILED', 'ERROR'].includes(status)) return '异常'
+  if (['PROCESSING', 'RUNNING', 'PENDING'].includes(status)) return '执行中'
+  return '已完成'
 }
 
-function displayLogTitle(item) {
-  const title = item?.title || item?.message || ''
-  return cleanProcessText(title)
-}
-
-function displayLogMessage(item) {
-  if (!item) return ''
-  const message = item.message || ''
-  if (!message || message === item.title) return ''
-  return cleanProcessText(message)
-}
-
-function cleanProcessText(value) {
-  let text = String(value || '').trim()
-  if (!text) return ''
-  const replacements = [
-    [/Qwen3\.6-35B-A3B 云端增强分析/g, '云端复核'],
-    [/Qwen[^\s，。；、]*/gi, '画面分析'],
-    [/4B\s*视频理解工作流/g, '视频理解链路'],
-    [/4B\s*视频理解/g, '视频理解'],
-    [/模型库工作流/g, '处置链路'],
-    [/模型库/g, '处置服务'],
-    [/智能路由/g, '处置方案'],
-    [/\bDAG\b/g, '流程'],
-    [/ECA/g, '条件判断'],
-    [/初筛/g, '分析'],
-  ]
-  replacements.forEach(([pattern, replacement]) => {
-    text = text.replace(pattern, replacement)
-  })
-  return text
+// 当前时间格式化（流程节点时间显示）
+function formatNow() {
+  return formatDetailTime(Date.now())
 }
 
 async function loadCameras() {
@@ -591,12 +467,10 @@ async function submitVideoFile() {
       failed: false,
       timeLabel: `FRAME ${String(index + 1).padStart(2, '0')}`,
     }))
-    history.value = [normalizedResult, ...history.value].slice(0, 20)
     if (normalizedResult.event_instance_id) {
       await refreshEventDetail(normalizedResult.event_instance_id)
       startEventPolling(normalizedResult.event_instance_id)
     }
-    ElMessage.success('视频分析完成，结果已提交条件判断')
   } catch (error) {
     lastError.value = error?.response?.data?.detail || error?.message || '视频分析请求失败'
   } finally {
@@ -696,54 +570,9 @@ function markFrameFailed(frame) {
   frame.failed = true
 }
 
-function sceneItemsFor(row) {
-  return sceneDefinitions.map(([key, confidenceKey, label]) => ({
-    key,
-    label,
-    detected: Number(row?.scene?.[key] || 0) === 1,
-    percent: Math.round(Number(row?.confidence?.[confidenceKey] || 0) * 100),
-  })).sort((a, b) => {
-    if (a.detected !== b.detected) return a.detected ? -1 : 1
-    return b.percent - a.percent
-  })
-}
-
-function rowPrimarySceneLabel(row) {
-  const items = sceneItemsFor(row)
-  const detected = items.find(item => item.detected)
-  if (detected) return `${detected.label}疑似触发`
-  const top = items[0]
-  return top?.percent ? `${top.label}关注度最高` : '未发现明确异常'
-}
-
-function selectHistory(row) {
-  stopEventPolling()
-  result.value = row
-  eventDetail.value = null
-  evidenceFrames.value = normalizeMediaUrls(row.image_urls || []).slice(0, FRAME_COUNT).map((url, index) => ({
-    id: `history-frame-${Date.now()}-${index}`,
-    url,
-    failed: false,
-  }))
-  if (row.event_instance_id) {
-    refreshEventDetail(row.event_instance_id)
-    startEventPolling(row.event_instance_id)
-  }
-}
-
 function openEventDetail(id) {
   if (!id) return
   router.push({ name: 'AlarmSafetyEventDetail', params: { id } })
-}
-
-function openReport() {
-  const instanceNo = result.value?.instance_no || detailEvent.value?.instance_no
-  if (!instanceNo) return
-  window.open(`/api/onlyoffice/document/dam_event_report_${instanceNo}`, '_blank')
-}
-
-function statusLabel(value) {
-  return ({ PENDING: '待处理', PROCESSING: '处理中', COMPLETED: '已完成', FAILED: '失败', FALSE_ALARM: '误报' })[value] || value || '--'
 }
 
 function logTypeLabel(value) {
@@ -757,13 +586,6 @@ function logTypeLabel(value) {
   })[value] || value || '记录'
 }
 
-function timelineTone(item) {
-  const status = String(item?.status || '').toUpperCase()
-  if (status === 'FAILED') return 'failed'
-  if (status === 'SUCCESS' || status === 'COMPLETED') return 'done'
-  return 'running'
-}
-
 function labelForRisk(level) { return ({ HIGH: '高风险', MEDIUM: '中风险', LOW: '低风险' })[level] || '低风险' }
 function tagForRisk(level) { return ({ HIGH: 'danger', MEDIUM: 'warning', LOW: 'success' })[level] || 'info' }
 function formatDetailTime(value) {
@@ -771,19 +593,6 @@ function formatDetailTime(value) {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? '--' : date.toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
-function formatResultTime(timestamp) {
-  if (!timestamp) return '--'
-  const date = new Date(Number(timestamp) * 1000)
-  return Number.isNaN(date.getTime()) ? '--' : date.toLocaleString('zh-CN', { hour12: false })
-}
-function formatVideoTime(value) {
-  const seconds = Number(value)
-  if (!Number.isFinite(seconds)) return '00:00'
-  const minute = Math.floor(seconds / 60)
-  const rest = Math.floor(seconds % 60)
-  return `${String(minute).padStart(2, '0')}:${String(rest).padStart(2, '0')}`
-}
-
 onMounted(loadCameras)
 onBeforeUnmount(() => {
   stopEventPolling()
@@ -818,20 +627,32 @@ onBeforeUnmount(() => {
 .panel-header,
 .panel-header > div:first-child,
 .panel-title,
-.runtime-state,
-.result-meta span,
-.eca-cell {
+.runtime-state {
   display: flex;
   align-items: center;
 }
+/* 页头（参考「数据源管理」admin-header 设计：标题块 + 操作入口，无冗余面包屑） */
 .page-header {
+  min-height: 74px;
+  padding: 16px 20px;
   justify-content: space-between;
   gap: 18px;
+  border: 1px solid rgba(96, 151, 191, .22);
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, rgba(14, 48, 76, .82) 0%, rgba(9, 29, 48, .72) 58%, rgba(7, 20, 34, .46) 100%);
+  box-shadow: inset 0 1px 0 rgba(147, 206, 241, .08);
 }
-.page-header p {
-  margin: 0 0 4px;
-  color: #7ea9c6;
+.title-block {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+.title-block p {
+  margin: 0;
+  color: #8aa9c3;
   font-size: 13px;
+  line-height: 1.35;
 }
 h2,
 h3 {
@@ -867,37 +688,6 @@ h3 {
   margin-left: 24px;
   color: #7594aa;
 }
-.status-grid {
-  display: grid;
-  grid-template-columns: 1fr 1.3fr 1.6fr 1fr;
-  gap: 10px;
-  margin-top: 16px;
-}
-.status-item {
-  min-width: 0;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #0b1d2e;
-}
-.status-item span {
-  display: block;
-  margin-bottom: 6px;
-  color: #7794aa;
-  font-size: 12px;
-}
-.status-item strong {
-  display: block;
-  overflow: hidden;
-  color: #e8f4fb;
-  font-size: 16px;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.status-item.accent strong {
-  color: var(--green);
-}
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(380px, .9fr);
@@ -905,8 +695,7 @@ h3 {
   margin-top: 16px;
 }
 .media-panel,
-.result-panel,
-.history-panel {
+.result-panel {
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -982,26 +771,6 @@ h3 {
   height: 100%;
   object-fit: contain;
   background: #02070d;
-}
-.video-overlay {
-  position: absolute;
-  right: 12px;
-  bottom: 12px;
-  left: 12px;
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 9px 12px;
-  color: #d9eaf5;
-  background: rgba(2,7,13,.82);
-  font-size: 12px;
-  pointer-events: none;
-}
-.video-overlay span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .empty-stage {
   display: grid;
@@ -1103,32 +872,6 @@ h3 {
 .result-panel {
   min-height: 620px;
 }
-.processing-state,
-.result-empty {
-  display: grid;
-  min-height: 500px;
-  place-content: center;
-  justify-items: center;
-  gap: 11px;
-  color: var(--muted);
-  text-align: center;
-}
-.processing-state .el-icon {
-  color: var(--amber);
-  font-size: 38px;
-}
-.processing-state strong,
-.result-empty strong {
-  color: #d9e9f5;
-}
-.processing-state span,
-.result-empty span {
-  font-size: 12px;
-}
-.result-empty .el-icon {
-  color: #426d87;
-  font-size: 46px;
-}
 .result-content {
   padding: 16px;
 }
@@ -1136,427 +879,405 @@ h3 {
   display: grid;
   gap: 14px;
 }
-.detail-flow {
+/* ========== 处理链路流程时间线（移植自 Dashboard「实时告警进度」） ========== */
+.progress-timeline {
+  position: relative;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
-  margin: 0;
+  align-content: start;
+  gap: 10px;
+  margin: 12px 0 0;
+  padding: 0 2px 0 22px;
+  list-style: none;
+  overflow: auto;
+  min-height: 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(67, 200, 255, .36) transparent;
+}
+.progress-timeline::before {
+  content: "";
+  position: absolute;
+  top: 13px;
+  bottom: 13px;
+  left: 7px;
+  width: 1px;
+  background: linear-gradient(180deg, rgba(255, 91, 104, .86), rgba(255, 182, 72, .64), rgba(104, 161, 200, .22));
+}
+.progress-timeline li {
+  position: relative;
+  min-width: 0;
+  color: #cfe2f0;
+}
+.progress-timeline > li > i {
+  position: absolute;
+  left: -20px;
+  top: 16px;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(136, 169, 193, .58);
+  border-radius: 50%;
+  background: #071a2f;
+  z-index: 1;
+}
+.progress-timeline li.is-primary > i {
+  border-color: #43c8ff;
+  background: #08243a;
+}
+.progress-timeline li.is-warning > i {
+  border-color: #ffb648;
+  background: #2c210d;
+}
+.progress-timeline li.is-success > i {
+  border-color: #38d59c;
+  background: #0a2d29;
+}
+.progress-timeline li.active > i {
+  border-color: #ff5b68;
+  box-shadow: 0 0 0 4px rgba(255, 91, 104, .12);
+}
+.progress-timeline article {
+  min-width: 0;
+  padding: 10px 11px;
+  border: 1px solid rgba(67, 200, 255, .14);
+  border-radius: 8px;
+  background: rgba(4, 20, 36, .48);
+}
+.progress-timeline li.active article {
+  border-color: rgba(255, 91, 104, .32);
+  background: linear-gradient(135deg, rgba(255, 91, 104, .1), rgba(4, 20, 36, .54));
+}
+.progress-timeline header,
+.progress-timeline footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+.progress-timeline header strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #f1fbff;
+  font-size: 14px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.progress-timeline time,
+.progress-timeline footer span {
+  flex: 0 0 auto;
+  color: #8fc8f2;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.progress-timeline p {
+  display: -webkit-box;
+  margin: 8px 0 10px;
+  overflow: hidden;
+  color: #b7d0e3;
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.flow-timeline {
+  gap: 12px;
+  margin-top: 12px;
+  padding-left: 52px;
+}
+.flow-timeline::before {
+  content: none;
+  display: none;
+}
+.flow-timeline > li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: -27px;
+  top: 47px;
+  bottom: -12px;
+  width: 1px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(143, 200, 242, .16), rgba(143, 200, 242, .06));
+  pointer-events: none;
+  z-index: 0;
+}
+.flow-timeline > li.connector-done:not(:last-child)::after {
+  background: linear-gradient(180deg, rgba(67, 200, 255, .58), rgba(56, 213, 156, .38));
+}
+.flow-timeline > li.connector-running:not(:last-child)::after {
+  background:
+    linear-gradient(180deg, transparent, rgba(100, 223, 255, .98), transparent) 0 -80px / 100% 80px no-repeat,
+    linear-gradient(180deg, rgba(67, 200, 255, .58), rgba(100, 223, 255, .28));
+  animation: flowLineScan 1.7s linear infinite;
+}
+.flow-timeline > li.connector-pending:not(:last-child)::after,
+.flow-timeline.idle > li:not(:last-child)::after {
+  background:
+    linear-gradient(180deg, rgba(143, 200, 242, .2), rgba(143, 200, 242, .08));
+  animation: none;
+}
+.progress-timeline > li > .flow-node-icon {
+  left: -44px;
+  top: 9px;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(143, 200, 242, .22);
+  border-radius: 9px;
+  color: #8fc8f2;
+  background: #082038;
+  box-shadow: none;
+  z-index: 2;
+}
+.flow-node-icon :deep(svg) {
+  width: 18px;
+  height: 18px;
+}
+.flow-timeline li.done > .flow-node-icon,
+.flow-timeline li.is-success.done > .flow-node-icon {
+  color: #48e6ae;
+  border-color: rgba(72, 230, 174, .32);
+  background: rgba(9, 45, 41, .92);
+}
+.flow-timeline li.running > .flow-node-icon {
+  color: #64dfff;
+  border-color: rgba(100, 223, 255, .68);
+  animation: flowNodePulse 1.6s ease-in-out infinite;
+  box-shadow: 0 0 0 3px rgba(100, 223, 255, .08), 0 0 14px rgba(100, 223, 255, .24);
+}
+.flow-timeline li.failed > .flow-node-icon,
+.flow-timeline li.is-failed > .flow-node-icon {
+  color: #ff7f88;
+  border-color: rgba(255, 91, 104, .58);
+  background: rgba(50, 18, 30, .9);
+}
+.flow-timeline li.idle > .flow-node-icon,
+.flow-timeline li.pending > .flow-node-icon {
+  opacity: .72;
+}
+.flow-timeline li.running article {
+  position: relative;
+  border-color: rgba(100, 223, 255, .44);
+  background:
+    linear-gradient(90deg, rgba(67, 200, 255, .12), rgba(4, 20, 36, .54) 48%, rgba(67, 200, 255, .08)),
+    rgba(4, 20, 36, .52);
+  overflow: hidden;
+  z-index: 1;
+}
+.flow-timeline li.running article::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(100, 223, 255, .16), transparent);
+  transform: translateX(-100%);
+  animation: flowScan 2.2s ease-in-out infinite;
+  pointer-events: none;
+}
+.flow-timeline.idle article {
+  border-color: rgba(67, 200, 255, .1);
+  background: rgba(4, 20, 36, .36);
+}
+.flow-timeline.idle {
+  overflow: visible;
+}
+.flow-timeline.idle header strong,
+.flow-timeline.idle p {
+  color: #88a9c1;
+}
+.flow-node-logs {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 10px;
   padding: 0;
   list-style: none;
 }
-.detail-flow li {
+.flow-node-logs li {
   min-width: 0;
-  padding: 10px;
-  border: 1px solid rgba(127,168,198,.18);
-  border-radius: 8px;
-  background: #071725;
-}
-.flow-dot {
-  display: inline-grid;
-  width: 28px;
-  height: 28px;
-  margin-bottom: 8px;
-  place-items: center;
-  border-radius: 50%;
-  color: #7f9ab0;
-  background: rgba(127,154,176,.12);
-}
-.detail-flow li.done .flow-dot {
-  color: #072016;
-  background: var(--green);
-}
-.detail-flow li.active .flow-dot,
-.detail-flow li.running .flow-dot {
-  color: #031720;
-  background: var(--cyan);
-  box-shadow: 0 0 0 5px rgba(79,208,232,.1);
-}
-.detail-flow li.failed .flow-dot {
-  color: #24070b;
-  background: var(--red);
-}
-.detail-flow strong,
-.detail-flow small {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.detail-flow strong {
-  color: #eaf5fc;
-  font-size: 13px;
-}
-.detail-flow small {
-  margin-top: 4px;
-  color: #8ba7ba;
-  font-size: 11px;
-}
-.detail-summary-card {
-  padding: 14px;
-  border: 1px solid rgba(127,168,198,.22);
-  border-left: 4px solid var(--green);
-  border-radius: 8px;
-  background: #091a29;
-}
-.detail-summary-card.risk-high {
-  border-left-color: var(--red);
-  background: rgba(112,31,42,.22);
-}
-.detail-summary-card.risk-medium {
-  border-left-color: var(--amber);
-  background: rgba(116,77,29,.18);
-}
-.detail-summary-card header,
-.section-heading,
-.detail-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.detail-summary-card span {
-  color: #7c98ad;
-  font-size: 11px;
-}
-.detail-summary-card h3 {
-  margin-top: 5px;
-  font-size: 20px;
-}
-.detail-summary-card p {
-  margin: 10px 0 0;
-  color: #d8e8f2;
-  line-height: 1.65;
-}
-.detail-fields {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin: 0;
-}
-.detail-fields div {
-  min-width: 0;
-  padding: 10px;
-  border: 1px solid rgba(127,168,198,.18);
+  gap: 4px;
+  padding: 8px 9px;
   border-radius: 6px;
-  background: #0a1928;
+  color: #b8d4e8;
+  background: rgba(2, 13, 25, .34);
 }
-.detail-fields dt {
-  color: #7895aa;
-  font-size: 11px;
-}
-.detail-fields dd {
-  margin: 5px 0 0;
+.flow-node-logs b {
+  min-width: 0;
   overflow: hidden;
-  color: #eaf5fc;
-  font-size: 14px;
-  font-weight: 700;
+  color: #e7f7ff;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.detail-section {
-  padding: 12px;
-  border: 1px solid rgba(127,168,198,.18);
-  border-radius: 8px;
-  background: #081827;
-}
-.section-heading {
-  margin-bottom: 10px;
-}
-.section-heading span,
-.section-heading small {
-  color: #7895aa;
+.flow-node-logs span {
+  min-width: 0;
+  display: -webkit-box;
+  overflow: hidden;
+  color: #9ed3f5;
   font-size: 11px;
+  line-height: 1.35;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
-.section-heading strong {
-  display: block;
-  margin-top: 3px;
-  color: #eaf5fc;
+/* 流程节点状态徽章（footer b） */
+.progress-timeline footer b {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  color: #9ed3f5;
+  background: rgba(143, 200, 242, .08);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.progress-timeline footer b.is-pending {
+  color: #ffcf78;
+  background: rgba(255, 182, 72, .12);
+}
+.progress-timeline footer b.is-processing {
+  color: #64dfff;
+  background: rgba(67, 200, 255, .12);
+}
+.progress-timeline footer b.is-success {
+  color: #48e6ae;
+  background: rgba(56, 213, 156, .12);
+}
+.progress-timeline footer b.is-muted {
+  color: #a6b8c8;
+  background: rgba(166, 184, 200, .1);
+}
+.progress-timeline footer b.is-failed {
+  color: #ff7f88;
+  background: rgba(255, 91, 104, .13);
+}
+/* 空闲轨道动画（未触发时流程链路待机监听） */
+.alarm-idle {
+  display: grid;
+  grid-template-columns: 74px 1fr;
+  gap: 14px;
+  align-items: center;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid rgba(67, 200, 255, .16);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 36px 40px, rgba(56, 213, 156, .13), transparent 58px),
+    rgba(5, 24, 43, .46);
+}
+.flow-idle-visual {
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px 13px;
+  border-color: rgba(67, 200, 255, .14);
+  background:
+    radial-gradient(circle at 34px 36px, rgba(56, 213, 156, .12), transparent 54px),
+    linear-gradient(135deg, rgba(7, 40, 65, .5), rgba(3, 18, 33, .38));
+}
+.flow-idle-visual .idle-orbit {
+  width: 54px;
+  height: 54px;
+}
+.flow-idle-visual .idle-copy strong {
   font-size: 15px;
 }
-.model-route-list {
-  display: grid;
-  gap: 8px;
-}
-.model-route-list article {
-  display: grid;
-  grid-template-columns: 30px minmax(0, 1fr);
-  gap: 10px;
-  align-items: center;
-  padding: 10px;
-  border: 1px solid rgba(127,168,198,.14);
-  border-radius: 6px;
-  background: #071725;
-}
-.model-route-list .el-icon {
-  color: #7f9ab0;
-  font-size: 20px;
-}
-.model-route-list article.done .el-icon {
-  color: var(--green);
-}
-.model-route-list article.running .el-icon {
-  color: var(--cyan);
-}
-.model-route-list article.failed .el-icon {
-  color: var(--red);
-}
-.model-route-list strong,
-.model-route-list span {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.model-route-list strong {
-  color: #e8f5fd;
-  font-size: 13px;
-}
-.model-route-list span {
-  margin-top: 4px;
-  color: #8ba7ba;
+.flow-idle-visual .idle-copy span {
   font-size: 12px;
 }
-.compact-scene-list {
-  margin-top: 0;
+.idle-orbit {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border: 1px solid rgba(67, 200, 255, .22);
+  border-radius: 50%;
+  background: rgba(3, 18, 33, .58);
 }
-.mini-log-stream {
-  display: grid;
-  gap: 8px;
-  max-height: 240px;
-  overflow: auto;
+.idle-orbit::before,
+.idle-orbit::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
 }
-.mini-log-stream article {
-  display: grid;
-  grid-template-columns: 54px minmax(0, 1fr) 92px;
-  gap: 10px;
-  padding: 10px;
-  border-left: 3px solid #5d7182;
-  border-radius: 6px;
-  background: #071725;
+.idle-orbit::before {
+  inset: 15px;
+  border: 2px solid rgba(56, 213, 156, .72);
 }
-.mini-log-stream article.done {
-  border-left-color: var(--green);
-}
-.mini-log-stream article.failed {
-  border-left-color: var(--red);
-}
-.mini-log-stream article > span,
-.mini-log-stream time {
-  color: #7895aa;
-  font-size: 11px;
-}
-.mini-log-stream strong {
-  display: block;
-  overflow: hidden;
-  color: #eaf5fc;
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.mini-log-stream p {
-  margin: 4px 0 0;
-  overflow: hidden;
-  color: #9fb7c8;
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.compact-empty-line {
-  padding: 16px;
-  border-radius: 6px;
-  color: #8ba7ba;
-  text-align: center;
-  background: #071725;
-  font-size: 12px;
-}
-.detail-actions {
-  justify-content: flex-end;
-}
-.decision-card {
-  padding: 14px;
-  border: 1px solid rgba(127,168,198,.22);
-  border-left: 4px solid var(--green);
-  border-radius: 8px;
-  background: #091a29;
-}
-.decision-card.risk-high {
-  border-left-color: var(--red);
-  background: rgba(112,31,42,.22);
-}
-.decision-card.risk-medium {
-  border-left-color: var(--amber);
-  background: rgba(116,77,29,.18);
-}
-.decision-card span {
-  color: #7c98ad;
-  font-size: 11px;
-}
-.decision-card strong {
-  display: block;
-  margin-top: 8px;
-  color: #f3f8fd;
-  font-size: 20px;
-}
-.decision-card p {
-  margin: 8px 0 0;
-  color: #d8e8f2;
-  line-height: 1.65;
-}
-.chain-steps {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
-  margin-top: 12px;
-}
-.chain-step {
-  min-width: 0;
-  padding: 10px;
-  border: 1px solid rgba(127,168,198,.18);
-  border-radius: 6px;
-  background: #071725;
-}
-.chain-step i {
-  display: block;
+.idle-orbit::after {
+  left: 50%;
+  top: 50%;
   width: 8px;
   height: 8px;
-  margin-bottom: 8px;
+  transform: translate(-50%, -50%);
+  background: #38d59c;
+  box-shadow: 0 0 12px rgba(56, 213, 156, .72);
+}
+.idle-orbit span {
+  position: absolute;
+  inset: 5px;
   border-radius: 50%;
-  background: #5d7182;
+  border-top: 2px solid rgba(67, 200, 255, .72);
+  border-right: 2px solid transparent;
+  animation: idleSpin 3.8s linear infinite;
 }
-.chain-step.done i {
-  background: var(--green);
-  box-shadow: 0 0 0 5px rgba(66,198,166,.1);
+.idle-orbit i {
+  position: absolute;
+  right: 8px;
+  top: 12px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #43c8ff;
 }
-.chain-step.active i {
-  background: var(--cyan);
-  box-shadow: 0 0 0 5px rgba(79,208,232,.1);
-}
-.chain-step span,
-.chain-step strong {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.chain-step span {
-  color: #7895aa;
-  font-size: 11px;
-}
-.chain-step strong {
-  margin-top: 5px;
-  color: #eaf5fc;
-  font-size: 13px;
-}
-.metric-row {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  margin-top: 12px;
-}
-.metric-row div {
+.idle-copy {
   min-width: 0;
-  padding: 10px;
-  border: 1px solid rgba(127,168,198,.18);
-  border-radius: 6px;
-  background: #0a1928;
-}
-.metric-row span {
-  display: block;
-  color: #7895aa;
-  font-size: 11px;
-}
-.metric-row strong {
-  display: block;
-  margin-top: 5px;
-  overflow: hidden;
-  color: #eaf5fc;
-  font-size: 18px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.scene-list {
   display: grid;
-  gap: 8px;
-  margin-top: 12px;
+  gap: 7px;
 }
-.scene-row {
-  display: grid;
-  grid-template-columns: minmax(90px, .9fr) minmax(110px, 1.2fr) 42px;
-  gap: 10px;
-  align-items: center;
-  padding: 10px;
-  border: 1px solid rgba(127,168,198,.18);
-  border-radius: 6px;
-  background: #091a29;
+.idle-copy strong {
+  color: #e9f8ff;
+  font-size: 16px;
+  line-height: 1;
 }
-.scene-row.detected {
-  border-color: rgba(255,107,120,.46);
-  background: rgba(112,31,42,.18);
+.idle-copy span {
+  color: #8fc8f2;
+  font-size: 12px;
+  line-height: 1.35;
 }
-.scene-label {
+/* 关键帧动画 */
+@keyframes idleSpin {
+  to { transform: rotate(360deg); }
+}
+@keyframes flowNodePulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(100, 223, 255, .18);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(100, 223, 255, .08);
+  }
+}
+@keyframes flowScan {
+  0% { transform: translateX(-100%); }
+  55%, 100% { transform: translateX(100%); }
+}
+@keyframes flowLineScan {
+  from { background-position: 0 -90px, 0 0; }
+  to { background-position: 0 100%, 0 0; }
+}
+.detail-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.scene-label span {
-  color: #d4e5ef;
-  font-size: 13px;
-}
-.scene-label b {
-  color: var(--green);
-  font-size: 11px;
-  white-space: nowrap;
-}
-.scene-row.detected .scene-label b {
-  color: #ff9ba4;
-}
-.scene-row small {
-  color: #8aa5b8;
-  font-size: 11px;
-  text-align: right;
-}
-.result-meta {
-  display: grid;
-  gap: 8px;
-  margin-top: 14px;
-}
-.result-meta span {
-  gap: 7px;
-  color: #91aabd;
-  font-size: 12px;
-}
-.result-meta span.ok {
-  color: var(--green);
+  justify-content: flex-end;
+  gap: 12px;
 }
 .result-actions {
   display: flex;
   justify-content: flex-end;
   margin-top: 10px;
-}
-.json-collapse {
-  margin-top: 12px;
-  border-color: var(--line);
-}
-.json-collapse :deep(.el-collapse-item__header),
-.json-collapse :deep(.el-collapse-item__wrap) {
-  color: #bed3e2;
-  background: transparent;
-  border-color: var(--line);
-}
-.json-collapse :deep(.el-collapse-item__content) {
-  padding-bottom: 0;
-}
-pre {
-  max-height: 260px;
-  margin: 0;
-  padding: 12px;
-  overflow: auto;
-  color: #a4ddcf;
-  background: #030c13;
-  font: 11px/1.55 Consolas, monospace;
-  white-space: pre-wrap;
-  word-break: break-word;
 }
 .error-banner {
   display: flex;
@@ -1569,78 +1290,7 @@ pre {
   background: rgba(110,27,39,.22);
   font-size: 12px;
 }
-.history-panel {
-  margin-top: 16px;
-}
-.panel-header.compact {
-  min-height: 56px;
-}
-.panel-header.compact > span {
-  color: #7894a9;
-  font-size: 12px;
-}
-.history-table {
-  background: #091b2b;
-}
-.history-table :deep(.el-table__inner-wrapper::before) {
-  background: var(--line);
-}
-.history-table :deep(th.el-table__cell) {
-  background: #102940;
-  color: #d4e7f4;
-}
-.history-table :deep(tr),
-.history-table :deep(td.el-table__cell) {
-  background: #091b2b;
-  color: #bed3e2;
-}
-.history-table :deep(td.el-table__cell),
-.history-table :deep(th.el-table__cell) {
-  border-bottom-color: rgba(105,165,207,.15);
-}
-.history-table :deep(.el-table__row:hover > td.el-table__cell) {
-  background: #0e273d;
-}
-.event-no {
-  display: inline-grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  border: 1px solid rgba(79,208,232,.28);
-  border-radius: 6px;
-  color: var(--cyan);
-  background: rgba(79,208,232,.08);
-  font-weight: 700;
-}
-.event-name {
-  color: #e8f5fd;
-  font-weight: 700;
-}
-.event-summary {
-  color: #bed3e2;
-}
-.eca-cell {
-  gap: 7px;
-}
-.eca-cell i {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #6d7f8e;
-}
-.eca-cell i.ok {
-  background: var(--green);
-}
 @media (max-width: 1180px) {
-  .status-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .chain-steps {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .detail-flow {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
   .workspace {
     grid-template-columns: 1fr;
   }
@@ -1669,28 +1319,11 @@ pre {
     width: auto;
     min-width: 190px;
   }
-  .status-grid,
-  .detail-fields,
-  .metric-row {
-    grid-template-columns: 1fr;
-  }
-  .detail-flow {
-    grid-template-columns: 1fr;
-  }
-  .mini-log-stream article {
-    grid-template-columns: 1fr;
-  }
   .video-stage {
     height: 340px;
   }
   .frame-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .scene-row {
-    grid-template-columns: 1fr;
-  }
-  .scene-row small {
-    text-align: left;
   }
 }
 </style>

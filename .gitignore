@@ -46,3 +46,6 @@ Thumbs.db
 # Model weights
 models/yolo-cls/*.pt
 *.pt
+
+# 知识库
+qdrant/data/

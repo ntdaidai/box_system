@@ -197,7 +197,7 @@ services:
       DB_USER: root
       DB_PASSWORD: root
       DB_NAME: dam_system
-      RESIDENT_MODEL_IDS: "9,10"
+      RESIDENT_MODEL_IDS: "9,10,14"
     network_mode: host
 
   # ========== DAM 工作流生成服务 ==========

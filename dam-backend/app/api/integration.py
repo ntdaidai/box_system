@@ -15,7 +15,9 @@ from app.core.security import require_auth
 from app.models.broadcast import BroadcastDevice, BroadcastTemplate
 from app.models.camera import Camera
 from app.models.condition_library import ConditionLibrary
+from app.models.data_source import DataSource
 from app.models.event_action import EventActionConfig
+from app.models.event_condition import EventCondition
 from app.models.event_library import EventLibrary
 from app.models.analysis_report import AnalysisReport
 from app.models.safety_event_task import SafetyEventTask
@@ -40,6 +42,8 @@ ACTION_LABELS = {
 }
 EVENT_CATEGORY_LABELS = {
     "environment": "环境事件",
+    "structure": "结构事件",
+    "equipment": "设备事件",
     "PERSON_SAFETY": "人员安全",
     "ILLEGAL_FISHING": "非法捕鱼",
 }
@@ -120,6 +124,7 @@ def _event_dict(
         "event_category": row.event_category,
         "source_type": row.source_type,
         "source_id": row.source_id,
+        "data_source_id": row.data_source_id,
         "risk_level": row.risk_level,
         "risk_label": RISK_LABELS.get(row.risk_level, row.risk_level),
         "max_risk_level": row.max_risk_level,
@@ -138,20 +143,28 @@ def get_integration_config(
     db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
-    conditions = (
-        db.query(ConditionLibrary)
-        .filter(ConditionLibrary.description.like("[VISUAL_ECA:%"))
-        .order_by(ConditionLibrary.id.asc())
-        .all()
-    )
+    conditions = db.query(ConditionLibrary).order_by(ConditionLibrary.id.asc()).all()
+    sources = {row.id: row for row in db.query(DataSource).all()}
     events = (
         db.query(EventLibrary)
-        .filter(EventLibrary.event_category.in_(["PERSON_SAFETY", "ILLEGAL_FISHING"]))
-        .order_by(EventLibrary.risk_level.asc(), EventLibrary.id.asc())
+        .order_by(EventLibrary.event_category.asc(), EventLibrary.risk_level.asc(), EventLibrary.id.asc())
         .all()
     )
     event_ids = [row.id for row in events]
     event_map = {row.id: row for row in events}
+    condition_map = {row.id: row for row in conditions}
+    relations = (
+        db.query(EventCondition)
+        .filter(EventCondition.event_id.in_(event_ids))
+        .order_by(EventCondition.event_id.asc(), EventCondition.sort_order.asc(), EventCondition.id.asc())
+        .all()
+        if event_ids else []
+    )
+    event_conditions: dict[int, list[ConditionLibrary]] = {}
+    for relation in relations:
+        condition = condition_map.get(relation.condition_id)
+        if condition:
+            event_conditions.setdefault(relation.event_id, []).append(condition)
     configs = (
         db.query(EventActionConfig)
         .filter(EventActionConfig.event_id.in_(event_ids))
@@ -168,6 +181,10 @@ def get_integration_config(
             "conditions": [{
                 "id": row.id,
                 "name": row.condition_name,
+                "source_id": row.source_id,
+                "source_name": sources.get(row.source_id).source_name if sources.get(row.source_id) else None,
+                "source_type": sources.get(row.source_id).source_type if sources.get(row.source_id) else None,
+                "expression": row.expression,
                 "duration": row.duration,
                 "enabled": bool(row.is_activate),
                 "unit": "秒",
@@ -177,13 +194,23 @@ def get_integration_config(
                 "code": row.event_code,
                 "name": row.event_name,
                 "category": row.event_category,
-                "category_label": "人员安全" if row.event_category == "PERSON_SAFETY" else "非法捕鱼",
+                "category_label": EVENT_CATEGORY_LABELS.get(row.event_category, row.event_category or "未分类"),
                 "risk_level": row.risk_level,
                 "risk_label": RISK_LABELS.get(row.risk_level, "未知"),
                 "recovery_duration": row.recovery_duration,
                 "route_role_id": row.route_role_id,
                 "enabled": bool(row.is_activate),
                 "description": row.description,
+                "conditions": [{
+                    "id": condition.id,
+                    "name": condition.condition_name,
+                    "source_id": condition.source_id,
+                    "source_name": sources.get(condition.source_id).source_name if sources.get(condition.source_id) else None,
+                    "source_type": sources.get(condition.source_id).source_type if sources.get(condition.source_id) else None,
+                    "expression": condition.expression,
+                    "duration": condition.duration,
+                    "enabled": bool(condition.is_activate),
+                } for condition in event_conditions.get(row.id, [])],
             } for row in events],
             "flows": [],
             "action_configs": [{
@@ -223,8 +250,8 @@ def update_condition_config(
     _user: User = Depends(require_auth),
 ):
     row = db.query(ConditionLibrary).filter(ConditionLibrary.id == condition_id).first()
-    if not row or not (row.description or "").startswith("[VISUAL_ECA:"):
-        raise HTTPException(status_code=404, detail="视觉条件不存在")
+    if not row:
+        raise HTTPException(status_code=404, detail="触发条件不存在")
     if payload.duration is not None:
         row.duration = payload.duration
         row.time_window = max(1, payload.duration)
@@ -243,10 +270,9 @@ def update_event_config(
 ):
     row = db.query(EventLibrary).filter(
         EventLibrary.id == event_id,
-        EventLibrary.event_category.in_(["PERSON_SAFETY", "ILLEGAL_FISHING"]),
     ).first()
     if not row:
-        raise HTTPException(status_code=404, detail="视觉事件不存在")
+        raise HTTPException(status_code=404, detail="事件不存在")
     if payload.enabled is not None:
         row.is_activate = payload.enabled
     if payload.recovery_duration is not None:

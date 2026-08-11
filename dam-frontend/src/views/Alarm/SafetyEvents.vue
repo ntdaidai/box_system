@@ -64,27 +64,27 @@
         :default-sort="{ prop: 'started_at', order: 'descending' }"
         @sort-change="handleSortChange"
       >
-        <el-table-column label="事件编号" prop="id" width="132" sortable="custom">
+        <el-table-column label="事件编号" prop="id" width="132" sortable="custom" align="center" header-align="center">
           <template #default="{ row }">
             <span class="event-no">{{ displayEventNo(row) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="事件名称" min-width="160">
+        <el-table-column label="事件名称" min-width="160" align="center" header-align="center">
           <template #default="{ row }">
             <strong class="event-name">{{ row.event_name || '未命名事件' }}</strong>
           </template>
         </el-table-column>
-        <el-table-column label="风险等级" prop="risk_level" width="116" sortable="custom">
+        <el-table-column label="风险等级" prop="risk_level" width="116" sortable="custom" align="center" header-align="center">
           <template #default="{ row }">
             <el-tag :type="riskTag(row.risk_level)" effect="dark">{{ riskLevelLabel(row.risk_level, row.risk_label) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="来源" width="108">
+        <el-table-column label="来源" width="108" align="center" header-align="center">
           <template #default="{ row }">
             <span class="source-pill" :class="`is-${row.source_type || 'unknown'}`">{{ sourceLabel(row.source_type) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="摘要" min-width="230">
+        <el-table-column label="摘要" min-width="230" align="center" header-align="center">
           <template #default="{ row }">
             <el-tooltip
               v-if="isLongSummary(row.summary)"
@@ -96,12 +96,12 @@
             <span v-else class="event-summary">{{ row.summary || '暂无摘要' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="处置状态" width="126">
+        <el-table-column label="处置状态" width="126" align="center" header-align="center">
           <template #default="{ row }">
             <span class="event-status" :class="statusClass(row.status)">{{ statusLabel(row.status) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="报告" min-width="150">
+        <el-table-column label="报告" min-width="170" align="center" header-align="center">
           <template #default="{ row }">
             <button
               v-if="row.analysis_report_document_id"
@@ -109,17 +109,17 @@
               type="button"
               @click="openReport(row)"
             >
-              事件处置报告
+              {{ reportTitle(row) }}
             </button>
             <span v-else class="no-report">{{ reportPlaceholder(row) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="开始时间" prop="started_at" width="190" sortable="custom">
+        <el-table-column label="开始时间" prop="started_at" width="190" sortable="custom" align="center" header-align="center">
           <template #default="{ row }">
             <time class="event-time">{{ formatTime(row.started_at) }}</time>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="96" fixed="right">
+        <el-table-column label="操作" width="96" fixed="right" align="center" header-align="center">
           <template #default="{ row }">
             <button class="detail-link" type="button" @click="openDetail(row)">
               <span>详情</span>
@@ -287,6 +287,12 @@ function isLongSummary(value) {
 
 function reportPlaceholder(row) {
   return ['COMPLETED', 'FALSE_ALARM'].includes(row?.status) ? '待生成' : '闭环后生成'
+}
+
+function reportTitle(row) {
+  const name = String(row?.event_name || row?.summary || '').trim()
+  if (!name) return '事件处置报告'
+  return name.includes('事件') ? `${name}处置报告` : `${name}事件处置报告`
 }
 
 function formatTime(value) {

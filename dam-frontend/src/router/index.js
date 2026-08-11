@@ -162,24 +162,42 @@ const routes = [
             path: 'video-detection',
             name: 'SystemVideoDetection',
             component: () => import('@/views/System/VideoDetection.vue'),
-            meta: { title: '视频测试' }
+            meta: { title: '视频测试', hideBreadcrumbBar: true }
           },
           {
             path: 'sensor-event-test',
             name: 'SystemSensorEventTest',
             component: () => import('@/views/System/SensorEventTest.vue'),
-            meta: { title: '传感器测试' }
+            meta: { title: '传感器测试', hideBreadcrumbBar: true }
           },
           {
             path: 'config',
             name: 'SystemInformationConfig',
-            redirect: '/system/linkage/rules',
+            redirect: '/system/linkage/events',
             meta: { title: '联动系统' }
           },
           {
             path: 'linkage',
-            redirect: '/system/linkage/devices',
+            redirect: '/system/linkage/events',
             meta: { title: '联动系统' }
+          },
+          {
+            path: 'linkage/events',
+            name: 'SystemLinkageEvents',
+            component: () => import('@/views/System/EventConfig.vue'),
+            meta: { title: '事件配置' }
+          },
+          {
+            path: 'linkage/actions',
+            name: 'SystemLinkageActions',
+            component: () => import('@/views/System/ActionConfig.vue'),
+            meta: { title: '动作配置' }
+          },
+          {
+            path: 'linkage/zones',
+            name: 'SystemLinkageZones',
+            component: () => import('@/views/Monitor/ZoneConfig.vue'),
+            meta: { title: '区域配置' }
           },
           {
             path: 'linkage/devices',
@@ -190,8 +208,8 @@ const routes = [
           {
             path: 'linkage/rules',
             name: 'SystemLinkageRules',
-            component: () => import('@/views/System/LinkageManagement.vue'),
-            meta: { title: '联动规则', linkageModule: 'rules' }
+            redirect: '/system/linkage/actions',
+            meta: { title: '动作配置' }
           },
           {
             path: 'linkage/drone',

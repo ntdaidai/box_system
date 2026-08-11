@@ -1,6 +1,7 @@
 services:
   qwen4b-local:
     build: .
+    image: qwen4b-local:latest
     container_name: qwen4b-local
     network_mode: host
     ports:
@@ -12,7 +13,12 @@ services:
       # 推理参数
       - MAX_TOKENS=2048
       - TEMPERATURE=0.15
-      - TIMEOUT=60
+      - TIMEOUT=${TIMEOUT:-240}
+      # 知识库增强：4B 工作流推理前自动检索库坝知识库
+      - KNOWLEDGE_RETRIEVAL_ENABLED=${KNOWLEDGE_RETRIEVAL_ENABLED:-true}
+      - KNOWLEDGE_API_BASE=${KNOWLEDGE_API_BASE:-http://localhost:8090/api/v1/knowledge}
+      - KNOWLEDGE_TOP_K=${KNOWLEDGE_TOP_K:-4}
+      - KNOWLEDGE_MIN_SCORE=${KNOWLEDGE_MIN_SCORE:-0.1}
       # 媒体转存：AGX 本地 MinIO -> A100 云端 MinIO
       - UPLOAD_MEDIA_TO_CLOUD=true
       - STRICT_MEDIA_UPLOAD=false

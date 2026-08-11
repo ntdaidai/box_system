@@ -295,7 +295,8 @@ class WorkflowExecutorService:
         if template:
             compact_inputs = self._compact_for_prompt(request_inputs)
             top_media_objects = self._top_level_media_objects(node, request_inputs)
-            return {
+            model_category = str(node.get("model_category") or "").lower()
+            request_data = {
                 "prompt": self._render_prompt(
                     template,
                     compact_inputs,
@@ -304,13 +305,47 @@ class WorkflowExecutorService:
                     event_type,
                 ),
                 "inputs": compact_inputs,
+                "sensor_data": sensor_data or request_inputs.get("sensor_data") or {},
+                "event_type": event_type or request_inputs.get("event_type"),
                 "images": request_inputs.get("images") or [],
                 "videos": request_inputs.get("videos") or [],
                 "media_objects": top_media_objects,
                 **media_options,
                 **metadata,
             }
+            if model_category == "local_llm":
+                request_data.setdefault("enable_knowledge_retrieval", True)
+                request_data.setdefault(
+                    "knowledge_query",
+                    self._build_knowledge_query(prompt, event_type, sensor_data, request_inputs),
+                )
+            return request_data
         return {**request_inputs, **media_options, **metadata}
+
+    @staticmethod
+    def _build_knowledge_query(
+        prompt: str,
+        event_type: Optional[str],
+        sensor_data: Dict[str, Any],
+        inputs: Dict[str, Any],
+    ) -> str:
+        """Build a stable DAM knowledge retrieval query for local LLM nodes."""
+        sensor_data = sensor_data if isinstance(sensor_data, dict) else {}
+        inputs = inputs if isinstance(inputs, dict) else {}
+        nested_sensor = inputs.get("sensor_data") if isinstance(inputs.get("sensor_data"), dict) else {}
+        parts = [
+            event_type,
+            inputs.get("event_type"),
+            sensor_data.get("event_name"),
+            nested_sensor.get("event_name"),
+            sensor_data.get("event_category"),
+            nested_sensor.get("event_category"),
+            sensor_data.get("summary"),
+            nested_sensor.get("summary"),
+            prompt,
+        ]
+        text = " ".join(str(item).strip() for item in parts if str(item or "").strip())
+        return f"{text} 库坝巡查 处置规范 风险研判 应急处置".strip()
 
     @staticmethod
     def _top_level_media_objects(node: Dict[str, Any], inputs: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -365,6 +400,7 @@ class WorkflowExecutorService:
         }
         prompt = (
             "请对本次库坝安全事件进行云端最终复核，并生成事件处置报告 JSON。"
+            "只允许输出一个合法 JSON 对象，不要输出思考过程、解释文字、Markdown 代码块或 <think> 内容。"
             "以视频证据和边缘侧 4B 初判为主，不要虚构时间、地点、人员或设备动作；"
             "发生时间、事件编号等以传入的 sensor_data 为准。"
             "除摘要字段外，请输出详细报告字段 detailed_scene_analysis、risk_reasoning、"

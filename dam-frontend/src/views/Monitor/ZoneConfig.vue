@@ -2,7 +2,8 @@
   <div class="zone-config-page">
     <header class="config-header">
       <div>
-        <h1>多级风险区域配置</h1>
+        <p>系统管理 / 联动系统</p>
+        <h1>区域配置</h1>
       </div>
       <div class="header-actions">
         <el-select
@@ -19,12 +20,79 @@
             :value="camera.id"
           />
         </el-select>
+        <el-button class="tool-button" @click="startNewZone">
+          <el-icon><EditPen /></el-icon>新增区域
+        </el-button>
+        <el-button class="save-button" :loading="saving" @click="saveZones">
+          <el-icon><Check /></el-icon>保存配置
+        </el-button>
       </div>
     </header>
 
-    <section class="config-workspace">
-      <article class="video-editor">
-        <div class="editor-stage">
+    <section class="zone-list-section full">
+      <div class="list-heading">
+        <div>
+          <span>区域列表</span>
+          <b>{{ currentCameraName }} · 共 {{ zones.length }} 个区域</b>
+        </div>
+      </div>
+      <div class="zone-table">
+        <div class="zone-table-head">
+          <span>区域名</span>
+          <span>区域类型</span>
+          <span>顶点数</span>
+          <span>启用状态</span>
+          <span>配置时间</span>
+          <span>操作</span>
+        </div>
+        <div
+          v-for="zone in zones"
+          :key="zone.id"
+          class="zone-table-row"
+          :class="{ selected: zone.id === selectedZoneId, disabled: !zone.enabled }"
+          @click="selectZone(zone.id)"
+        >
+          <strong>
+            <i :style="{ background: zoneColor(zone) }"></i>
+            {{ zone.zone_name || zoneTypeLabel(zone.zone_type) }}
+          </strong>
+          <span>{{ zoneTypeLabel(zone.zone_type) }}</span>
+          <span>{{ zone.polygon_points.length }} 个</span>
+          <span>
+            <button
+              type="button"
+              class="zone-enable-toggle"
+              :class="{ active: zone.enabled }"
+              @click.stop="zone.enabled = !zone.enabled"
+            >
+              <i></i>{{ zone.enabled ? '启用' : '未启用' }}
+            </button>
+          </span>
+          <span>{{ formatZoneTime(zone) }}</span>
+          <div class="row-actions">
+            <button type="button" class="row-edit" @click.stop="openZoneEditor(zone.id)">
+              编辑画框
+            </button>
+            <button type="button" class="row-delete" @click.stop="deleteZone(zone.id)">
+              删除
+            </button>
+          </div>
+        </div>
+        <div v-if="!zones.length" class="zone-table-empty">暂无区域配置</div>
+      </div>
+    </section>
+
+    <el-dialog
+      v-model="drawDialogVisible"
+      append-to-body
+      class="zone-draw-dialog"
+      title="区域画框"
+      width="1180px"
+      @closed="handleDrawDialogClosed"
+    >
+      <section class="config-workspace">
+        <article class="video-editor">
+          <div class="editor-stage">
           <img
             v-if="streamUrl"
             ref="stageImageRef"
@@ -103,71 +171,25 @@
             <span>正在获取摄像头画面</span>
           </div>
           <div v-if="drawing" class="draw-tip">正在新增区域：点击画面添加顶点</div>
-        </div>
-        <div class="editor-toolbar">
-          <span class="toolbar-note">顶点只在配置模式显示，可拖拽微调。</span>
-        </div>
-      </article>
-
-      <section class="zone-list-section">
-        <div class="list-heading">
-          <div>
-            <span>当前摄像头区域列表</span>
-            <b>共 {{ zones.length }} 个区域</b>
           </div>
-          <div class="list-actions">
+          <div class="editor-toolbar">
+            <span class="toolbar-note">点击画面新增顶点，拖拽顶点微调位置。</span>
             <el-button class="tool-button" :class="{ active: drawing }" @click="drawing ? exitDrawing() : startNewZone()">
-              <el-icon><EditPen /></el-icon>{{ drawing ? '退出新增' : '新增区域' }}
+              <el-icon><EditPen /></el-icon>{{ drawing ? '退出新增' : '继续新增' }}
+            </el-button>
+            <el-button class="tool-button" :disabled="!selectedZone" @click="editDialogVisible = true">
+              点位配置
             </el-button>
             <el-button class="save-button" :loading="saving" @click="saveZones">
               <el-icon><Check /></el-icon>保存配置
             </el-button>
           </div>
-        </div>
-        <div class="zone-table">
-          <div class="zone-table-head">
-            <span>区域名</span>
-            <span>区域类型</span>
-            <span>启用状态</span>
-            <span>配置时间</span>
-            <span>操作</span>
-          </div>
-          <div
-            v-for="zone in zones"
-            :key="zone.id"
-            class="zone-table-row"
-            :class="{ selected: zone.id === selectedZoneId, disabled: !zone.enabled }"
-            @click="selectZone(zone.id)"
-          >
-            <strong>
-              <i :style="{ background: zoneColor(zone) }"></i>
-              {{ zone.zone_name || zoneTypeLabel(zone.zone_type) }}
-            </strong>
-            <span>{{ zoneTypeLabel(zone.zone_type) }}</span>
-            <span>
-              <button
-                type="button"
-                class="zone-enable-toggle"
-                :class="{ active: zone.enabled }"
-                @click.stop="zone.enabled = !zone.enabled"
-              >
-                <i></i>{{ zone.enabled ? '启用' : '未启用' }}
-              </button>
-            </span>
-            <span>{{ formatZoneTime(zone) }}</span>
-            <div class="row-actions">
-              <button type="button" class="row-edit" @click.stop="openZoneEditor(zone.id)">
-                编辑
-              </button>
-              <button type="button" class="row-delete" @click.stop="deleteZone(zone.id)">
-                删除
-              </button>
-            </div>
-          </div>
-          <div v-if="!zones.length" class="zone-table-empty">暂无区域配置</div>
-        </div>
+        </article>
       </section>
-    </section>
+      <template #footer>
+        <el-button class="exit-button" @click="drawDialogVisible = false">完成</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog
       v-model="editDialogVisible"
@@ -288,11 +310,13 @@ const stageImageRef = ref(null)
 const drawing = ref(false)
 const dragging = ref(null)
 const saving = ref(false)
+const drawDialogVisible = ref(false)
 const editDialogVisible = ref(false)
 
 const overlayWidth = computed(() => Number(stageImageRef.value?.naturalWidth) || 1920)
 const overlayHeight = computed(() => Number(stageImageRef.value?.naturalHeight) || 1080)
 const selectedZone = computed(() => zones.value.find((zone) => zone.id === selectedZoneId.value) || null)
+const currentCameraName = computed(() => cameras.value.find((camera) => camera.id === currentCameraId.value)?.name || '未选择摄像头')
 const zoneLabelFontSize = computed(() => Math.max(16, Math.min(64, overlayWidth.value * 0.022)))
 const vertexAnchorRadius = computed(() => Math.max(6, Math.min(28, overlayWidth.value * 0.007)))
 const vertexIndexFontSize = computed(() => Math.max(13, Math.min(42, overlayWidth.value * 0.016)))
@@ -321,8 +345,10 @@ async function activateCamera() {
   zones.value = []
   selectedZoneId.value = ''
   drawing.value = false
+  drawDialogVisible.value = false
   editDialogVisible.value = false
-  await Promise.all([loadZones(), refreshStream()])
+  streamUrl.value = ''
+  await loadZones()
 }
 
 async function loadZones() {
@@ -399,6 +425,8 @@ function createZone() {
 }
 
 function startNewZone() {
+  drawDialogVisible.value = true
+  if (!streamUrl.value) refreshStream()
   createZone()
   drawing.value = true
   editDialogVisible.value = false
@@ -427,7 +455,14 @@ function selectZone(zoneId) {
 function openZoneEditor(zoneId) {
   selectZone(zoneId)
   drawing.value = false
-  editDialogVisible.value = true
+  drawDialogVisible.value = true
+  if (!streamUrl.value) refreshStream()
+}
+
+function handleDrawDialogClosed() {
+  drawing.value = false
+  dragging.value = null
+  editDialogVisible.value = false
 }
 
 function showZoneAnchors(zone) {

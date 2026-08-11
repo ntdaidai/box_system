@@ -2257,16 +2257,19 @@ onUnmounted(() => {
   padding-top: 9px;
   display: flex;
   align-items: center;
-  gap: 9px;
-  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: nowrap;
   border-top: 1px solid rgba(174, 202, 245, 0.11);
   color: #9fb6d3;
-  font-size: 14px;
-  line-height: 1.2;
+  font-size: 13px;
+  line-height: 1.3;
 }
 
 .today-strip span {
-  white-space: nowrap;
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: normal;
 }
 
 .today-strip .today-label {

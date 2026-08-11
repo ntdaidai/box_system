@@ -174,8 +174,10 @@ const menuMap = {
       name: '联动系统',
       icon: Setting,
       children: [
+        { name: '事件配置', path: '/system/linkage/events', icon: DataAnalysis },
+        { name: '动作配置', path: '/system/linkage/actions', icon: Connection },
+        { name: '区域配置', path: '/system/linkage/zones', icon: VideoCamera },
         { name: '联动设备', path: '/system/linkage/devices', icon: Connection },
-        { name: '联动规则', path: '/system/linkage/rules', icon: DataAnalysis },
         { name: '无人机监测', path: '/system/linkage/drone', icon: 'drone-custom-icon' },
       ],
     },

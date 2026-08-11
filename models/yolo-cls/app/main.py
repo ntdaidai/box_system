@@ -188,6 +188,10 @@ def _bucket_object(ref):
         raise HTTPException(status_code=400, detail="缺少媒体路径")
     if value.startswith("http://") or value.startswith("https://"):
         value = urlparse(value).path.lstrip("/")
+    elif value.startswith("minio://") or value.startswith("s3://"):
+        parsed = urlparse(value)
+        if parsed.netloc and parsed.path:
+            return parsed.netloc, parsed.path.lstrip("/")
     value = value.lstrip("/")
     if "/" not in value:
         default_bucket = os.getenv("MINIO_BUCKET") or os.getenv("DEFAULT_BUCKET")

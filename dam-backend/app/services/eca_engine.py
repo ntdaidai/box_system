@@ -4,7 +4,6 @@ import re
 import json
 import asyncio
 import operator
-import uuid
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 from sqlalchemy.orm import Session
@@ -1809,7 +1808,7 @@ class ECAEngine:
             return active
 
         instance = SafetyEventInstance(
-            instance_no=f"EVT_{now:%Y%m%d}_{uuid.uuid4().hex[:12]}",
+            instance_no=safety_event_runtime_service.next_instance_no(db, now),
             current_event_id=event.id,
             event_category=event.event_category or "CAMERA",
             data_source_id=source.id,

@@ -36,35 +36,15 @@
     </div>
 
     <div class="filter-section">
-      <div class="filter-field">
-        <span class="filter-label">文档分类</span>
-        <el-select v-model="selectedCategory" placeholder="全部分类" clearable class="category-select">
-          <el-option
-            v-for="cat in categories"
-            :key="cat"
-            :label="cat"
-            :value="cat"
-          />
-        </el-select>
-      </div>
-      <div class="filter-field">
-        <span class="filter-label">业务类型</span>
-        <el-select v-model="selectedBusinessType" placeholder="全部业务类型" clearable class="business-type-select">
-          <el-option
-            v-for="type in businessTypes"
-            :key="type.value"
-            :label="type.label"
-            :value="type.value"
-          />
-        </el-select>
-      </div>
-      <div class="filter-field">
-        <span class="filter-label">排序方式</span>
-        <el-select v-model="sortBy" placeholder="排序方式" class="sort-select">
-          <el-option label="最近修改" value="updated" />
-          <el-option label="文件名称" value="name" />
-          <el-option label="文件大小" value="size" />
-        </el-select>
+      <div class="filter-field search-field">
+        <span class="filter-label">搜索</span>
+        <el-input
+          v-model="searchQuery"
+          placeholder="输入文件名"
+          :prefix-icon="Search"
+          clearable
+          class="search-input"
+        />
       </div>
       <div class="filter-field month-field">
         <span class="filter-label">导出月份</span>
@@ -77,19 +57,9 @@
           popper-class="document-month-popper"
         />
       </div>
-      <div class="filter-field search-field">
-        <span class="filter-label">搜索</span>
-        <el-input
-          v-model="searchQuery"
-          placeholder="输入文件名"
-          :prefix-icon="Search"
-          clearable
-          class="search-input"
-        />
-      </div>
       <div class="filter-actions">
         <el-button
-          class="batch-button"
+          class="export-button"
           :disabled="!exportMonth"
           :loading="exportingMonth"
           @click="exportMonthDocuments"
@@ -99,7 +69,7 @@
         </el-button>
         <el-button
           type="primary"
-          class="export-selected-button"
+          class="export-button export-selected-button"
           :disabled="selectedDocumentIds.length === 0"
           :loading="exportingSelected"
           @click="exportSelectedDocuments"
@@ -120,12 +90,19 @@
               @change="toggleCurrentPageSelection"
             />
           </div>
-          <div class="row-index">序号</div>
-          <div class="row-name">文档 / 关联编号</div>
+          <button type="button" class="row-index sortable-header" @click="toggleSort('index')">
+            序号 <span class="sort-caret" :class="sortClass('index')"></span>
+          </button>
+          <div class="row-name">文档</div>
+          <div class="row-event-no">事件编号</div>
           <div class="row-type">文件类型</div>
           <div class="row-size">文件大小</div>
-          <div class="row-date">创建时间</div>
-          <div class="row-date">最后更新时间</div>
+          <button type="button" class="row-date sortable-header" @click="toggleSort('created')">
+            创建时间 <span class="sort-caret" :class="sortClass('created')"></span>
+          </button>
+          <button type="button" class="row-date sortable-header" @click="toggleSort('updated')">
+            最后更新时间 <span class="sort-caret" :class="sortClass('updated')"></span>
+          </button>
           <div class="row-actions">操作</div>
         </div>
         <div
@@ -146,8 +123,11 @@
             </el-icon>
             <span class="doc-title-stack" :title="documentTitle(doc)">
               <strong class="doc-name">{{ documentTitle(doc) }}</strong>
-              <small v-if="documentSubTitle(doc)">{{ documentSubTitle(doc) }}</small>
             </span>
+          </div>
+          <div class="row-event-no" :class="{ 'is-empty-event': !eventNumberForDocument(doc) }" :title="eventNumberForDocument(doc) || '无关联编号'">
+            <template v-if="eventNumberForDocument(doc)">{{ eventNumberForDocument(doc) }}</template>
+            <template v-else>无关联编号</template>
           </div>
           <div class="row-type">
             <span class="type-badge" :class="getTypeBadgeClass(doc.type)">
@@ -284,6 +264,7 @@ const searchQuery = ref('')
 const selectedCategory = ref('')
 const selectedBusinessType = ref('')
 const sortBy = ref('updated')
+const sortOrder = ref('desc')
 const currentPage = ref(1)
 const pageSize = 10
 const selectedDocumentIds = ref([])
@@ -337,9 +318,13 @@ const filteredDocuments = computed(() => {
   }
 
   result.sort((a, b) => {
-    if (sortBy.value === 'name') return a.name.localeCompare(b.name)
-    if (sortBy.value === 'size') return b.size - a.size
-    return new Date(b.updatedAt) - new Date(a.updatedAt)
+    const direction = sortOrder.value === 'asc' ? 1 : -1
+    if (sortBy.value === 'index') return (a.sourceIndex - b.sourceIndex) * direction
+    if (sortBy.value === 'created') return (dateValue(a.created_at) - dateValue(b.created_at)) * direction
+    if (sortBy.value === 'updated') return (dateValue(a.updatedAt) - dateValue(b.updatedAt)) * direction
+    if (sortBy.value === 'name') return a.name.localeCompare(b.name) * direction
+    if (sortBy.value === 'size') return (a.size - b.size) * direction
+    return 0
   })
 
   return result
@@ -433,6 +418,12 @@ const getTypeBadgeClass = (type) => {
 
 const getTypeLabel = (extension) => String(extension || '').toUpperCase() || 'FILE'
 
+const eventReportTitle = (name) => {
+  const text = String(name || '').trim()
+  if (!text) return '事件处置报告'
+  return text.includes('事件') ? `${text}处置报告` : `${text}事件处置报告`
+}
+
 const isEventReportDocument = (doc) => (
   doc?.businessType === 'event' ||
   String(doc?.document_id || '').startsWith('dam_event_report_')
@@ -470,16 +461,18 @@ const formatEventDocumentId = (doc) => {
 }
 
 const documentTitle = (doc) => {
-  if (isEventReportDocument(doc)) return '事件处置报告'
+  if (isEventReportDocument(doc)) {
+    return eventReportTitle(doc?.event_name || doc?.event_summary || doc?.report_title)
+  }
   return doc?.name || '未命名文档'
 }
 
-const documentSubTitle = (doc) => {
+const eventNumberForDocument = (doc) => {
+  // 仅事件处置报告有关联的事件编号，其余文档（如每日报告）无关联编号
   if (isEventReportDocument(doc)) {
-    const displayId = formatEventDocumentId(doc)
-    return displayId ? `关联事件 ${displayId}` : ''
+    return formatEventDocumentId(doc) || ''
   }
-  return doc?.document_id || ''
+  return ''
 }
 
 const formatSize = (bytes) => {
@@ -540,6 +533,8 @@ const parseDocumentDate = (value) => {
   return Number.isNaN(date.getTime()) ? null : date
 }
 
+const dateValue = (value) => parseDocumentDate(value)?.getTime() || 0
+
 const formatDateTime = (value) => {
   const date = parseDocumentDate(value)
   if (!date) return '-'
@@ -557,10 +552,11 @@ const getDocumentMonth = (value) => {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
 }
 
-const normalizeDocument = (doc) => {
+const normalizeDocument = (doc, index = 0) => {
   const normalized = {
     ...doc,
     id: doc.document_id,
+    sourceIndex: index,
     name: doc.title || doc.document_id || '未命名文档',
     type: getDisplayType(doc.file_type),
     category: getCategory(doc.file_type),
@@ -569,14 +565,28 @@ const normalizeDocument = (doc) => {
     updatedAt: doc.updated_at
   }
   normalized.displayTitle = documentTitle(normalized)
-  normalized.displaySubTitle = documentSubTitle(normalized)
+  normalized.displayEventNo = eventNumberForDocument(normalized)
   normalized.searchText = [
     normalized.name,
     normalized.document_id,
     normalized.displayTitle,
-    normalized.displaySubTitle
+    normalized.displayEventNo
   ].filter(Boolean).join(' ').toLowerCase()
   return normalized
+}
+
+const toggleSort = (field) => {
+  if (sortBy.value === field) {
+    sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc'
+    return
+  }
+  sortBy.value = field
+  sortOrder.value = field === 'index' ? 'asc' : 'desc'
+}
+
+const sortClass = (field) => {
+  if (sortBy.value !== field) return ''
+  return sortOrder.value === 'asc' ? 'is-asc' : 'is-desc'
 }
 
 const loadDocuments = async () => {
@@ -591,7 +601,7 @@ const loadDocuments = async () => {
     })
 
     if (response.data.success) {
-      documents.value = response.data.data.documents.map(normalizeDocument)
+      documents.value = response.data.data.documents.map((doc, index) => normalizeDocument(doc, index))
       selectedDocumentIds.value = selectedDocumentIds.value.filter((id) => (
         documents.value.some((doc) => doc.document_id === id)
       ))
@@ -925,11 +935,12 @@ onActivated(() => {
 .filter-field {
   display: flex;
   flex: 0 0 auto;
-  min-width: 150px;
+  min-width: 0;
 }
 
 .search-field {
-  min-width: 300px;
+  min-width: 360px;
+  flex: 1 1 420px;
 }
 
 .filter-label {
@@ -937,7 +948,7 @@ onActivated(() => {
 }
 
 .search-input {
-  width: 360px;
+  width: 100%;
 }
 
 .category-select,
@@ -947,11 +958,11 @@ onActivated(() => {
 }
 
 .month-field {
-  min-width: 286px;
+  min-width: 240px;
 }
 
 .month-picker {
-  width: 286px;
+  width: 240px;
 }
 
 .filter-section :deep(.el-select),
@@ -1004,15 +1015,19 @@ onActivated(() => {
   white-space: nowrap;
 }
 
-.export-selected-button {
+.export-button {
   height: 44px;
-  min-width: 166px;
+  width: 168px;
   padding: 0 20px;
-  border-color: rgba(82, 181, 244, .72);
+  justify-content: center;
   border-radius: 6px;
+  font-weight: 700;
+}
+
+.export-selected-button {
+  border-color: rgba(82, 181, 244, .72);
   color: #fff;
   background: #3d8ed8;
-  font-weight: 700;
 }
 
 .export-selected-button:hover,
@@ -1021,8 +1036,7 @@ onActivated(() => {
   background: #4aa0ed;
 }
 
-.batch-button {
-  height: 44px;
+.export-button:not(.export-selected-button) {
   border-color: rgba(72, 216, 255, .32);
   color: #c8f0ff;
   background: rgba(72, 216, 255, .08);
@@ -1051,27 +1065,28 @@ onActivated(() => {
 .document-header,
 .document-row {
   display: grid;
-  grid-template-columns: 34px 48px minmax(260px, 3fr) 86px 104px 150px 150px 210px;
+  grid-template-columns: 34px 58px minmax(220px, 2fr) 150px 100px 112px 160px 160px 210px;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
 }
 
 .document-header {
   min-height: 50px;
   padding: 0 22px;
-  color: #f3f8fd;
+  color: #9fb4c5;
   background: rgba(30, 58, 95, .58);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
 }
 
 .document-header .row-name,
+.document-header .row-event-no,
 .document-header .row-type,
 .document-header .row-size,
 .document-header .row-date,
 .document-header .row-actions {
   cursor: default;
-  color: #f3f8fd;
+  color: #9fb4c5;
 }
 
 .document-header .row-actions {
@@ -1079,9 +1094,10 @@ onActivated(() => {
 }
 
 .document-header .row-index,
+.document-header .row-event-no,
 .document-header .row-size,
 .document-header .row-date {
-  color: #f3f8fd;
+  color: #9fb4c5;
 }
 
 .document-row {
@@ -1098,8 +1114,20 @@ onActivated(() => {
 }
 
 .row-index,
+.row-event-no,
+.row-type,
 .row-size,
-.row-date {
+.row-date,
+.row-actions {
+  display: flex;
+  justify-content: center;
+  text-align: center;
+}
+
+.row-index,
+.row-size,
+.row-date,
+.row-event-no {
   font-size: 14px;
   font-weight: 500;
   color: #9cb6ca;
@@ -1111,9 +1139,14 @@ onActivated(() => {
   font-weight: 700;
 }
 
+.row-event-no.is-empty-event {
+  color: #9cb6ca;
+}
+
 .row-name {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 12px;
   min-width: 0;
   cursor: pointer;
@@ -1122,6 +1155,44 @@ onActivated(() => {
 .row-select {
   display: flex;
   justify-content: center;
+}
+
+.sortable-header {
+  width: 100%;
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.sortable-header:hover {
+  color: #d9e8f8;
+}
+
+.sort-caret {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid #6e879a;
+  opacity: .65;
+}
+
+.sort-caret.is-asc {
+  border-top: 0;
+  border-bottom: 5px solid #48d8ff;
+  opacity: 1;
+}
+
+.sort-caret.is-desc {
+  border-top-color: #48d8ff;
+  opacity: 1;
 }
 
 .doc-icon {
@@ -1642,6 +1713,7 @@ onActivated(() => {
   }
 
   .row-type,
+  .row-event-no,
   .row-size,
   .row-date,
   .row-actions {
