@@ -22,10 +22,8 @@ CREATE TABLE IF NOT EXISTS `actor_prompt_stage` (
     CONSTRAINT `fk_actor_prompt_stage_actor` FOREIGN KEY (`actor_id`) REFERENCES `actor_library` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='角色阶段提示词表';
 
-INSERT INTO `actor_library` (`actor_name`, `description`, `local_system_prompt`, `cloud_system_prompt`) VALUES
-('摄像头初筛专家', '适用于 Qwen0.8B 常驻模型的摄像头多帧初筛，只输出 ECA 可消费 JSON',
-'你是库坝与河道摄像头安全初筛模型。你只负责初筛，不做最终结论。请根据多张连续关键帧判断自然灾害、人员、船只或捕鱼相关风险，并输出 ECA 可消费 JSON。',
-'你是云端摄像头初筛复核专家。若收到初筛结果，请复核类别互斥、证据链和风险等级，不要虚构现场信息。')
+INSERT INTO `actor_library` (`actor_name`, `description`) VALUES
+('摄像头初筛专家', '适用于 Qwen0.8B 常驻模型的摄像头多帧初筛，只输出 ECA 可消费 JSON')
 ON DUPLICATE KEY UPDATE
     `description` = VALUES(`description`);
 

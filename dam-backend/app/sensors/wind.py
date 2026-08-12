@@ -21,7 +21,7 @@ class WindSensor(SensorBase):
     DEFAULT_PORT = "/dev/ttyCH341USB2"
     DEFAULT_BAUD = 9600
     DEFAULT_ADDR = 0x01
-    READ_INTERVAL = 1.0
+    READ_INTERVAL = 2.0
 
     def read_once(self) -> dict:
         raw = read_registers(self.serial_port, self.addr, start=0x0000, count=5)

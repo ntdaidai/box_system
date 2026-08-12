@@ -26,8 +26,6 @@ class ActorLibrary(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     actor_name = Column(String(128), nullable=False)
     description = Column(String(512), nullable=True)
-    local_system_prompt = Column(Text, nullable=True)
-    cloud_system_prompt = Column(Text, nullable=True)
     create_time = Column(DateTime, nullable=False, default=datetime.now)
     update_time = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
 

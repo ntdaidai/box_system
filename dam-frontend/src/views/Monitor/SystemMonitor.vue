@@ -191,8 +191,7 @@
             </div>
 
             <div v-else class="inspector-facts">
-              <div v-for="(fact, index) in inspectorNode.facts" :key="fact.label">
-                <b>0{{ index + 1 }}</b>
+              <div v-for="fact in inspectorNode.facts" :key="fact.label">
                 <span>{{ fact.label }}</span>
                 <strong>{{ fact.value }}</strong>
               </div>
@@ -251,7 +250,7 @@
                 </span>
                 <b>{{ category.items.length }} 项服务</b>
                 <em>{{ category.summary }}</em>
-                <u>⌄</u>
+                <u aria-hidden="true" />
               </button>
 
               <div v-if="expandedDependencyKey === category.key" class="category-detail">
@@ -1652,39 +1651,41 @@ onUnmounted(() => {
 .inspector-facts {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: 12px;
   margin-top: 20px;
 }
 
 .inspector-facts div {
-  position: relative;
   display: grid;
-  align-content: center;
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
   min-width: 0;
-  min-height: 132px;
+  min-height: 92px;
   overflow: hidden;
-  padding: 20px 22px;
+  padding: 18px 22px;
   border: 1px solid rgba(105, 215, 189, 0.12);
   border-radius: 8px;
   background: rgba(15, 35, 48, 0.72);
 }
 
-.inspector-facts div > b {
-  position: absolute;
-  right: 16px;
-  top: 8px;
-  color: rgba(105, 215, 189, 0.09);
-  font-size: 48px;
-  font-weight: 800;
+.inspector-facts span {
+  overflow: hidden;
+  color: #8aa2ae;
+  font-size: 15px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .inspector-facts strong {
   display: block;
   overflow: hidden;
   color: #eaf4f5;
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 700;
+  line-height: 1.25;
+  text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1706,10 +1707,10 @@ onUnmounted(() => {
 }
 
 .alert-locator header {
-  min-height: 42px;
-  margin-bottom: 14px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid rgba(105, 215, 189, 0.16);
+  min-height: 34px;
+  margin-bottom: 10px;
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 
 .alert-locator .panel-title > strong {
@@ -1722,7 +1723,7 @@ onUnmounted(() => {
   gap: 10px;
   min-height: 0;
   overflow-y: auto;
-  padding-right: 6px;
+  padding: 0 6px 2px 0;
   scrollbar-width: thin;
   scrollbar-color: rgba(105, 215, 189, 0.45) rgba(255, 255, 255, 0.04);
 }
@@ -1845,7 +1846,7 @@ onUnmounted(() => {
 
 .category-summary {
   display: grid;
-  grid-template-columns: 14px minmax(280px, 1fr) 110px 116px 26px;
+  grid-template-columns: 14px minmax(0, 1fr) 110px 116px 28px;
   gap: 16px;
   align-items: center;
   width: 100%;
@@ -1887,13 +1888,25 @@ onUnmounted(() => {
 
 .category-summary > span {
   display: grid;
-  gap: 4px;
+  grid-template-columns: minmax(120px, 0.42fr) minmax(180px, 0.58fr);
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
 }
 
 .category-summary > span strong {
+  overflow: hidden;
   color: #edf6f7;
   font-size: 18px;
   line-height: 1.28;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.category-summary small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .category-summary small,
@@ -1916,12 +1929,35 @@ onUnmounted(() => {
 .dependency-category.neutral .category-summary > em { color: #93a8b3; }
 
 .category-summary > u {
-  color: #7f95a3;
-  font-size: 18px;
-  text-align: center;
+  position: relative;
+  display: block;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
   text-decoration: none;
   transform: rotate(0deg);
-  transition: transform 0.2s ease;
+  transition: background 0.18s ease, transform 0.24s ease;
+}
+
+.category-summary > u::before {
+  position: absolute;
+  left: 9px;
+  top: 8px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid #84a3b0;
+  border-bottom: 2px solid #84a3b0;
+  content: '';
+  transform: rotate(45deg);
+  transition: border-color 0.18s ease;
+}
+
+.category-summary:hover > u {
+  background: rgba(105, 215, 189, 0.08);
+}
+
+.category-summary:hover > u::before {
+  border-color: #9ee7dc;
 }
 
 .dependency-category.expanded .category-summary > u {

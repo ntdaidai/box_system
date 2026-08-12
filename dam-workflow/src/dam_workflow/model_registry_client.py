@@ -99,10 +99,14 @@ class ModelRegistryClient:
             httpx.TimeoutException: 请求超时
             httpx.HTTPStatusError: HTTP 错误状态码
         """
-        url = f"{self.base_url}/api/model-registry/{model_id}/infer"
-
         # 构建请求数据
         payload = request_data.copy()
+
+        direct_result = self._infer_via_direct_fallback(model_id, payload, model_name)
+        if direct_result is not None:
+            return direct_result
+
+        url = f"{self.base_url}/api/model-registry/{model_id}/infer"
 
         # 自动获取并添加 model 参数
         if "model" not in payload:
@@ -132,6 +136,36 @@ class ModelRegistryClient:
         except httpx.HTTPStatusError as e:
             logger.error("模型库推理请求失败: %s -> %s", url, e.response.status_code)
             raise
+
+    def _infer_via_direct_fallback(self, model_id: int, payload: Dict, model_name: str = None) -> Optional[Dict]:
+        """Directly call the resident fallback LLM when model-library HTTP is unhealthy.
+
+        DAM planning uses Qwen0.8B only for light routing/IO JSON decisions. Calling
+        its vLLM endpoint directly avoids blocking the whole route on model-library
+        metadata APIs.
+        """
+        if model_id != settings.llm_fallback_model_id:
+            return None
+        if not settings.llm_fallback_direct_url:
+            return None
+
+        direct_payload = payload.copy()
+        direct_payload.setdefault("model", model_name or settings.llm_fallback_model_name)
+        if "prompt" in direct_payload and "messages" not in direct_payload:
+            prompt = direct_payload.pop("prompt")
+            direct_payload["messages"] = [{"role": "user", "content": prompt}]
+
+        try:
+            response = httpx.post(
+                settings.llm_fallback_direct_url,
+                json=direct_payload,
+                timeout=settings.llm_fallback_timeout,
+            )
+            response.raise_for_status()
+            return {"data": response.json()}
+        except Exception as exc:
+            logger.warning("直连兜底模型失败，将回退模型库推理接口: %s", exc)
+            return None
 
 
 # 全局客户端实例

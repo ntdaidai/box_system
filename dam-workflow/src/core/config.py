@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     llm_cloud_model_id: Optional[int] = None     # 云端大模型 ID
     # 兜底模型：qwen0.8B，用于 IO 匹配等轻量任务
     llm_fallback_model_id: Optional[int] = None  # 兜底模型 ID
+    llm_fallback_direct_url: str = "http://127.0.0.1:8003/v1/chat/completions"
+    llm_fallback_model_name: str = "qwen0.8B"
+    llm_fallback_timeout: float = 20.0
 
     @field_validator("llm_local_model_id", "llm_cloud_model_id", "llm_fallback_model_id", mode="before")
     @classmethod

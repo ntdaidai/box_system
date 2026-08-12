@@ -472,26 +472,37 @@ h2 {
 .status-filter {
   flex: 0 0 auto;
   display: inline-flex;
+  gap: 0;
   padding: 2px;
   border: 1px solid rgba(84, 148, 193, .28);
   border-radius: 8px;
   background: #0d2740;
+  overflow: hidden;
+}
+.status-filter :deep(.el-radio-button) {
+  margin: 0;
 }
 .status-filter :deep(.el-radio-button__inner) {
   min-width: 62px;
   height: 32px;
   padding: 0 12px;
-  border: 0;
-  border-radius: 6px;
+  border: 0 !important;
+  border-radius: 0;
   color: #a7c0d3;
   background: transparent;
   line-height: 32px;
-  box-shadow: none;
+  box-shadow: none !important;
+}
+.status-filter :deep(.el-radio-button:first-child .el-radio-button__inner) {
+  border-radius: 5px 0 0 5px;
+}
+.status-filter :deep(.el-radio-button:last-child .el-radio-button__inner) {
+  border-radius: 0 5px 5px 0;
 }
 .status-filter :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) {
   color: #061827;
   background: #8fd4df;
-  box-shadow: none;
+  box-shadow: none !important;
 }
 .camera-list {
   min-width: 1240px;
@@ -687,15 +698,29 @@ h2 {
   font-size: 13px;
   font-weight: 800;
 }
-.action-buttons :deep(.edit-action) {
-  border-color: rgba(66, 164, 224, .50);
-  color: #d5f0ff;
-  background: rgba(29, 91, 133, .70);
+.action-buttons :deep(.el-button.edit-action),
+.action-buttons .edit-action {
+  border-color: rgba(66, 164, 224, .50) !important;
+  color: #d5f0ff !important;
+  background: rgba(29, 91, 133, .70) !important;
 }
-.action-buttons :deep(.delete-action) {
-  border-color: rgba(226, 88, 109, .46);
-  color: #ffb1bd;
-  background: rgba(128, 36, 54, .48);
+.action-buttons :deep(.el-button.delete-action),
+.action-buttons .delete-action {
+  border-color: rgba(226, 88, 109, .46) !important;
+  color: #ffb1bd !important;
+  background: rgba(128, 36, 54, .48) !important;
+}
+.action-buttons :deep(.el-button.edit-action:hover),
+.action-buttons .edit-action:hover {
+  border-color: rgba(66, 164, 224, .72) !important;
+  color: #effaff !important;
+  background: rgba(33, 107, 156, .82) !important;
+}
+.action-buttons :deep(.el-button.delete-action:hover),
+.action-buttons .delete-action:hover {
+  border-color: rgba(226, 88, 109, .68) !important;
+  color: #ffd5dd !important;
+  background: rgba(144, 42, 62, .62) !important;
 }
 .list-pagination {
   min-height: 58px;

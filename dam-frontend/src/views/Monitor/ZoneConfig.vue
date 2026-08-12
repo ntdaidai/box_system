@@ -1,10 +1,11 @@
 <template>
   <div class="zone-config-page">
     <header class="config-header">
-      <div>
-        <p>系统管理 / 规则管理</p>
+      <div class="title-block">
         <h1>区域配置</h1>
+        <p>维护摄像头监测区域、画框边界和启用状态</p>
       </div>
+      <el-button :icon="Refresh" @click="refreshZones">刷新</el-button>
     </header>
 
     <section class="zone-toolbar-card">
@@ -301,7 +302,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  Check, EditPen, Loading, Plus,
+  Check, EditPen, Loading, Plus, Refresh,
 } from '@element-plus/icons-vue'
 import {
   createStreamTicket, getCameraList, getCameraZones, saveCameraZones,
@@ -379,6 +380,13 @@ async function loadZones() {
   const response = await getCameraZones(currentCameraId.value)
   zones.value = normalizeZones(response.data)
   selectedZoneId.value = zones.value[0]?.id || ''
+}
+
+async function refreshZones() {
+  if (!currentCameraId.value) {
+    await loadCameras()
+  }
+  await loadZones()
 }
 
 async function refreshStream() {
@@ -678,23 +686,43 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  min-height: 60px;
+  min-height: 74px;
   margin-bottom: 16px;
-  padding: 14px;
-  border: 1px solid rgba(104, 161, 200, 0.18);
+  padding: 16px 20px;
+  border: 1px solid rgba(96, 151, 191, 0.22);
   border-radius: 8px;
-  background: rgba(11, 29, 48, 0.72);
+  background: linear-gradient(90deg, rgba(14, 48, 76, 0.82) 0%, rgba(9, 29, 48, 0.72) 58%, rgba(7, 20, 34, 0.46) 100%);
+  box-shadow: inset 0 1px 0 rgba(147, 206, 241, 0.08);
 }
-.config-header p {
-  margin: 0 0 3px;
-  color: #789bb4;
-  font-size: 12px;
+
+.title-block {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
 }
+
 .config-header h1 {
   margin: 0;
   color: #f3f8fd;
-  font-size: 22px;
+  font-size: 25px;
+  line-height: 1.1;
   letter-spacing: 0;
+}
+
+.config-header p {
+  margin: 0;
+  color: #8aa9c3;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.config-header :deep(.el-button) {
+  min-width: 92px;
+  height: 36px;
+  border-color: #1b7fa5;
+  color: #dcefff;
+  background: #103954;
+  font-weight: 700;
 }
 .header-actions { display: flex; align-items: center; gap: 8px; }
 .camera-select { width: 260px; }

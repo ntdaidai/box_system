@@ -3,6 +3,7 @@
 import copy
 import json
 import logging
+from json import JSONDecoder
 from typing import Dict, Optional
 from sqlalchemy.orm import Session
 
@@ -18,6 +19,33 @@ from src.dam_workflow.tools.rule_io_matcher import (
 from src.core.models import ModelIOTemplate
 from src.dam_workflow.model_registry_client import model_registry_client
 from src.core.config import settings
+
+
+def _parse_json_object(text: str) -> Optional[Dict]:
+    """Parse the first JSON object from an LLM response."""
+    if not isinstance(text, str) or not text.strip():
+        return None
+    content = text.strip()
+    if content.startswith("```"):
+        content = content.split("\n", 1)[-1]
+        if content.endswith("```"):
+            content = content[:-3]
+    start = content.find("{")
+    if start < 0:
+        return None
+    decoder = JSONDecoder()
+    try:
+        parsed, _end = decoder.raw_decode(content[start:])
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        end = content.rfind("}")
+        if end <= start:
+            return None
+        try:
+            parsed = json.loads(content[start:end + 1])
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            return None
 
 
 def query_io_template(db: Session, event_type: str, source_category: str, target_category: str) -> Optional[Dict]:
@@ -125,11 +153,11 @@ def llm_io_match(source_io: Dict, target_io: Dict, context: str = "") -> Dict:
             content = content[:-3]
 
     try:
-        mapping = json.loads(content)
+        mapping = _parse_json_object(content)
         if isinstance(mapping, dict) and "inputs" in mapping:
             return mapping
         logger.warning("LLM IO 匹配返回的 JSON 缺少 inputs 字段: %s", content[:200])
-    except json.JSONDecodeError as e:
+    except Exception as e:
         logger.warning("LLM IO 匹配返回的 JSON 解析失败: %s", e)
 
     return {"inputs": {}, "outputs": {}}

@@ -73,6 +73,19 @@ class DamModelLibraryClient:
         result = await self._request("GET", f"/api/model-registry/{model_id}/status", timeout=30.0)
         return result.get("data") or {}
 
+    async def start_model(self, model_id: int) -> Dict[str, Any]:
+        result = await self._request("POST", f"/api/model-registry/{model_id}/start", timeout=60.0)
+        return result.get("data") or {}
+
+    async def stop_model(self, model_id: int, *, timeout_seconds: int = 30) -> Dict[str, Any]:
+        result = await self._request(
+            "POST",
+            f"/api/model-registry/{model_id}/stop",
+            params={"timeout": timeout_seconds},
+            timeout=max(60.0, float(timeout_seconds) + 15.0),
+        )
+        return result.get("data") or {}
+
     async def execute_workflow(
         self,
         *,

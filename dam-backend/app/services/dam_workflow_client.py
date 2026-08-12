@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -95,7 +96,10 @@ class DamWorkflowClient:
         )
         url = f"{self.base_url}/api/dam/analyze"
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(url, json=payload)
+            try:
+                response = await client.post(url, json=payload)
+            except (httpx.TimeoutException, asyncio.TimeoutError) as exc:
+                raise RuntimeError(f"DAM 工作流服务响应超时（timeout={self.timeout}s）") from exc
             response.raise_for_status()
             result = response.json()
         if not result.get("success"):

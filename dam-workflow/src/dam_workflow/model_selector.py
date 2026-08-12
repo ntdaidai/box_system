@@ -89,7 +89,7 @@ def fetch_actor_prompt(
     actor_name: str,
     model_category: str,
 ) -> Optional[Dict[str, str]]:
-    """从 actor_prompt_stage/actor_library 读取模型阶段 system prompt。"""
+    """从 actor_prompt_stage 读取模型阶段 system prompt。"""
     if not db:
         return None
 
@@ -102,26 +102,8 @@ def fetch_actor_prompt(
     stage_info = MODEL_CATEGORY_STAGE.get(model_category)
     if stage_info:
         stage_code, model_scope = stage_info
-        stage_prompt = fetch_actor_stage_prompt(db, actor, stage_code, model_scope)
-        if stage_prompt:
-            return stage_prompt
-
-    if model_category == "local_llm":
-        prompt = actor.local_system_prompt
-        source = "actor_library.local_system_prompt"
-    elif model_category == "cloud_llm":
-        prompt = actor.cloud_system_prompt
-        source = "actor_library.cloud_system_prompt"
-    else:
-        return None
-
-    if not prompt:
-        return None
-    return {
-        "actor_name": actor.actor_name,
-        "system_prompt": prompt,
-        "system_prompt_source": source,
-    }
+        return fetch_actor_stage_prompt(db, actor, stage_code, model_scope)
+    return None
 
 
 def fetch_actor_stage_prompt(

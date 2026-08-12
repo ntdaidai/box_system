@@ -61,14 +61,12 @@ class ModelEvaluationTemplate(Base):
 
 
 class ActorLibrary(Base):
-    """角色库表：为边缘/云端多模态模型提供 system prompt。"""
+    """角色库表：定义分析角色；阶段提示词由 actor_prompt_stage 管理。"""
     __tablename__ = "actor_library"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     actor_name = Column(String(128), nullable=False, comment="角色名称")
     description = Column(String(512), nullable=True, comment="角色描述")
-    local_system_prompt = Column(Text, nullable=True, comment="边缘模型系统提示词")
-    cloud_system_prompt = Column(Text, nullable=True, comment="云端模型系统提示词")
     create_time = Column(DateTime, nullable=False, default=datetime.now, comment="创建时间")
     update_time = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now, comment="更新时间")
 

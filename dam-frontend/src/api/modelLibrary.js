@@ -27,3 +27,17 @@ export function checkModelHealth(modelId) {
     silentError: true,
   })
 }
+
+export function startModel(modelId) {
+  return request.post(`/v1/model-library/models/${encodeURIComponent(modelId)}/start`, null, {
+    timeout: 60000,
+    silentError: true,
+  })
+}
+
+export function stopModel(modelId) {
+  return request.post(`/v1/model-library/models/${encodeURIComponent(modelId)}/stop`, null, {
+    timeout: 60000,
+    silentError: true,
+  })
+}

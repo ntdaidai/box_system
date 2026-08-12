@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Literal, Optional
+import re
+from typing import Any, Literal, Optional
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
@@ -27,6 +29,9 @@ from app.models.safety_integration import (
     SafetyEventTimelineLog,
 )
 from app.models.user import User
+from minio.error import S3Error
+
+from app.services.minio_service import minio_service
 from app.services.safety_event_operation_service import operate_safety_event as apply_safety_event_operation
 from app.services.safety_event_ws import safety_event_ws_manager
 
@@ -164,6 +169,158 @@ def _event_dict(
         "resolved_at": row.resolved_at.isoformat() if row.resolved_at else None,
         "resolve_reason": row.resolve_reason,
     }
+
+
+def _looks_like_object_ref(value: str) -> bool:
+    """判断字符串是否像 MinIO 对象路径/URL，而非模板占位符或描述文本。"""
+    text = str(value).strip()
+    if not text:
+        return False
+    if "{{" in text or "}}" in text:
+        return False
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", text):
+        return True
+    if text.startswith("/") or "/" in text:
+        return True
+    return bool(re.search(r"\.\w{1,5}(?:\?|$)", text, re.I))
+
+
+def _dam_object_name(url: str) -> Optional[str]:
+    """从媒体地址解析本机 dam 桶对象名；非 dam 桶地址返回 None。"""
+    text = str(url or "").strip()
+    if not text:
+        return None
+    if text.startswith(("http://", "https://")):
+        parts = urlparse(text).path.lstrip("/").split("/", 1)
+        if len(parts) == 2 and parts[0] == minio_service.bucket_name:
+            return parts[1]
+        return None
+    clean = text.lstrip("/")
+    if clean.startswith(f"{minio_service.bucket_name}/"):
+        return clean.split("/", 1)[1]
+    return clean
+
+
+def _dam_object_exists(url: str) -> bool:
+    """本机 MinIO 中存在的对象才保留；跨机 A100 引用、已清理对象直接过滤。"""
+    try:
+        object_name = _dam_object_name(url)
+        if not object_name:
+            return False
+        if not minio_service.client:
+            minio_service.connect()
+        if not minio_service.client:
+            return True  # MinIO 暂不可用时保留帧，避免复核区清空
+        minio_service.client.stat_object(minio_service.bucket_name, object_name)
+        return True
+    except S3Error:
+        return False
+    except Exception:
+        return True  # 连接异常不阻断展示
+
+
+def _collect_review_frames(
+    observation: dict[str, Any],
+    timeline: list[SafetyEventTimelineLog],
+    evidence: list[SafetyEventEvidence],
+    *,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    frames: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add_frame(value: Any, description: str = "Qwen4B 复核帧", captured_at: Optional[str] = None) -> None:
+        if len(frames) >= limit:
+            return
+        if isinstance(value, dict):
+            frame_type = str(value.get("type") or value.get("media_type") or "image").lower()
+            if frame_type and frame_type not in {"image", "photo", "snapshot"}:
+                return
+            source_ref = value.get("source")
+            url = (
+                value.get("url")
+                or value.get("file_url")
+                or value.get("path")
+                or value.get("object_name")
+                or value.get("object_key")
+                or (source_ref if isinstance(source_ref, str) else None)
+            )
+            caption = value.get("caption") or value.get("description") or description
+            source = source_ref if isinstance(source_ref, dict) else {}
+            timestamp = (
+                value.get("timestamp_seconds")
+                or value.get("frame_time_sec")
+                or source.get("timestamp_seconds")
+                or source.get("frame_time_sec")
+            )
+        else:
+            url = value
+            caption = description
+            timestamp = None
+        if not url:
+            return
+        normalized = str(url).strip()
+        if not normalized:
+            return
+        # 过滤模板占位符与描述性文本等非媒体对象引用（如 {{start_0.media_objects}}、DAG 节点描述）
+        if not _looks_like_object_ref(normalized):
+            return
+        if not (normalized.startswith("http") or normalized.startswith("/") or normalized.startswith("dam/")):
+            normalized = f"dam/{normalized.lstrip('/')}"
+        # 过滤本机 MinIO 中不存在的对象（跨机 A100 引用、已清理对象）
+        if not _dam_object_exists(normalized):
+            return
+        if normalized in seen:
+            return
+        seen.add(normalized)
+        frames.append({
+            "id": f"review-frame-{len(frames) + 1}",
+            "evidence_type": "IMAGE",
+            "source_type": "SYSTEM",
+            "file_url": normalized,
+            "description": caption,
+            "captured_at": captured_at,
+            "time_label": f"{float(timestamp):.1f}s" if timestamp is not None else f"复核帧 {len(frames) + 1:02d}",
+        })
+
+    visual = observation.get("visual") if isinstance(observation.get("visual"), dict) else {}
+    screening = visual.get("screening") if isinstance(visual.get("screening"), dict) else {}
+    for key in ("qwen_image_urls", "image_urls"):
+        value = observation.get(key) or screening.get(key)
+        if isinstance(value, list):
+            for item in value:
+                add_frame(item, "Qwen4B 抽取帧")
+
+    def walk(value: Any) -> None:
+        if len(frames) >= limit:
+            return
+        if isinstance(value, dict):
+            for key in ("representative_frame", "representative_frames", "key_frames", "image_urls", "media_objects", "cloud_media_objects"):
+                nested = value.get(key)
+                if isinstance(nested, list):
+                    for item in nested:
+                        add_frame(item)
+                elif nested:
+                    add_frame(nested)
+            for nested in value.values():
+                walk(nested)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+
+    for row in reversed(timeline):
+        payload = row.payload or {}
+        walk(payload)
+        if len(frames) >= limit:
+            break
+
+    for row in evidence:
+        if len(frames) >= limit:
+            break
+        if str(row.evidence_type or "").upper() == "IMAGE":
+            add_frame(row.file_url, row.description or "现场证据", row.captured_at.isoformat() if row.captured_at else None)
+
+    return frames[:limit]
 
 
 @router.get("/config", summary="获取融合业务配置")
@@ -589,6 +746,7 @@ def get_safety_event_detail(
             "source_type": row.source_type, "file_url": row.file_url, "description": row.description,
             "captured_at": row.captured_at.isoformat() if row.captured_at else None,
         } for row in evidence],
+        "review_frames": _collect_review_frames(observation, timeline, evidence),
         "tasks": [{
             "id": row.id, "assignee": row.assignee, "dispatch_operator": row.dispatch_operator,
             "status": row.task_status, "note": row.task_note, "result_type": row.result_type,

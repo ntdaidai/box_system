@@ -783,6 +783,9 @@ class ECAEngine:
                     instance,
                     sensor_data,
                 )
+            sensor_data = dict(sensor_data or {})
+            sensor_data["event_instance_id"] = instance.id
+            sensor_data["instance_no"] = instance.instance_no
             if event:
                 await self.plan_dam_workflow(instance, event, sensor_data, db)
 
@@ -801,6 +804,9 @@ class ECAEngine:
                 payload={"instance_no": instance.instance_no, "actions": action_result},
             )
             instance.status = "COMPLETED"
+            instance.state = "RESOLVED"
+            instance.resolved_at = instance.resolved_at or datetime.now()
+            instance.resolve_reason = instance.resolve_reason or "eca_flow_completed"
             db.commit()
 
         except Exception as e:
@@ -1251,9 +1257,10 @@ class ECAEngine:
         Returns:
             Any: 执行结果
         """
-        if step.action_type == "llm":
+        action_type = str(step.action_type or "").lower()
+        if action_type == "llm":
             return await self.execute_llm_step(step, sensor_data, db)
-        elif step.action_type == "alert":
+        elif action_type == "alert":
             return await self.execute_alert_step(
                 step,
                 sensor_data,
@@ -1262,12 +1269,95 @@ class ECAEngine:
                 step_context,
                 event,
             )
-        elif step.action_type == "script":
+        elif action_type == "script":
             return await self.execute_script_step(step, sensor_data)
-        elif step.action_type == "http":
+        elif action_type == "http":
             return await self.execute_http_step(step, sensor_data)
+        elif action_type == "camera_snapshot":
+            return await self.execute_camera_snapshot_step(step, sensor_data, db)
+        elif action_type == "broadcast":
+            return await self.execute_broadcast_step(step, sensor_data, db)
+        elif action_type == "staff_task":
+            return await self.execute_staff_task_step(step, sensor_data, db)
         else:
             raise ValueError(f"未知的动作类型: {step.action_type}")
+
+    async def execute_camera_snapshot_step(
+        self,
+        step: EventActionConfig,
+        sensor_data: Dict[str, Any],
+        db: Session,
+    ) -> Dict[str, Any]:
+        """Record camera evidence for the event.
+
+        Camera-triggered events already carry an evidence video captured for
+        screening; use it as the linkage evidence when no dedicated PTZ/snapshot
+        device parameters are configured.
+        """
+        video_url = (
+            sensor_data.get("source_video_url")
+            or (sensor_data.get("video_urls") or [None])[0]
+            or (sensor_data.get("videos") or [None])[0]
+        )
+        return {
+            "status": "archived",
+            "message": "事件视频证据已归档",
+            "video_url": video_url,
+            "action_type": step.action_type,
+        }
+
+    async def execute_broadcast_step(
+        self,
+        step: EventActionConfig,
+        sensor_data: Dict[str, Any],
+        db: Session,
+    ) -> Dict[str, Any]:
+        """Register an automatic broadcast action without failing missing hardware."""
+        return {
+            "status": "registered",
+            "message": "广播联动已登记，待广播设备配置后执行",
+            "action_type": step.action_type,
+        }
+
+    async def execute_staff_task_step(
+        self,
+        step: EventActionConfig,
+        sensor_data: Dict[str, Any],
+        db: Session,
+    ) -> Dict[str, Any]:
+        """Create or reuse a staff handling task for the event."""
+        instance_id = sensor_data.get("event_instance_id")
+        if not instance_id:
+            return {
+                "status": "registered",
+                "message": "人工处置任务已登记",
+                "action_type": step.action_type,
+            }
+        from app.models.safety_event_task import SafetyEventTask
+
+        task = (
+            db.query(SafetyEventTask)
+            .filter(SafetyEventTask.event_instance_id == int(instance_id))
+            .order_by(SafetyEventTask.id.desc())
+            .first()
+        )
+        if task is None:
+            task = SafetyEventTask(
+                event_instance_id=int(instance_id),
+                dispatch_operator="SYSTEM",
+                task_status="WAITING_ACCEPT",
+                task_note="ECA自动生成现场处置任务",
+                dispatched_at=datetime.now(),
+            )
+            db.add(task)
+            db.flush()
+        return {
+            "status": "created",
+            "message": "人工处置任务已生成",
+            "task_id": task.id,
+            "task_status": task.task_status,
+            "action_type": step.action_type,
+        }
 
     async def execute_llm_step(self, step: EventActionConfig, sensor_data: Dict[str, Any], db: Session) -> Dict[str, Any]:
         """执行LLM推理步骤（调用模型服务）
@@ -1601,7 +1691,7 @@ class ECAEngine:
             "slope_damage_detected", "gate_deform_detected",
             "mudslide_detected", "landslide_detected", "earthquake_detected",
             "flood_detected", "person_present", "boat_present",
-            "possible_person", "possible_boat",
+            "possible_person", "possible_boat", "illegal_fishing",
         }
 
         # 检查是否有视觉检测异常

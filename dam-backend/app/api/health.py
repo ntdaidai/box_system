@@ -1,6 +1,6 @@
 """健康检查与系统运行状态接口"""
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from typing import Dict
 from loguru import logger
@@ -37,28 +37,6 @@ class SystemInfoResponse(BaseModel):
 async def health_check(req: Request):
     """服务健康检查"""
     services = {}
-    all_healthy = True
-
-    # 检查 Qwen3-VL-8B
-    from app.core.config import settings
-    try:
-        client = req.app.state.http_client
-        resp = await client.get(f"{settings.VLLM_QWEN3VL_URL}/v1/models")
-        if resp.status_code == 200:
-            services["qwen3-vl-8b"] = "healthy"
-        else:
-            services["qwen3-vl-8b"] = "unhealthy"
-            all_healthy = False
-    except Exception as e:
-        services["qwen3-vl-8b"] = "unreachable"
-        all_healthy = False
-        logger.warning(f"Qwen3-VL-8B 不可达: {e}")
-
-    if not all_healthy:
-        raise HTTPException(
-            status_code=503,
-            detail={"status": "unhealthy", "services": services}
-        )
 
     return HealthResponse(status="healthy", services=services)
 
@@ -331,16 +309,6 @@ def _get_gpu_info() -> dict:
 @cached(ttl=5, prefix="system:info")
 async def get_system_info(req: Request):
     """获取系统运行状态信息"""
-    # 检查 AI 模型状态
-    ai_model_status = "unknown"
-    try:
-        from app.core.config import settings
-        client = req.app.state.http_client
-        resp = await client.get(f"{settings.VLLM_QWEN3VL_URL}/v1/models")
-        ai_model_status = "healthy" if resp.status_code == 200 else "unhealthy"
-    except Exception:
-        ai_model_status = "unreachable"
-
     # 检查传感器采集器状态
     from app.services.sensor_collector import sensor_collector
     collector_running = sensor_collector.running if sensor_collector else False
@@ -360,7 +328,6 @@ async def get_system_info(req: Request):
         "system_uptime_hours": _get_system_uptime(),
         "service_uptime_hours": round((time.time() - _SERVICE_START_TIME) / 3600, 1),
         "sensor_collector_running": collector_running,
-        "ai_model": ai_model_status,
         "sensor_count": {
             "total": total_sensors,
             "online": online_sensors,

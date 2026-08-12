@@ -63,7 +63,7 @@ def _infer_capability(model: dict) -> str:
         for key in ("name", "description", "model_type", "framework", "architecture")
     ).lower()
     if "vlm" in text or "视觉语言" in text or "多模态" in text:
-        return "图文理解"
+        return "视觉语言模型"
     if "llm" in text or "语言模型" in text or "报告" in text:
         return "文本推理"
     if "classification" in text or "分类" in text:
@@ -94,6 +94,26 @@ def _public_endpoint(binding: Optional[dict], inference_url: Optional[str]) -> O
     if host and port:
         return f"http://{host}:{port}{path}"
     return None
+
+
+def _status_response(model_id: int, data: Optional[dict]) -> dict:
+    data = data or {}
+    runtime_status = data.get("runtime_status") or data.get("runtimeStatus") or "unknown"
+    container_status = data.get("container_status") or data.get("containerStatus")
+    health_state = _health_state(runtime_status, container_status)
+    inference_url = data.get("inference_url") or data.get("inferenceUrl")
+    return {
+        "model_id": model_id,
+        "runtime_status": runtime_status,
+        "status_label": STATUS_LABELS.get(runtime_status, runtime_status),
+        "status_level": STATUS_LEVELS.get(runtime_status, "info"),
+        "container_status": container_status,
+        "health_state": health_state,
+        "healthy": health_state == "healthy",
+        "inference_url": inference_url,
+        "endpoint": inference_url,
+        "resources": data.get("resources"),
+    }
 
 
 def _normalize_model(
@@ -220,24 +240,43 @@ async def health_check_model(model_id: int):
     """Check whether a model looks usable from the model-library runtime state."""
     try:
         status = await dam_model_library_client.get_status(model_id)
-        runtime_status = status.get("runtime_status") or "unknown"
-        container_status = status.get("container_status")
-        health_state = _health_state(runtime_status, container_status)
         return {
             "code": 200,
-            "data": {
-                "model_id": model_id,
-                "runtime_status": runtime_status,
-                "status_label": STATUS_LABELS.get(runtime_status, runtime_status),
-                "status_level": STATUS_LEVELS.get(runtime_status, "info"),
-                "container_status": container_status,
-                "health_state": health_state,
-                "healthy": health_state == "healthy",
-                "inference_url": status.get("inference_url"),
-                "resources": status.get("resources"),
-            },
+            "data": _status_response(model_id, status),
         }
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"模型库服务不可达: {exc}") from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"模型健康测试失败: {exc}") from exc
+
+
+@router.post("/models/{model_id}/start")
+async def start_model(model_id: int):
+    """Start a model through the model-library lifecycle service."""
+    try:
+        result = await dam_model_library_client.start_model(model_id)
+        status = await dam_model_library_client.get_status(model_id)
+        return {
+            "code": 200,
+            "data": _status_response(model_id, {**result, **status}),
+        }
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"模型库服务不可达: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"模型启动失败: {exc}") from exc
+
+
+@router.post("/models/{model_id}/stop")
+async def stop_model(model_id: int, timeout: int = Query(30, ge=1, le=300)):
+    """Stop a model through the model-library lifecycle service."""
+    try:
+        result = await dam_model_library_client.stop_model(model_id, timeout_seconds=timeout)
+        status = await dam_model_library_client.get_status(model_id)
+        return {
+            "code": 200,
+            "data": _status_response(model_id, {**result, **status}),
+        }
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"模型库服务不可达: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"模型停止失败: {exc}") from exc

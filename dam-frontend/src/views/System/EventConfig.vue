@@ -1,9 +1,9 @@
 <template>
   <div class="event-config-page">
     <header class="page-header">
-      <div>
-        <p>系统管理 / 规则管理</p>
+      <div class="title-block">
         <h2>事件配置</h2>
+        <p>统一维护系统预置事件、触发参数和联动流程</p>
       </div>
       <el-button :icon="Refresh" :loading="loading" @click="loadConfig">刷新</el-button>
     </header>
@@ -1483,32 +1483,43 @@ onBeforeUnmount(() => {
 
 .page-header {
   justify-content: space-between;
-  min-height: 60px;
+  min-height: 74px;
   margin-bottom: 18px;
-  padding: 14px;
-  border: 1px solid rgba(104, 161, 200, .18);
+  padding: 16px 20px;
+  border: 1px solid rgba(96, 151, 191, .22);
   border-radius: 8px;
-  background: rgba(11, 29, 48, .72);
+  background: linear-gradient(90deg, rgba(14, 48, 76, .82) 0%, rgba(9, 29, 48, .72) 58%, rgba(7, 20, 34, .46) 100%);
+  box-shadow: inset 0 1px 0 rgba(147, 206, 241, .08);
+}
+
+.title-block {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
 }
 
 .page-header p {
-  margin: 0 0 3px;
-  color: #789bb4;
-  font-size: 12px;
+  margin: 0;
+  color: #8aa9c3;
+  font-size: 13px;
+  line-height: 1.35;
 }
 
 .page-header h2 {
   margin: 0;
   color: #f3f8fd;
-  font-size: 22px;
+  font-size: 25px;
+  line-height: 1.1;
   letter-spacing: 0;
 }
 
 .page-header :deep(.el-button) {
-  height: 40px;
-  border-color: rgba(104, 161, 200, .28);
-  color: #d9e8f8;
-  background: rgba(6, 25, 42, .82);
+  min-width: 92px;
+  height: 36px;
+  border-color: #1b7fa5;
+  color: #dcefff;
+  background: #103954;
+  font-weight: 700;
 }
 
 .risk-badge,

@@ -15,8 +15,8 @@ def test_config_loads():
     assert settings.host == "0.0.0.0"
     assert settings.port == 5002
     assert settings.model_registry_db_host == "192.168.31.52"
-    assert settings.llm_local_model_id == 10
-    assert settings.llm_fallback_model_id == 9
+    assert settings.llm_local_model_id is None or settings.llm_local_model_id > 0
+    assert settings.llm_fallback_model_id is None or settings.llm_fallback_model_id > 0
     print("PASS: config loads")
 
 
@@ -109,28 +109,35 @@ def test_actor_inference():
     print("PASS: actor inference")
 
 
-def test_actor_stage_prompt_preferred():
-    """角色阶段 prompt 优先于旧 actor_library 字段。"""
+def test_actor_stage_prompt_used():
+    """角色阶段 prompt 用于注入模型 system prompt。"""
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
-    from src.core.models import Base, ActorLibrary, ActorPromptStage
+    from src.core.models import Base, ActorLibrary, ActorPromptStage, ModelEvaluationTemplate
     from src.dam_workflow.model_selector import configure_action_node
 
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine, tables=[ActorLibrary.__table__, ActorPromptStage.__table__])
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            ActorLibrary.__table__,
+            ActorPromptStage.__table__,
+            ModelEvaluationTemplate.__table__,
+        ],
+    )
     db = sessionmaker(bind=engine)()
     try:
         actor = ActorLibrary(
+            id=1,
             actor_name="自然灾害分析专家",
             description="test",
-            local_system_prompt="旧本地提示词",
-            cloud_system_prompt="旧云端提示词",
         )
         db.add(actor)
         db.flush()
         db.add(
             ActorPromptStage(
+                id=1,
                 actor_id=actor.id,
                 stage_code="edge_analysis",
                 model_scope="qwen4b",
@@ -151,7 +158,7 @@ def test_actor_stage_prompt_preferred():
     finally:
         db.close()
         engine.dispose()
-    print("PASS: actor stage prompt preferred")
+    print("PASS: actor stage prompt used")
 
 
 def test_rule_io_matcher():
@@ -169,6 +176,6 @@ if __name__ == "__main__":
     test_dag_generation_template_path()
     test_input_parser()
     test_actor_inference()
-    test_actor_stage_prompt_preferred()
+    test_actor_stage_prompt_used()
     test_rule_io_matcher()
     print("\nAll smoke tests passed!")

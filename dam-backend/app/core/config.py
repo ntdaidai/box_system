@@ -94,7 +94,7 @@ class Settings:
     DAM_WORKFLOW_BASE_URL: str = _get_env(
         "DAM_WORKFLOW_BASE_URL", "http://localhost:5002"
     ).rstrip("/")
-    DAM_WORKFLOW_TIMEOUT: float = float(_get_env("DAM_WORKFLOW_TIMEOUT", "30"))
+    DAM_WORKFLOW_TIMEOUT: float = float(_get_env("DAM_WORKFLOW_TIMEOUT", "120"))
     DAM_WORKFLOW_PLACEHOLDER_IMAGE: str = _get_env(
         "DAM_WORKFLOW_PLACEHOLDER_IMAGE", "NO_IMAGE_REQUIRED"
     )

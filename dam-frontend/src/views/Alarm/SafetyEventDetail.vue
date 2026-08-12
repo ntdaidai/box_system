@@ -57,37 +57,36 @@
             </dl>
           </section>
 
-          <section class="work-card evidence-card" :class="{ empty: !evidence.length }">
+          <section class="work-card evidence-card" :class="{ empty: !reviewFrames.length }">
             <header class="card-heading">
               <div>
                 <span>现场证据</span>
-                <h2>Evidence Gallery</h2>
               </div>
-              <small>{{ evidence.length }} 份</small>
+              <small>{{ reviewFrames.length }} / 8 帧</small>
             </header>
 
-            <div v-if="evidence.length" class="evidence-grid" :class="{ single: evidence.length === 1 }">
+            <div v-if="reviewFrames.length" class="review-frame-strip">
               <button
-                v-for="item in evidence"
+                v-for="(item, index) in reviewFrames"
                 :key="item.id"
                 type="button"
-                class="evidence-item"
+                class="review-frame-item"
                 @click="openEvidenceItem(item)"
               >
-                <el-image v-if="isImageEvidence(item)" :src="item.file_url" fit="cover" />
-                <div v-else class="file-evidence">
-                  <el-icon><Document /></el-icon>
-                  <strong>{{ evidenceTypeLabel(item.evidence_type) }}</strong>
-                </div>
+                <el-image :src="normalizeMediaUrl(item.file_url)" fit="cover" />
                 <footer>
-                  <span>{{ item.description || sourceLabel(item.source_type) }}</span>
-                  <time>{{ formatTime(item.captured_at) }}</time>
+                  <span>{{ item.time_label || `复核帧 ${String(index + 1).padStart(2, '0')}` }}</span>
+                  <time>{{ item.description || 'Qwen4B 抽取帧' }}</time>
                 </footer>
               </button>
+              <div v-for="slot in Math.max(0, 8 - reviewFrames.length)" :key="`review-slot-${slot}`" class="review-frame-slot">
+                <strong>{{ String(reviewFrames.length + slot).padStart(2, '0') }}</strong>
+                <span>待归档</span>
+              </div>
             </div>
             <div v-else class="compact-empty">
               <el-icon><Picture /></el-icon>
-              <span>暂无截图、照片、视频帧或文件证据</span>
+              <span>暂无 Qwen4B 抽取帧</span>
             </div>
           </section>
 
@@ -226,14 +225,14 @@
         <figure v-for="item in currentEvidence" :key="item.id">
           <el-image
             v-if="isImageEvidence(item)"
-            :src="item.file_url"
+            :src="normalizeMediaUrl(item.file_url)"
             fit="cover"
-            :preview-src-list="currentEvidence.filter(isImageEvidence).map((record) => record.file_url)"
+            :preview-src-list="currentEvidence.filter(isImageEvidence).map((record) => normalizeMediaUrl(record.file_url))"
             preview-teleported
           />
           <div v-else class="drawer-file">
             <el-icon><Document /></el-icon>
-            <a :href="item.file_url" target="_blank" rel="noreferrer">{{ item.file_url }}</a>
+            <a :href="normalizeMediaUrl(item.file_url)" target="_blank" rel="noreferrer">{{ normalizeMediaUrl(item.file_url) }}</a>
           </div>
           <figcaption>
             <strong>{{ item.description || evidenceTypeLabel(item.evidence_type) }}</strong>
@@ -263,6 +262,7 @@ import {
   WarningFilled,
 } from '@element-plus/icons-vue'
 import { getIntegrationConfig, getUnifiedSafetyEventDetail, operateUnifiedSafetyEvent } from '@/api/integration'
+import { normalizeMediaUrl } from '@/utils/media'
 
 const route = useRoute()
 const router = useRouter()
@@ -274,6 +274,7 @@ const detail = reactive({
   visual_detail: null,
   timeline: [],
   evidence: [],
+  review_frames: [],
   tasks: [],
 })
 const actionConfigs = ref([])
@@ -282,6 +283,11 @@ const event = computed(() => detail.event)
 const visualDetail = computed(() => detail.visual_detail)
 const timeline = computed(() => detail.timeline)
 const evidence = computed(() => detail.evidence)
+const reviewFrames = computed(() => {
+  const frames = Array.isArray(detail.review_frames) ? detail.review_frames : []
+  const fallback = evidence.value.filter(isImageEvidence)
+  return dedupeEvidenceFrames(frames.length ? frames : fallback).slice(0, 8)
+})
 const latestTask = computed(() => detail.tasks[0] || null)
 const isResolved = computed(() => event.value?.state === 'RESOLVED' || ['COMPLETED', 'FALSE_ALARM'].includes(event.value?.status))
 const eventActionConfigs = computed(() => actionConfigs.value.filter((item) => item.event_id === event.value?.event_id && item.enabled))
@@ -512,6 +518,7 @@ async function loadDetail() {
     detail.visual_detail = data.visual_detail || null
     detail.timeline = Array.isArray(data.timeline) ? data.timeline : []
     detail.evidence = Array.isArray(data.evidence) ? data.evidence : []
+    detail.review_frames = Array.isArray(data.review_frames) ? data.review_frames : []
     detail.tasks = Array.isArray(data.tasks) ? data.tasks : []
     actionConfigs.value = configResult.status === 'fulfilled' && Array.isArray(configResult.value.data?.action_configs)
       ? configResult.value.data.action_configs
@@ -635,6 +642,22 @@ function isImageEvidence(item) {
   const type = String(item?.evidence_type || '').toUpperCase()
   const url = String(item?.file_url || '').split('?')[0].toLowerCase()
   return type === 'IMAGE' || /\.(png|jpe?g|webp|gif|bmp)$/.test(url)
+}
+
+function dedupeEvidenceFrames(items) {
+  const seen = new Set()
+  return items.reduce((result, item, index) => {
+    const url = String(item?.file_url || '').trim()
+    if (!url || seen.has(url)) return result
+    seen.add(url)
+    result.push({
+      ...item,
+      id: item.id || `review-frame-${index + 1}`,
+      evidence_type: item.evidence_type || 'IMAGE',
+      source_type: item.source_type || 'SYSTEM',
+    })
+    return result
+  }, [])
 }
 
 function riskClass(value) {
@@ -861,8 +884,9 @@ loadDetail()
   color: #7ee2bd;
 }
 .major-flow {
-  position: relative;
-  z-index: 5;
+  position: sticky;
+  top: 0;
+  z-index: 20;
   margin-top: 0;
   min-height: 132px;
   padding: 20px 26px 22px;
@@ -875,7 +899,8 @@ loadDetail()
   background:
     linear-gradient(180deg, rgba(12, 35, 55, .86), rgba(7, 22, 36, .96)),
     rgba(8, 23, 39, .96);
-  box-shadow: inset 0 1px 0 rgba(143, 200, 242, .08), 0 14px 34px rgba(0, 0, 0, .2);
+  backdrop-filter: blur(12px);
+  box-shadow: inset 0 1px 0 rgba(143, 200, 242, .08), 0 18px 38px rgba(0, 0, 0, .28);
 }
 .flow-back-button {
   position: relative;
@@ -1071,9 +1096,11 @@ loadDetail()
 .primary-stack {
   min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
 }
 .work-card {
+  min-width: 0;
   padding: 20px;
   border-radius: 8px;
   background:
@@ -1193,6 +1220,88 @@ dd {
 }
 .evidence-card.empty {
   padding-bottom: 14px;
+}
+.review-frame-strip {
+  margin-top: 16px;
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0 2px 8px 0;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(105, 216, 255, .42) rgba(4, 13, 22, .45);
+}
+.review-frame-item,
+.review-frame-slot {
+  flex: 0 0 clamp(220px, 23vw, 320px);
+  aspect-ratio: 16 / 9;
+  border: 1px solid rgba(105, 216, 255, .18);
+  border-radius: 8px;
+  scroll-snap-align: start;
+}
+.review-frame-item {
+  position: relative;
+  overflow: hidden;
+  padding: 0;
+  color: #e9f7ff;
+  text-align: left;
+  background: #020b13;
+  cursor: pointer;
+}
+.review-frame-item .el-image {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.review-frame-item::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 42%, rgba(0, 0, 0, .78));
+}
+.review-frame-item:hover {
+  border-color: rgba(105, 216, 255, .58);
+}
+.review-frame-item footer {
+  position: absolute;
+  z-index: 1;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+}
+.review-frame-item footer span,
+.review-frame-item footer time {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.review-frame-item footer span {
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+.review-frame-item footer time {
+  margin-top: 4px;
+  color: #a9c5d6;
+  font-size: 12px;
+}
+.review-frame-slot {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 6px;
+  color: #53758c;
+  background: rgba(4, 13, 22, .42);
+}
+.review-frame-slot strong {
+  color: #6f91a8;
+  font-size: 18px;
+}
+.review-frame-slot span {
+  color: #6f8798;
+  font-size: 12px;
 }
 .evidence-grid {
   max-height: 440px;

@@ -12,7 +12,7 @@ class RainSensor(SensorBase):
     DEFAULT_PORT = "/dev/ttyCH341USB3"
     DEFAULT_BAUD = 9600
     DEFAULT_ADDR = 0x01
-    READ_INTERVAL = 1.0
+    READ_INTERVAL = 10.0
 
     def read_once(self) -> dict:
         raw = read_registers(self.serial_port, self.addr, start=0x0000, count=0x0A)

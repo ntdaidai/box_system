@@ -70,6 +70,11 @@ class VisionDetector:
                 "model": "Qwen3.5-0.8B",
                 "variable": "possible_boat",
             },
+            "illegal_fishing": {
+                "name": "疑似电鱼捕鱼初筛",
+                "model": "Qwen3.5-0.8B",
+                "variable": "illegal_fishing",
+            },
             "crack": {
                 "name": "裂缝检测",
                 "model": "CrackDetection-v1",
@@ -196,6 +201,7 @@ class VisionDetector:
             "boat": ("boat_present", "boat_confidence"),
             "possible_person": ("possible_person", "person_confidence"),
             "possible_boat": ("possible_boat", "boat_confidence"),
+            "illegal_fishing": ("illegal_fishing", "illegal_fishing_confidence"),
         }
         now = time.time()
         batch_result = {
@@ -294,6 +300,43 @@ class VisionDetector:
         boat_evidence = any(term in text for term in boat_positive_terms) and not any(
             term in text for term in boat_negative_terms
         )
+        flood_terms = (
+            "洪水",
+            "洪涝",
+            "水位暴涨",
+            "水位上涨",
+            "水流湍急",
+            "水势较大",
+            "水势猛烈",
+            "漫堤",
+            "漫水",
+            "漫过道路",
+            "淹没道路",
+            "道路积水",
+            "泄洪",
+            "浑浊急流",
+            "急流",
+            "大水",
+        )
+        normal_water_terms = ("正常水面", "无明显洪水", "未见洪水", "水面平稳", "水流平缓")
+        if any(term in text for term in flood_terms) and not any(term in text for term in normal_water_terms):
+            scene["flood_detected"] = 1
+            try:
+                confidence["flood_confidence"] = max(float(confidence.get("flood_confidence", 0.0) or 0.0), 0.72)
+            except (TypeError, ValueError):
+                confidence["flood_confidence"] = 0.72
+
+        natural_disaster = any(
+            int(scene.get(key) or 0) == 1
+            for key in ("mudslide_detected", "landslide_detected", "earthquake_detected", "flood_detected")
+        )
+        if natural_disaster:
+            for key in ("person_present", "boat_present", "possible_person", "possible_boat"):
+                scene[key] = 0
+            confidence["person_confidence"] = 0.0
+            confidence["boat_confidence"] = 0.0
+            normalized["risk_level"] = "HIGH"
+            return normalized
         try:
             person_score = float(confidence.get("person_confidence", 0.0) or 0.0)
         except (TypeError, ValueError):

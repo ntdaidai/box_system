@@ -490,8 +490,11 @@ def _screening_event_codes(result: dict) -> set[str]:
         codes.add("PERSON_WATERFRONT")
     if int(scene.get("boat_present") or 0) == 1:
         codes.update({"BOAT_INTRUSION", "BOAT_STAY"})
+    if int(scene.get("illegal_fishing") or 0) == 1:
+        codes.add("BOAT_ILLEGAL_FISHING")
     if int(scene.get("possible_boat") or 0) == 1:
-        codes.add("BOAT_STAY")
+        if int(scene.get("illegal_fishing") or 0) != 1:
+            codes.add("BOAT_STAY")
     return codes
 
 

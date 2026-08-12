@@ -551,27 +551,38 @@ onMounted(refreshCurrent)
 .segmented-filter {
   flex: 0 0 auto;
   display: inline-flex;
+  gap: 0;
   padding: 2px;
   border: 1px solid rgba(84, 148, 193, .22);
   border-radius: 7px;
   background: rgba(7, 24, 39, .72);
+  overflow: hidden;
+}
+.segmented-filter :deep(.el-radio-button) {
+  margin: 0;
 }
 .segmented-filter :deep(.el-radio-button__inner) {
   min-width: 58px;
   height: 32px;
   padding: 0 11px;
-  border: 0;
-  border-radius: 5px;
+  border: 0 !important;
+  border-radius: 0;
   color: #9db8cc;
   background: transparent;
   font-size: 12px;
   line-height: 32px;
-  box-shadow: none;
+  box-shadow: none !important;
+}
+.segmented-filter :deep(.el-radio-button:first-child .el-radio-button__inner) {
+  border-radius: 5px 0 0 5px;
+}
+.segmented-filter :deep(.el-radio-button:last-child .el-radio-button__inner) {
+  border-radius: 0 5px 5px 0;
 }
 .segmented-filter :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) {
   color: #061827;
   background: #8fd4df;
-  box-shadow: none;
+  box-shadow: none !important;
 }
 .mode-action {
   border-color: rgba(70, 145, 190, .38);

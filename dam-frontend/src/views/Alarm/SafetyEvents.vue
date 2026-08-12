@@ -152,6 +152,13 @@ const loading = ref(false)
 const items = ref([])
 const eventTypeOptions = ref([])
 const total = ref(0)
+const overview = ref({
+  pending: 0,
+  high: 0,
+  medium: 0,
+  low: 0,
+  closed: 0,
+})
 const query = reactive({
   status: '',
   risk_level: '',
@@ -165,34 +172,82 @@ const query = reactive({
   page_size: 10,
 })
 
-const overview = computed(() => ({
-  pending: items.value.filter((item) => item.status === 'PENDING').length,
-  processing: items.value.filter((item) => item.status === 'PROCESSING').length,
-  high: items.value.filter((item) => item.risk_level === 'HIGH').length,
-  closed: items.value.filter((item) => ['COMPLETED', 'FALSE_ALARM'].includes(item.status)).length,
-}))
-
 const overviewCards = computed(() => [
   { label: '事件总数', value: total.value, hint: '当前筛选范围', icon: BellFilled, tone: 'tone-total' },
-  { label: '待确认', value: overview.value.pending, hint: '需要人工判断', icon: Clock, tone: 'tone-pending' },
-  { label: '高风险', value: overview.value.high, hint: '优先处置对象', icon: WarningFilled, tone: 'tone-high' },
-  { label: '已闭环', value: overview.value.closed, hint: '完成或误报', icon: Finished, tone: 'tone-closed' },
+  { label: '待确认', value: overview.value.pending, hint: '当前筛选范围', icon: Clock, tone: 'tone-pending' },
+  { label: '高风险', value: overview.value.high, hint: '当前筛选范围', icon: WarningFilled, tone: 'tone-high' },
+  { label: '中风险', value: overview.value.medium, hint: '当前筛选范围', icon: WarningFilled, tone: 'tone-medium' },
+  { label: '低风险', value: overview.value.low, hint: '当前筛选范围', icon: WarningFilled, tone: 'tone-low' },
+  { label: '已闭环', value: overview.value.closed, hint: '当前筛选范围', icon: Finished, tone: 'tone-closed' },
 ])
 
 async function loadEvents() {
   loading.value = true
   try {
-    const params = Object.fromEntries(
-      Object.entries(query).filter(([, value]) => value !== '' && value !== null && value !== undefined),
-    )
-    const res = await getUnifiedSafetyEvents(params, { silentError: true })
-    items.value = res.data?.items || []
-    total.value = res.data?.total || 0
+    const [listResult, overviewResult] = await Promise.allSettled([
+      getUnifiedSafetyEvents(buildEventQueryParams(), { silentError: true }),
+      fetchOverviewCounts(),
+    ])
+    if (listResult.status === 'rejected') throw listResult.reason
+    items.value = listResult.value.data?.items || []
+    total.value = listResult.value.data?.total || 0
+    if (overviewResult.status === 'fulfilled') {
+      overview.value = overviewResult.value
+    }
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '告警数据暂时不可达，请检查后端服务')
   } finally {
     loading.value = false
   }
+}
+
+function buildEventQueryParams(overrides = {}) {
+  return Object.fromEntries(
+    Object.entries({ ...query, ...overrides })
+      .filter(([, value]) => value !== '' && value !== null && value !== undefined),
+  )
+}
+
+async function fetchEventCount(overrides = {}) {
+  const params = buildEventQueryParams({ ...overrides, page: 1, page_size: 1 })
+  const res = await getUnifiedSafetyEvents(params, { silentError: true })
+  return Number(res.data?.total || 0)
+}
+
+async function fetchOverviewCounts() {
+  const pendingPromise = query.status && query.status !== 'PENDING'
+    ? Promise.resolve(0)
+    : fetchEventCount({ status: 'PENDING' })
+
+  const highPromise = query.risk_level && query.risk_level !== 'HIGH'
+    ? Promise.resolve(0)
+    : fetchEventCount({ risk_level: 'HIGH' })
+
+  const mediumPromise = query.risk_level && query.risk_level !== 'MEDIUM'
+    ? Promise.resolve(0)
+    : fetchEventCount({ risk_level: 'MEDIUM' })
+
+  const lowPromise = query.risk_level && query.risk_level !== 'LOW'
+    ? Promise.resolve(0)
+    : fetchEventCount({ risk_level: 'LOW' })
+
+  const closedPromise = query.status === 'COMPLETED' || query.status === 'FALSE_ALARM'
+    ? fetchEventCount({ status: query.status })
+    : query.status
+      ? Promise.resolve(0)
+      : Promise.all([
+        fetchEventCount({ status: 'COMPLETED' }),
+        fetchEventCount({ status: 'FALSE_ALARM' }),
+      ]).then(([completed, falseAlarm]) => completed + falseAlarm)
+
+  const [pending, high, medium, low, closed] = await Promise.all([
+    pendingPromise,
+    highPromise,
+    mediumPromise,
+    lowPromise,
+    closedPromise,
+  ])
+  return { pending, high, medium, low, closed }
 }
 
 function reloadFromFirstPage() {
@@ -315,7 +370,7 @@ loadEvents()
 }
 .alarm-overview {
   display: grid;
-  grid-template-columns: repeat(4, minmax(160px, 1fr));
+  grid-template-columns: repeat(6, minmax(160px, 1fr));
   gap: 16px;
 }
 .alarm-overview article {
@@ -367,6 +422,22 @@ loadEvents()
   color: #ff6b76;
   background: rgba(255, 77, 94, .14);
   box-shadow: inset 0 0 0 1px rgba(255, 77, 94, .24);
+}
+.alarm-overview article.tone-medium::after {
+  background: #FFB648;
+}
+.alarm-overview article.tone-medium .el-icon {
+  color: #FFB648;
+  background: rgba(255, 182, 72, .14);
+  box-shadow: inset 0 0 0 1px rgba(255, 182, 72, .24);
+}
+.alarm-overview article.tone-low::after {
+  background: #38D59C;
+}
+.alarm-overview article.tone-low .el-icon {
+  color: #38D59C;
+  background: rgba(56, 213, 156, .13);
+  box-shadow: inset 0 0 0 1px rgba(56, 213, 156, .22);
 }
 .alarm-overview article.tone-closed::after {
   background: #62d7b1;
