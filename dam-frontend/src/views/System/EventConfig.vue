@@ -41,7 +41,7 @@
         </div>
 
         <div
-          v-for="event in filteredEvents"
+          v-for="event in pagedEvents"
           :key="event.id"
           class="config-row"
           :class="{ editing: editingEventId === event.id }"
@@ -128,6 +128,14 @@
 
         <div v-if="!filteredEvents.length" class="empty-list">暂无匹配事件</div>
       </div>
+      <el-pagination
+        v-if="filteredEvents.length"
+        v-model:current-page="eventPage"
+        class="list-pagination"
+        :page-size="pageSize"
+        :total="filteredEvents.length"
+        layout="prev, pager, next"
+      />
     </section>
 
     <el-dialog
@@ -379,6 +387,8 @@ const sourceFilter = ref('all')
 const riskFilter = ref('all')
 const enabledFilter = ref('all')
 const sortFilter = ref('risk')
+const eventPage = ref(1)
+const pageSize = 10
 const selectedEventId = ref(null)
 const editingEventId = ref(null)
 const flowDialogVisible = ref(false)
@@ -507,6 +517,10 @@ const filteredEvents = computed(() => {
     return riskWeight(second) - riskWeight(first) || String(first.name || '').localeCompare(String(second.name || ''), 'zh-CN')
   })
 })
+const pagedEvents = computed(() => {
+  const start = (eventPage.value - 1) * pageSize
+  return filteredEvents.value.slice(start, start + pageSize)
+})
 const currentEvent = computed(() => events.value.find((event) => event.id === selectedEventId.value) || null)
 const currentActions = computed(() => {
   if (!currentEvent.value) return []
@@ -581,8 +595,14 @@ const flowStageStyle = computed(() => ({
   transform: `translate(${fitTransform.x}px, ${fitTransform.y}px) scale(${fitTransform.scale})`,
 }))
 watch(filteredEvents, (list) => {
+  const maxPage = Math.max(1, Math.ceil(list.length / pageSize))
+  if (eventPage.value > maxPage) eventPage.value = maxPage
   if (!list.length || flowEditMode.value || ruleDirty.value) return
   if (!list.some((event) => event.id === selectedEventId.value)) selectEvent(list[0].id)
+})
+
+watch([keyword, sourceFilter, riskFilter, enabledFilter, sortFilter], () => {
+  eventPage.value = 1
 })
 
 watch(
@@ -1822,7 +1842,7 @@ onBeforeUnmount(() => {
   padding: 0;
   border: 1px solid rgba(104, 161, 200, .18);
   border-radius: 8px;
-  background: rgba(11, 29, 48, .72);
+  background: #0b1d30;
   overflow: hidden;
 }
 
@@ -1866,43 +1886,52 @@ onBeforeUnmount(() => {
 
 .config-table {
   overflow-x: auto;
+  background: #0a1d30;
 }
 
 .config-table-head,
 .config-row {
-  min-width: 1120px;
+  min-width: 1410px;
   display: grid;
-  grid-template-columns: minmax(150px, 1.1fr) 86px minmax(280px, 2fr) 96px 96px 92px 80px 180px;
+  grid-template-columns: 220px 96px minmax(360px, 1fr) 86px 86px 98px 86px 240px;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
+  text-align: center;
 }
 
 .config-table-head {
-  min-height: 50px;
-  padding: 0 22px;
-  color: #9fb4c5;
-  background: rgba(30, 58, 95, .58);
-  font-size: 13px;
-  font-weight: 700;
+  min-height: 48px;
+  padding: 0 20px;
+  color: #a9c7de;
+  background: #15314d;
+  font-size: 14px;
+  font-weight: 800;
 }
 
 .config-row {
   min-height: 72px;
-  padding: 12px 22px;
+  padding: 12px 20px;
   color: #d8e7ff;
   border-top: 1px solid rgba(104, 161, 200, .1);
-  background: rgba(10, 28, 47, .38);
+  background: #092034;
   transition: background .16s ease, box-shadow .16s ease;
 }
 
 .config-row:hover {
-  background: rgba(30, 74, 112, .46);
+  background: #102940;
 }
 
 .config-row.editing {
-  min-height: 84px;
-  background: rgba(30, 74, 112, .56);
+  min-height: 72px;
+  background: #102940;
   box-shadow: inset 3px 0 0 #48d8ff;
+}
+
+.config-table-head span:first-child,
+.config-table-head span:nth-child(3),
+.config-row > div:first-child,
+.config-row > div:nth-child(3) {
+  text-align: left;
 }
 
 .event-name-cell strong {
@@ -1911,12 +1940,14 @@ onBeforeUnmount(() => {
   color: #f3f8fd;
   font-size: 14px;
   font-weight: 750;
+  text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .rule-cell {
   min-width: 0;
+  text-align: left;
 }
 
 .rule-cell > span {
@@ -1933,6 +1964,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  height: 36px;
 }
 
 .compact-select {
@@ -1947,35 +1979,73 @@ onBeforeUnmount(() => {
   color: #9cb6ca;
   font-size: 14px;
   font-weight: 500;
+  text-align: center;
   white-space: nowrap;
 }
 
 .duration-cell :deep(.el-input) {
-  width: 86px;
+  width: 80px;
 }
 
+.condition-editor :deep(.el-input__wrapper),
+.duration-cell :deep(.el-input__wrapper),
+.visual-inline-editor :deep(.el-select__wrapper) {
+  min-height: 34px;
+  border-radius: 5px;
+  background: rgba(6, 25, 42, .86);
+  box-shadow: inset 0 0 0 1px rgba(83, 153, 197, .36) !important;
+}
+
+.condition-editor :deep(.el-input-group__append),
 .duration-cell :deep(.el-input-group__append) {
   width: 34px;
   justify-content: center;
   padding: 0;
+  border-radius: 0 5px 5px 0;
+  color: #9ec4dd;
+  background: rgba(14, 44, 68, .92);
+  box-shadow: inset 0 0 0 1px rgba(83, 153, 197, .28);
+}
+
+.condition-editor :deep(.el-input__inner),
+.duration-cell :deep(.el-input__inner) {
+  color: #eaf6ff;
+  font-weight: 700;
 }
 
 .row-actions {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 8px;
   white-space: nowrap;
 }
 
 .row-actions :deep(.el-button.is-link) {
-  color: #7dd7ff;
+  min-width: 86px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid rgba(66, 164, 224, .32);
+  border-radius: 5px;
+  color: #cae6fa;
+  background: rgba(20, 58, 88, .54);
   font-size: 14px;
   font-weight: 700;
 }
 
+.row-actions :deep(.el-button:not(.is-link)) {
+  min-width: 72px;
+  height: 32px;
+  margin: 0;
+  border-radius: 5px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .row-actions :deep(.el-button.is-link:hover) {
-  color: #c7f0ff;
+  color: #f1fbff;
+  border-color: rgba(66, 164, 224, .58);
+  background: rgba(29, 91, 133, .72);
 }
 
 .empty-list {
@@ -1984,6 +2054,38 @@ onBeforeUnmount(() => {
   place-items: center;
   color: #789bb4;
   font-size: 13px;
+}
+
+.list-pagination {
+  min-height: 46px;
+  justify-content: center;
+  border-top: 1px solid rgba(149, 190, 220, .10);
+  background: #092034;
+}
+
+.list-pagination :deep(.btn-prev),
+.list-pagination :deep(.btn-next),
+.list-pagination :deep(.el-pager li) {
+  min-width: 34px;
+  height: 32px;
+  margin: 0 3px;
+  border: 1px solid rgba(70, 145, 190, .34);
+  border-radius: 5px;
+  color: #8fb6d1;
+  background: #0b2238;
+  font-weight: 700;
+}
+
+.list-pagination :deep(.el-pager li.is-active) {
+  border-color: #4ba7e6;
+  color: #fff;
+  background: #3f95d7;
+}
+
+.list-pagination :deep(.btn-prev:disabled),
+.list-pagination :deep(.btn-next:disabled) {
+  color: rgba(143, 182, 209, .35);
+  background: #0b2238;
 }
 
 :deep(.flow-workspace-dialog.el-dialog),

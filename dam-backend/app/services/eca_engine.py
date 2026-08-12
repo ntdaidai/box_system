@@ -1812,13 +1812,17 @@ class ECAEngine:
 
         risk_rank = {"LOW": 1, "MEDIUM": 2, "HIGH": 3}
         if active:
+            should_resubmit_workflow = self._should_resubmit_camera_workflow(db, active)
             active.last_observed_at = now
             active.latest_observation = observation
             active.risk_level = risk
             if risk_rank.get(risk, 0) > risk_rank.get(active.max_risk_level, 0):
                 active.max_risk_level = risk
-            active.status = "PROCESSING"
+            if active.status not in {"COMPLETED", "FALSE_ALARM"}:
+                active.status = "PROCESSING"
             db.commit()
+            if should_resubmit_workflow:
+                self._dispatch_async_event_actions(event.id, active.id, camera_data)
             return active
 
         instance = SafetyEventInstance(
@@ -1861,18 +1865,45 @@ class ECAEngine:
         ))
         db.commit()
 
+        self._dispatch_async_event_actions(event.id, instance.id, camera_data)
+        return instance
+
+    def _should_resubmit_camera_workflow(self, db: Session, instance: SafetyEventInstance) -> bool:
+        if instance.analysis_report_id:
+            return False
+        running = db.query(SafetyEventTimelineLog).filter(
+            SafetyEventTimelineLog.event_instance_id == instance.id,
+            SafetyEventTimelineLog.log_type == "DAM_WORKFLOW",
+            SafetyEventTimelineLog.status == "PROCESSING",
+        ).first()
+        if running:
+            return False
+        latest_workflow = db.query(SafetyEventTimelineLog).filter(
+            SafetyEventTimelineLog.event_instance_id == instance.id,
+            SafetyEventTimelineLog.log_type == "DAM_WORKFLOW",
+        ).order_by(SafetyEventTimelineLog.id.desc()).first()
+        if not latest_workflow:
+            return True
+        message = str(latest_workflow.message or "")
+        return latest_workflow.status == "FAILED" or "not_submitted" in message
+
+    def _dispatch_async_event_actions(
+        self,
+        event_id: int,
+        event_instance_id: int,
+        sensor_data: Dict[str, Any],
+    ) -> None:
         global _main_event_loop
         if _main_event_loop and _main_event_loop.is_running():
             future = asyncio.run_coroutine_threadsafe(
-                self.execute_event_actions(event.id, instance.id, camera_data),
+                self.execute_event_actions(event_id, event_instance_id, sensor_data),
                 _main_event_loop,
             )
             future.add_done_callback(self._handle_async_exception)
         else:
             logger.warning(
-                f"无法异步执行摄像头事件行为：主事件循环未设置或未运行。事件 {event.id}"
+                f"无法异步执行摄像头事件行为：主事件循环未设置或未运行。事件 {event_id}"
             )
-        return instance
 
     def resolve_camera_event_if_recovered(
         self,

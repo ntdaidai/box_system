@@ -5,37 +5,40 @@
         <p>系统管理 / 规则管理</p>
         <h1>区域配置</h1>
       </div>
-      <div class="header-actions">
-        <el-select
-          v-model="currentCameraId"
-          class="camera-select zone-config-select"
-          popper-class="zone-config-select-popper"
-          placeholder="选择摄像头"
-          @change="activateCamera"
-        >
-          <el-option
-            v-for="camera in cameras"
-            :key="camera.id"
-            :label="camera.name"
-            :value="camera.id"
-          />
-        </el-select>
-        <el-button class="tool-button" @click="startNewZone">
-          <el-icon><EditPen /></el-icon>新增区域
-        </el-button>
-        <el-button class="save-button" :loading="saving" @click="saveZones">
-          <el-icon><Check /></el-icon>保存配置
-        </el-button>
-      </div>
     </header>
 
-    <section class="zone-list-section full">
+    <section class="zone-toolbar-card">
       <div class="list-heading">
         <div>
           <span>区域列表</span>
           <b>{{ currentCameraName }} · 共 {{ zones.length }} 个区域</b>
         </div>
+        <div class="header-actions">
+          <el-select
+            v-model="currentCameraId"
+            class="camera-select zone-config-select"
+            popper-class="zone-config-select-popper"
+            placeholder="选择摄像头"
+            @change="activateCamera"
+          >
+            <el-option
+              v-for="camera in cameras"
+              :key="camera.id"
+              :label="camera.name"
+              :value="camera.id"
+            />
+          </el-select>
+          <el-button class="tool-button" @click="startNewZone">
+            <el-icon><EditPen /></el-icon>新增区域
+          </el-button>
+          <el-button class="save-button" :loading="saving" @click="saveZones">
+            <el-icon><Check /></el-icon>保存配置
+          </el-button>
+        </div>
       </div>
+    </section>
+
+    <section class="zone-list-section full">
       <div class="zone-table">
         <div class="zone-table-head">
           <span>区域名</span>
@@ -46,7 +49,7 @@
           <span>操作</span>
         </div>
         <div
-          v-for="zone in zones"
+          v-for="zone in pagedZones"
           :key="zone.id"
           class="zone-table-row"
           :class="{ selected: zone.id === selectedZoneId, disabled: !zone.enabled }"
@@ -80,6 +83,14 @@
         </div>
         <div v-if="!zones.length" class="zone-table-empty">暂无区域配置</div>
       </div>
+      <el-pagination
+        v-if="zones.length"
+        v-model:current-page="zonePage"
+        class="list-pagination"
+        :page-size="pageSize"
+        :total="zones.length"
+        layout="prev, pager, next"
+      />
     </section>
 
     <el-dialog
@@ -286,7 +297,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
@@ -312,6 +323,8 @@ const dragging = ref(null)
 const saving = ref(false)
 const drawDialogVisible = ref(false)
 const editDialogVisible = ref(false)
+const zonePage = ref(1)
+const pageSize = 10
 
 const overlayWidth = computed(() => Number(stageImageRef.value?.naturalWidth) || 1920)
 const overlayHeight = computed(() => Number(stageImageRef.value?.naturalHeight) || 1080)
@@ -320,6 +333,15 @@ const currentCameraName = computed(() => cameras.value.find((camera) => camera.i
 const zoneLabelFontSize = computed(() => Math.max(16, Math.min(64, overlayWidth.value * 0.022)))
 const vertexAnchorRadius = computed(() => Math.max(6, Math.min(28, overlayWidth.value * 0.007)))
 const vertexIndexFontSize = computed(() => Math.max(13, Math.min(42, overlayWidth.value * 0.016)))
+const pagedZones = computed(() => {
+  const start = (zonePage.value - 1) * pageSize
+  return zones.value.slice(start, start + pageSize)
+})
+
+watch(zones, (items) => {
+  const maxPage = Math.max(1, Math.ceil(items.length / pageSize))
+  if (zonePage.value > maxPage) zonePage.value = maxPage
+})
 
 function formatZoneTime(zone) {
   const value = zone?.update_time
@@ -344,6 +366,7 @@ async function loadCameras() {
 async function activateCamera() {
   zones.value = []
   selectedZoneId.value = ''
+  zonePage.value = 1
   drawing.value = false
   drawDialogVisible.value = false
   editDialogVisible.value = false
@@ -656,7 +679,7 @@ onMounted(async () => {
   justify-content: space-between;
   gap: 16px;
   min-height: 60px;
-  margin-bottom: 18px;
+  margin-bottom: 16px;
   padding: 14px;
   border: 1px solid rgba(104, 161, 200, 0.18);
   border-radius: 8px;
@@ -712,7 +735,7 @@ onMounted(async () => {
 .zone-list-section {
   border: 1px solid rgba(104, 161, 200, 0.18);
   border-radius: 8px;
-  background: rgba(11, 29, 48, 0.72);
+  background: #0b1d30;
 }
 .editor-stage {
   position: relative;
@@ -824,19 +847,30 @@ onMounted(async () => {
 }
 .toolbar-note { margin-left: auto; color: #69889a; font-size: 12px; }
 .zone-list-section {
+  margin-top: 16px;
   min-width: 0;
   padding: 0;
   overflow: hidden;
+}
+.zone-toolbar-card {
+  min-height: 82px;
+  display: flex;
+  align-items: center;
+  padding: 18px 20px;
+  border: 1px solid rgba(104, 161, 200, 0.18);
+  border-radius: 8px;
+  background: #0b1d30;
 }
 .list-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  min-height: 72px;
+  width: 100%;
+  min-height: 44px;
   margin: 0;
-  padding: 14px;
-  border-bottom: 1px solid rgba(104, 161, 200, 0.12);
+  padding: 0;
+  border-bottom: 0;
 }
 .list-heading > div:first-child {
   display: flex;
@@ -866,45 +900,54 @@ onMounted(async () => {
 .zone-table {
   width: 100%;
   overflow-x: auto;
+  background: #0a1d30;
 }
 .zone-table-head,
 .zone-table-row {
-  min-width: 980px;
+  min-width: 1190px;
   display: grid;
-  grid-template-columns: minmax(190px, 1.4fr) 130px 128px 124px 168px 140px;
+  grid-template-columns: 300px 160px 110px 130px minmax(190px, 1fr) 190px;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
+  text-align: center;
 }
 .zone-table-head {
-  min-height: 50px;
-  padding: 0 22px;
-  color: #9fb4c5;
-  background: rgba(30, 58, 95, 0.58);
-  font-size: 13px;
-  font-weight: 700;
+  min-height: 48px;
+  padding: 0 20px;
+  color: #a9c7de;
+  background: #15314d;
+  font-size: 14px;
+  font-weight: 800;
 }
 .zone-table-row {
   min-height: 72px;
   margin-top: 0;
-  padding: 12px 22px;
+  padding: 12px 20px;
   color: #d8e7ff;
   border-top: 1px solid rgba(104, 161, 200, 0.1);
-  background: rgba(10, 28, 47, 0.38);
+  background: #092034;
   cursor: pointer;
   transition: background 0.16s ease, box-shadow 0.16s ease;
 }
 .zone-table-row:hover,
 .zone-table-row.selected {
-  background: rgba(30, 74, 112, 0.46);
+  background: #102940;
 }
 .zone-table-row.selected {
   box-shadow: inset 3px 0 0 #48d8ff;
 }
+
+.zone-table-head span:first-child,
+.zone-table-row strong {
+  text-align: left;
+}
+
 .zone-table-row.disabled { opacity: 0.56; }
 .zone-table-row strong {
   min-width: 0;
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 9px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -955,26 +998,29 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 10px;
 }
 .row-edit,
 .row-delete {
   min-width: auto;
-  height: 30px;
-  padding: 0;
-  border: 0;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid;
+  border-radius: 5px;
   font: inherit;
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 800;
   cursor: pointer;
 }
 .row-edit {
-  color: #7dd7ff;
-  background: transparent;
+  border-color: rgba(66, 164, 224, 0.5);
+  color: #d5f0ff;
+  background: rgba(29, 91, 133, 0.7);
 }
 .row-delete {
-  color: #ff9daa;
-  background: transparent;
+  border-color: rgba(226, 88, 109, 0.46);
+  color: #ffb1bd;
+  background: rgba(128, 36, 54, 0.48);
 }
 .row-edit:hover {
   color: #c7f0ff;
@@ -988,6 +1034,34 @@ onMounted(async () => {
   place-items: center;
   color: #789bb4;
   font-size: 13px;
+}
+.list-pagination {
+  min-height: 46px;
+  justify-content: center;
+  border-top: 1px solid rgba(149, 190, 220, 0.1);
+  background: #092034;
+}
+.list-pagination :deep(.btn-prev),
+.list-pagination :deep(.btn-next),
+.list-pagination :deep(.el-pager li) {
+  min-width: 34px;
+  height: 32px;
+  margin: 0 3px;
+  border: 1px solid rgba(70, 145, 190, 0.34);
+  border-radius: 5px;
+  color: #8fb6d1;
+  background: #0b2238;
+  font-weight: 700;
+}
+.list-pagination :deep(.el-pager li.is-active) {
+  border-color: #4ba7e6;
+  color: #fff;
+  background: #3f95d7;
+}
+.list-pagination :deep(.btn-prev:disabled),
+.list-pagination :deep(.btn-next:disabled) {
+  color: rgba(143, 182, 209, 0.35);
+  background: #0b2238;
 }
 .config-panel { min-width: 0; padding: 12px; }
 .panel-heading {

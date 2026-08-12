@@ -12,7 +12,7 @@
       <header class="tab-header">
         <h3>{{ isTemplateView ? '播报模板' : '广播列表' }}</h3>
         <div v-if="!isTemplateView" class="tab-actions">
-          <el-button class="mode-action" @click="showTemplates">查看模板 {{ broadcastTemplates.length }}</el-button>
+          <el-button class="mode-action template-entry" @click="showTemplates">查看模板 {{ broadcastTemplates.length }}</el-button>
           <el-button type="primary" :icon="Plus" @click="openDeviceDialog()">新增设备</el-button>
           <el-radio-group v-model="deviceFilters.status" class="segmented-filter">
             <el-radio-button label="all">全部</el-radio-button>
@@ -21,7 +21,7 @@
           </el-radio-group>
         </div>
         <div v-else class="tab-actions">
-          <el-button class="mode-action" @click="showDevices">返回广播列表</el-button>
+          <el-button class="mode-action back-action" @click="showDevices">返回广播列表</el-button>
           <el-button type="primary" :icon="Plus" @click="openTemplateDialog()">新增模板</el-button>
         </div>
       </header>
@@ -513,6 +513,22 @@ onMounted(refreshCurrent)
   margin-left: 0;
   padding: 0 15px;
 }
+
+.tab-actions :deep(.el-button.template-entry) {
+  min-width: 134px;
+  height: 40px;
+  border-color: rgba(72, 216, 255, .62);
+  color: #061827;
+  background: linear-gradient(110deg, #48d8ff, #70e5d3);
+  box-shadow: 0 0 0 1px rgba(72, 216, 255, .16), 0 10px 22px rgba(16, 130, 170, .22);
+  font-weight: 900;
+}
+
+.tab-actions :deep(.el-button.template-entry:hover) {
+  color: #03121d;
+  border-color: rgba(146, 236, 255, .86);
+  background: linear-gradient(110deg, #7be4ff, #91f0df);
+}
 .resource-control-card,
 .resource-list-card {
   border: 1px solid rgba(96, 151, 191, .18);
@@ -570,10 +586,10 @@ onMounted(refreshCurrent)
   background: #0a1d30;
 }
 .broadcast-list {
-  min-width: 1040px;
+  min-width: 1220px;
 }
 .template-list {
-  min-width: 1220px;
+  min-width: 1400px;
 }
 .broadcast-list-header-row,
 .broadcast-row,
@@ -608,11 +624,11 @@ onMounted(refreshCurrent)
 }
 .broadcast-list-header-row,
 .broadcast-row {
-  grid-template-columns: minmax(220px, 1.1fr) minmax(420px, 1.8fr) 150px 160px;
+  grid-template-columns: 320px minmax(420px, 1fr) 170px 220px;
 }
 .template-list-header-row,
 .template-row {
-  grid-template-columns: minmax(190px, 1fr) minmax(150px, .8fr) 120px minmax(380px, 1.7fr) 120px 160px;
+  grid-template-columns: 240px 180px 120px minmax(420px, 1fr) 130px 190px;
 }
 .col-device,
 .col-device-desc,
@@ -622,7 +638,14 @@ onMounted(refreshCurrent)
 .broadcast-description,
 .template-name-cell {
   min-width: 0;
-  text-align: center;
+  text-align: left;
+}
+
+.broadcast-list-header-row .col-device,
+.broadcast-list-header-row .col-device-desc,
+.template-list-header-row .col-template-name,
+.template-list-header-row .col-template-content {
+  text-align: left;
 }
 .broadcast-name strong,
 .template-name-cell strong {
@@ -679,7 +702,7 @@ onMounted(refreshCurrent)
   background: rgba(122, 30, 48, .34);
 }
 .list-pagination {
-  min-height: 72px;
+  min-height: 46px;
   justify-content: center;
   border-top: 1px solid rgba(149, 190, 220, .10);
   background: #092034;
@@ -687,9 +710,9 @@ onMounted(refreshCurrent)
 .list-pagination :deep(.btn-prev),
 .list-pagination :deep(.btn-next),
 .list-pagination :deep(.el-pager li) {
-  min-width: 44px;
-  height: 44px;
-  margin: 0 4px;
+  min-width: 34px;
+  height: 32px;
+  margin: 0 3px;
   border: 1px solid rgba(70, 145, 190, .34);
   border-radius: 5px;
   color: #8fb6d1;

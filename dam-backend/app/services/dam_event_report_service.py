@@ -217,8 +217,9 @@ class DamEventReportService:
             if str(row.get("status") or "").lower() != "success":
                 continue
             output = row.get("output")
-            text = self.extract_text(output) or self.summarize_structured_output(output)
-            if not text:
+            text = self.summarize_structured_output(output) or self.extract_text(output)
+            text = self.clean_model_output_field(text, allow_empty=True)
+            if not text or self.looks_like_model_thinking(text):
                 continue
             if node_id == "action_report":
                 return {
@@ -434,6 +435,8 @@ class DamEventReportService:
         video_items = self.collect_video_items(workflow_payload, visual, evidence)
         selected_text = self.clean_report_text(selected["text"])
         workflow_insight = self.workflow_insight(workflow_payload, visual, selected_text)
+        workflow_insight["event_name"] = getattr(event, "event_name", None) or instance.summary or "安全事件"
+        workflow_insight["event_code"] = getattr(event, "event_code", None)
         if not image_items and video_items:
             image_items = self.extract_frame_items_from_videos(
                 video_items,
@@ -1060,7 +1063,7 @@ class DamEventReportService:
     ) -> str:
         camera_name = visual.get("camera_name") or getattr(source, "source_name", None) or "现场摄像头"
         event_name = getattr(event, "event_name", None) or instance.summary or "安全事件"
-        suspect_note = self.screening_suspect_note(visual)
+        suspect_note = self.screening_suspect_note(visual, event_name=event_name)
         if suspect_note:
             return self.compact(f"{camera_name}触发{event_name}，{suspect_note}", 180)
         qwen_summary = insight.get("qwen_summary")
@@ -1155,17 +1158,20 @@ class DamEventReportService:
         summary = insight.get("qwen_summary") or "触发时未记录初筛摘要"
         return f"{camera_name}在{self.format_datetime(instance.started_at)}触发{event_name}，初筛摘要为：{summary}。"
 
-    def screening_suspect_note(self, visual: dict[str, Any]) -> str:
+    def screening_suspect_note(self, visual: dict[str, Any], event_name: str = "") -> str:
         screening = visual.get("screening") if isinstance(visual.get("screening"), dict) else {}
         if not screening:
             return ""
         pieces = []
         boat_confidence = self.numeric_value(screening.get("boat_confidence"))
         person_confidence = self.numeric_value(screening.get("person_confidence"))
-        if self.truthy(screening.get("possible_boat")) and not self.truthy(screening.get("boat_present")):
+        event_text = str(event_name or "")
+        person_event = any(token in event_text for token in ("人员", "亲水", "涉水", "滩涂", "入侵"))
+        boat_event = any(token in event_text for token in ("船", "捕鱼", "电鱼", "偷捕"))
+        if boat_event and self.truthy(screening.get("possible_boat")) and not self.truthy(screening.get("boat_present")):
             confidence = f"{boat_confidence * 100:.1f}%" if boat_confidence is not None else "低置信"
             pieces.append(f"初筛标记疑似船只/疑似捕鱼，置信度{confidence}，未达到明确确认阈值，需结合后续模型和现场证据复核")
-        if self.truthy(screening.get("possible_person")) and not self.truthy(screening.get("person_present")):
+        if (person_event or not boat_event) and self.truthy(screening.get("possible_person")) and not self.truthy(screening.get("person_present")):
             confidence = f"{person_confidence * 100:.1f}%" if person_confidence is not None else "低置信"
             pieces.append(f"初筛标记疑似人员，置信度{confidence}，未达到明确确认阈值，需结合后续模型和现场证据复核")
         return "；".join(pieces) + ("。" if pieces else "")
@@ -1417,10 +1423,6 @@ class DamEventReportService:
                 found = self.find_in_value(value.get(child_key), key)
                 if found not in (None, "", []):
                     return found
-            for child in value.values():
-                found = self.find_in_value(child, key)
-                if found not in (None, "", []):
-                    return found
         elif isinstance(value, list):
             for item in value:
                 found = self.find_in_value(item, key)
@@ -1443,18 +1445,35 @@ class DamEventReportService:
         workflow_insight: dict[str, Any],
         cloud_note: str,
     ) -> str:
+        event_profile = self.event_profile(workflow_insight)
+        model_conclusion = self.model_report_conclusion(selected, workflow_insight, event_profile)
+        if model_conclusion:
+            if cloud_note:
+                return self.clean_model_output_field(f"{cloud_note}\n{model_conclusion}")
+            return model_conclusion
+
         if workflow_insight.get("suspected"):
+            event_name = event_profile["event_name"]
+            person_event = event_profile["person_event"]
+            boat_event = event_profile["boat_event"]
             parts = []
-            if self.truthy(workflow_insight.get("possible_boat")) and not self.truthy(workflow_insight.get("boat_present")):
+            if boat_event and self.truthy(workflow_insight.get("possible_boat")) and not self.truthy(workflow_insight.get("boat_present")):
                 parts.append("疑似船只/疑似捕鱼")
-            if self.truthy(workflow_insight.get("possible_person")) and not self.truthy(workflow_insight.get("person_present")):
-                parts.append("疑似人员")
-            target_text = "、".join(parts) or "疑似目标"
-            conclusion = (
-                f"本次事件为低置信{target_text}触发，已完成智能分析、处置联动和证据归档。"
-                "当前证据不足以直接认定为明确违规行为，也不应表述为已排除目标；"
-                "后续应结合连续视频、现场巡查和专有模型复核结果确认最终处置等级。"
-            )
+            if (person_event or not boat_event) and self.truthy(workflow_insight.get("possible_person")) and not self.truthy(workflow_insight.get("person_present")):
+                parts.append("疑似人员亲水/滩涂活动")
+            target_text = "、".join(parts) or event_name or "疑似目标"
+            if person_event and not boat_event:
+                conclusion = (
+                    f"本次事件按{target_text}进入复核，已完成智能分析、处置联动和证据归档。"
+                    "当前画面属于低置信远距离小目标线索，尚不足以认定为明确涉水或违规行为；"
+                    "后续应结合连续视频、现场巡查和专有检测模型结果确认人员位置、活动轨迹及最终处置等级。"
+                )
+            else:
+                conclusion = (
+                    f"本次事件为低置信{target_text}触发，已完成智能分析、处置联动和证据归档。"
+                    "当前证据不足以直接认定为明确违规行为，也不应表述为已排除目标；"
+                    "后续应结合连续视频、现场巡查和专有模型复核结果确认最终处置等级。"
+                )
             if cloud_note:
                 return self.clean_model_output_field(f"{cloud_note}\n{conclusion}")
             return self.clean_model_output_field(conclusion)
@@ -1496,6 +1515,55 @@ class DamEventReportService:
             return self.clean_model_output_field(f"{cloud_note}\n{conclusion}")
         return self.clean_model_output_field(conclusion)
 
+    def model_report_conclusion(
+        self,
+        selected: dict[str, Any],
+        workflow_insight: dict[str, Any],
+        event_profile: dict[str, Any],
+    ) -> str:
+        candidates = [
+            self.find_in_selected(selected, "conclusion"),
+            self.find_in_selected(selected, "handling_conclusion"),
+            self.find_in_selected(selected, "final_conclusion"),
+            workflow_insight.get("qwen4b_conclusion"),
+        ]
+        for candidate in candidates:
+            cleaned = self.clean_model_output_field(candidate, allow_empty=True)
+            if not self.valid_model_conclusion(cleaned, event_profile):
+                continue
+            return cleaned
+        return ""
+
+    def valid_model_conclusion(self, conclusion: str, event_profile: dict[str, Any]) -> bool:
+        text = self.valid_report_text(conclusion)
+        if not text:
+            return False
+        if self.looks_truncated(text):
+            return False
+        if event_profile.get("person_event"):
+            conflict_terms = ("船只", "船舶", "小船", "捕鱼", "电鱼", "偷捕", "非法捕捞", "疑似船")
+            if any(term in text for term in conflict_terms):
+                return False
+        if event_profile.get("boat_event"):
+            conflict_terms = ("人员亲水", "滩涂游玩", "人员涉水", "疑似人员")
+            if any(term in text for term in conflict_terms):
+                return False
+        return True
+
+    @staticmethod
+    def event_profile(workflow_insight: dict[str, Any]) -> dict[str, Any]:
+        event_name = str(workflow_insight.get("event_name") or "")
+        event_code = str(workflow_insight.get("event_code") or "")
+        event_text = f"{event_name} {event_code}"
+        person_event = any(token in event_text for token in ("人员", "亲水", "涉水", "滩涂", "入侵", "PERSON_"))
+        boat_event = any(token in event_text for token in ("船", "捕鱼", "电鱼", "偷捕", "BOAT_", "ILLEGAL_FISHING"))
+        return {
+            "event_name": event_name,
+            "event_code": event_code,
+            "person_event": person_event,
+            "boat_event": boat_event,
+        }
+
     def clean_report_text(self, text: str) -> str:
         text = str(text or "").strip()
         text = text.replace("✅", "")
@@ -1516,6 +1584,11 @@ class DamEventReportService:
         text = str(value or "").strip()
         text = self.strip_model_thinking(text)
         text = re.sub(r"^\s*(结论|处置结论|最终结论)\s*[:：]\s*", "", text)
+        text = re.sub(r"(?<![A-Za-z])medium\s*或\s*high(?![A-Za-z])", "中风险或高风险", text, flags=re.IGNORECASE)
+        text = re.sub(r"(?<![A-Za-z])low\s*或\s*medium(?![A-Za-z])", "低风险或中风险", text, flags=re.IGNORECASE)
+        text = re.sub(r"(?<![A-Za-z])high(?![A-Za-z])", "高风险", text, flags=re.IGNORECASE)
+        text = re.sub(r"(?<![A-Za-z])medium(?![A-Za-z])", "中风险", text, flags=re.IGNORECASE)
+        text = re.sub(r"(?<![A-Za-z])low(?![A-Za-z])", "低风险", text, flags=re.IGNORECASE)
         text = re.sub(r"\s+", " ", text).strip()
         if self.looks_like_model_thinking(text):
             text = ""
@@ -1773,9 +1846,10 @@ class DamEventReportService:
         lowered = value.lower()
         return (
             value.startswith(("好的，我现在", "首先，我", "<think>"))
-            or lowered.startswith(("thinking process", "reasoning:", "analysis process"))
+            or lowered.startswith(("thinking process", "reasoning:", "analysis process", "the user wants", "we need to", "i need to"))
             or "thinking process:" in lowered[:80]
             or "analyze the request" in lowered[:160]
+            or "the input data includes" in lowered[:220]
             or "</think>" in value
             or "需要处理用户" in value[:120]
             or "生成一个关于" in value[:160]

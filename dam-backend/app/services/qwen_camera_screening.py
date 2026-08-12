@@ -27,55 +27,14 @@ from app.services.minio_service import minio_service
 from app.services.vision_detector import vision_detector
 
 
-SYSTEM_PROMPT = """你是库坝与河道摄像头安全初筛模型。
-
-你只负责初筛，不做最终结论。请根据多张连续关键帧判断是否存在下列场景：
-1. 自然灾害：泥石流、滑坡、洪水、地震；
-2. 人员相关：人员出现/入侵、滩涂游玩/亲水/涉水；
-3. 船只或捕鱼相关：船只出现、疑似电鱼捕鱼/偷捕。
-
-必须只输出 JSON，不要输出 Markdown 或解释文字。JSON 字段必须完整：
-{
-  "scene": {
-    "mudslide_detected": 0,
-    "landslide_detected": 0,
-    "earthquake_detected": 0,
-    "flood_detected": 0,
-    "person_present": 0,
-    "boat_present": 0
-  },
-  "confidence": {
-    "mudslide_confidence": 0.0,
-    "landslide_confidence": 0.0,
-    "earthquake_confidence": 0.0,
-    "flood_confidence": 0.0,
-    "person_confidence": 0.0,
-    "boat_confidence": 0.0
-  },
-  "risk_level": "LOW",
-  "summary": "一句话概括",
-  "evidence": ["判断依据"],
-  "uncertainties": ["不确定因素"]
-}
-
-规则：
-- detected 字段只能是 0 或 1。
-- target_variables 之间互斥，只允许最主要、证据最充分的一类输出 1，其余全部输出 0。
-- 如果画面主要是洪水/大面积积水/水流上涨，不要同时输出泥石流或滑坡。
-- confidence 范围是 0 到 1。
-- 人员/船只规则：画面清晰、明确看到人员或船只时，detected 输出 1，confidence 给 0.65 以上。
-  如果画质差、距离远、夜间红外、目标很小或目标被遮挡，只能确认存在疑似迹象而无法确认时，
-  detected 输出 0，但请给出 0.3 ~ 0.6 的 confidence（不要直接给 0），并把不确定因素写入 uncertainties。
-  系统会根据该置信度自动标记 possible_person/possible_boat 疑似位，你无需输出这两个字段。
-- 夜间电鱼/偷捕弱特征：小船或漂浮目标在水面移动、船后尾迹/扰动水纹、靠近水面的异常强光/探照灯、
-  凌晨或夜间河面活动，即使目标小或模糊，也应作为船只/捕鱼疑似线索处理：
-  boat_present 输出 0，boat_confidence 给 0.35 ~ 0.60，并在 evidence 中说明。
-- 特别注意夜间河面小目标：如果连续帧中出现水面移动暗斑、细长漂浮目标、尾迹/扰动水纹，
-  或靠近水面的异常强光，即使看不清船体，也不允许把 boat_confidence 写成 0；
-  应按“疑似船只/疑似捕鱼”输出 boat_present=0、boat_confidence=0.35~0.60，并在 uncertainties 中说明待复核确认。
-- 自然灾害（泥石流/滑坡/洪水/地震）规则不变：看不清或证据不足时输出 0，不要用低置信度硬凑。
-- 地震不能只凭普通画面轻易判定，除非画面有明显震动破坏迹象。
-"""
+SYSTEM_PROMPT = """你是库坝/河道摄像头初筛模型，只做疑似筛查，不做最终结论。只输出 JSON：
+{"scene":{"mudslide_detected":0,"landslide_detected":0,"earthquake_detected":0,"flood_detected":0,"person_present":0,"boat_present":0},"confidence":{"mudslide_confidence":0,"landslide_confidence":0,"earthquake_confidence":0,"flood_confidence":0,"person_confidence":0,"boat_confidence":0},"risk_level":"LOW","summary":"一句话","evidence":["依据"],"uncertainties":["不确定"]}
+规则：detected 只能 0/1；只允许最主要一类为 1；confidence 为 0~1。
+清晰看到人员/船只时对应 present=1 且 confidence>=0.65。
+远距离、画质差、小目标、遮挡但有疑似迹象时，present=0，但 confidence 给 0.35~0.60，不要写 0，说明待复核。
+滩涂/岸坡/河滩/消落带/亲水平台上若有连续点状目标、小人影、成排活动点或缓慢移动目标，按疑似人员/滩涂游玩处理：person_present=0，person_confidence=0.35~0.60。
+夜间水面小船、漂浮目标、尾迹、水面强光按疑似船只/电鱼处理：boat_present=0，boat_confidence=0.35~0.60。
+自然灾害证据不足时输出 0；地震需明显震动破坏迹象。"""
 
 CAMERA_SCREENING_ACTOR_NAME = "摄像头初筛专家"
 CAMERA_SCREENING_STAGE_CODE = "camera_screening"
@@ -601,20 +560,6 @@ class QwenCameraScreeningService:
                     "image_url": {"url": f"data:image/jpeg;base64,{encoded}"},
                 })
 
-        prompt = {
-            "camera_id": camera_id,
-            "image_count": len(frames),
-            "window_seconds": window_seconds,
-            "minio_image_urls": image_urls,
-            "target_variables": [
-                "mudslide_detected",
-                "landslide_detected",
-                "earthquake_detected",
-                "flood_detected",
-                "person_present",
-                "boat_present",
-            ],
-        }
         prompt_config = await asyncio.to_thread(self._get_camera_screening_prompt)
         messages = [
             {"role": "system", "content": prompt_config["prompt"]},
@@ -623,10 +568,7 @@ class QwenCameraScreeningService:
                 "content": image_content + [
                     {
                         "type": "text",
-                        "text": (
-                            "请根据这些连续关键帧输出初筛 JSON。上下文："
-                            + json.dumps(prompt, ensure_ascii=False)
-                        ),
+                        "text": f"连续关键帧共{len(frames)}张，时间窗约{window_seconds:.1f}秒。请只输出初筛JSON。",
                     }
                 ],
             },
@@ -745,6 +687,7 @@ class QwenCameraScreeningService:
                     confidence[key] = max(0.0, min(float(confidence.get(key, 0.0) or 0.0), 1.0))
                 except (TypeError, ValueError):
                     confidence[key] = 0.0
+            self._apply_person_suspect_text_fallback(data, confidence)
             for scene_key, confidence_key in zip(scene_keys, confidence_keys):
                 if confidence[confidence_key] < min_confidence:
                     scene[scene_key] = 0
@@ -762,6 +705,7 @@ class QwenCameraScreeningService:
                     scene[possible_key] = 1
                 else:
                     scene[possible_key] = 0
+            self._suppress_secondary_person_boat_suspect(data, scene, confidence)
             data["risk_level"] = str(data.get("risk_level") or "LOW").upper()
             if data["risk_level"] not in {"LOW", "MEDIUM", "HIGH"}:
                 data["risk_level"] = "LOW"
@@ -786,6 +730,90 @@ class QwenCameraScreeningService:
         except Exception as exc:
             logger.warning(f"Qwen摄像头初筛JSON解析失败: {exc}, content={content[:200]}")
             return None
+
+    @staticmethod
+    def _apply_person_suspect_text_fallback(data: Dict[str, Any], confidence: Dict[str, Any]) -> None:
+        """Use Qwen's own uncertainty text to preserve tiny tidal-flat person cues."""
+        current = float(confidence.get("person_confidence", 0.0) or 0.0)
+        if current > 0:
+            return
+        text = " ".join(
+            str(item)
+            for item in [
+                data.get("summary"),
+                *(data.get("evidence") or []),
+                *(data.get("uncertainties") or []),
+            ]
+            if item is not None
+        )
+        terrain_hit = any(token in text for token in ("滩涂", "河滩", "岸坡", "消落带", "亲水平台", "堤坡"))
+        weak_target_hit = any(
+            token in text
+            for token in (
+                "目标位置较远",
+                "距离较远",
+                "目标较远",
+                "目标很小",
+                "小目标",
+                "人影",
+                "活动点",
+                "远景细节",
+                "细节可能受遮挡",
+                "难以确认是否存在人员",
+            )
+        )
+        if terrain_hit and weak_target_hit:
+            confidence["person_confidence"] = max(current, settings.QWEN_CAMERA_SCREENING_SUSPECT_MIN_CONFIDENCE + 0.05)
+            evidence = data.setdefault("evidence", [])
+            if isinstance(evidence, list):
+                evidence.append("画面为滩涂/岸坡场景且存在远距离小目标不确定描述，按疑似人员线索进入复核")
+            uncertainties = data.setdefault("uncertainties", [])
+            if isinstance(uncertainties, list):
+                uncertainties.append("人员目标距离远、尺度小，需由后续专有模型和4B/35B复核确认")
+
+    @staticmethod
+    def _suppress_secondary_person_boat_suspect(
+        data: Dict[str, Any],
+        scene: Dict[str, Any],
+        confidence: Dict[str, Any],
+    ) -> None:
+        text = " ".join(
+            str(item)
+            for item in [
+                data.get("summary"),
+                *(data.get("evidence") or []),
+                *(data.get("uncertainties") or []),
+            ]
+            if item is not None
+        )
+        boat_positive_terms = (
+            "捕鱼",
+            "电鱼",
+            "漂浮目标",
+            "尾迹",
+            "水面强光",
+            "小船",
+            "船只出现",
+            "船只活动",
+            "船只停留",
+            "船只闯入",
+            "船只偷捕",
+            "船后",
+        )
+        boat_negative_terms = ("无船", "无船只", "无人员或船只", "未见船", "没有船")
+        boat_evidence = any(term in text for term in boat_positive_terms) and not any(
+            term in text for term in boat_negative_terms
+        )
+        person_score = float(confidence.get("person_confidence", 0.0) or 0.0)
+        boat_score = float(confidence.get("boat_confidence", 0.0) or 0.0)
+        if (
+            int(scene.get("possible_person") or 0) == 1
+            and int(scene.get("possible_boat") or 0) == 1
+            and person_score >= boat_score
+            and not boat_evidence
+        ):
+            scene["possible_boat"] = 0
+            confidence["boat_confidence"] = 0.0
 
     @staticmethod
     def _enforce_single_scene(scene: Dict[str, Any], confidence: Dict[str, Any]) -> None:

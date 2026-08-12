@@ -184,6 +184,7 @@ class VisionDetector:
         raw_response: str = "",
     ):
         """Update all ECA-facing variables produced by Qwen camera screening."""
+        screening = self._normalize_screening_for_eca(screening or {})
         scene = screening.get("scene") or {}
         confidence = screening.get("confidence") or {}
         mapping = {
@@ -257,6 +258,63 @@ class VisionDetector:
             f"Qwen摄像头初筛结果更新: camera={camera_id}, "
             f"detected={batch_result['detected']}, confidence={batch_result['confidence']:.2f}"
         )
+
+    @staticmethod
+    def _normalize_screening_for_eca(screening: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(screening or {})
+        scene = dict(normalized.get("scene") or {})
+        confidence = dict(normalized.get("confidence") or {})
+        normalized["scene"] = scene
+        normalized["confidence"] = confidence
+
+        text = " ".join(
+            str(item)
+            for item in [
+                normalized.get("summary"),
+                *(normalized.get("evidence") or []),
+                *(normalized.get("uncertainties") or []),
+            ]
+            if item is not None
+        )
+        boat_positive_terms = (
+            "捕鱼",
+            "电鱼",
+            "漂浮目标",
+            "尾迹",
+            "水面强光",
+            "小船",
+            "船只出现",
+            "船只活动",
+            "船只停留",
+            "船只闯入",
+            "船只偷捕",
+            "船后",
+        )
+        boat_negative_terms = ("无船", "无船只", "无人员或船只", "未见船", "没有船")
+        boat_evidence = any(term in text for term in boat_positive_terms) and not any(
+            term in text for term in boat_negative_terms
+        )
+        try:
+            person_score = float(confidence.get("person_confidence", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            person_score = 0.0
+        try:
+            boat_score = float(confidence.get("boat_confidence", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            boat_score = 0.0
+
+        if (
+            int(scene.get("possible_person") or 0) == 1
+            and int(scene.get("boat_present") or 0) != 1
+            and boat_score <= max(person_score, 0.35)
+            and not boat_evidence
+        ):
+            scene["possible_boat"] = 0
+            confidence["boat_confidence"] = 0.0
+
+        if int(scene.get("possible_boat") or 0) != 1:
+            confidence["boat_confidence"] = 0.0 if int(scene.get("boat_present") or 0) != 1 else confidence.get("boat_confidence", 0.0)
+        return normalized
 
     def get_latest_result(self, camera_id: str = None, detection_type: str = None) -> Dict[str, Any]:
         """

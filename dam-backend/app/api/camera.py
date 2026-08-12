@@ -425,6 +425,7 @@ async def _wait_latest_camera_event(
     since: dt.datetime,
     *,
     timeout_seconds: float = 10.0,
+    event_codes: Optional[set[str]] = None,
 ) -> Optional[dict]:
     if not str(camera_id).isdigit():
         return None
@@ -441,7 +442,7 @@ async def _wait_latest_camera_event(
     while time.time() < deadline:
         db.rollback()
         db.expire_all()
-        row = (
+        query = (
             db.query(SafetyEventInstance, EventLibrary)
             .join(EventLibrary, EventLibrary.id == SafetyEventInstance.current_event_id)
             .filter(
@@ -453,9 +454,10 @@ async def _wait_latest_camera_event(
                     SafetyEventInstance.last_observed_at >= since,
                 ),
             )
-            .order_by(SafetyEventInstance.id.desc())
-            .first()
         )
+        if event_codes:
+            query = query.filter(EventLibrary.event_code.in_(list(event_codes)))
+        row = query.order_by(SafetyEventInstance.id.desc()).first()
         if row:
             instance, event = row
             return {
@@ -469,6 +471,28 @@ async def _wait_latest_camera_event(
             }
         await asyncio.sleep(0.2)
     return None
+
+
+def _screening_event_codes(result: dict) -> set[str]:
+    scene = result.get("scene") or {}
+    codes: set[str] = set()
+    if int(scene.get("mudslide_detected") or 0) == 1:
+        codes.add("AI_MUDSLIDE")
+    if int(scene.get("landslide_detected") or 0) == 1:
+        codes.add("AI_LANDSLIDE")
+    if int(scene.get("earthquake_detected") or 0) == 1:
+        codes.add("AI_EARTHQUAKE")
+    if int(scene.get("flood_detected") or 0) == 1:
+        codes.add("AI_FLOOD")
+    if int(scene.get("person_present") or 0) == 1:
+        codes.update({"PERSON_INTRUSION", "PERSON_WATERFRONT"})
+    if int(scene.get("possible_person") or 0) == 1:
+        codes.add("PERSON_WATERFRONT")
+    if int(scene.get("boat_present") or 0) == 1:
+        codes.update({"BOAT_INTRUSION", "BOAT_STAY"})
+    if int(scene.get("possible_boat") or 0) == 1:
+        codes.add("BOAT_STAY")
+    return codes
 
 
 @router.get("/media/minio-proxy", summary="代理读取 MinIO 媒体对象")
@@ -1122,7 +1146,12 @@ async def simulate_camera_screening(
     )
     if result is None:
         raise HTTPException(status_code=502, detail="Qwen 初筛未返回有效 JSON")
-    event_ref = await _wait_latest_camera_event(db, str(row.id), triggered_since)
+    event_ref = await _wait_latest_camera_event(
+        db,
+        str(row.id),
+        triggered_since,
+        event_codes=_screening_event_codes(result),
+    )
     return DetectResponse(
         code=200,
         data={**result, "eca_dispatched": True, **(event_ref or {})},
@@ -1183,7 +1212,12 @@ async def simulate_camera_screening_video(
 
     if result is None:
         raise HTTPException(status_code=502, detail="Qwen 视频初筛未返回有效 JSON")
-    event_ref = await _wait_latest_camera_event(db, str(row.id), triggered_since)
+    event_ref = await _wait_latest_camera_event(
+        db,
+        str(row.id),
+        triggered_since,
+        event_codes=_screening_event_codes(result),
+    )
     return DetectResponse(
         code=200,
         data={**result, "eca_dispatched": True, **(event_ref or {})},

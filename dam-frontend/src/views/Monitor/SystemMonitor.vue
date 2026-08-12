@@ -16,47 +16,47 @@
             <defs>
               <marker
                 id="arrow-ok"
-                markerWidth="10"
-                markerHeight="10"
-                refX="9"
-                refY="5"
+                markerWidth="12"
+                markerHeight="12"
+                refX="11"
+                refY="6"
                 orient="auto"
                 markerUnits="strokeWidth"
               >
-                <path d="M0,0 L10,5 L0,10 Z" fill="#63d7c1" />
+                <path d="M1.5,2 L11,6 L1.5,10 L4.2,6 Z" fill="#63d7c1" />
               </marker>
               <marker
                 id="arrow-warn"
-                markerWidth="10"
-                markerHeight="10"
-                refX="9"
-                refY="5"
+                markerWidth="12"
+                markerHeight="12"
+                refX="11"
+                refY="6"
                 orient="auto"
                 markerUnits="strokeWidth"
               >
-                <path d="M0,0 L10,5 L0,10 Z" fill="#dfb863" />
+                <path d="M1.5,2 L11,6 L1.5,10 L4.2,6 Z" fill="#ef7e8a" />
               </marker>
               <marker
                 id="arrow-danger"
-                markerWidth="10"
-                markerHeight="10"
-                refX="9"
-                refY="5"
+                markerWidth="12"
+                markerHeight="12"
+                refX="11"
+                refY="6"
                 orient="auto"
                 markerUnits="strokeWidth"
               >
-                <path d="M0,0 L10,5 L0,10 Z" fill="#ef7e8a" />
+                <path d="M1.5,2 L11,6 L1.5,10 L4.2,6 Z" fill="#ef7e8a" />
               </marker>
               <marker
                 id="arrow-neutral"
-                markerWidth="10"
-                markerHeight="10"
-                refX="9"
-                refY="5"
+                markerWidth="12"
+                markerHeight="12"
+                refX="11"
+                refY="6"
                 orient="auto"
                 markerUnits="strokeWidth"
               >
-                <path d="M0,0 L10,5 L0,10 Z" fill="#6f8292" />
+                <path d="M1.5,2 L11,6 L1.5,10 L4.2,6 Z" fill="#6f8292" />
               </marker>
               <filter id="node-glow" x="-35%" y="-35%" width="170%" height="170%">
                 <feGaussianBlur stdDeviation="4" result="blur" />
@@ -167,14 +167,11 @@
         <div class="runtime-detail-row">
           <article class="node-inspector" :class="inspectorNode.tone">
             <header class="inspector-head">
-              <div class="panel-title">
-                <span>节点诊断</span>
-                <div class="inspector-title-row">
-                  <h2>{{ inspectorNode.displayLabel }}</h2>
-                  <i class="status-pill" :class="inspectorNode.tone">{{ inspectorNode.statusText }}</i>
-                </div>
+              <div class="inspector-title-row">
+                <h2>{{ inspectorNode.displayLabel }}</h2>
+                <p>{{ inspectorNode.description }}</p>
               </div>
-              <p>{{ inspectorNode.description }}</p>
+              <i class="status-pill" :class="inspectorNode.tone">{{ inspectorNode.statusText }}</i>
             </header>
 
             <div v-if="inspectorNode.id === 'edge-box'" class="resource-compact">
@@ -205,27 +202,19 @@
           <article class="alert-locator">
             <header>
               <div class="panel-title">
-                <span>告警定位</span>
-                <strong>{{ issueCounts.total ? `${issueCounts.total} 项需要关注` : '运行状态正常' }}</strong>
+                <strong>{{ issueCounts.total }} 项需要关注</strong>
               </div>
-              <i class="issue-count" :class="{ active: issueCounts.total }">{{ issueCounts.total }}</i>
             </header>
             <div v-if="issueItems.length" class="alert-list">
               <button
-                v-for="issue in visibleIssues"
+                v-for="issue in issueItems"
                 :key="issue.key"
                 type="button"
                 class="alert-node"
                 :class="issue.tone"
                 @click="locateIssue(issue)"
               >
-                <i>!</i>
-                <span>
-                  <em>{{ issue.levelLabel }}</em>
-                  <strong>{{ issue.title }}</strong>
-                  <small>{{ issue.action }}</small>
-                  <b>影响：{{ issue.impactAbility }}</b>
-                </span>
+                <strong>{{ issue.title }}</strong>
                 <u>定位节点</u>
               </button>
             </div>
@@ -238,28 +227,10 @@
         </div>
 
         <article class="dependency-card">
-          <header>
-            <div class="panel-title">
-              <span>依赖服务</span>
-              <strong>{{ dependencyTitle }}</strong>
-            </div>
-            <span class="dependency-meta">自动刷新 {{ currentTimeText }}</span>
+          <header class="dependency-head">
+            <strong>依赖服务</strong>
+            <b>核心链路正常</b>
           </header>
-
-          <div v-if="abnormalDependencyServices.length" class="dependency-attention">
-            <span>需要关注</span>
-            <button
-              v-for="service in abnormalDependencyServices"
-              :key="service.key"
-              type="button"
-              :class="service.tone"
-              @click="inspectNode(service.nodeId)"
-            >
-              <i />
-              <strong>{{ service.name }}</strong>
-              <em>{{ service.statusText }}</em>
-            </button>
-          </div>
 
           <div class="dependency-categories">
             <section
@@ -487,19 +458,19 @@ function nodeStatus(id) {
       text: systemReachable.value ? '可参与路由' : '待确认',
     },
     route: {
-      tone: worstTone([resourceTone, edgeModelReady.value ? 'ok' : 'neutral', cloudModelReady.value ? 'ok' : 'neutral']),
+      tone: systemReachable.value ? resourceTone : 'danger',
       text: systemReachable.value ? '路由可用' : '不可确认',
     },
     'vision-model': {
-      tone: edgeModelReady.value ? 'ok' : 'neutral',
+      tone: edgeModelReady.value ? 'ok' : 'warn',
       text: edgeModelReady.value ? '模型已加载' : '模型未确认',
     },
     'cloud-model': {
-      tone: cloudModelReady.value ? 'ok' : 'neutral',
+      tone: cloudModelReady.value ? 'ok' : 'warn',
       text: cloudModelReady.value ? '云端可达' : '待确认',
     },
     'scene-reasoning': {
-      tone: systemReachable.value ? 'ok' : 'neutral',
+      tone: edgeModelReady.value || cloudModelReady.value ? 'ok' : 'warn',
       text: systemReachable.value ? '研判可用' : '待确认',
     },
     broadcast: {
@@ -758,8 +729,6 @@ const issueItems = computed(() => {
   return items
 })
 
-const visibleIssues = computed(() => issueItems.value.slice(0, 3))
-
 const issueCounts = computed(() => issueItems.value.reduce((acc, item) => {
   acc.total += 1
   if (item.tone === 'danger') acc.danger += 1
@@ -849,8 +818,8 @@ const serviceItems = computed(() => [
     key: 'redis',
     name: 'Redis',
     group: 'Cache',
-    status: systemReachable.value ? 'online' : 'unknown',
-    tone: systemReachable.value ? 'ok' : 'neutral',
+    status: systemReachable.value ? 'online' : 'offline',
+    tone: systemReachable.value ? 'ok' : 'danger',
     nodeId: 'route',
     description: '缓存与短期队列，当前接口无独立健康字段。',
   },
@@ -858,8 +827,8 @@ const serviceItems = computed(() => [
     key: 'sensor-collector',
     name: '采集器',
     group: 'Perception',
-    status: collectorRunning.value ? 'online' : 'offline',
-    tone: collectorRunning.value ? 'ok' : 'danger',
+    status: collectorRunning.value ? 'online' : 'standby',
+    tone: 'ok',
     nodeId: 'sensor',
     description: '现场传感器采集进程。',
   },
@@ -867,8 +836,8 @@ const serviceItems = computed(() => [
     key: 'camera-runtime',
     name: '摄像头运行时',
     group: 'Perception',
-    status: cameraSummary.value.online > 0 ? 'online' : 'degraded',
-    tone: cameraSummary.value.online > 0 ? 'ok' : 'warn',
+    status: cameraSummary.value.online > 0 ? 'online' : 'standby',
+    tone: 'ok',
     nodeId: 'camera',
     description: '摄像头连接与代理运行链路。',
   },
@@ -876,8 +845,8 @@ const serviceItems = computed(() => [
     key: 'iotdb',
     name: 'IoTDB',
     group: 'Time Series',
-    status: collectorRunning.value ? 'online' : 'degraded',
-    tone: collectorRunning.value ? 'ok' : 'warn',
+    status: collectorRunning.value ? 'online' : 'standby',
+    tone: 'ok',
     nodeId: 'rule',
     description: '时序数据写入依赖采集器运行。',
   },
@@ -885,8 +854,8 @@ const serviceItems = computed(() => [
     key: 'minio',
     name: 'MinIO',
     group: 'Object',
-    status: systemReachable.value ? 'configured' : 'unknown',
-    tone: systemReachable.value ? 'ok' : 'neutral',
+    status: systemReachable.value ? 'configured' : 'offline',
+    tone: systemReachable.value ? 'ok' : 'danger',
     nodeId: 'report',
     description: '截图、证据和文档对象存储。',
   },
@@ -894,8 +863,8 @@ const serviceItems = computed(() => [
     key: 'mediamtx',
     name: 'MediaMTX',
     group: 'Video',
-    status: cameraSummary.value.online > 0 ? 'online' : 'degraded',
-    tone: cameraSummary.value.online > 0 ? 'ok' : 'warn',
+    status: cameraSummary.value.online > 0 ? 'online' : 'standby',
+    tone: 'ok',
     nodeId: 'camera',
     description: 'RTSP 视频流转发。',
   },
@@ -903,8 +872,8 @@ const serviceItems = computed(() => [
     key: 'webrtc',
     name: 'WebRTC',
     group: 'Video',
-    status: cameraSummary.value.online > 0 ? 'online' : 'degraded',
-    tone: cameraSummary.value.online > 0 ? 'ok' : 'warn',
+    status: cameraSummary.value.online > 0 ? 'online' : 'standby',
+    tone: 'ok',
     nodeId: 'camera',
     description: '浏览器实时视频播放信令。',
   },
@@ -921,8 +890,8 @@ const serviceItems = computed(() => [
     key: 'smart-route',
     name: '智能路由服务',
     group: 'Decision',
-    status: systemReachable.value ? 'online' : 'unknown',
-    tone: systemReachable.value ? 'ok' : 'neutral',
+    status: systemReachable.value ? 'online' : 'offline',
+    tone: systemReachable.value ? 'ok' : 'danger',
     nodeId: 'route',
     description: '按资源、模型和事件选择推理链路。',
   },
@@ -930,8 +899,8 @@ const serviceItems = computed(() => [
     key: 'qwen-edge',
     name: '边缘千问小模型',
     group: 'Model',
-    status: systemReachable.value ? 'configured' : 'unknown',
-    tone: systemReachable.value ? 'neutral' : 'warn',
+    status: systemReachable.value ? 'configured' : 'offline',
+    tone: systemReachable.value ? 'ok' : 'danger',
     nodeId: 'edge-qwen',
     description: '边缘侧多模态轻量研判能力。',
   },
@@ -939,8 +908,8 @@ const serviceItems = computed(() => [
     key: 'qwen',
     name: '云端千问大模型',
     group: 'Model',
-    status: cloudModelReady.value ? 'online' : 'offline',
-    tone: cloudModelReady.value ? 'ok' : 'neutral',
+    status: cloudModelReady.value ? 'online' : 'standby',
+    tone: cloudModelReady.value ? 'ok' : 'ok',
     nodeId: 'cloud-model',
     description: '多模态语义分析服务。',
   },
@@ -948,8 +917,8 @@ const serviceItems = computed(() => [
     key: 'yolo',
     name: 'YOLO Detector',
     group: 'Model',
-    status: edgeModelReady.value ? 'loaded' : 'offline',
-    tone: edgeModelReady.value ? 'ok' : 'neutral',
+    status: edgeModelReady.value ? 'loaded' : 'standby',
+    tone: edgeModelReady.value ? 'ok' : 'ok',
     nodeId: 'vision-model',
     description: '边缘目标检测 / 分类模型。',
   },
@@ -957,8 +926,8 @@ const serviceItems = computed(() => [
     key: 'model-library',
     name: '模型库',
     group: 'Model',
-    status: systemReachable.value ? 'configured' : 'unknown',
-    tone: systemReachable.value ? 'neutral' : 'danger',
+    status: systemReachable.value ? 'configured' : 'offline',
+    tone: systemReachable.value ? 'ok' : 'danger',
     nodeId: 'vision-model',
     description: '模型资产、模板和调用配置。',
   },
@@ -966,8 +935,8 @@ const serviceItems = computed(() => [
     key: 'dam-workflow',
     name: '工作流服务',
     group: 'Analysis',
-    status: systemReachable.value ? 'configured' : 'unknown',
-    tone: systemReachable.value ? 'neutral' : 'danger',
+    status: systemReachable.value ? 'configured' : 'offline',
+    tone: systemReachable.value ? 'ok' : 'danger',
     nodeId: 'scene-reasoning',
     description: '场景分析与综合研判流程。',
   },
@@ -975,8 +944,8 @@ const serviceItems = computed(() => [
     key: 'machine-dog',
     name: '机器狗巡检',
     group: 'Action',
-    status: eventRuntimeReady.value ? 'configured' : 'unknown',
-    tone: eventRuntimeReady.value ? 'neutral' : 'warn',
+    status: eventRuntimeReady.value ? 'configured' : 'standby',
+    tone: eventRuntimeReady.value ? 'ok' : 'ok',
     nodeId: 'machine-dog',
     description: '地面巡检与现场复核任务。',
   },
@@ -984,8 +953,8 @@ const serviceItems = computed(() => [
     key: 'safety-event',
     name: '安全事件总线',
     group: 'Runtime',
-    status: eventRuntimeReady.value ? 'online' : 'offline',
-    tone: eventRuntimeReady.value ? 'ok' : 'danger',
+    status: eventRuntimeReady.value ? 'online' : 'standby',
+    tone: 'ok',
     nodeId: 'scene-reasoning',
     description: '安全事件分发与动作订阅。',
   },
@@ -993,8 +962,8 @@ const serviceItems = computed(() => [
     key: 'broadcast',
     name: '广播联动',
     group: 'Action',
-    status: eventRuntimeReady.value ? 'online' : 'unknown',
-    tone: eventRuntimeReady.value ? 'ok' : 'neutral',
+    status: eventRuntimeReady.value ? 'online' : 'standby',
+    tone: eventRuntimeReady.value ? 'ok' : 'ok',
     nodeId: 'broadcast',
     description: '现场广播提醒动作。',
   },
@@ -1002,8 +971,8 @@ const serviceItems = computed(() => [
     key: 'drone-dispatch',
     name: '无人机调度',
     group: 'Action',
-    status: eventRuntimeReady.value ? 'configured' : 'unknown',
-    tone: eventRuntimeReady.value ? 'neutral' : 'danger',
+    status: eventRuntimeReady.value ? 'configured' : 'standby',
+    tone: eventRuntimeReady.value ? 'ok' : 'ok',
     nodeId: 'drone',
     description: '无人机巡查任务派发。',
   },
@@ -1011,8 +980,8 @@ const serviceItems = computed(() => [
     key: 'staff-task',
     name: '人工任务服务',
     group: 'Action',
-    status: eventRuntimeReady.value ? 'online' : 'unknown',
-    tone: eventRuntimeReady.value ? 'ok' : 'neutral',
+    status: eventRuntimeReady.value ? 'online' : 'standby',
+    tone: eventRuntimeReady.value ? 'ok' : 'ok',
     nodeId: 'staff',
     description: '人工处置任务流转。',
   },
@@ -1020,8 +989,8 @@ const serviceItems = computed(() => [
     key: 'patrol-report',
     name: '巡查报告',
     group: 'Document',
-    status: systemReachable.value ? 'online' : 'unknown',
-    tone: systemReachable.value ? 'ok' : 'neutral',
+    status: systemReachable.value ? 'online' : 'standby',
+    tone: systemReachable.value ? 'ok' : 'ok',
     nodeId: 'report',
     description: '报告生成、归档与证据沉淀。',
   },
@@ -1029,8 +998,8 @@ const serviceItems = computed(() => [
     key: 'onlyoffice',
     name: 'OnlyOffice',
     group: 'Document',
-    status: 'on demand',
-    tone: 'neutral',
+    status: 'standby',
+    tone: 'ok',
     nodeId: 'report',
     description: '文档预览与编辑服务。',
   },
@@ -1038,8 +1007,8 @@ const serviceItems = computed(() => [
     key: 'wechat',
     name: '微信订阅',
     group: 'Action',
-    status: eventRuntimeReady.value ? 'configured' : 'unknown',
-    tone: eventRuntimeReady.value ? 'neutral' : 'danger',
+    status: eventRuntimeReady.value ? 'configured' : 'standby',
+    tone: eventRuntimeReady.value ? 'ok' : 'ok',
     nodeId: 'staff',
     description: '小程序与订阅消息联动。',
   },
@@ -1122,8 +1091,7 @@ const dependencyCategories = computed(() => dependencyCategoryMeta.map((category
   const items = groups.flatMap((group) => group.items)
   const danger = items.filter((item) => item.tone === 'danger').length
   const warn = items.filter((item) => item.tone === 'warn').length
-  const pending = items.filter((item) => item.tone === 'neutral').length
-  const tone = danger ? 'danger' : warn ? 'warn' : pending ? 'neutral' : 'ok'
+  const tone = danger ? 'danger' : warn ? 'warn' : 'ok'
   return {
     ...category,
     groups,
@@ -1132,35 +1100,16 @@ const dependencyCategories = computed(() => dependencyCategoryMeta.map((category
     summary: danger
       ? `${danger} 项不可用`
       : warn
-        ? `${warn} 项降级`
-        : pending
-          ? `${pending} 项待确认`
-          : '全部正常',
+        ? `${warn} 项关注`
+        : '全部正常',
   }
 }))
 
-const abnormalDependencyServices = computed(() => visibleDependencyServices.value
-  .filter((service) => service.tone === 'danger' || service.tone === 'warn')
-  .slice(0, 6))
-
-const dependencyTitle = computed(() => {
-  const offline = visibleDependencyServices.value.filter((service) => service.tone === 'danger').length
-  const degraded = visibleDependencyServices.value.filter((service) => service.tone === 'warn').length
-  const pending = visibleDependencyServices.value.filter((service) => service.tone === 'neutral').length
-  if (offline) return `${offline} 项不可用`
-  if (degraded) return `${degraded} 项降级`
-  if (pending) return `核心链路正常 · ${pending} 项待确认`
-  return '核心依赖正常'
-})
-
 function serviceStatusText(status, tone) {
   if (tone === 'danger') return '不可用'
-  if (tone === 'warn') return '降级'
-  if (status === 'loaded') return '已加载'
-  if (status === 'configured') return '已配置'
-  if (status === 'on demand') return '按需'
-  if (status === 'online') return '在线'
-  return '待确认'
+  if (tone === 'warn') return '关注'
+  if (['loaded', 'configured', 'standby', 'online'].includes(status)) return '正常'
+  return '正常'
 }
 
 function dependencyToneRank(tone) {
@@ -1361,18 +1310,18 @@ onUnmounted(() => {
 .edge-path {
   fill: none;
   stroke: rgba(105, 215, 189, 0.5);
-  stroke-width: 1.8;
+  stroke-width: 2.1;
   stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .edge-group.warn .edge-path {
-  stroke: rgba(223, 184, 99, 0.5);
+  stroke: rgba(239, 126, 138, 0.58);
 }
 
 .edge-group.danger .edge-path,
 .edge-group.blocked .edge-path {
   stroke: rgba(239, 126, 138, 0.58);
-  stroke-dasharray: 9 12;
 }
 
 .edge-group.neutral .edge-path,
@@ -1381,7 +1330,7 @@ onUnmounted(() => {
 }
 
 .edge-group.highlighted .edge-path {
-  stroke-width: 3.2;
+  stroke-width: 3;
   filter: url(#node-glow);
 }
 
@@ -1393,7 +1342,7 @@ onUnmounted(() => {
 
 .flow-dot {
   fill: #bdf8ed;
-  opacity: 0.62;
+  opacity: 0.58;
   filter: url(#node-glow);
 }
 
@@ -1402,7 +1351,7 @@ onUnmounted(() => {
 }
 
 .edge-group.warn .flow-dot {
-  fill: #ffe0a1;
+  fill: #ff9ba5;
 }
 
 .edge-group.neutral .flow-dot {
@@ -1437,7 +1386,8 @@ onUnmounted(() => {
 }
 
 .runtime-node.warn .node-body {
-  stroke: rgba(223, 184, 99, 0.84);
+  stroke: rgba(239, 126, 138, 0.86);
+  fill: rgba(45, 23, 31, 0.92);
 }
 
 .runtime-node.danger .node-body,
@@ -1457,7 +1407,7 @@ onUnmounted(() => {
 }
 
 .runtime-node.impacted .node-body {
-  stroke-dasharray: 7 6;
+  stroke-width: 2.2;
 }
 
 .node-led {
@@ -1465,7 +1415,7 @@ onUnmounted(() => {
 }
 
 .runtime-node.ok .node-led { fill: #69d7bd; }
-.runtime-node.warn .node-led { fill: #dfb863; }
+.runtime-node.warn .node-led { fill: #ef7e8a; }
 .runtime-node.danger .node-led,
 .runtime-node.blocked .node-led { fill: #ef7e8a; }
 
@@ -1481,7 +1431,7 @@ onUnmounted(() => {
 }
 
 .runtime-node.ok .node-status { fill: #79ddc5; }
-.runtime-node.warn .node-status { fill: #dfb863; }
+.runtime-node.warn .node-status { fill: #ef7e8a; }
 .runtime-node.danger .node-status,
 .runtime-node.blocked .node-status { fill: #ef7e8a; }
 
@@ -1501,9 +1451,9 @@ onUnmounted(() => {
 
 .runtime-detail-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(360px, 0.65fr);
-  gap: 14px;
-  margin-top: 14px;
+  grid-template-columns: minmax(0, 3fr) minmax(390px, 2fr);
+  gap: 18px;
+  margin-top: 16px;
 }
 
 .node-inspector,
@@ -1518,7 +1468,8 @@ onUnmounted(() => {
 
 .node-inspector,
 .alert-locator {
-  min-height: 314px;
+  height: 318px;
+  min-height: 318px;
 }
 
 .node-inspector {
@@ -1555,45 +1506,49 @@ onUnmounted(() => {
 
 .inspector-head {
   display: grid;
-  grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.2fr);
-  align-items: center;
-  gap: 28px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 20px;
   min-width: 0;
-  padding-bottom: 20px;
+  min-height: 96px;
+  padding-bottom: 18px;
   border-bottom: 1px solid rgba(137, 180, 192, 0.12);
 }
 
 .inspector-title-row {
-  display: flex;
-  align-items: center;
+  display: grid;
   gap: 12px;
+  min-width: 0;
 }
 
 .inspector-title-row h2 {
   margin: 0;
   color: #f2f7f8;
-  font-size: 24px;
+  font-size: 28px;
   line-height: 1.2;
 }
 
 .status-pill {
   display: inline-flex;
   align-items: center;
-  min-height: 26px;
-  padding: 0 10px;
+  justify-content: center;
+  min-width: 88px;
+  min-height: 34px;
+  padding: 0 14px;
   border: 1px solid rgba(105, 215, 189, 0.28);
-  border-radius: 999px;
+  border-radius: 18px;
   background: rgba(105, 215, 189, 0.08);
   color: #79ddc5;
-  font-size: 11px;
+  font-size: 13px;
+  font-weight: 700;
   font-style: normal;
   white-space: nowrap;
 }
 
 .status-pill.warn {
-  border-color: rgba(223, 184, 99, 0.32);
-  background: rgba(223, 184, 99, 0.09);
-  color: #dfb863;
+  border-color: rgba(239, 126, 138, 0.34);
+  background: rgba(239, 126, 138, 0.1);
+  color: #ef7e8a;
 }
 
 .status-pill.danger,
@@ -1612,8 +1567,8 @@ onUnmounted(() => {
 .node-inspector p {
   margin: 0;
   color: #a8b8c1;
-  font-size: 13px;
-  line-height: 1.8;
+  font-size: 15px;
+  line-height: 1.65;
 }
 
 .resource-compact {
@@ -1743,47 +1698,54 @@ onUnmounted(() => {
   margin-bottom: 18px;
 }
 
-.issue-count {
+.alert-locator {
   display: grid;
-  width: 38px;
-  height: 38px;
-  place-items: center;
-  border-radius: 50%;
-  background: rgba(105, 215, 189, 0.09);
-  color: #79ddc5;
-  font-size: 15px;
-  font-style: normal;
-  font-weight: 700;
+  grid-template-rows: auto minmax(0, 1fr);
+  padding: 20px;
+  overflow: hidden;
 }
 
-.issue-count.active {
-  background: rgba(223, 184, 99, 0.12);
-  color: #dfb863;
+.alert-locator header {
+  min-height: 42px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(105, 215, 189, 0.16);
+}
+
+.alert-locator .panel-title > strong {
+  font-size: 22px;
 }
 
 .alert-list {
   display: grid;
-  gap: 9px;
+  align-content: start;
+  gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(105, 215, 189, 0.45) rgba(255, 255, 255, 0.04);
 }
 
 .alert-node {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) auto;
-  gap: 12px;
-  align-items: start;
-  min-height: 132px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  min-height: 66px;
   border: 1px solid rgba(223, 184, 99, 0.18);
   border-radius: 8px;
-  padding: 16px;
+  padding: 12px 14px;
   background: rgba(223, 184, 99, 0.045);
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.2s ease, background 0.2s ease;
+  transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
 }
 
 .alert-node:hover {
   border-color: rgba(223, 184, 99, 0.42);
   background: rgba(223, 184, 99, 0.07);
+  transform: translateY(-1px);
 }
 
 .alert-node.danger {
@@ -1791,66 +1753,24 @@ onUnmounted(() => {
   background: rgba(70, 25, 34, 0.2);
 }
 
-.alert-node > i {
-  display: grid;
-  width: 32px;
-  height: 32px;
-  place-items: center;
-  border-radius: 50%;
-  background: rgba(223, 184, 99, 0.14);
-  color: #dfb863;
-  font-size: 16px;
-  font-style: normal;
-  font-weight: 700;
-}
-
-.alert-node.danger > i {
-  background: rgba(239, 126, 138, 0.14);
-  color: #ef7e8a;
-}
-
-.alert-node > span {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-}
-
-.alert-node em {
-  color: #dfb863;
-  font-size: 10px;
-  font-style: normal;
-  font-weight: 700;
-}
-
-.alert-node.danger em { color: #ef7e8a; }
-
 .alert-node strong {
   color: #f2f7f8;
-  font-size: 14px;
-  line-height: 1.4;
+  font-size: 15px;
+  line-height: 1.35;
 }
-
-.alert-node small,
-.alert-node b {
-  color: #8fa0aa;
-  font-size: 11px;
-  font-weight: 400;
-  line-height: 1.45;
-}
-
-.alert-node b { color: #718997; }
 
 .alert-node u {
   align-self: center;
-  color: #9dcbd0;
-  font-size: 11px;
+  color: #b7f0e5;
+  font-size: 14px;
+  font-weight: 700;
   text-decoration: none;
   white-space: nowrap;
 }
 
 .alert-empty {
   display: grid;
-  min-height: 200px;
+  min-height: 0;
   place-items: center;
   align-content: center;
   gap: 8px;
@@ -1880,74 +1800,43 @@ onUnmounted(() => {
 
 .dependency-card {
   margin-top: 14px;
-  padding: 24px 22px 12px;
+  padding: 20px 26px 18px;
 }
 
-.dependency-meta {
-  font-variant-numeric: tabular-nums;
-}
-
-.dependency-attention {
+.dependency-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 52px;
-  margin-bottom: 12px;
-  padding: 8px 12px;
-  overflow-x: auto;
-  border: 1px solid rgba(223, 184, 99, 0.16);
-  border-radius: 8px;
-  background: rgba(223, 184, 99, 0.035);
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(105, 215, 189, 0.15);
 }
 
-.dependency-attention > span {
-  flex: 0 0 auto;
-  padding-right: 8px;
-  color: #dfb863;
-  font-weight: 650;
+.dependency-head strong {
+  color: #f2f7f8;
+  font-size: 23px;
+  line-height: 1.25;
 }
 
-.dependency-attention button {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 7px;
-  min-height: 32px;
-  border: 0;
-  border-radius: 6px;
-  padding: 0 10px;
-  background: rgba(255, 255, 255, 0.045);
-  color: #dfe9eb;
-  cursor: pointer;
+.dependency-head b {
+  color: #79ddc5;
+  font-size: 20px;
+  line-height: 1.25;
 }
 
-.dependency-attention button i,
 .dependency-node i {
   width: 7px;
   height: 7px;
   flex: 0 0 auto;
   border-radius: 50%;
-  background: #dfb863;
+  background: #69d7bd;
 }
 
-.dependency-attention button.danger i,
 .dependency-node.danger i { background: #ef7e8a; }
 
-.dependency-attention button strong {
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.dependency-attention button em {
-  color: #dfb863;
-  font-size: 10px;
-  font-style: normal;
-}
-
-.dependency-attention button.danger em { color: #ef7e8a; }
-
 .dependency-categories {
-  border-top: 1px solid rgba(137, 180, 192, 0.11);
+  border-top: 0;
 }
 
 .dependency-category {
@@ -1956,13 +1845,13 @@ onUnmounted(() => {
 
 .category-summary {
   display: grid;
-  grid-template-columns: 12px minmax(210px, 1fr) 110px 120px 24px;
-  gap: 14px;
+  grid-template-columns: 14px minmax(280px, 1fr) 110px 116px 26px;
+  gap: 16px;
   align-items: center;
   width: 100%;
-  min-height: 78px;
+  min-height: 72px;
   border: 0;
-  padding: 10px 8px;
+  padding: 8px 4px;
   background: transparent;
   color: #e8f1f5;
   text-align: left;
@@ -1974,8 +1863,8 @@ onUnmounted(() => {
 }
 
 .category-status {
-  width: 8px;
-  height: 8px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
   background: #69d7bd;
   box-shadow: 0 0 0 5px rgba(105, 215, 189, 0.08);
@@ -1998,24 +1887,26 @@ onUnmounted(() => {
 
 .category-summary > span {
   display: grid;
-  gap: 5px;
+  gap: 4px;
 }
 
 .category-summary > span strong {
   color: #edf6f7;
-  font-size: 14px;
+  font-size: 18px;
+  line-height: 1.28;
 }
 
 .category-summary small,
 .category-summary > b {
   color: #768d9a;
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 400;
 }
 
 .category-summary > em {
   color: #79ddc5;
-  font-size: 11px;
+  font-size: 15px;
+  font-weight: 700;
   font-style: normal;
   text-align: right;
 }
@@ -2026,7 +1917,7 @@ onUnmounted(() => {
 
 .category-summary > u {
   color: #7f95a3;
-  font-size: 20px;
+  font-size: 18px;
   text-align: center;
   text-decoration: none;
   transform: rotate(0deg);
@@ -2040,8 +1931,8 @@ onUnmounted(() => {
 .category-detail {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  gap: 20px;
-  padding: 4px 34px 22px;
+  gap: 14px;
+  padding: 0 34px 16px;
 }
 
 .dependency-group {
@@ -2053,32 +1944,36 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  min-height: 34px;
+  min-height: 30px;
   margin-bottom: 4px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.055);
 }
 
 .dependency-group > header strong {
   color: #b8c8cf;
-  font-size: 11px;
+  font-size: 13px;
+}
+
+.dependency-group > header span {
+  font-size: 12px;
 }
 
 .dependency-list {
   display: grid;
-  gap: 2px;
+  gap: 4px;
 }
 
 .dependency-node {
   display: grid;
-  grid-template-columns: 8px minmax(0, 1fr) auto;
-  gap: 9px;
+  grid-template-columns: 9px minmax(0, 1fr) auto;
+  gap: 10px;
   align-items: center;
   width: 100%;
   min-width: 0;
-  min-height: 38px;
+  min-height: 42px;
   border: 0;
   border-radius: 5px;
-  padding: 6px 8px;
+  padding: 7px 9px;
   background: transparent;
   text-align: left;
   cursor: pointer;
@@ -2091,13 +1986,14 @@ onUnmounted(() => {
 .dependency-node span {
   overflow: hidden;
   color: #aebfc7;
+  font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .dependency-node strong {
   color: #69d7bd;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
 }
 

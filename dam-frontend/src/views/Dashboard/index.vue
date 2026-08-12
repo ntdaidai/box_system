@@ -276,7 +276,11 @@
       </main>
 
       <aside class="right-column">
-        <section class="screen-panel progress-panel">
+        <section
+          class="screen-panel progress-panel"
+          @mouseenter="handleProgressPanelEnter"
+          @mouseleave="handleProgressPanelLeave"
+        >
           <div class="panel-heading progress-heading">
             <h2>实时告警进度</h2>
             <div class="clock-block progress-clock">
@@ -312,6 +316,8 @@
             ref="flowTimelineRef"
             class="progress-timeline flow-timeline"
             :class="{ idle: !displayedPriorityAlert }"
+            @wheel.passive="handleFlowTimelineUserScroll"
+            @touchmove.passive="handleFlowTimelineUserScroll"
           >
             <li
               v-for="item in alarmFlowSteps"
@@ -500,6 +506,8 @@ const mapScale = ref(1)
 const mapOffset = ref({ x: 120, y: 0 })
 const minMapScale = ref(1)
 const showZoomTrack = ref(false)
+const progressPanelHovered = ref(false)
+const flowTimelineUserScrolled = ref(false)
 const chartInstances = new Map()
 
 const mapDragState = {
@@ -1918,10 +1926,28 @@ function clearDisplayedAlert() {
   displayedAlertClearId = null
   priorityDetail.value = { id: null, timeline: [] }
   currentPriorityDetailId = null
+  flowTimelineUserScrolled.value = false
   window.clearTimeout(displayedAlertClearTimer)
 }
 
-function scrollActiveFlowNodeIntoView() {
+function handleProgressPanelEnter() {
+  progressPanelHovered.value = true
+}
+
+function handleProgressPanelLeave() {
+  progressPanelHovered.value = false
+  if (!flowTimelineUserScrolled.value) return
+  flowTimelineUserScrolled.value = false
+  nextTick(() => scrollActiveFlowNodeIntoView({ force: true }))
+}
+
+function handleFlowTimelineUserScroll() {
+  if (!displayedPriorityAlert.value) return
+  flowTimelineUserScrolled.value = true
+}
+
+function scrollActiveFlowNodeIntoView(options = {}) {
+  if (!options.force && progressPanelHovered.value && flowTimelineUserScrolled.value) return
   const container = flowTimelineRef.value
   if (!container || !displayedPriorityAlert.value || container.classList.contains('idle')) return
   const activeNode = container.querySelector('li.running, li.active')
@@ -2398,7 +2424,7 @@ onBeforeUnmount(() => {
   min-height: 0;
   position: relative;
   display: grid;
-  grid-template-rows: clamp(34px, 2vw, 44px) 1fr;
+  grid-template-rows: clamp(38px, 2.16vw, 48px) 1fr;
   gap: clamp(6px, .4vw, 9px);
   padding: clamp(11px, .7vw, 15px) clamp(13px, .8vw, 18px) clamp(10px, .6vw, 14px);
   border: 1px solid rgba(74, 163, 214, .22);
@@ -2431,9 +2457,9 @@ onBeforeUnmount(() => {
 
 .metric-icon {
   position: relative;
-  flex: 0 0 clamp(34px, 2vw, 44px);
-  width: clamp(34px, 2vw, 44px);
-  height: clamp(34px, 2vw, 44px);
+  flex: 0 0 clamp(38px, 2.15vw, 48px);
+  width: clamp(38px, 2.15vw, 48px);
+  height: clamp(38px, 2.15vw, 48px);
   display: grid;
   place-items: center;
   border-radius: 10px;
@@ -2443,8 +2469,8 @@ onBeforeUnmount(() => {
 }
 
 .metric-icon :deep(svg) {
-  width: clamp(18px, 1.1vw, 25px);
-  height: clamp(18px, 1.1vw, 25px);
+  width: clamp(20px, 1.22vw, 27px);
+  height: clamp(20px, 1.22vw, 27px);
   display: block;
 }
 
@@ -2459,7 +2485,7 @@ onBeforeUnmount(() => {
 
 .metric-label {
   color: #b7e5ff;
-  font-size: clamp(16px, .93vw, 20px);
+  font-size: clamp(18px, 1.16vw, 25px);
   font-weight: 800;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2478,7 +2504,7 @@ onBeforeUnmount(() => {
   display: block;
   margin: 0;
   color: #fff;
-  font-size: clamp(29px, 1.71vw, 37px);
+  font-size: clamp(31px, 1.82vw, 40px);
   line-height: 1;
   letter-spacing: 0;
   font-variant-numeric: tabular-nums;
@@ -2495,7 +2521,7 @@ onBeforeUnmount(() => {
 
 .metric-compare span {
   color: #9ed3f5;
-  font-size: clamp(13px, .78vw, 17px);
+  font-size: clamp(14px, .84vw, 18px);
   line-height: 1;
 }
 
@@ -2508,7 +2534,7 @@ onBeforeUnmount(() => {
   font-style: normal;
   line-height: 1.1;
   font-variant-numeric: tabular-nums;
-  font-size: clamp(13px, .78vw, 17px);
+  font-size: clamp(14px, .84vw, 18px);
   font-weight: 800;
 }
 
@@ -2767,7 +2793,7 @@ onBeforeUnmount(() => {
   left: clamp(12px, .9vw, 18px);
   bottom: clamp(12px, .9vw, 18px);
   z-index: 5;
-  width: clamp(118px, 7.2vw, 142px);
+  width: clamp(136px, 8.1vw, 168px);
   padding: clamp(6px, .38vw, 8px);
   border: 1px solid rgba(105, 205, 255, .16);
   border-radius: 6px;
@@ -2815,7 +2841,7 @@ onBeforeUnmount(() => {
 
 .map-rank-list li {
   display: grid;
-  grid-template-columns: clamp(14px, .74vw, 16px) minmax(0, 1fr);
+  grid-template-columns: clamp(14px, .74vw, 16px) minmax(108px, 1fr);
   align-items: center;
   gap: clamp(5px, .28vw, 7px);
   min-width: 0;
@@ -2860,9 +2886,9 @@ onBeforeUnmount(() => {
 }
 
 .map-rank-main > div {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(72px, 1fr) max-content;
   align-items: baseline;
-  justify-content: space-between;
   gap: 8px;
   min-width: 0;
 }
@@ -3740,11 +3766,13 @@ onBeforeUnmount(() => {
 }
 
 .progress-timeline {
+  --flow-gap: clamp(8px, 1.05vh, 12px);
   position: relative;
   flex: 1 1 auto;
   display: grid;
+  grid-template-rows: repeat(4, minmax(min-content, 1fr));
   align-content: start;
-  gap: 10px;
+  gap: var(--flow-gap);
   margin: 12px 0 0;
   padding: 0 2px 10px 22px;
   list-style: none;
@@ -3768,6 +3796,7 @@ onBeforeUnmount(() => {
 
 .progress-timeline li {
   position: relative;
+  min-height: 0;
   min-width: 0;
   color: #cfe2f0;
 }
@@ -3805,8 +3834,10 @@ onBeforeUnmount(() => {
 }
 
 .progress-timeline article {
+  height: 100%;
   min-width: 0;
   padding: 10px 11px;
+  box-sizing: border-box;
   border: 1px solid rgba(67, 200, 255, .14);
   border-radius: 8px;
   background: rgba(4, 20, 36, .48);
@@ -3861,8 +3892,6 @@ onBeforeUnmount(() => {
   --flow-rail-center: -27px;
   --flow-icon-size: clamp(32px, 1.9vw, 42px);
   --flow-icon-top: 9px;
-  --flow-gap: 12px;
-  gap: var(--flow-gap);
   margin-top: 12px;
   padding-left: 52px;
 }
@@ -3977,11 +4006,8 @@ onBeforeUnmount(() => {
 }
 
 .flow-timeline.idle {
-  --flow-gap: clamp(8px, 1.2vh, 14px);
   flex: 1 1 0;
-  grid-template-rows: repeat(4, minmax(0, 1fr));
   align-content: stretch;
-  gap: var(--flow-gap);
   padding-bottom: 0;
   overflow: hidden;
 }
@@ -4284,7 +4310,7 @@ onBeforeUnmount(() => {
   }
 
   .today-card {
-    grid-template-rows: 34px minmax(0, 1fr);
+    grid-template-rows: 38px minmax(0, 1fr);
     gap: 5px;
     padding: 10px 12px 10px;
   }
@@ -4300,20 +4326,20 @@ onBeforeUnmount(() => {
   }
 
   .metric-icon {
-    flex-basis: 34px;
-    width: 34px;
-    height: 34px;
+    flex-basis: 38px;
+    width: 38px;
+    height: 38px;
     border-radius: 9px;
   }
 
   .metric-icon :deep(svg) {
-    width: 18px;
-    height: 18px;
+    width: 20px;
+    height: 20px;
   }
 
   .metric-label {
     overflow: visible;
-    font-size: 15px;
+    font-size: 17px;
     text-overflow: clip;
   }
 
@@ -4322,30 +4348,30 @@ onBeforeUnmount(() => {
   }
 
   .today-card strong {
-    font-size: 26px;
+    font-size: 28px;
   }
 
   .metric-compare,
   .metric-compare span,
   .metric-compare i {
-    font-size: 12px;
+    font-size: 13px;
   }
 }
 
 @container todayPanel (max-width: 390px) {
   .today-card {
-    grid-template-rows: 32px minmax(0, 1fr);
+    grid-template-rows: 35px minmax(0, 1fr);
     padding: 9px 10px;
   }
 
   .metric-icon {
-    flex-basis: 32px;
-    width: 32px;
-    height: 32px;
+    flex-basis: 35px;
+    width: 35px;
+    height: 35px;
   }
 
   .metric-label {
-    font-size: 14px;
+    font-size: 16px;
   }
 
   .metric-value-row {
@@ -4353,23 +4379,23 @@ onBeforeUnmount(() => {
   }
 
   .today-card strong {
-    font-size: 24px;
+    font-size: 26px;
   }
 }
 
 @container todayPanel (max-width: 350px) {
   .metric-icon {
-    flex-basis: 30px;
-    width: 30px;
-    height: 30px;
+    flex-basis: 33px;
+    width: 33px;
+    height: 33px;
   }
 
   .metric-label {
-    font-size: 13px;
+    font-size: 15px;
   }
 
   .today-card strong {
-    font-size: 22px;
+    font-size: 24px;
   }
 }
 

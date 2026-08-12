@@ -1,0 +1,26 @@
+services:
+  rtdetr-api:
+    build: .
+    container_name: rtdetr-detector
+    restart: unless-stopped
+    ports:
+      - "8014:8000"
+    environment:
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MODEL_WEIGHTS=/app/models/rtdetr_3_best.pt
+      - CLASS_NAMES=boat,swimmer,person,crowd
+      - DEVICE=0
+      - IMG_SIZE=960
+      - CONF=0.25
+      - IOU=0.45
+      - SAVE_ANNOTATED=true
+    volumes:
+      - ./rtdetr_3_best.pt:/app/models/rtdetr_3_best.pt:ro
+    networks:
+      - box_system_default
+
+networks:
+  box_system_default:
+    external: true

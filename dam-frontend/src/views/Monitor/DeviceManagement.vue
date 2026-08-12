@@ -656,14 +656,14 @@ h2 {
   line-height: 1;
 }
 .status-pill.is-online {
-  border: 1px solid rgba(103, 194, 58, .26);
-  color: #78dc8b;
-  background: rgba(103, 194, 58, .10);
+  border: 1px solid rgba(92, 215, 154, .34);
+  color: #81efad;
+  background: rgba(48, 154, 118, .18);
 }
 .status-pill.is-offline {
-  border: 1px solid rgba(176, 190, 204, .26);
-  color: #aebfcb;
-  background: rgba(124, 142, 158, .10);
+  border: 1px solid rgba(235, 124, 133, .34);
+  color: #ffabb5;
+  background: rgba(142, 48, 62, .18);
 }
 .col-enabled :deep(.el-switch__core) {
   border-color: rgba(120, 153, 176, .34);
@@ -680,25 +680,25 @@ h2 {
 }
 .action-buttons :deep(.el-button) {
   width: auto;
-  height: 34px;
+  height: 32px;
   margin: 0;
-  padding: 0 12px;
+  padding: 0 13px;
   border-radius: 5px;
   font-size: 13px;
   font-weight: 800;
 }
 .action-buttons :deep(.edit-action) {
-  border-color: rgba(70, 145, 190, .42);
-  color: #cae6fa;
-  background: rgba(20, 58, 88, .78);
+  border-color: rgba(66, 164, 224, .50);
+  color: #d5f0ff;
+  background: rgba(29, 91, 133, .70);
 }
 .action-buttons :deep(.delete-action) {
-  border-color: rgba(220, 92, 111, .42);
-  color: #ff9aa9;
-  background: rgba(122, 30, 48, .34);
+  border-color: rgba(226, 88, 109, .46);
+  color: #ffb1bd;
+  background: rgba(128, 36, 54, .48);
 }
 .list-pagination {
-  min-height: 72px;
+  min-height: 58px;
   justify-content: center;
   border-top: 1px solid rgba(149, 190, 220, .10);
   background: #092034;
@@ -707,7 +707,7 @@ h2 {
 .list-pagination :deep(.btn-next),
 .list-pagination :deep(.el-pager li) {
   min-width: 44px;
-  height: 44px;
+  height: 38px;
   margin: 0 4px;
   border: 1px solid rgba(70, 145, 190, .34);
   border-radius: 5px;

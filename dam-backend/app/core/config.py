@@ -61,7 +61,7 @@ class Settings:
         _get_env("QWEN_CAMERA_SCREENING_JPEG_QUALITY", "45")
     )
     QWEN_CAMERA_SCREENING_MAX_IMAGE_SIDE: int = int(
-        _get_env("QWEN_CAMERA_SCREENING_MAX_IMAGE_SIDE", "384")
+        _get_env("QWEN_CAMERA_SCREENING_MAX_IMAGE_SIDE", "640")
     )
     QWEN_CAMERA_SCREENING_MIN_CONFIDENCE: float = float(
         _get_env("QWEN_CAMERA_SCREENING_MIN_CONFIDENCE", "0.65")
