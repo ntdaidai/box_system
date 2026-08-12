@@ -12,7 +12,7 @@ import re
 import subprocess
 import tempfile
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal, Optional
 from urllib.parse import quote, unquote
@@ -23,6 +23,7 @@ from fastapi.responses import StreamingResponse
 from jose import jwt
 from minio import Minio
 from pydantic import BaseModel
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -39,6 +40,7 @@ JWT_SECRET = settings.ONLYOFFICE_JWT_SECRET
 BUCKET_NAME = settings.DOCUMENT_BUCKET
 OBJECT_PREFIX = "editable"
 EDITOR_KEY_VERSION = "download-v3"
+RISK_LABELS = {"LOW": "低风险", "MEDIUM": "中风险", "HIGH": "高风险"}
 
 minio_client: Optional[Minio] = None
 
@@ -83,6 +85,64 @@ def event_instance_no_from_document_id(document_id: str) -> str:
     prefix = "dam_event_report_"
     text = str(document_id or "")
     return text[len(prefix):] if text.startswith(prefix) else ""
+
+
+def date_token_from_text(value: str) -> str:
+    matched = re.search(r"20\d{6}", str(value or ""))
+    return matched.group(0) if matched else ""
+
+
+def instance_sequence_token(value: str) -> str:
+    matched = re.search(r"_(\d{1,4})$", str(value or ""))
+    return matched.group(1) if matched else ""
+
+
+def normalize_event_instance_no(value: str, fallback_date: str = "", fallback_sequence: int = 1) -> str:
+    text = str(value or "").strip()
+    date_token = date_token_from_text(text) or date_token_from_text(fallback_date)
+    if not date_token:
+        return text
+    sequence = instance_sequence_token(text) or str(fallback_sequence or 1)
+    return f"EVT_{date_token}_{int(sequence):03d}"
+
+
+def display_instance_no_for_event(db: Session, event: SafetyEventInstance) -> str:
+    if not event.started_at:
+        return event.instance_no
+    day_start = datetime.combine(event.started_at.date(), datetime.min.time())
+    day_end = day_start + timedelta(days=1)
+    sequence = (
+        db.query(func.count(SafetyEventInstance.id))
+        .filter(
+            SafetyEventInstance.started_at >= day_start,
+            SafetyEventInstance.started_at < day_end,
+            or_(
+                SafetyEventInstance.started_at < event.started_at,
+                and_(
+                    SafetyEventInstance.started_at == event.started_at,
+                    SafetyEventInstance.id <= event.id,
+                ),
+            ),
+        )
+        .scalar()
+        or 1
+    )
+    return f"EVT_{event.started_at:%Y%m%d}_{int(sequence):03d}"
+
+
+def normalize_event_report_title(title: str, document_id: str, fallback_date: str = "", fallback_sequence: int = 1) -> str:
+    raw_title = Path(str(title or "未命名文档")).name
+    if not (str(document_id or "").startswith("dam_event_report_") or "处置报告" in raw_title):
+        return raw_title
+    suffix = Path(raw_title).suffix
+    stem = raw_title[:-len(suffix)] if suffix else raw_title
+    instance_source = event_instance_no_from_document_id(document_id)
+    if not instance_source:
+        matched = re.search(r"(?:EVT_)?20\d{6}_[0-9a-fA-F-]+$", stem)
+        instance_source = matched.group(0) if matched else ""
+    base = re.sub(r"_?(?:EVT_)?20\d{6}_[0-9a-fA-F-]+$", "", stem).strip("_") or "事件处置报告"
+    instance_no = normalize_event_instance_no(instance_source, fallback_date, fallback_sequence)
+    return f"{base}_{instance_no}{suffix}" if instance_no else raw_title
 
 
 def get_file_extension(filename: str) -> str:
@@ -675,10 +735,33 @@ async def list_documents(
         doc["event_instance_no"] = event_instance_no
         if event_pair:
             event, event_def = event_pair
+            display_instance_no = display_instance_no_for_event(db, event)
+            doc["source_event_instance_no"] = event_instance_no
+            doc["event_instance_no"] = display_instance_no
             doc["event_instance_id"] = event.id
             doc["event_started_at"] = event.started_at.isoformat() if event.started_at else None
             doc["event_name"] = event_def.event_name if event_def else event.summary
             doc["event_summary"] = event.summary
+            doc["risk_level"] = event.risk_level
+            doc["risk_label"] = RISK_LABELS.get(event.risk_level, event.risk_level)
+            doc["title"] = normalize_event_report_title(
+                doc["title"],
+                f"dam_event_report_{display_instance_no}",
+                doc["event_started_at"] or doc["created_at"] or doc["updated_at"],
+                event.id,
+            )
+        else:
+            doc["event_instance_no"] = normalize_event_instance_no(
+                event_instance_no,
+                doc.get("created_at") or doc.get("updated_at") or "",
+                1,
+            )
+            doc["title"] = normalize_event_report_title(
+                doc["title"],
+                f"dam_event_report_{doc['event_instance_no']}",
+                doc.get("created_at") or doc.get("updated_at") or "",
+                1,
+            )
 
     docs.sort(key=lambda item: item["updated_at"], reverse=True)
     total = len(docs)
@@ -696,7 +779,7 @@ async def list_documents(
 
 
 @router.post("/documents/export")
-async def export_documents(payload: ExportRequest):
+async def export_documents(payload: ExportRequest, db: Session = Depends(get_db)):
     client = get_minio_client()
     selected_ids = set(payload.document_ids or [])
     prefix = f"{OBJECT_PREFIX}/{payload.user_id}/"
@@ -717,6 +800,23 @@ async def export_documents(payload: ExportRequest):
         try:
             stat = client.stat_object(BUCKET_NAME, obj.object_name)
             title = Path(get_original_title(stat, filename)).name or filename
+            event_instance_no = event_instance_no_from_document_id(document_id)
+            normalized_title = False
+            if event_instance_no:
+                event = (
+                    db.query(SafetyEventInstance)
+                    .filter(SafetyEventInstance.instance_no == event_instance_no)
+                    .first()
+                )
+                if event:
+                    display_instance_no = display_instance_no_for_event(db, event)
+                    title = normalize_event_report_title(title, f"dam_event_report_{display_instance_no}", event.started_at.isoformat() if event.started_at else updated_at, event.id)
+                    normalized_title = True
+                else:
+                    title = normalize_event_report_title(title, document_id, updated_at, len(documents) + 1)
+                    normalized_title = True
+            if not normalized_title:
+                title = normalize_event_report_title(title, document_id, updated_at, len(documents) + 1)
             response = client.get_object(BUCKET_NAME, obj.object_name)
             try:
                 content = response.read()

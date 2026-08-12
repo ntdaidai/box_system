@@ -161,6 +161,24 @@
             </div>
           </section>
 
+          <section v-if="event.analysis_report_document_id" class="work-card report-card">
+            <header class="card-heading">
+              <div>
+                <span>处置报告</span>
+                <h2>报告归档</h2>
+              </div>
+              <small>DOCX</small>
+            </header>
+            <button class="report-card-link" type="button" @click="openReport">
+              <el-icon><Document /></el-icon>
+              <span class="report-card-copy">
+                <strong>{{ reportTitle }}</strong>
+                <small>{{ displayEventId }} · 点击查看</small>
+              </span>
+              <span class="report-open-text">查看</span>
+            </button>
+          </section>
+
           <section class="work-card operation-card">
             <header class="card-heading">
               <div>
@@ -296,6 +314,15 @@ const archivedReason = computed(() => {
   return localizeText(event.value?.resolve_reason) || '事件已闭环归档，不能继续执行人工操作'
 })
 const displayEventId = computed(() => formatDisplayEventId(event.value))
+const reportTitle = computed(() => {
+  const name = String(event.value?.event_name || event.value?.summary || '').trim()
+  const baseTitle = name
+    ? (name.includes('事件') ? `${name}处置报告` : `${name}事件处置报告`)
+    : '事件处置报告'
+  return displayEventId.value && !baseTitle.includes(displayEventId.value)
+    ? `${baseTitle}_${displayEventId.value}`
+    : baseTitle
+})
 
 const sensorSourceNames = {
   1: '温湿度传感器',
@@ -551,6 +578,15 @@ function goBack() {
   router.push('/alarm/safety-events')
 }
 
+function openReport() {
+  if (!event.value?.analysis_report_document_id) return
+  router.push({
+    name: 'DocumentEditor',
+    params: { documentId: event.value.analysis_report_document_id },
+    query: { mode: 'view', title: reportTitle.value },
+  })
+}
+
 function evidenceForLog(logId) {
   return evidence.value.filter((item) => item.timeline_log_id === logId)
 }
@@ -661,11 +697,13 @@ function sensorSourceName() {
 
 function formatDisplayEventId(row) {
   if (!row) return ''
-  const date = dateToken(row.started_at) || dateToken(row.instance_no)
+  if (row.display_instance_no) return row.display_instance_no
+  const text = String(row.instance_no || '').trim()
+  const date = dateToken(text) || dateToken(row.started_at)
   if (!date) return row.instance_no || ''
-  const sequence = instanceSequence(row.instance_no) || row.id
-  const shortSequence = String(sequence || 1).padStart(2, '0')
-  return `${date}_${shortSequence}`
+  const sequence = instanceSequence(text) || 1
+  const shortSequence = String(sequence || 1).padStart(3, '0')
+  return `EVT_${date}_${shortSequence}`
 }
 
 function dateToken(value) {
@@ -824,6 +862,7 @@ loadDetail()
 }
 .major-flow {
   position: relative;
+  z-index: 5;
   margin-top: 0;
   min-height: 132px;
   padding: 20px 26px 22px;
@@ -1393,6 +1432,82 @@ dd {
   background:
     linear-gradient(180deg, rgba(14, 42, 64, .88), rgba(8, 24, 39, .92)),
     rgba(10, 29, 48, .9);
+}
+.report-card {
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, rgba(17, 52, 79, .94), rgba(8, 25, 42, .9)),
+    rgba(8, 25, 42, .88);
+}
+.report-card::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: linear-gradient(90deg, #69d8ff, rgba(126, 226, 189, .55), transparent);
+}
+.report-card-link {
+  position: relative;
+  width: 100%;
+  margin-top: 14px;
+  padding: 14px 14px 14px 16px;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid rgba(105, 216, 255, .34);
+  border-radius: 8px;
+  color: #dcefff;
+  text-align: left;
+  background:
+    linear-gradient(180deg, rgba(8, 28, 45, .86), rgba(4, 13, 22, .72)),
+    rgba(4, 13, 22, .38);
+  cursor: pointer;
+}
+.report-card-link:hover {
+  border-color: rgba(105, 216, 255, .7);
+  background:
+    linear-gradient(180deg, rgba(13, 45, 70, .92), rgba(5, 18, 30, .76)),
+    rgba(15, 49, 75, .62);
+}
+.report-card-link .el-icon {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: #061927;
+  background: #69d8ff;
+  font-size: 24px;
+}
+.report-card-copy,
+.report-card-link strong,
+.report-card-link small {
+  display: block;
+  min-width: 0;
+}
+.report-card-link strong {
+  display: -webkit-box;
+  color: #f4f9fd;
+  font-size: 15px;
+  line-height: 1.4;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.report-card-link small {
+  margin-top: 5px;
+  color: #8fd2f2;
+  font-size: 12px;
+}
+.report-open-text {
+  padding: 5px 10px;
+  border-radius: 6px;
+  color: #061927;
+  background: #8bdcff;
+  font-size: 12px;
+  font-weight: 800;
 }
 .action-context span,
 .action-context strong,

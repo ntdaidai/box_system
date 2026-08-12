@@ -1,8 +1,10 @@
 """FastAPI 主应用。"""
 
 import os
+import time
 from collections import Counter
 from contextlib import asynccontextmanager
+from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import Body, FastAPI, HTTPException
@@ -167,6 +169,95 @@ def _suffix_from_key(object_key: str, default: str) -> str:
     return suffix if suffix else default
 
 
+def _artifact_prefix(object_key: str) -> str:
+    base = (os.getenv("YOLO_OUTPUT_PREFIX") or "workflow/yolo-detections").strip("/")
+    stem = Path(str(object_key)).stem or "media"
+    safe_stem = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in stem)[:80] or "media"
+    return f"{base}/{safe_stem}/{int(time.time() * 1000)}"
+
+
+def _upload_detection_artifacts(raw: dict, *, bucket: str, object_key: str) -> dict:
+    target_bucket = os.getenv("YOLO_OUTPUT_BUCKET") or os.getenv("MINIO_BUCKET") or bucket
+    prefix = _artifact_prefix(object_key)
+    media_objects: list[dict] = []
+    videos: list[str] = []
+    images: list[str] = []
+
+    annotated_video_path = raw.get("annotated_video_path")
+    if annotated_video_path and Path(annotated_video_path).exists():
+        annotated_object_key = f"{prefix}/annotated_detection.mp4"
+        ref = minio_client.upload_file(
+            target_bucket,
+            annotated_object_key,
+            Path(annotated_video_path),
+            content_type="video/mp4",
+        )
+        videos.append(ref)
+        media_objects.append(
+            {
+                "type": "video",
+                "bucket": target_bucket,
+                "object_key": annotated_object_key,
+                "object_name": annotated_object_key,
+                "path": ref,
+                "source": "yolo_detection",
+                "role": "annotated_detection_video",
+                "content_type": "video/mp4",
+                "frame_count": raw.get("processed_frames") or raw.get("total_frames"),
+                "duration_seconds": raw.get("duration_sec"),
+            }
+        )
+        raw["annotated_video"] = ref
+        raw["annotated_video_object"] = annotated_object_key
+
+    for index, frame in enumerate(raw.get("frames") or [], start=1):
+        annotated_path = frame.get("annotated_path")
+        if not annotated_path or not Path(annotated_path).exists():
+            continue
+        frame_object_key = f"{prefix}/frames/frame_{index:02d}_{frame.get('frame_id')}.jpg"
+        ref = minio_client.upload_file(
+            target_bucket,
+            frame_object_key,
+            Path(annotated_path),
+            content_type="image/jpeg",
+        )
+        images.append(ref)
+        frame["annotated_ref"] = ref
+        frame["annotated_object_key"] = frame_object_key
+        media_objects.append(
+            {
+                "type": "image",
+                "bucket": target_bucket,
+                "object_key": frame_object_key,
+                "object_name": frame_object_key,
+                "path": ref,
+                "source": "yolo_detection",
+                "role": "annotated_detection_frame",
+                "content_type": "image/jpeg",
+                "frame_id": frame.get("frame_id"),
+                "frame_time_sec": frame.get("frame_time_sec"),
+            }
+        )
+
+    return {
+        "media_objects": media_objects,
+        "videos": videos,
+        "video_urls": videos,
+        "images": images,
+        "image_urls": images,
+        "artifact_bucket": target_bucket,
+        "artifact_prefix": prefix,
+    }
+
+
+def _cleanup_detection_artifacts(raw: dict) -> None:
+    paths = [raw.get("annotated_video_path"), raw.get("annotated_path")]
+    paths.extend((frame.get("annotated_path") for frame in raw.get("frames") or [] if isinstance(frame, dict)))
+    for path in paths:
+        if path:
+            Path(path).unlink(missing_ok=True)
+
+
 def _risk_from_detections(detections: list[dict]) -> str:
     if not detections:
         return "low"
@@ -284,10 +375,14 @@ async def workflow_infer(payload: dict = Body(...)):
                 int(payload.get("frame_interval") or 30),
                 max_frames=payload.get("max_frames", 8),
             )
+            result.update(_upload_detection_artifacts(result, bucket=bucket, object_key=object_key))
             return _standard_output(result, media_type="video", media_ref=f"{bucket}/{object_key}")
         result = detector_service.detect_image(temp_path)
+        result.update(_upload_detection_artifacts({"frames": [{"annotated_path": result.get("annotated_path"), "frame_id": 0}], **result}, bucket=bucket, object_key=object_key))
         return _standard_output(result, media_type="image", media_ref=f"{bucket}/{object_key}")
     finally:
+        if "result" in locals() and isinstance(result, dict):
+            _cleanup_detection_artifacts(result)
         minio_client.cleanup_temp_file(temp_path)
 
 

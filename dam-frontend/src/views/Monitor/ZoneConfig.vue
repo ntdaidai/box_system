@@ -2,7 +2,7 @@
   <div class="zone-config-page">
     <header class="config-header">
       <div>
-        <p>系统管理 / 联动系统</p>
+        <p>系统管理 / 规则管理</p>
         <h1>区域配置</h1>
       </div>
       <div class="header-actions">
@@ -646,33 +646,45 @@ onMounted(async () => {
 <style scoped>
 .zone-config-page {
   min-height: 100%;
-  padding: 14px;
-  color: #e9f7ff;
-  background: linear-gradient(145deg, #071522, #0a1c2b 58%, #071522);
+  padding: 22px;
+  color: #d9e8f8;
+  background: #071422;
 }
 .config-header {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 12px;
+  min-height: 60px;
+  margin-bottom: 18px;
   padding: 14px;
-  border: 1px solid rgba(80, 165, 200, 0.14);
+  border: 1px solid rgba(104, 161, 200, 0.18);
   border-radius: 8px;
-  background: rgba(5, 22, 34, 0.72);
+  background: rgba(11, 29, 48, 0.72);
 }
-.config-header h1 { margin: 0; font-size: 22px; }
+.config-header p {
+  margin: 0 0 3px;
+  color: #789bb4;
+  font-size: 12px;
+}
+.config-header h1 {
+  margin: 0;
+  color: #f3f8fd;
+  font-size: 22px;
+  letter-spacing: 0;
+}
 .header-actions { display: flex; align-items: center; gap: 8px; }
 .camera-select { width: 260px; }
 .zone-config-select :deep(.el-select__wrapper) {
-  min-height: 40px;
+  min-height: 44px;
   border-radius: 6px;
-  background: rgba(7, 30, 46, 0.92);
-  box-shadow: 0 0 0 1px rgba(72, 216, 255, 0.28) inset;
+  background: rgba(6, 25, 42, 0.82);
+  box-shadow: inset 0 0 0 1px rgba(60, 150, 214, 0.46) !important;
 }
 .zone-config-select :deep(.el-select__wrapper:hover),
-.zone-config-select :deep(.el-select__wrapper.is-focused) {
-  box-shadow: 0 0 0 1px rgba(72, 216, 255, 0.72) inset, 0 0 14px rgba(72, 216, 255, 0.14);
+.zone-config-select :deep(.el-select__wrapper.is-focused),
+.zone-config-select :deep(.el-select__wrapper.is-focus) {
+  box-shadow: inset 0 0 0 1px rgba(87, 190, 255, 0.82), 0 0 0 2px rgba(72, 216, 255, 0.08) !important;
 }
 .zone-config-select :deep(.el-select__selected-item),
 .zone-config-select :deep(.el-select__placeholder) {
@@ -698,9 +710,9 @@ onMounted(async () => {
 .video-editor,
 .config-panel,
 .zone-list-section {
-  border: 1px solid rgba(80, 165, 200, 0.14);
+  border: 1px solid rgba(104, 161, 200, 0.18);
   border-radius: 8px;
-  background: rgba(5, 20, 31, 0.78);
+  background: rgba(11, 29, 48, 0.72);
 }
 .editor-stage {
   position: relative;
@@ -795,9 +807,10 @@ onMounted(async () => {
   padding: 10px;
 }
 .tool-button {
-  color: #b9d2df;
-  border-color: rgba(101, 184, 212, 0.22);
-  background: rgba(20, 64, 86, 0.42);
+  min-height: 40px;
+  color: #d9e8f8;
+  border-color: rgba(104, 161, 200, 0.28);
+  background: rgba(6, 25, 42, 0.82);
 }
 .tool-button.active {
   color: #061b23;
@@ -812,33 +825,38 @@ onMounted(async () => {
 .toolbar-note { margin-left: auto; color: #69889a; font-size: 12px; }
 .zone-list-section {
   min-width: 0;
-  padding: 12px;
+  padding: 0;
+  overflow: hidden;
 }
 .list-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  margin-bottom: 12px;
+  min-height: 72px;
+  margin: 0;
+  padding: 14px;
+  border-bottom: 1px solid rgba(104, 161, 200, 0.12);
 }
 .list-heading > div:first-child {
   display: flex;
   align-items: baseline;
   gap: 10px;
-  color: #9bbbd0;
+  color: #d9e8f8;
   font-size: 16px;
-  font-weight: 900;
+  font-weight: 800;
 }
 .list-heading b {
-  min-height: 28px;
+  min-height: 26px;
   display: inline-flex;
   align-items: center;
-  padding: 4px 10px;
-  color: #061b23;
-  border-radius: 7px;
-  background: linear-gradient(110deg, #48d8ff, #51e6be);
-  font-size: 13px;
-  font-weight: 900;
+  padding: 0 12px;
+  color: #aee8ff;
+  border: 1px solid rgba(72, 216, 255, 0.22);
+  border-radius: 5px;
+  background: rgba(72, 216, 255, 0.08);
+  font-size: 12px;
+  font-weight: 700;
 }
 .list-actions {
   display: flex;
@@ -855,30 +873,32 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: minmax(190px, 1.4fr) 130px 128px 124px 168px 140px;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
 }
 .zone-table-head {
-  min-height: 38px;
-  padding: 0 12px;
-  color: #8fb0c2;
-  border-bottom: 1px solid rgba(80, 165, 200, 0.16);
+  min-height: 50px;
+  padding: 0 22px;
+  color: #9fb4c5;
+  background: rgba(30, 58, 95, 0.58);
   font-size: 13px;
-  font-weight: 900;
+  font-weight: 700;
 }
 .zone-table-row {
-  min-height: 58px;
-  margin-top: 8px;
-  padding: 8px 12px;
-  color: #cfe5ee;
-  border: 1px solid rgba(85, 166, 201, 0.14);
-  border-radius: 8px;
-  background: rgba(8, 31, 47, 0.58);
+  min-height: 72px;
+  margin-top: 0;
+  padding: 12px 22px;
+  color: #d8e7ff;
+  border-top: 1px solid rgba(104, 161, 200, 0.1);
+  background: rgba(10, 28, 47, 0.38);
   cursor: pointer;
+  transition: background 0.16s ease, box-shadow 0.16s ease;
 }
 .zone-table-row:hover,
 .zone-table-row.selected {
-  border-color: rgba(72, 216, 255, 0.48);
-  background: rgba(9, 43, 65, 0.72);
+  background: rgba(30, 74, 112, 0.46);
+}
+.zone-table-row.selected {
+  box-shadow: inset 3px 0 0 #48d8ff;
 }
 .zone-table-row.disabled { opacity: 0.56; }
 .zone-table-row strong {
@@ -891,29 +911,29 @@ onMounted(async () => {
   white-space: nowrap;
 }
 .zone-table-row strong i {
-  width: 4px;
-  height: 28px;
+  width: 5px;
+  height: 32px;
   flex: 0 0 auto;
-  border-radius: 2px;
+  border-radius: 3px;
 }
 .risk-cell {
   color: #8ddcf0;
   font-weight: 900;
 }
 .zone-enable-toggle {
-  min-width: 84px;
-  height: 32px;
+  min-width: 74px;
+  height: 26px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 7px;
-  border: 1px solid rgba(127, 155, 176, 0.28);
-  border-radius: 999px;
-  color: #9bbbd0;
-  background: rgba(15, 39, 55, 0.72);
+  border: 1px solid rgba(126, 152, 170, 0.24);
+  border-radius: 5px;
+  color: #b6c7d4;
+  background: rgba(126, 152, 170, 0.08);
   font: inherit;
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 700;
   cursor: pointer;
 }
 .zone-enable-toggle i {
@@ -923,54 +943,51 @@ onMounted(async () => {
   background: #7f9bb0;
 }
 .zone-enable-toggle.active {
-  color: #061b23;
-  border-color: transparent;
-  background: linear-gradient(110deg, #48d8ff, #51e6be);
+  color: #b8f3dc;
+  border-color: rgba(98, 215, 177, 0.24);
+  background: rgba(98, 215, 177, 0.08);
 }
 .zone-enable-toggle.active i {
-  background: #061b23;
-  box-shadow: 0 0 8px rgba(6, 27, 35, 0.38);
+  background: #62d7b1;
+  box-shadow: 0 0 8px rgba(98, 215, 177, 0.38);
 }
 .row-actions {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
 }
 .row-edit,
 .row-delete {
-  min-width: 58px;
-  height: 32px;
-  border-radius: 6px;
+  min-width: auto;
+  height: 30px;
+  padding: 0;
+  border: 0;
   font: inherit;
-  font-size: 13px;
-  font-weight: 900;
+  font-size: 14px;
+  font-weight: 700;
   cursor: pointer;
 }
 .row-edit {
-  color: #51e6be;
-  border: 1px solid rgba(81, 230, 190, 0.46);
-  background: rgba(11, 73, 78, 0.52);
+  color: #7dd7ff;
+  background: transparent;
 }
 .row-delete {
-  color: #ff8b9a;
-  border: 1px solid rgba(255, 93, 108, 0.34);
-  background: rgba(72, 32, 48, 0.58);
+  color: #ff9daa;
+  background: transparent;
 }
 .row-edit:hover {
-  color: #e9fff9;
-  border-color: rgba(81, 230, 190, 0.72);
+  color: #c7f0ff;
 }
 .row-delete:hover {
   color: #ffd5d9;
-  border-color: rgba(255, 93, 108, 0.58);
 }
 .zone-table-empty {
-  min-height: 92px;
+  min-height: 180px;
   display: grid;
   place-items: center;
-  color: #6f8da0;
-  border: 1px dashed rgba(54, 221, 212, 0.28);
-  border-radius: 8px;
+  color: #789bb4;
+  font-size: 13px;
 }
 .config-panel { min-width: 0; padding: 12px; }
 .panel-heading {

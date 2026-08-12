@@ -60,6 +60,16 @@ class VisionDetector:
                 "model": "Qwen3.5-0.8B",
                 "variable": "boat_present",
             },
+            "possible_person": {
+                "name": "疑似人员初筛",
+                "model": "Qwen3.5-0.8B",
+                "variable": "possible_person",
+            },
+            "possible_boat": {
+                "name": "疑似船只初筛",
+                "model": "Qwen3.5-0.8B",
+                "variable": "possible_boat",
+            },
             "crack": {
                 "name": "裂缝检测",
                 "model": "CrackDetection-v1",
@@ -183,6 +193,8 @@ class VisionDetector:
             "flood": ("flood_detected", "flood_confidence"),
             "person": ("person_present", "person_confidence"),
             "boat": ("boat_present", "boat_confidence"),
+            "possible_person": ("possible_person", "person_confidence"),
+            "possible_boat": ("possible_boat", "boat_confidence"),
         }
         now = time.time()
         batch_result = {
@@ -203,7 +215,9 @@ class VisionDetector:
             for detection_type, (detected_key, confidence_key) in mapping.items():
                 detected = bool(int(scene.get(detected_key, 0) or 0))
                 try:
-                    score = float(confidence.get(confidence_key, 1.0 if detected else 0.0) or 0.0)
+                    # possible_* 无独立 confidence 键，缺失时按 0 处理，避免回落到 1.0
+                    default_score = 1.0 if (detected and not detection_type.startswith("possible_")) else 0.0
+                    score = float(confidence.get(confidence_key, default_score) or 0.0)
                 except (TypeError, ValueError):
                     score = 0.0
                 result = {

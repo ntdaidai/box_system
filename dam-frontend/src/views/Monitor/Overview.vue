@@ -82,13 +82,15 @@ const fetchStatus = async () => {
   try {
     const res = await getCameraList()
     const cameras = res.data?.cameras || []
-    const onlineCount = cameras.filter(camera => camera.connected).length
+    // 在线只统计启用且连接的摄像头，总数统计全部摄像头（含关闭的）
+    const enabledCameras = cameras.filter(camera => camera.enabled !== false)
+    const onlineCount = enabledCameras.filter(camera => camera.connected).length
     deviceStatus.value = {
       ...deviceStatus.value,
       camera: {
-        status: onlineCount === 0 ? 'offline' : (onlineCount === cameras.filter(camera => camera.enabled).length ? 'online' : 'partial'),
+        status: onlineCount === 0 ? 'offline' : (onlineCount === enabledCameras.length ? 'online' : 'partial'),
         online: onlineCount,
-        total: cameras.filter(camera => camera.enabled).length,
+        total: cameras.length,
       },
     }
   } catch (error) {

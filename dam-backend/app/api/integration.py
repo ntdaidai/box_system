@@ -7,7 +7,7 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
-from sqlalchemy import case, or_
+from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -52,6 +52,7 @@ EVENT_CATEGORY_LABELS = {
 class ConditionConfigUpdate(BaseModel):
     duration: Optional[int] = Field(None, ge=0, le=3600)
     enabled: Optional[bool] = None
+    expression: Optional[str] = Field(None, min_length=1, max_length=500)
 
 
 class EventConfigUpdate(BaseModel):
@@ -105,16 +106,43 @@ def _report_document_id(row: SafetyEventInstance) -> Optional[str]:
     return f"dam_event_report_{row.instance_no}"
 
 
+def _display_instance_no(db: Session, row: SafetyEventInstance) -> str:
+    if not row.started_at:
+        return row.instance_no
+    day_start = dt.datetime.combine(row.started_at.date(), dt.time.min)
+    day_end = day_start + dt.timedelta(days=1)
+    sequence = (
+        db.query(func.count(SafetyEventInstance.id))
+        .filter(
+            SafetyEventInstance.started_at >= day_start,
+            SafetyEventInstance.started_at < day_end,
+            or_(
+                SafetyEventInstance.started_at < row.started_at,
+                and_(
+                    SafetyEventInstance.started_at == row.started_at,
+                    SafetyEventInstance.id <= row.id,
+                ),
+            ),
+        )
+        .scalar()
+        or 1
+    )
+    return f"EVT_{row.started_at:%Y%m%d}_{int(sequence):03d}"
+
+
 def _event_dict(
     row: SafetyEventInstance,
     event: Optional[EventLibrary] = None,
     report: Optional[AnalysisReport] = None,
+    db: Optional[Session] = None,
 ) -> dict:
     event = event or getattr(row, "event", None)
     report_document_id = _report_document_id(row)
+    display_instance_no = _display_instance_no(db, row) if db else row.instance_no
     return {
         "id": row.id,
         "instance_no": row.instance_no,
+        "display_instance_no": display_instance_no,
         "event_id": row.current_event_id,
         "analysis_report_id": row.analysis_report_id,
         "analysis_report_title": report.report_title if report else None,
@@ -257,6 +285,8 @@ def update_condition_config(
         row.time_window = max(1, payload.duration)
     if payload.enabled is not None:
         row.is_activate = payload.enabled
+    if payload.expression is not None:
+        row.expression = payload.expression
     db.commit()
     return {"code": 200, "message": "条件配置已保存"}
 
@@ -395,7 +425,7 @@ def list_safety_events(
     event_category: Optional[str] = Query(None, max_length=64),
     event_id: Optional[int] = Query(None, ge=1),
     event_date: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
-    sort_by: Optional[str] = Query(None, pattern="^(index|risk|time)$"),
+    sort_by: Optional[str] = Query(None, pattern="^(index|risk|time|resolved)$"),
     sort_order: Optional[str] = Query(None, pattern="^(asc|desc)$"),
     keyword: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
@@ -437,6 +467,7 @@ def list_safety_events(
         "index": SafetyEventInstance.id,
         "risk": risk_order,
         "time": SafetyEventInstance.started_at,
+        "resolved": SafetyEventInstance.resolved_at,
     }.get(sort_by or "time", SafetyEventInstance.started_at)
     order_method = sort_expr.asc if sort_order == "asc" else sort_expr.desc
     rows = (
@@ -445,7 +476,7 @@ def list_safety_events(
         .limit(page_size)
         .all()
     )
-    return {"code": 200, "data": {"items": [_event_dict(instance, event, report) for instance, event, report in rows], "total": total}}
+    return {"code": 200, "data": {"items": [_event_dict(instance, event, report, db) for instance, event, report in rows], "total": total}}
 
 
 @router.get("/safety-events/categories", summary="获取安全事件类型")
@@ -533,7 +564,7 @@ def get_safety_event_detail(
     ).order_by(SafetyEventEvidence.captured_at.asc()).all()
     tasks = db.query(SafetyEventTask).filter(SafetyEventTask.event_instance_id == instance.id).order_by(SafetyEventTask.id.desc()).all()
     return {"code": 200, "data": {
-        "event": _event_dict(instance, event),
+        "event": _event_dict(instance, event, db=db),
         "visual_detail": None if not visual else {
             "camera_id": visual.get("camera_id") or instance.source_id,
             "camera_name": visual.get("camera_name"),

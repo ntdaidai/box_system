@@ -64,7 +64,7 @@
         :default-sort="{ prop: 'started_at', order: 'descending' }"
         @sort-change="handleSortChange"
       >
-        <el-table-column label="事件编号" prop="id" width="132" sortable="custom" align="center" header-align="center">
+        <el-table-column label="事件编号" prop="id" width="176" sortable="custom" align="center" header-align="center">
           <template #default="{ row }">
             <span class="event-no">{{ displayEventNo(row) }}</span>
           </template>
@@ -84,7 +84,7 @@
             <span class="source-pill" :class="`is-${row.source_type || 'unknown'}`">{{ sourceLabel(row.source_type) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="摘要" min-width="230" align="center" header-align="center">
+        <el-table-column label="摘要" min-width="160" align="center" header-align="center">
           <template #default="{ row }">
             <el-tooltip
               v-if="isLongSummary(row.summary)"
@@ -101,22 +101,14 @@
             <span class="event-status" :class="statusClass(row.status)">{{ statusLabel(row.status) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="报告" min-width="170" align="center" header-align="center">
-          <template #default="{ row }">
-            <button
-              v-if="row.analysis_report_document_id"
-              class="report-link"
-              type="button"
-              @click="openReport(row)"
-            >
-              {{ reportTitle(row) }}
-            </button>
-            <span v-else class="no-report">{{ reportPlaceholder(row) }}</span>
-          </template>
-        </el-table-column>
         <el-table-column label="开始时间" prop="started_at" width="190" sortable="custom" align="center" header-align="center">
           <template #default="{ row }">
             <time class="event-time">{{ formatTime(row.started_at) }}</time>
+          </template>
+        </el-table-column>
+        <el-table-column label="最后完成时间" prop="resolved_at" width="190" sortable="custom" align="center" header-align="center">
+          <template #default="{ row }">
+            <time class="event-time">{{ formatTime(row.resolved_at) }}</time>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="96" fixed="right" align="center" header-align="center">
@@ -170,7 +162,7 @@ const query = reactive({
   sort_by: 'time',
   sort_order: 'desc',
   page: 1,
-  page_size: 20,
+  page_size: 10,
 })
 
 const overview = computed(() => ({
@@ -213,11 +205,6 @@ function openDetail(row) {
   router.push({ name: 'AlarmSafetyEventDetail', params: { id: row.id } })
 }
 
-function openReport(row) {
-  if (!row?.analysis_report_document_id) return
-  router.push({ name: 'DocumentEditor', params: { documentId: row.analysis_report_document_id }, query: { mode: 'view' } })
-}
-
 function handleSortChange({ prop, order }) {
   if (!order) {
     query.sort_by = 'time'
@@ -225,7 +212,7 @@ function handleSortChange({ prop, order }) {
     reloadFromFirstPage()
     return
   }
-  const sortMap = { id: 'index', risk_level: 'risk', started_at: 'time' }
+  const sortMap = { id: 'index', risk_level: 'risk', started_at: 'time', resolved_at: 'resolved' }
   query.sort_by = sortMap[prop] || 'time'
   query.sort_order = order === 'ascending' ? 'asc' : 'desc'
   reloadFromFirstPage()
@@ -233,10 +220,16 @@ function handleSortChange({ prop, order }) {
 
 function displayEventNo(row) {
   if (!row) return ''
-  const date = dateToken(row.started_at) || dateToken(row.instance_no)
-  if (!date) return row.instance_no || String(row.id || '')
-  const sequence = instanceSequence(row.instance_no) || row.id
-  return `${date}_${String(sequence || 1).padStart(2, '0')}`
+  return row.display_instance_no || normalizeInstanceNo(row.instance_no, row.started_at)
+}
+
+function normalizeInstanceNo(value, fallbackDate) {
+  const text = String(value || '').trim()
+  const date = dateToken(text) || dateToken(fallbackDate)
+  if (!date) return text
+  const numericSequence = instanceSequence(text)
+  const sequence = numericSequence || 1
+  return `EVT_${date}_${String(sequence).padStart(3, '0')}`
 }
 
 function dateToken(value) {
@@ -283,16 +276,6 @@ function shortSummary(value) {
 
 function isLongSummary(value) {
   return String(value || '').length > 15
-}
-
-function reportPlaceholder(row) {
-  return ['COMPLETED', 'FALSE_ALARM'].includes(row?.status) ? '待生成' : '闭环后生成'
-}
-
-function reportTitle(row) {
-  const name = String(row?.event_name || row?.summary || '').trim()
-  if (!name) return '事件处置报告'
-  return name.includes('事件') ? `${name}处置报告` : `${name}事件处置报告`
 }
 
 function formatTime(value) {
@@ -473,12 +456,23 @@ loadEvents()
   border-bottom: 0;
   background: rgba(30, 58, 95, .58) !important;
 }
+.table-panel :deep(th.el-table__cell .cell) {
+  line-height: 22px;
+}
+.table-panel :deep(.el-table__row) {
+  height: 72px;
+}
 .table-panel :deep(td.el-table__cell) {
+  padding: 12px 0;
   border-bottom-color: rgba(104, 161, 200, .1);
 }
 .event-no,
 .event-name {
   color: #f3f8fd;
+}
+.event-no {
+  display: inline-block;
+  white-space: nowrap;
 }
 .event-summary,
 .event-time {
@@ -521,32 +515,6 @@ loadEvents()
   border-color: rgba(98, 215, 177, .24);
   color: #b8f3dc;
   background: rgba(98, 215, 177, .08);
-}
-.report-link {
-  appearance: none;
-  max-width: 140px;
-  padding: 0 0 2px;
-  border: 0;
-  border-bottom: 1px solid rgba(112, 199, 255, .82);
-  overflow: hidden;
-  color: #70c7ff;
-  background: transparent;
-  cursor: pointer;
-  text-overflow: ellipsis;
-  vertical-align: middle;
-  white-space: nowrap;
-  text-decoration: underline;
-  text-decoration-color: rgba(112, 199, 255, .68);
-  text-underline-offset: 4px;
-  font-weight: 700;
-}
-.report-link:hover {
-  border-bottom-color: #b6e8ff;
-  color: #b6e8ff;
-  text-decoration-color: #b6e8ff;
-}
-.no-report {
-  color: #607a90;
 }
 .detail-link {
   appearance: none;

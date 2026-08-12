@@ -3,7 +3,7 @@
     <aside class="tool-panel">
       <header>
         <span>总览地图区域标注</span>
-        <h1>摄像头范围框选</h1>
+        <h1>2号摄像头范围框选</h1>
       </header>
 
       <section class="target-list">
@@ -29,7 +29,7 @@
       <section class="hint-panel">
         <p>滚轮缩放地图；绘制模式下左键点击添加边界点。</p>
         <p>拖动模式下按住左键移动地图；绘制模式按住 Shift 也可以拖动。</p>
-        <p>2 号点位不参与标注。</p>
+        <p>当前页面只标注 2 号摄像头范围，导出 JSON 只包含 camera-2。</p>
       </section>
 
       <section class="export-panel">
@@ -111,28 +111,14 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 
 const imageSize = { width: 2168, height: 725 }
-const storageKey = 'overview-camera-region-annotator-v3'
+const storageKey = 'overview-camera-2-region-annotator-v1'
 
 const targets = [
-  { key: 'camera-1', pointNos: [1], type: 'boatForbidden', name: '1号摄像头范围' },
-  { key: 'camera-3', pointNos: [3], type: 'boatForbidden', name: '3号摄像头范围' },
-  { key: 'camera-4', pointNos: [4], type: 'boatForbidden', name: '4号摄像头范围' },
-  { key: 'camera-5', pointNos: [5], type: 'boatForbidden', name: '5号摄像头范围' },
-  { key: 'camera-6', pointNos: [6], type: 'boatForbidden', name: '6号摄像头范围' },
-  { key: 'camera-7', pointNos: [7], type: 'boatForbidden', name: '7号摄像头范围' },
-  { key: 'camera-8', pointNos: [8], type: 'boatForbidden', name: '8号摄像头范围' },
-  { key: 'camera-9', pointNos: [9], type: 'personForbidden', name: '9号摄像头范围' },
+  { key: 'camera-2', pointNos: [2], type: 'toConfirm', name: '2号摄像头范围' },
 ]
 
 const cameraPoints = [
-  { no: 1, x: 17.3410, y: 40.8304 },
-  { no: 3, x: 41.8497, y: 74.0484 },
-  { no: 4, x: 47.3988, y: 38.0623 },
-  { no: 5, x: 49.2486, y: 38.0623 },
-  { no: 6, x: 66.3584, y: 52.5952 },
-  { no: 7, x: 68.2081, y: 52.5952 },
-  { no: 8, x: 57.3410, y: 75.4325 },
-  { no: 9, x: 91.7919, y: 24.2215 },
+  { no: 2, x: 7.3988, y: 15.2249 },
 ]
 
 const boardRef = ref(null)
@@ -159,7 +145,7 @@ const targetsWithPath = computed(() => targets
   .filter((target) => target.path))
 
 const outputJson = computed(() => JSON.stringify({
-  source: 'overview-camera-region-annotator',
+  source: 'overview-camera-2-region-annotator',
   image: '/dam.png',
   annotateImage: '/dam.png',
   imageSize,

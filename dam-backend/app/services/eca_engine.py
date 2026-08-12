@@ -1601,6 +1601,7 @@ class ECAEngine:
             "slope_damage_detected", "gate_deform_detected",
             "mudslide_detected", "landslide_detected", "earthquake_detected",
             "flood_detected", "person_present", "boat_present",
+            "possible_person", "possible_boat",
         }
 
         # 检查是否有视觉检测异常
@@ -1786,6 +1787,19 @@ class ECAEngine:
 
         risk = {1: "LOW", 2: "MEDIUM", 3: "HIGH"}.get(int(event.risk_level or 1), "LOW")
         observation = dict(camera_data or {})
+        # 疑似命中检测：人员/船只低置信（possible_*==1 且对应确认位!=1）→ 降级 LOW 并标记待复核
+        suspected = (
+            int(observation.get("possible_person") or 0) == 1
+            and int(observation.get("person_present") or 0) != 1
+        ) or (
+            int(observation.get("possible_boat") or 0) == 1
+            and int(observation.get("boat_present") or 0) != 1
+        )
+        if suspected:
+            risk = "LOW"
+            observation["suspected"] = True
+            observation["suspected_label"] = "疑似人员/船只待复核"
+            observation["screening_note"] = "0.8B 初筛低置信命中，已进入 4B/35B 复核，风险等级按 LOW 降级处理"
         camera = db.query(Camera).filter(Camera.id == source.device_id).first() if source.device_id else None
         observation["visual"] = {
             **dict(observation.get("visual") or {}),
@@ -1835,11 +1849,13 @@ class ECAEngine:
             trigger_type="AUTO",
             risk_level=risk,
             status="SUCCESS",
-            message=f"{event.event_name}已由Qwen摄像头初筛触发",
+            message=f"{event.event_name}已由Qwen摄像头初筛触发"
+                    + ("（疑似命中，待4B/35B复核确认）" if suspected else ""),
             operator="SYSTEM",
             payload={
                 "instance_no": instance.instance_no,
                 "observation": observation,
+                "suspected": suspected,
             },
             create_time=now,
         ))
@@ -1906,7 +1922,9 @@ class ECAEngine:
         instance.status = "COMPLETED"
         instance.resolved_at = now
         instance.resolve_reason = "camera_condition_recovered"
-        instance.latest_observation = {"recovery_observation": camera_data}
+        latest["recovery_observation"] = camera_data
+        latest["recovered_at"] = now.isoformat()
+        instance.latest_observation = latest
         db.add(SafetyEventTimelineLog(
             event_instance_id=instance.id,
             event_id=event.id,

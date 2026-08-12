@@ -97,6 +97,12 @@ class WorkflowExecutorService:
                     "skipped": True,
                     "reason": "节点未配置 model_id，无法由模型库执行",
                     "inputs": inputs,
+                    # Pass-through nodes, such as a temporarily unconfigured
+                    # tracker, must not break visual evidence propagation.
+                    "images": inputs.get("images") if isinstance(inputs.get("images"), list) else [],
+                    "videos": inputs.get("videos") if isinstance(inputs.get("videos"), list) else [],
+                    "media_objects": inputs.get("media_objects") if isinstance(inputs.get("media_objects"), list) else [],
+                    "detection_results": inputs.get("detection_results") or inputs.get("sensor_data"),
                 }
                 context[node_id] = output
                 node_results.append(self._node_result(node, "skipped", output, request_data=None))
@@ -195,6 +201,12 @@ class WorkflowExecutorService:
                 propagated_media = self._extract_media_objects(context[source])
                 if propagated_media:
                     inputs["media_objects"] = propagated_media
+                    propagated_videos = self._media_paths_by_type(propagated_media, "video")
+                    propagated_images = self._media_paths_by_type(propagated_media, "image")
+                    if propagated_videos:
+                        inputs["videos"] = propagated_videos
+                    if propagated_images:
+                        inputs["images"] = propagated_images
         inputs.setdefault("images", images)
         inputs.setdefault("videos", videos)
         inputs.setdefault("media_objects", media_objects)
@@ -259,6 +271,13 @@ class WorkflowExecutorService:
                 data.get("uploaded_media_objects"),
                 data.get("media_objects"),
             ])
+        nested_inputs = output.get("inputs")
+        if isinstance(nested_inputs, dict):
+            candidates.extend([
+                nested_inputs.get("cloud_media_objects"),
+                nested_inputs.get("uploaded_media_objects"),
+                nested_inputs.get("media_objects"),
+            ])
         result = output.get("inference_result")
         if isinstance(result, dict):
             candidates.extend([
@@ -270,6 +289,27 @@ class WorkflowExecutorService:
             if isinstance(candidate, list) and candidate:
                 return [item for item in candidate if isinstance(item, dict)]
         return []
+
+    @staticmethod
+    def _media_paths_by_type(media_objects: List[Dict[str, Any]], media_type: str) -> List[str]:
+        paths: List[str] = []
+        for item in media_objects:
+            if not isinstance(item, dict):
+                continue
+            item_type = str(item.get("type") or item.get("media_type") or "").lower()
+            if item_type != media_type:
+                continue
+            ref = (
+                item.get("path")
+                or item.get("url")
+                or item.get("minio_url")
+                or item.get("file_url")
+            )
+            if not ref and item.get("bucket") and (item.get("object_key") or item.get("object_name")):
+                ref = f"{item.get('bucket')}/{item.get('object_key') or item.get('object_name')}"
+            if isinstance(ref, str) and ref:
+                paths.append(ref)
+        return paths
 
     def _build_request_data(
         self,
@@ -487,6 +527,8 @@ class WorkflowExecutorService:
             "person_confidence",
             "boat_present",
             "boat_confidence",
+            "possible_person",
+            "possible_boat",
         )
         return {key: sensor_data[key] for key in keep if key in sensor_data}
 

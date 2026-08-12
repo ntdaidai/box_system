@@ -28,12 +28,12 @@ ROOT = Path(__file__).resolve().parents[2]
 BACKUP_DIR = ROOT / "backups"
 DROP_TABLES = ("camera_zone_condition", "alarm")
 VISUAL_EVENTS = {
-    "PERSON_INTRUSION": ("person_present == 1", "人员闯入触发条件", 5),
-    "PERSON_WATERFRONT": ("person_present == 1", "人员亲水触发条件", 3),
-    "PERSON_WADING": ("person_present == 1", "人员涉水触发条件", 0),
-    "BOAT_INTRUSION": ("boat_present == 1", "船只闯入触发条件", 0),
-    "BOAT_STAY": ("boat_present == 1", "船只停留触发条件", 30),
-    "BOAT_ILLEGAL_FISHING": ("boat_present == 1", "船只偷捕触发条件", 120),
+    "PERSON_INTRUSION": ("person_present == 1 OR possible_person == 1", "人员闯入触发条件", 5),
+    "PERSON_WATERFRONT": ("person_present == 1 OR possible_person == 1", "人员亲水触发条件", 3),
+    "PERSON_WADING": ("person_present == 1 OR possible_person == 1", "人员涉水触发条件", 0),
+    "BOAT_INTRUSION": ("boat_present == 1 OR possible_boat == 1", "船只闯入触发条件", 0),
+    "BOAT_STAY": ("boat_present == 1 OR possible_boat == 1", "船只停留触发条件", 30),
+    "BOAT_ILLEGAL_FISHING": ("boat_present == 1 OR possible_boat == 1", "船只偷捕触发条件", 120),
 }
 
 

@@ -5,26 +5,6 @@
         <h2>视频测试</h2>
         <p>上传视频进行画面分析，联动触发事件处置与报告归档</p>
       </div>
-      <div class="source-control">
-        <el-select
-          v-model="cameraId"
-          placeholder="选择摄像头"
-          :loading="cameraLoading"
-          class="camera-select"
-        >
-          <el-option
-            v-for="camera in cameras"
-            :key="camera.id"
-            :value="camera.id"
-            :label="camera.name || camera.camera_name || `摄像头 ${camera.id}`"
-            :disabled="camera.enabled === false"
-          >
-            <span>{{ camera.name || camera.camera_name || `摄像头 ${camera.id}` }}</span>
-            <small>{{ camera.connected ? '在线' : '模拟可用' }}</small>
-          </el-option>
-        </el-select>
-        <el-button :icon="Refresh" circle title="刷新摄像头" @click="loadCameras" />
-      </div>
     </header>
 
     <section class="workspace">
@@ -42,7 +22,7 @@
             <el-button
               type="primary"
               :icon="simulationActive ? VideoPause : VideoPlay"
-              :disabled="!videoUrl || !cameraId"
+              :disabled="!videoUrl"
               @click="toggleSimulation"
             >
               {{ simulationActive ? '暂停模拟' : '开始模拟' }}
@@ -75,15 +55,19 @@
         </div>
 
         <div class="evidence-strip">
-          <div class="strip-title"><span>采样帧</span><b>{{ evidenceFrames.length }} / {{ FRAME_COUNT }} 帧</b></div>
+          <div class="strip-title">
+            <span>复核帧</span>
+            <b>{{ evidenceFrames.length }} / {{ FRAME_COUNT }} 帧</b>
+          </div>
           <div class="frame-strip">
             <figure v-for="(frame, index) in evidenceFrames" :key="frame.id">
-              <img v-if="!frame.failed" :src="frame.url" :alt="`关键帧 ${index + 1}`" @error="markFrameFailed(frame)" />
-              <div v-else class="frame-error">关键帧加载失败</div>
-              <span>采样帧 {{ index + 1 }}</span>
+              <img v-if="!frame.failed" :src="frame.url" :alt="`模型复核帧 ${index + 1}`" @error="markFrameFailed(frame)" />
+              <div v-else class="frame-error">复核帧加载失败</div>
+              <span>{{ frame.timeLabel || `复核帧 ${index + 1}` }}</span>
             </figure>
-            <div v-for="slot in Math.max(0, 4 - evidenceFrames.length)" :key="`slot-${slot}`" class="frame-slot">
-              {{ String(evidenceFrames.length + slot).padStart(2, '0') }}
+            <div v-for="slot in Math.max(0, FRAME_COUNT - evidenceFrames.length)" :key="`slot-${slot}`" class="frame-slot">
+              <b>{{ String(evidenceFrames.length + slot).padStart(2, '0') }}</b>
+              <span>{{ frameSlotLabel }}</span>
             </div>
           </div>
         </div>
@@ -154,22 +138,21 @@
 </template>
 
 <script setup>
-import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, markRaw, nextTick, onBeforeUnmount, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  CircleCheckFilled, Connection, Promotion, Refresh, VideoCamera, VideoPause, VideoPlay, Warning, WarningFilled,
+  CircleCheckFilled, Connection, Promotion, VideoCamera, VideoPause, VideoPlay, Warning, WarningFilled,
 } from '@element-plus/icons-vue'
-import { getCameraList, simulateCameraVideoScreening } from '@/api/camera'
+import { simulateCameraVideoScreening } from '@/api/camera'
 import { getUnifiedSafetyEventDetail } from '@/api/integration'
-import { camerasFromPayload } from '@/utils/cameraSnapshots'
 
-const FRAME_COUNT = 4
+const FRAME_COUNT = 8
 const WINDOW_SECONDS = 10
+const DEFAULT_CAMERA_ID = 1
+const DEFAULT_CAMERA_NAME = '9号监测点'
 const router = useRouter()
-const cameras = ref([])
-const cameraId = ref('')
-const cameraLoading = ref(false)
+const cameraId = ref(DEFAULT_CAMERA_ID)
 const fileInputRef = ref(null)
 const videoRef = ref(null)
 const videoUrl = ref('')
@@ -186,15 +169,16 @@ const pollStartedAt = ref(0)
 const lastDetailSignature = ref('')
 const stablePollCount = ref(0)
 
-const selectedCameraName = computed(() => {
-  const camera = cameras.value.find(item => item.id === cameraId.value)
-  return camera?.name || camera?.camera_name || (cameraId.value ? `摄像头 ${cameraId.value}` : '--')
-})
+const selectedCameraName = computed(() => DEFAULT_CAMERA_NAME)
 const mediaStatus = computed(() => {
   if (screening.value) return '分析中'
   if (simulationActive.value) return '实时采集中'
   if (videoUrl.value) return '视频已就绪'
   return '等待输入'
+})
+const frameSlotLabel = computed(() => {
+  if (screening.value || result.value?.event_instance_id) return '等待复核帧'
+  return '待生成'
 })
 const riskLabel = computed(() => labelForRisk(result.value?.risk_level))
 const riskTag = computed(() => tagForRisk(result.value?.risk_level))
@@ -379,21 +363,6 @@ function formatNow() {
   return formatDetailTime(Date.now())
 }
 
-async function loadCameras() {
-  cameraLoading.value = true
-  try {
-    const response = await getCameraList()
-    cameras.value = camerasFromPayload(response.data)
-    if (!cameras.value.some(item => item.id === cameraId.value)) {
-      cameraId.value = cameras.value.find(item => item.enabled !== false)?.id || ''
-    }
-  } catch (error) {
-    lastError.value = error?.response?.data?.detail || '摄像头列表加载失败'
-  } finally {
-    cameraLoading.value = false
-  }
-}
-
 function handleVideoFile(raw) {
   if (!raw) return
   if (raw.size > 200 * 1024 * 1024) return ElMessage.error('视频大小不能超过 200MB')
@@ -455,18 +424,9 @@ async function submitVideoFile() {
       videoFile.value,
       { windowSeconds: WINDOW_SECONDS },
     )
-    const normalizedResult = {
-      ...response.data,
-      image_urls: normalizeMediaUrls(response.data?.image_urls || []),
-    }
+    const normalizedResult = { ...response.data }
     result.value = normalizedResult
-    evidenceFrames.value = normalizedResult.image_urls.slice(0, FRAME_COUNT).map((url, index) => ({
-      id: `server-frame-${Date.now()}-${index}`,
-      blob: null,
-      url,
-      failed: false,
-      timeLabel: `FRAME ${String(index + 1).padStart(2, '0')}`,
-    }))
+    evidenceFrames.value = []
     if (normalizedResult.event_instance_id) {
       await refreshEventDetail(normalizedResult.event_instance_id)
       startEventPolling(normalizedResult.event_instance_id)
@@ -484,6 +444,7 @@ async function refreshEventDetail(id = result.value?.event_instance_id) {
   try {
     const response = await getUnifiedSafetyEventDetail(id)
     eventDetail.value = response.data
+    updateWorkflowEvidenceFrames(response.data)
     const event = response.data?.event || {}
     result.value = {
       ...(result.value || {}),
@@ -554,6 +515,9 @@ function normalizeMediaUrl(url) {
   if (!url) return ''
   const raw = String(url)
   if (raw.startsWith('data:') || raw.startsWith('blob:') || raw.startsWith('/')) return raw
+  if (raw.startsWith('dam/')) {
+    return `/api/v1/camera/media/minio-proxy?url=${encodeURIComponent(raw)}`
+  }
   try {
     const parsed = new URL(raw)
     const isMinio = parsed.port === '9000' || ['localhost', '127.0.0.1', '172.17.0.1', 'minio'].includes(parsed.hostname)
@@ -564,6 +528,86 @@ function normalizeMediaUrl(url) {
     return raw
   }
   return raw
+}
+
+function updateWorkflowEvidenceFrames(detail) {
+  const frames = extractWorkflowReviewFrames(detail)
+  if (!frames.length) return
+  evidenceFrames.value = frames.slice(0, FRAME_COUNT).map((item, index) => ({
+    id: `workflow-frame-${item.key || index}`,
+    url: normalizeMediaUrl(item.url),
+    failed: false,
+    timeLabel: item.timeLabel || `复核帧 ${String(index + 1).padStart(2, '0')}`,
+  }))
+}
+
+function extractWorkflowReviewFrames(detail) {
+  const timeline = Array.isArray(detail?.timeline) ? detail.timeline : []
+  const workflowLog = [...timeline].reverse().find((row) => String(row?.log_type || '').toUpperCase() === 'DAM_WORKFLOW' && row?.payload?.execution_result)
+  const nodeResults = workflowLog?.payload?.execution_result?.node_results
+  if (!Array.isArray(nodeResults)) return []
+
+  const reasoningNode = nodeResults.find((row) => row?.node_id === 'action_reasoning')
+  const detectNode = nodeResults.find((row) => row?.node_id === 'action_detect')
+  const reasoningMedia = mediaListFromNode(reasoningNode)
+  const detectMedia = mediaListFromNode(detectNode)
+  const candidates = [...reasoningMedia, ...detectMedia]
+  const frames = []
+  const seen = new Set()
+
+  for (const item of candidates) {
+    const ref = preferredReviewFrameRef(item)
+    if (!ref) continue
+    const key = `${ref.bucket || ''}/${ref.objectName || ref.url}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    frames.push({
+      key,
+      url: ref.url,
+      timeLabel: frameTimeLabel(item, frames.length),
+    })
+    if (frames.length >= FRAME_COUNT) break
+  }
+  return frames
+}
+
+function mediaListFromNode(node) {
+  const output = node?.output || {}
+  const inference = output.inference_result || {}
+  return [
+    ...(Array.isArray(inference.media_objects) ? inference.media_objects : []),
+    ...(Array.isArray(inference.cloud_media_objects) ? inference.cloud_media_objects : []),
+    ...(Array.isArray(output.media_objects) ? output.media_objects : []),
+  ]
+}
+
+function preferredReviewFrameRef(item) {
+  if (!item || String(item.type || '').toLowerCase() !== 'image') return null
+  if (String(item.role || '') === 'qwen4b_selected_representative_frame') return null
+
+  const source = item.source
+  const sourceRef = typeof source === 'string' ? source : source?.path || source?.object_name || source?.object_key || ''
+  const ownRef = item.path || item.object_name || item.object_key || ''
+  const ref = String(sourceRef || ownRef || '')
+  const isYoloFrame = ref.includes('/workflow/yolo-detections/') || ref.includes('workflow/yolo-detections/')
+  const isWorkflowFrame = String(ownRef).includes('/workflow-media/') && String(ownRef).includes('/images/')
+  if (!isYoloFrame && !isWorkflowFrame) return null
+
+  const localRef = isYoloFrame ? ref : String(ownRef)
+  const normalized = localRef.startsWith('dam/') || localRef.startsWith('http')
+    ? localRef
+    : `dam/${localRef.replace(/^\/+/, '')}`
+  return {
+    url: normalized,
+    bucket: normalized.split('/')[0],
+    objectName: normalized.split('/').slice(1).join('/'),
+  }
+}
+
+function frameTimeLabel(item, index) {
+  const seconds = item?.timestamp_seconds ?? item?.source?.timestamp_seconds ?? item?.frame_time_sec ?? item?.source?.frame_time_sec
+  if (seconds !== undefined && seconds !== null && seconds !== '') return `${Number(seconds).toFixed(1)}s`
+  return `复核帧 ${String(index + 1).padStart(2, '0')}`
 }
 
 function markFrameFailed(frame) {
@@ -593,7 +637,6 @@ function formatDetailTime(value) {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? '--' : date.toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
-onMounted(loadCameras)
 onBeforeUnmount(() => {
   stopEventPolling()
   stopSimulation(false)
@@ -622,7 +665,6 @@ onBeforeUnmount(() => {
   background: #07131f;
 }
 .page-header,
-.source-control,
 .media-tools,
 .panel-header,
 .panel-header > div:first-child,
@@ -666,27 +708,6 @@ h2 {
 }
 h3 {
   font-size: 16px;
-}
-.source-control {
-  gap: 10px;
-  color: #b3c7d6;
-  font-size: 13px;
-}
-.camera-select {
-  width: 260px;
-}
-.camera-select :deep(.el-select__wrapper) {
-  min-height: 36px;
-  background: #0c2134;
-  box-shadow: inset 0 0 0 1px var(--line);
-}
-.camera-select :deep(.el-select__selected-item) {
-  color: var(--text);
-}
-.source-control small {
-  float: right;
-  margin-left: 24px;
-  color: #7594aa;
 }
 .workspace {
   display: grid;
@@ -820,15 +841,22 @@ h3 {
   color: #d7e8f3;
 }
 .frame-strip {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  display: flex;
   gap: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 4px;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(79, 208, 232, .42) rgba(8, 24, 39, .6);
 }
 .frame-strip figure,
 .frame-slot {
+  flex: 0 0 clamp(190px, 22vw, 280px);
   aspect-ratio: 16 / 9;
   border: 1px solid #284962;
   border-radius: 6px;
+  scroll-snap-align: start;
 }
 .frame-strip figure {
   position: relative;
@@ -864,10 +892,19 @@ h3 {
 .frame-slot {
   display: grid;
   place-items: center;
+  align-content: center;
+  gap: 6px;
   color: #3c5b70;
   background: #0b2032;
+}
+.frame-slot b {
   font-size: 18px;
   font-weight: 800;
+}
+.frame-slot span {
+  color: #607f94;
+  font-size: 11px;
+  font-weight: 600;
 }
 .result-panel {
   min-height: 620px;
@@ -1310,20 +1347,15 @@ h3 {
     padding-top: 12px;
     padding-bottom: 12px;
   }
-  .source-control,
   .media-tools {
     flex-wrap: wrap;
-  }
-  .camera-select {
-    flex: 1;
-    width: auto;
-    min-width: 190px;
   }
   .video-stage {
     height: 340px;
   }
-  .frame-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .frame-strip figure,
+  .frame-slot {
+    flex-basis: 78vw;
   }
 }
 </style>

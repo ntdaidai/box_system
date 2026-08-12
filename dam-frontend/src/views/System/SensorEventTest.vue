@@ -5,15 +5,22 @@
         <h2>传感器测试</h2>
         <p>模拟传感器数据触发 ECA，联动事件处置与报告归档</p>
       </div>
-      <div class="source-control">
-        <el-tag effect="dark" :type="statusTag">{{ flowStatusLabel }}</el-tag>
-      </div>
     </header>
 
     <section class="workspace">
       <div class="control-panel">
         <header class="panel-header">
           <div><span class="section-index">01</span><div><small>SENSOR</small><h3>触发参数</h3></div></div>
+          <el-button
+            type="primary"
+            :icon="VideoPlay"
+            :loading="submitting"
+            :disabled="!canSubmit"
+            :title="submitDisabledReason"
+            @click="submit"
+          >
+            开始模拟
+          </el-button>
         </header>
 
         <div class="preset-grid">
@@ -26,7 +33,7 @@
           >
             <span>{{ preset.level }}</span>
             <strong>{{ preset.label }}</strong>
-            <small>{{ preset.expression }}</small>
+            <small>{{ preset.rangeText }}</small>
           </button>
         </div>
 
@@ -51,18 +58,8 @@
             <span>MP4、MOV、WEBM 或 M4V</span>
           </button>
         </div>
+        <p class="submit-hint" :class="{ ready: canSubmit }">{{ submitHint }}</p>
 
-        <div class="actions">
-          <el-button
-            type="primary"
-            :icon="Promotion"
-            :loading="submitting"
-            :disabled="!canSubmit"
-            @click="submit"
-          >
-            触发传感器 ECA
-          </el-button>
-        </div>
       </div>
 
       <aside class="result-panel">
@@ -120,7 +117,7 @@ import { computed, markRaw, nextTick, onBeforeUnmount, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  CircleCheckFilled, Connection, DataAnalysis, Promotion, VideoCamera, Warning, WarningFilled,
+  CircleCheckFilled, Connection, DataAnalysis, Promotion, VideoCamera, VideoPlay, Warning, WarningFilled,
 } from '@element-plus/icons-vue'
 import { simulateSensorEvent } from '@/api/eca'
 import { getUnifiedSafetyEventDetail } from '@/api/integration'
@@ -128,13 +125,17 @@ import { getUnifiedSafetyEventDetail } from '@/api/integration'
 const router = useRouter()
 
 const presets = [
-  { key: 'wind6', eventId: 22, sensorName: 'wind', label: '大风预警', level: '6级', speed: 11.5, risk: 'LOW', expression: 'wind_speed_ms >= 10.8 AND wind_speed_ms < 13.9' },
-  { key: 'wind7', eventId: 23, sensorName: 'wind', label: '强风预警', level: '7级', speed: 15.0, risk: 'LOW', expression: 'wind_speed_ms >= 13.9 AND wind_speed_ms < 17.2' },
-  { key: 'wind8', eventId: 24, sensorName: 'wind', label: '大风警报', level: '8级', speed: 18.5, risk: 'MEDIUM', expression: 'wind_speed_ms >= 17.2 AND wind_speed_ms < 20.8' },
-  { key: 'wind12', eventId: 28, sensorName: 'wind', label: '飓风警报', level: '12级', speed: 33.5, risk: 'HIGH', expression: 'wind_speed_ms >= 32.7' },
+  { key: 'wind8', eventId: 24, sensorName: 'wind', label: '大风警报', level: '风速8级', risk: 'MEDIUM', rangeText: '17.2-20.7 m/s', sensorData: { wind_speed_ms: 18.5, wind_direction: 135, wind_level: 8 } },
+  { key: 'wind12', eventId: 28, sensorName: 'wind', label: '飓风警报', level: '风速12级', risk: 'HIGH', rangeText: '>= 32.7 m/s', sensorData: { wind_speed_ms: 33.5, wind_direction: 135, wind_level: 12 } },
+  { key: 'rain_hourly', eventId: 54, sensorName: 'rain', label: '小时暴雨预警', level: '雨量', risk: 'MEDIUM', rangeText: '小时雨量 >= 16 mm', sensorData: { hour_rain: 18, today_rain: 46, last_hour_rain: 9 } },
+  { key: 'rain_heavy_day', eventId: 56, sensorName: 'rain', label: '当天大暴雨警报', level: '雨量', risk: 'HIGH', rangeText: '当天雨量 100-249 mm', sensorData: { hour_rain: 24, today_rain: 128, last_hour_rain: 18 } },
+  { key: 'temp_low', eventId: 34, sensorName: 'temp_humidity', label: '低温告警', level: '温度', risk: 'MEDIUM', rangeText: '-10-0 ℃', sensorData: { temperature: -3.2, humidity: 62 } },
+  { key: 'temp_high', eventId: 35, sensorName: 'temp_humidity', label: '高温告警', level: '温度', risk: 'MEDIUM', rangeText: '35-39 ℃', sensorData: { temperature: 37.6, humidity: 55 } },
+  { key: 'humidity_high', eventId: 40, sensorName: 'temp_humidity', label: '高湿事件', level: '湿度', risk: 'MEDIUM', rangeText: '湿度 80-89 %', sensorData: { temperature: 28.4, humidity: 85 } },
+  { key: 'freeze', eventId: 38, sensorName: 'temp_humidity', label: '冰冻风险告警', level: '温湿度', risk: 'HIGH', rangeText: '温度 < 0 ℃ 且湿度 >= 85%', sensorData: { temperature: -2.5, humidity: 91 } },
 ]
 
-const selectedKey = ref('wind8')
+const selectedKey = ref('')
 const fileInputRef = ref(null)
 const videoRef = ref(null)
 const videoFile = ref(null)
@@ -146,11 +147,23 @@ const detail = ref(null)
 const lastError = ref('')
 const pollTimer = ref(null)
 
-const selectedPreset = computed(() => presets.find(item => item.key === selectedKey.value) || presets[0])
+const selectedPreset = computed(() => presets.find(item => item.key === selectedKey.value) || null)
 const detailEvent = computed(() => detail.value?.event || null)
 const chainTimeline = computed(() => detail.value?.timeline || [])
 const conditionItems = computed(() => triggerResult.value?.condition_check?.conditions || [])
-const canSubmit = computed(() => Boolean(selectedPreset.value?.eventId))
+const canSubmit = computed(() => Boolean(selectedPreset.value?.eventId && videoFile.value && !submitting.value))
+const submitDisabledReason = computed(() => {
+  if (!selectedPreset.value?.eventId) return '请先选择测试事件'
+  if (!videoFile.value) return '请先选择现场视频'
+  if (submitting.value) return '正在提交'
+  return '开始模拟'
+})
+const submitHint = computed(() => {
+  if (canSubmit.value) return `已选择 ${selectedPreset.value.label} 和现场视频，可以开始模拟`
+  if (!selectedPreset.value?.eventId && !videoFile.value) return '请选择测试事件，并上传现场视频'
+  if (!selectedPreset.value?.eventId) return '请选择测试事件'
+  return '请上传现场视频'
+})
 
 // 处理链路节点 = Dashboard「实时告警进度」4 节点（事件触发/智能路由/联动处理/闭环归档）+ 首个「传感器输入」
 const flowDefinitions = [
@@ -177,13 +190,21 @@ const statusTag = computed(() => {
   if (submitting.value || status === 'PROCESSING') return 'warning'
   return 'info'
 })
+const reportCompleted = computed(() => Boolean(detailEvent.value?.analysis_report_id) || chainTimeline.value.some((row) => {
+  const logType = String(row?.log_type || '').toUpperCase()
+  const actionKey = String(row?.action_key || '').toLowerCase()
+  return (logType === 'REPORT' || actionKey.includes('dam-event-report')) && isDoneStatus(row?.status)
+}))
+const eventClosed = computed(() => ['COMPLETED', 'RESOLVED', 'CLOSED'].includes(String(detailEvent.value?.status || '').toUpperCase()))
+const finalArchived = computed(() => reportCompleted.value || eventClosed.value)
+const hasRunningTimeline = computed(() => chainTimeline.value.some((row) => isRunningStatus(row?.status)))
 
 // 事件触发节点兜底文案：条件匹配结果
 const triggerMessage = computed(() => {
   const items = conditionItems.value
   if (!items.length) return '已提交事件入口，等待事件创建'
   const matched = items.filter(item => item.matched).length
-  return `${selectedPreset.value.label}条件判定：${matched}/${items.length} 项匹配`
+  return `${selectedPreset.value?.label || '传感器事件'}条件判定：${matched}/${items.length} 项匹配`
 })
 
 const flowSteps = computed(() => {
@@ -194,6 +215,7 @@ const flowSteps = computed(() => {
       .filter((row) => definition.logTypes.includes(String(row?.log_type || '').toUpperCase()))
       .map((row, index) => ({
         key: row.id || `${definition.key}-${row.create_time || row.created_at || index}`,
+        actionKey: row.action_key || row.action_id || '',
         title: row.title || logTypeLabel(row.log_type),
         status: String(row.status || '').toUpperCase(),
         statusText: timelineStatusLabel(row.status),
@@ -201,6 +223,7 @@ const flowSteps = computed(() => {
         time: row.create_time || row.created_at,
         operator: operatorLabel(row.operator),
       }))
+      .sort(compareLogs)
     return { definition, logs }
   })
 
@@ -214,7 +237,7 @@ const flowSteps = computed(() => {
         rawState: done ? 'done' : 'pending',
         time: done ? formatNow() : '--',
         message: done
-          ? (videoName.value ? `已加载现场视频 ${videoName.value}` : `已提交 ${selectedPreset.value.label} 传感器数据`)
+          ? (videoName.value ? `已加载现场视频 ${videoName.value}` : `已提交 ${selectedPreset.value?.label || '传感器'} 数据`)
           : definition.idleText,
         operator: '本机输入',
       }
@@ -229,25 +252,41 @@ const flowSteps = computed(() => {
         operator: '系统自动',
       }
     }
-    // 闭环归档：日志驱动 + 报告 ID 兜底
-    if (definition.key === 'archive' && detailEvent.value?.analysis_report_id) {
+    // 最终报告或闭环已落库时，说明路由链路已经走完；避免旧 PROCESSING 日志把节点卡在执行中。
+    if (definition.key === 'route' && finalArchived.value) {
+      const latest = latestLog(logs)
       return {
         ...base,
         rawState: 'done',
-        time: formatNow(),
-        message: '报告已生成并归档',
-        operator: '系统自动',
+        time: latest?.time ? formatTime(latest.time) : formatNow(),
+        message: '处置流程已匹配并执行完成',
+        operator: latest?.operator || '系统自动',
+      }
+    }
+    if (definition.key === 'linkage' && finalArchived.value) {
+      const latest = latestLog(logs)
+      return {
+        ...base,
+        rawState: 'done',
+        time: latest?.time ? formatTime(latest.time) : formatNow(),
+        message: reportCompleted.value ? '分析报告已生成，处置结果已归档' : '联动处置已完成',
+        operator: latest?.operator || '系统自动',
+      }
+    }
+    // 闭环归档：日志驱动 + 报告 ID 兜底
+    if (definition.key === 'archive' && finalArchived.value) {
+      const latest = latestLog(logs)
+      return {
+        ...base,
+        rawState: 'done',
+        time: latest?.time ? formatTime(latest.time) : formatNow(),
+        message: reportCompleted.value ? '报告已生成并归档' : '事件已闭环归档',
+        operator: latest?.operator || '系统自动',
       }
     }
     // 其余阶段：按日志聚合判断状态
-    const latest = logs[logs.length - 1] || null
-    const rawState = logs.length
-      ? (logs.some((log) => ['FAILED', 'ERROR'].includes(log.status))
-          ? 'failed'
-          : logs.some((log) => ['PENDING', 'PROCESSING', 'RUNNING'].includes(log.status))
-            ? 'running'
-            : 'done')
-      : 'pending'
+    const latest = latestLog(logs)
+    const rawState = aggregateLogState(logs)
     return {
       ...base,
       rawState,
@@ -296,11 +335,10 @@ const flowSteps = computed(() => {
 
 function buildSensorData() {
   const preset = selectedPreset.value
+  if (!preset) return {}
   return {
-    wind_speed_ms: preset.speed,
-    wind_direction: 135,
-    wind_level: windLevelFromSpeed(preset.speed),
-    sensor_location: '库坝现场风速传感器',
+    ...(preset.sensorData || {}),
+    sensor_location: sensorLocationLabel(preset.sensorName),
     camera_id: 1,
   }
 }
@@ -337,6 +375,14 @@ function openVideoPicker() {
 
 async function submit() {
   const preset = selectedPreset.value
+  if (!preset?.eventId) {
+    ElMessage.warning('请先选择测试事件')
+    return
+  }
+  if (!videoFile.value) {
+    ElMessage.warning('请先选择现场视频')
+    return
+  }
   submitting.value = true
   lastError.value = ''
   triggerResult.value = null
@@ -367,7 +413,8 @@ async function refreshDetail() {
   if (!id) return
   const response = await getUnifiedSafetyEventDetail(id)
   detail.value = response.data
-  if (detailEvent.value?.analysis_report_id || ['COMPLETED', 'FAILED'].includes(detailEvent.value?.status)) {
+  const status = String(detailEvent.value?.status || '').toUpperCase()
+  if (reportCompleted.value || status === 'FAILED' || (status === 'COMPLETED' && !hasRunningTimeline.value)) {
     stopPolling()
   }
 }
@@ -387,15 +434,12 @@ function openEventDetail(id) {
   router.push({ name: 'AlarmSafetyEventDetail', params: { id } })
 }
 
-function windLevelFromSpeed(speed) {
-  if (speed >= 32.7) return 12
-  if (speed >= 28.5) return 11
-  if (speed >= 24.5) return 10
-  if (speed >= 20.8) return 9
-  if (speed >= 17.2) return 8
-  if (speed >= 13.9) return 7
-  if (speed >= 10.8) return 6
-  return 0
+function sensorLocationLabel(sensorName) {
+  return ({
+    wind: '库坝现场风速风向传感器',
+    rain: '库坝现场雨量计',
+    temp_humidity: '库坝现场温湿度传感器',
+  })[sensorName] || '库坝现场传感器'
 }
 
 // 操作人显示名（后端 operator 常为大写标识，映射为友好名称）
@@ -411,9 +455,9 @@ function operatorLabel(value) {
 // 时间线日志状态显示文案（对齐 Dashboard 徽章语义）
 function timelineStatusLabel(value) {
   const status = String(value || '').toUpperCase()
-  if (['SUCCESS', 'COMPLETED', 'DONE'].includes(status)) return '已完成'
-  if (['FAILED', 'ERROR'].includes(status)) return '异常'
-  if (['PROCESSING', 'RUNNING', 'PENDING'].includes(status)) return '执行中'
+  if (isDoneStatus(status)) return '已完成'
+  if (isFailedStatus(status)) return '异常'
+  if (isRunningStatus(status)) return '执行中'
   return '已完成'
 }
 
@@ -437,6 +481,42 @@ function formatTime(value) {
   if (!value) return '--'
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? '--' : date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function latestLog(logs) {
+  return Array.isArray(logs) && logs.length ? logs[logs.length - 1] : null
+}
+
+function aggregateLogState(logs) {
+  const latest = latestLog(logs)
+  if (!latest) return 'pending'
+  if (isFailedStatus(latest.status)) return 'failed'
+  if (isRunningStatus(latest.status)) return 'running'
+  if (isDoneStatus(latest.status)) return 'done'
+  return 'done'
+}
+
+function compareLogs(a, b) {
+  const diff = logTimestamp(a) - logTimestamp(b)
+  if (diff !== 0) return diff
+  return String(a.key || '').localeCompare(String(b.key || ''))
+}
+
+function logTimestamp(log) {
+  const date = new Date(log?.time || 0)
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime()
+}
+
+function isDoneStatus(value) {
+  return ['SUCCESS', 'COMPLETED', 'DONE'].includes(String(value || '').toUpperCase())
+}
+
+function isFailedStatus(value) {
+  return ['FAILED', 'ERROR'].includes(String(value || '').toUpperCase())
+}
+
+function isRunningStatus(value) {
+  return ['PROCESSING', 'RUNNING', 'PENDING'].includes(String(value || '').toUpperCase())
 }
 
 onBeforeUnmount(() => {
@@ -465,7 +545,6 @@ onBeforeUnmount(() => {
 .source-control,
 .panel-header,
 .panel-header > div:first-child,
-.actions,
 .result-actions {
   display: flex;
   align-items: center;
@@ -568,6 +647,12 @@ h3 {
   background: #0a1d2f;
   cursor: pointer;
 }
+.preset-card:hover,
+.preset-card:focus-visible {
+  outline: none;
+  border-color: rgba(79, 208, 232, .55);
+  background: #0d273b;
+}
 .preset-card.active {
   border-color: rgba(79, 208, 232, .85);
   background: #0e3146;
@@ -582,8 +667,17 @@ h3 {
   font-size: 17px;
 }
 .preset-card small {
-  color: var(--muted);
-  line-height: 1.5;
+  display: block;
+  margin-top: 14px;
+  padding: 4px 8px;
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid rgba(79, 208, 232, .24);
+  border-radius: 6px;
+  color: #bfe9f4;
+  font-size: 12px;
+  line-height: 1.3;
+  background: rgba(79, 208, 232, .08);
 }
 /* 现场证据视频（参考视频测试页：隐藏 input + 空态按钮，上传后出现画面） */
 .video-stage {
@@ -640,7 +734,15 @@ h3 {
 .empty-stage span {
   font-size: 12px;
 }
-.actions,
+.submit-hint {
+  margin: -4px 16px 16px;
+  color: #8fa8ba;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.submit-hint.ready {
+  color: var(--green);
+}
 .result-actions {
   justify-content: flex-end;
   gap: 10px;

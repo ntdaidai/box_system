@@ -447,6 +447,43 @@ class BroadcastServiceTests(unittest.TestCase):
         devices = self.service._resolve_devices(self.db, str(camera.id), [device.id])
         self.assertEqual([row.id for row in devices], [device.id])
 
+    def test_suspected_event_skips_automatic_broadcast(self):
+        """疑似事件（latest_observation.suspected）不自动广播。"""
+        instance = self.add_event("evt_suspected")
+        instance.latest_observation = {"suspected": True, "possible_person": 1}
+        self.db.commit()
+
+        with patch("app.services.broadcast_service.SessionLocal", return_value=self.db), \
+                patch.object(self.service, "play", return_value={"success": True}) as mock_play:
+            self.service.handle_safety_event_action({
+                "action_type": "AUTO_BROADCAST",
+                "risk_level": "MEDIUM",
+                "event_id": "evt_suspected",
+                "camera_id": "1",
+                "action_id": "act-suspect",
+            })
+        mock_play.assert_not_called()
+
+    def test_confirmed_event_still_broadcasts(self):
+        """确认事件不受疑似守卫影响，仍走原有广播流程。"""
+        instance = self.add_event("evt_confirmed")
+        instance.latest_observation = {"suspected": False, "person_present": 1}
+        self.db.commit()
+
+        with patch("app.services.broadcast_service.SessionLocal", return_value=self.db), \
+                patch.object(self.service, "_configured_action_targets", return_value=("PERSON_HIGH", [1])), \
+                patch.object(self.service, "_allow_auto", return_value=True), \
+                patch.object(self.service, "play", return_value={"success": True}) as mock_play, \
+                patch.object(self.service, "_mark_safety_action", return_value=None):
+            self.service.handle_safety_event_action({
+                "action_type": "AUTO_BROADCAST",
+                "risk_level": "MEDIUM",
+                "event_id": "evt_confirmed",
+                "camera_id": "1",
+                "action_id": "act-confirm",
+            })
+        mock_play.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

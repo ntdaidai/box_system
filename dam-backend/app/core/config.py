@@ -66,6 +66,10 @@ class Settings:
     QWEN_CAMERA_SCREENING_MIN_CONFIDENCE: float = float(
         _get_env("QWEN_CAMERA_SCREENING_MIN_CONFIDENCE", "0.65")
     )
+    # 人员/船只疑似档下界：低于该值视为无；介于 [下界, MIN_CONFIDENCE) 视为疑似(possible_*)
+    QWEN_CAMERA_SCREENING_SUSPECT_MIN_CONFIDENCE: float = float(
+        _get_env("QWEN_CAMERA_SCREENING_SUSPECT_MIN_CONFIDENCE", "0.30")
+    )
     QWEN_CAMERA_SCREENING_USE_MINIO_URL: bool = (
         _get_env("QWEN_CAMERA_SCREENING_USE_MINIO_URL", "true").lower() == "true"
     )

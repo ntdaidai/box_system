@@ -5,7 +5,7 @@
         <div class="topology-canvas">
           <svg
             class="runtime-svg"
-            viewBox="20 32 1180 572"
+            viewBox="20 32 1240 572"
             preserveAspectRatio="xMidYMid meet"
             role="img"
             aria-label="系统运行拓扑"
@@ -16,47 +16,47 @@
             <defs>
               <marker
                 id="arrow-ok"
-                markerWidth="8"
-                markerHeight="8"
-                refX="7"
-                refY="4"
+                markerWidth="10"
+                markerHeight="10"
+                refX="9"
+                refY="5"
                 orient="auto"
                 markerUnits="strokeWidth"
               >
-                <path d="M0,0 L8,4 L0,8 Z" fill="#63d7c1" />
+                <path d="M0,0 L10,5 L0,10 Z" fill="#63d7c1" />
               </marker>
               <marker
                 id="arrow-warn"
-                markerWidth="8"
-                markerHeight="8"
-                refX="7"
-                refY="4"
+                markerWidth="10"
+                markerHeight="10"
+                refX="9"
+                refY="5"
                 orient="auto"
                 markerUnits="strokeWidth"
               >
-                <path d="M0,0 L8,4 L0,8 Z" fill="#dfb863" />
+                <path d="M0,0 L10,5 L0,10 Z" fill="#dfb863" />
               </marker>
               <marker
                 id="arrow-danger"
-                markerWidth="8"
-                markerHeight="8"
-                refX="7"
-                refY="4"
+                markerWidth="10"
+                markerHeight="10"
+                refX="9"
+                refY="5"
                 orient="auto"
                 markerUnits="strokeWidth"
               >
-                <path d="M0,0 L8,4 L0,8 Z" fill="#ef7e8a" />
+                <path d="M0,0 L10,5 L0,10 Z" fill="#ef7e8a" />
               </marker>
               <marker
                 id="arrow-neutral"
-                markerWidth="8"
-                markerHeight="8"
-                refX="7"
-                refY="4"
+                markerWidth="10"
+                markerHeight="10"
+                refX="9"
+                refY="5"
                 orient="auto"
                 markerUnits="strokeWidth"
               >
-                <path d="M0,0 L8,4 L0,8 Z" fill="#6f8292" />
+                <path d="M0,0 L10,5 L0,10 Z" fill="#6f8292" />
               </marker>
               <filter id="node-glow" x="-35%" y="-35%" width="170%" height="170%">
                 <feGaussianBlur stdDeviation="4" result="blur" />
@@ -166,13 +166,16 @@
 
         <div class="runtime-detail-row">
           <article class="node-inspector" :class="inspectorNode.tone">
-            <div class="inspector-head">
-              <div>
+            <header class="inspector-head">
+              <div class="panel-title">
                 <span>节点诊断</span>
-                <strong>{{ inspectorNode.displayLabel }}</strong>
+                <div class="inspector-title-row">
+                  <h2>{{ inspectorNode.displayLabel }}</h2>
+                  <i class="status-pill" :class="inspectorNode.tone">{{ inspectorNode.statusText }}</i>
+                </div>
               </div>
-              <p>{{ inspectorNode.statusText }} · {{ inspectorNode.description }}</p>
-            </div>
+              <p>{{ inspectorNode.description }}</p>
+            </header>
 
             <div v-if="inspectorNode.id === 'edge-box'" class="resource-compact">
               <div v-for="metric in resourceMetrics" :key="metric.key" class="resource-meter" :class="metric.tone">
@@ -181,15 +184,18 @@
                   <strong>{{ metric.display }}</strong>
                 </div>
                 <i><b :style="{ width: `${metric.value}%` }" /></i>
+                <small>{{ metric.value < 60 ? '负载平稳' : metric.value < 85 ? '持续关注' : '资源承压' }}</small>
               </div>
               <div class="uptime-meter">
-                <span>运行时长</span>
+                <span>连续运行</span>
                 <strong>{{ uptimeText }}</strong>
+                <small>边缘节点在线时长</small>
               </div>
             </div>
 
             <div v-else class="inspector-facts">
-              <div v-for="fact in inspectorNode.facts" :key="fact.label">
+              <div v-for="(fact, index) in inspectorNode.facts" :key="fact.label">
+                <b>0{{ index + 1 }}</b>
                 <span>{{ fact.label }}</span>
                 <strong>{{ fact.value }}</strong>
               </div>
@@ -198,10 +204,11 @@
 
           <article class="alert-locator">
             <header>
-              <div>
-                <span>告警定位节点</span>
-                <strong>{{ issueCounts.total ? `${issueCounts.total} 项需要关注` : '当前无阻断告警' }}</strong>
+              <div class="panel-title">
+                <span>告警定位</span>
+                <strong>{{ issueCounts.total ? `${issueCounts.total} 项需要关注` : '运行状态正常' }}</strong>
               </div>
+              <i class="issue-count" :class="{ active: issueCounts.total }">{{ issueCounts.total }}</i>
             </header>
             <div v-if="issueItems.length" class="alert-list">
               <button
@@ -212,36 +219,93 @@
                 :class="issue.tone"
                 @click="locateIssue(issue)"
               >
-                <span>{{ issue.levelLabel }}</span>
-                <strong>{{ issue.title }}</strong>
-                <em>{{ issue.impactAbility }}</em>
+                <i>!</i>
+                <span>
+                  <em>{{ issue.levelLabel }}</em>
+                  <strong>{{ issue.title }}</strong>
+                  <small>{{ issue.action }}</small>
+                  <b>影响：{{ issue.impactAbility }}</b>
+                </span>
+                <u>定位节点</u>
               </button>
             </div>
-            <div v-else class="alert-empty">拓扑主链路保持连通</div>
+            <div v-else class="alert-empty">
+              <i>✓</i>
+              <strong>主链路运行正常</strong>
+              <span>当前没有需要处理的阻断或降级项</span>
+            </div>
           </article>
         </div>
 
         <article class="dependency-card">
           <header>
-            <div>
+            <div class="panel-title">
               <span>依赖服务</span>
               <strong>{{ dependencyTitle }}</strong>
             </div>
             <span class="dependency-meta">自动刷新 {{ currentTimeText }}</span>
           </header>
-          <div class="dependency-grid">
+
+          <div v-if="abnormalDependencyServices.length" class="dependency-attention">
+            <span>需要关注</span>
             <button
-              v-for="service in visibleDependencyServices"
+              v-for="service in abnormalDependencyServices"
               :key="service.key"
               type="button"
-              class="dependency-node"
               :class="service.tone"
               @click="inspectNode(service.nodeId)"
             >
-              <span>{{ service.name }}</span>
-              <strong>{{ service.statusText }}</strong>
-              <small>{{ service.description }}</small>
+              <i />
+              <strong>{{ service.name }}</strong>
+              <em>{{ service.statusText }}</em>
             </button>
+          </div>
+
+          <div class="dependency-categories">
+            <section
+              v-for="category in dependencyCategories"
+              :key="category.key"
+              class="dependency-category"
+              :class="[category.tone, { expanded: expandedDependencyKey === category.key }]"
+            >
+              <button
+                type="button"
+                class="category-summary"
+                @click="toggleDependencyCategory(category.key)"
+              >
+                <i class="category-status" />
+                <span>
+                  <strong>{{ category.label }}</strong>
+                  <small>{{ category.description }}</small>
+                </span>
+                <b>{{ category.items.length }} 项服务</b>
+                <em>{{ category.summary }}</em>
+                <u>⌄</u>
+              </button>
+
+              <div v-if="expandedDependencyKey === category.key" class="category-detail">
+                <section v-for="group in category.groups" :key="group.key" class="dependency-group">
+                  <header>
+                    <strong>{{ group.label }}</strong>
+                    <span>{{ group.summary }}</span>
+                  </header>
+                  <div class="dependency-list">
+                    <button
+                      v-for="service in group.items"
+                      :key="service.key"
+                      type="button"
+                      class="dependency-node"
+                      :class="service.tone"
+                      @click="inspectNode(service.nodeId)"
+                    >
+                      <i />
+                      <span>{{ service.name }}</span>
+                      <strong>{{ service.statusText }}</strong>
+                    </button>
+                  </div>
+                </section>
+              </div>
+            </section>
           </div>
         </article>
       </section>
@@ -264,6 +328,7 @@ const currentTime = ref(new Date())
 const selectedNodeId = ref('edge-box')
 const highlightedNodeId = ref('')
 const highlightedEdgeIds = ref([])
+const expandedDependencyKey = ref('')
 const draggingNodeId = ref('')
 const dragOffset = ref({ x: 0, y: 0 })
 const resourceHistory = ref({
@@ -277,42 +342,42 @@ let focusTimer = null
 
 const zones = [
   { key: 'perception', label: '感知层', x: 34, y: 46, width: 205, height: 548 },
-  { key: 'decision', label: '决策层', x: 276, y: 46, width: 226, height: 548 },
-  { key: 'model', label: '模型层', x: 538, y: 46, width: 190, height: 548 },
-  { key: 'analysis', label: '分析层', x: 762, y: 46, width: 220, height: 548 },
-  { key: 'system', label: '系统层', x: 1018, y: 46, width: 180, height: 548 },
+  { key: 'decision', label: '决策层', x: 276, y: 46, width: 206, height: 548 },
+  { key: 'model', label: '模型层', x: 520, y: 46, width: 238, height: 548 },
+  { key: 'analysis', label: '分析层', x: 796, y: 46, width: 206, height: 548 },
+  { key: 'system', label: '系统层', x: 1040, y: 46, width: 206, height: 548 },
 ]
 
 const topologyDefinition = [
   { id: 'camera', label: '摄像头', sublabel: '视频接入', x: 136, y: 142, width: 142, height: 76, description: '数据库中启用的视频源经后端签发票据进入实时视频链路。' },
   { id: 'sensor', label: '传感器', sublabel: '实时采集', x: 136, y: 318, width: 142, height: 76, description: '振动、雨量、风速、温湿度等传感器由采集服务汇入实时状态。' },
   { id: 'edge-box', label: '边缘盒子', sublabel: '现场汇聚', x: 136, y: 494, width: 142, height: 76, description: 'Jetson AGX 承载现场接入、资源调度与边缘侧运行环境。', pulse: true },
-  { id: 'rule', label: '规则引擎', sublabel: '规则判断', x: 388, y: 142, width: 150, height: 82, description: 'ECA 规则引擎根据传感器、视觉和融合事件触发运行时动作。' },
-  { id: 'edge-qwen', label: '边缘模型', sublabel: '千问小模型', x: 388, y: 318, width: 150, height: 82, description: '边缘侧多模态小模型用于现场快速筛选和轻量判断。' },
-  { id: 'route', label: '智能路由', sublabel: '任务分发', x: 388, y: 494, width: 150, height: 82, description: '根据资源压力、模型可用性和事件类型选择本地、专有或云端分析链路。' },
-  { id: 'vision-model', label: '专有模型', sublabel: '视觉推理', x: 633, y: 318, width: 150, height: 86, description: 'YOLO 检测 / 分类模型负责视频巡查中的专有视觉识别。' },
-  { id: 'cloud-model', label: '云端模型', sublabel: '千问大模型', x: 872, y: 218, width: 150, height: 82, description: '云端千问多模态大模型提供更强语义理解和复杂场景判断。' },
-  { id: 'scene-reasoning', label: '场景推理', sublabel: '综合研判', x: 872, y: 418, width: 150, height: 82, description: '汇聚规则、专有模型和云端模型结果，形成面向场景的安全研判。' },
-  { id: 'broadcast', label: '广播联动', sublabel: '现场提醒', x: 1064, y: 160, width: 126, height: 70, description: '广播服务订阅安全事件动作并执行现场提醒。' },
-  { id: 'drone', label: '无人机', sublabel: '巡查调度', x: 1152, y: 288, width: 126, height: 70, description: '无人机调度服务根据事件动作执行巡检派发。' },
-  { id: 'staff', label: '人工任务', sublabel: '处置派发', x: 1064, y: 418, width: 126, height: 70, description: '人工任务服务承接高风险事件处置流转。' },
-  { id: 'report', label: '报告归档', sublabel: '证据沉淀', x: 1152, y: 546, width: 126, height: 70, description: '巡查报告和事件证据进入文档与对象存储链路。' },
+  { id: 'rule', label: '规则引擎', sublabel: '规则判断', x: 380, y: 220, width: 146, height: 80, description: 'ECA 规则引擎根据传感器、视觉和融合事件触发运行时动作。' },
+  { id: 'route', label: '智能路由', sublabel: '任务分发', x: 380, y: 430, width: 146, height: 80, description: '根据资源压力、模型可用性和事件类型选择本地、专有或云端分析链路。' },
+  { id: 'edge-qwen', label: '边缘模型', sublabel: '千问小模型', x: 640, y: 150, width: 150, height: 78, description: '边缘侧多模态小模型用于现场快速筛选和轻量判断。' },
+  { id: 'vision-model', label: '专有模型', sublabel: '视觉推理', x: 640, y: 318, width: 150, height: 82, description: 'YOLO 检测 / 分类模型负责视频巡查中的专有视觉识别。' },
+  { id: 'cloud-model', label: '云端模型', sublabel: '千问大模型', x: 640, y: 486, width: 150, height: 78, description: '云端千问多模态大模型提供更强语义理解和复杂场景判断。' },
+  { id: 'scene-reasoning', label: '场景推理', sublabel: '综合研判', x: 900, y: 318, width: 150, height: 82, description: '汇聚规则、专有模型和云端模型结果，形成面向场景的安全研判。' },
+  { id: 'broadcast', label: '广播联动', sublabel: '现场提醒', x: 1144, y: 116, width: 126, height: 64, description: '广播服务订阅安全事件动作并执行现场提醒。' },
+  { id: 'drone', label: '无人机', sublabel: '巡查调度', x: 1144, y: 220, width: 126, height: 64, description: '无人机调度服务根据事件动作执行巡检派发。' },
+  { id: 'machine-dog', label: '机器狗', sublabel: '地面巡检', x: 1144, y: 324, width: 126, height: 64, description: '机器狗承接地面近距巡检、补盲确认和现场复核任务。' },
+  { id: 'staff', label: '人工任务', sublabel: '处置派发', x: 1144, y: 428, width: 126, height: 64, description: '人工任务服务承接高风险事件处置流转。' },
+  { id: 'report', label: '报告归档', sublabel: '证据沉淀', x: 1144, y: 532, width: 126, height: 64, description: '巡查报告和事件证据进入文档与对象存储链路。' },
 ]
 
 const edgeDefinition = [
-  { id: 'camera-edge', from: 'camera', to: 'edge-box' },
-  { id: 'sensor-edge', from: 'sensor', to: 'edge-box' },
-  { id: 'edge-rule', from: 'edge-box', to: 'rule' },
-  { id: 'edge-qwen', from: 'edge-box', to: 'edge-qwen' },
+  { id: 'camera-rule', from: 'camera', to: 'rule' },
+  { id: 'sensor-rule', from: 'sensor', to: 'rule' },
   { id: 'edge-route', from: 'edge-box', to: 'route' },
-  { id: 'rule-route', from: 'rule', to: 'route' },
-  { id: 'qwen-vision', from: 'edge-qwen', to: 'vision-model' },
-  { id: 'route-vision', from: 'route', to: 'vision-model' },
-  { id: 'vision-cloud', from: 'vision-model', to: 'cloud-model' },
+  { id: 'rule-qwen', from: 'rule', to: 'edge-qwen' },
+  { id: 'rule-vision', from: 'rule', to: 'vision-model' },
+  { id: 'route-cloud', from: 'route', to: 'cloud-model' },
+  { id: 'qwen-scene', from: 'edge-qwen', to: 'scene-reasoning' },
   { id: 'vision-scene', from: 'vision-model', to: 'scene-reasoning' },
   { id: 'cloud-scene', from: 'cloud-model', to: 'scene-reasoning' },
   { id: 'scene-broadcast', from: 'scene-reasoning', to: 'broadcast' },
   { id: 'scene-drone', from: 'scene-reasoning', to: 'drone' },
+  { id: 'scene-machine-dog', from: 'scene-reasoning', to: 'machine-dog' },
   { id: 'scene-staff', from: 'scene-reasoning', to: 'staff' },
   { id: 'scene-report', from: 'scene-reasoning', to: 'report' },
 ]
@@ -368,8 +433,8 @@ function worstTone(tones) {
 
 function riskTone(percentValue) {
   if (!systemReachable.value) return 'neutral'
-  if (percentValue >= 85) return 'danger'
-  if (percentValue >= 70) return 'warn'
+  if (percentValue >= 94) return 'danger'
+  if (percentValue >= 84) return 'warn'
   return 'ok'
 }
 
@@ -386,14 +451,12 @@ function nodeStatus(id) {
 
   const cameraTone = cameraSummary.value.total === 0
     ? 'neutral'
-    : cameraSummary.value.online === 0
-      ? 'danger'
-      : cameraSummary.value.online < cameraSummary.value.total
+    : cameraSummary.value.online === 0 || cameraSummary.value.online < cameraSummary.value.total
         ? 'warn'
         : 'ok'
 
   const sensorTone = !collectorRunning.value
-    ? 'danger'
+    ? 'warn'
     : sensorsTotal.value === 0
       ? 'neutral'
       : sensorsOnline.value < sensorsTotal.value
@@ -424,20 +487,20 @@ function nodeStatus(id) {
       text: systemReachable.value ? '可参与路由' : '待确认',
     },
     route: {
-      tone: worstTone([resourceTone, edgeModelReady.value ? 'ok' : 'warn', cloudModelReady.value ? 'ok' : 'warn']),
+      tone: worstTone([resourceTone, edgeModelReady.value ? 'ok' : 'neutral', cloudModelReady.value ? 'ok' : 'neutral']),
       text: systemReachable.value ? '路由可用' : '不可确认',
     },
     'vision-model': {
-      tone: edgeModelReady.value ? 'ok' : 'danger',
+      tone: edgeModelReady.value ? 'ok' : 'neutral',
       text: edgeModelReady.value ? '模型已加载' : '模型未确认',
     },
     'cloud-model': {
-      tone: cloudModelReady.value ? 'ok' : 'warn',
-      text: cloudModelReady.value ? '云端可达' : '云端不可达',
+      tone: cloudModelReady.value ? 'ok' : 'neutral',
+      text: cloudModelReady.value ? '云端可达' : '待确认',
     },
     'scene-reasoning': {
-      tone: edgeModelReady.value || cloudModelReady.value ? 'ok' : 'danger',
-      text: edgeModelReady.value || cloudModelReady.value ? '研判可用' : '研判受阻',
+      tone: systemReachable.value ? 'ok' : 'neutral',
+      text: systemReachable.value ? '研判可用' : '待确认',
     },
     broadcast: {
       tone: eventRuntimeReady.value ? 'ok' : 'blocked',
@@ -446,6 +509,10 @@ function nodeStatus(id) {
     drone: {
       tone: eventRuntimeReady.value ? 'ok' : 'blocked',
       text: eventRuntimeReady.value ? '可调度' : '阻断',
+    },
+    'machine-dog': {
+      tone: eventRuntimeReady.value ? 'ok' : 'neutral',
+      text: eventRuntimeReady.value ? '可巡检' : '待确认',
     },
     staff: {
       tone: eventRuntimeReady.value ? 'ok' : 'blocked',
@@ -529,11 +596,9 @@ const topologyNodes = computed(() => topologyDefinition.map((node) => {
 const topologyNodeMap = computed(() => Object.fromEntries(topologyNodes.value.map((node) => [node.id, node])))
 
 function isEdgeBlocked(edge, from, to) {
-  if (!systemReachable.value && !['camera-edge', 'sensor-edge'].includes(edge.id)) return true
-  if (edge.id === 'camera-edge') return cameraSummary.value.total > 0 && cameraSummary.value.online === 0
-  if (edge.id === 'sensor-edge') return !collectorRunning.value
-  if (['qwen-vision', 'route-vision', 'vision-cloud', 'vision-scene'].includes(edge.id)) return !edgeModelReady.value
-  if (edge.id === 'cloud-scene') return !cloudModelReady.value
+  if (!systemReachable.value && !['camera-rule', 'sensor-rule'].includes(edge.id)) return true
+  if (edge.id === 'camera-rule') return cameraSummary.value.total > 0 && cameraSummary.value.online === 0 && !systemReachable.value
+  if (edge.id === 'sensor-rule') return !collectorRunning.value && !systemReachable.value
   return from.tone === 'danger' || from.tone === 'blocked' || to.tone === 'danger' || to.tone === 'blocked'
 }
 
@@ -549,9 +614,9 @@ const topologyEdges = computed(() => edgeDefinition.map((edge, index) => {
     path,
     tone,
     blocked,
-    active: !blocked && tone !== 'neutral',
-    duration: `${8 + (index % 4) * 1.3}s`,
-    secondary: index % 2 === 0,
+    active: !blocked,
+    duration: `${9 + (index % 4) * 1.5}s`,
+    secondary: tone === 'ok' && index % 3 === 0,
     secondaryDuration: `${11 + (index % 5) * 1.2}s`,
     breakX: breakPoint.x,
     breakY: breakPoint.y,
@@ -589,7 +654,7 @@ const issueItems = computed(() => {
       key: 'system-unreachable',
       title: '后端系统信息不可达',
       nodeId: 'edge-box',
-      edgeIds: ['edge-rule', 'edge-qwen', 'edge-route'],
+      edgeIds: ['edge-route', 'route-cloud', 'scene-report'],
       tone: 'danger',
       levelLabel: 'CRITICAL',
       impactAbility: '系统监测与事件运行确认',
@@ -605,9 +670,9 @@ const issueItems = computed(() => {
       key: 'collector',
       title: '传感器采集服务未运行',
       nodeId: 'sensor',
-      edgeIds: ['sensor-edge', 'edge-rule', 'edge-route'],
-      tone: 'danger',
-      levelLabel: 'CRITICAL',
+      edgeIds: ['sensor-rule'],
+      tone: 'warn',
+      levelLabel: 'WARNING',
       impactAbility: '传感器采集、时序入库、ECA 传感器触发',
       pathLabel: 'Sensors → Perception Ingress → IoTDB → ECA',
       action: '检查采集器进程、串口链路与 IoTDB 写入状态。',
@@ -620,7 +685,7 @@ const issueItems = computed(() => {
       key: 'sensors-offline',
       title: '部分感知设备离线',
       nodeId: 'sensor',
-      edgeIds: ['sensor-edge'],
+      edgeIds: ['sensor-rule'],
       tone: 'warn',
       levelLabel: 'WARNING',
       impactAbility: '传感器覆盖完整性',
@@ -635,9 +700,9 @@ const issueItems = computed(() => {
       key: 'camera-offline',
       title: '视频通道不完整',
       nodeId: 'camera',
-      edgeIds: ['camera-edge', 'qwen-vision', 'route-vision'],
-      tone: cameraSummary.value.online === 0 ? 'danger' : 'warn',
-      levelLabel: cameraSummary.value.online === 0 ? 'CRITICAL' : 'WARNING',
+      edgeIds: ['camera-rule', 'rule-vision'],
+      tone: 'warn',
+      levelLabel: 'WARNING',
       impactAbility: '实时视频、视频取证',
       pathLabel: 'Camera → Media Stream → Safety Event Runtime',
       action: '检查摄像头连接、RTSP 地址和 WebRTC 信令。',
@@ -650,9 +715,9 @@ const issueItems = computed(() => {
       key: 'edge-model',
       title: '边缘视觉模型未确认',
       nodeId: 'vision-model',
-      edgeIds: ['qwen-vision', 'route-vision', 'vision-scene'],
-      tone: 'danger',
-      levelLabel: 'CRITICAL',
+      edgeIds: ['rule-vision', 'vision-scene'],
+      tone: 'warn',
+      levelLabel: 'WARNING',
       impactAbility: '视频 AI 巡查',
       pathLabel: 'Camera → AI Inference → Detection',
       action: '检查模型加载状态，必要时重新加载边缘检测模型。',
@@ -664,9 +729,9 @@ const issueItems = computed(() => {
   if (!cloudModelReady.value) {
     items.push({
       key: 'cloud-model',
-      title: '云边大模型不可达',
+      title: '云端大模型待确认',
       nodeId: 'cloud-model',
-      edgeIds: ['vision-cloud', 'cloud-scene'],
+      edgeIds: ['route-cloud', 'cloud-scene'],
       tone: 'warn',
       levelLabel: 'WARNING',
       impactAbility: '多模态语义研判',
@@ -681,7 +746,7 @@ const issueItems = computed(() => {
       key: `resource-${metric.key}`,
       title: `${metric.label} 资源压力偏高`,
       nodeId: 'edge-box',
-      edgeIds: ['edge-qwen', 'edge-route'],
+      edgeIds: ['edge-route'],
       tone: metric.tone,
       levelLabel: severityLabel(metric.tone),
       impactAbility: '边缘推理与页面响应时延',
@@ -693,7 +758,7 @@ const issueItems = computed(() => {
   return items
 })
 
-const visibleIssues = computed(() => issueItems.value.slice(0, 4))
+const visibleIssues = computed(() => issueItems.value.slice(0, 3))
 
 const issueCounts = computed(() => issueItems.value.reduce((acc, item) => {
   acc.total += 1
@@ -754,6 +819,7 @@ function nodeFacts(id) {
     ],
     broadcast: [{ label: '动作类型', value: '广播联动' }, { label: '执行状态', value: eventRuntimeReady.value ? '可执行' : '阻断' }],
     drone: [{ label: '动作类型', value: '无人机巡查' }, { label: '执行状态', value: eventRuntimeReady.value ? '可调度' : '阻断' }],
+    'machine-dog': [{ label: '动作类型', value: '机器狗巡检' }, { label: '执行状态', value: eventRuntimeReady.value ? '可巡检' : '待确认' }],
     staff: [{ label: '动作类型', value: '人工处置' }, { label: '执行状态', value: eventRuntimeReady.value ? '可派发' : '阻断' }],
     report: [{ label: '动作类型', value: '报告归档' }, { label: '归档状态', value: eventRuntimeReady.value ? '可归档' : '阻断' }],
   }
@@ -863,34 +929,34 @@ const serviceItems = computed(() => [
   {
     key: 'qwen-edge',
     name: '边缘千问小模型',
-    group: 'AI',
+    group: 'Model',
     status: systemReachable.value ? 'configured' : 'unknown',
-    tone: systemReachable.value ? 'neutral' : 'danger',
+    tone: systemReachable.value ? 'neutral' : 'warn',
     nodeId: 'edge-qwen',
     description: '边缘侧多模态轻量研判能力。',
   },
   {
     key: 'qwen',
     name: '云端千问大模型',
-    group: 'AI',
+    group: 'Model',
     status: cloudModelReady.value ? 'online' : 'offline',
-    tone: cloudModelReady.value ? 'ok' : 'danger',
+    tone: cloudModelReady.value ? 'ok' : 'neutral',
     nodeId: 'cloud-model',
     description: '多模态语义分析服务。',
   },
   {
     key: 'yolo',
     name: 'YOLO Detector',
-    group: 'AI',
+    group: 'Model',
     status: edgeModelReady.value ? 'loaded' : 'offline',
-    tone: edgeModelReady.value ? 'ok' : 'danger',
+    tone: edgeModelReady.value ? 'ok' : 'neutral',
     nodeId: 'vision-model',
     description: '边缘目标检测 / 分类模型。',
   },
   {
     key: 'model-library',
     name: '模型库',
-    group: 'AI',
+    group: 'Model',
     status: systemReachable.value ? 'configured' : 'unknown',
     tone: systemReachable.value ? 'neutral' : 'danger',
     nodeId: 'vision-model',
@@ -904,6 +970,15 @@ const serviceItems = computed(() => [
     tone: systemReachable.value ? 'neutral' : 'danger',
     nodeId: 'scene-reasoning',
     description: '场景分析与综合研判流程。',
+  },
+  {
+    key: 'machine-dog',
+    name: '机器狗巡检',
+    group: 'Action',
+    status: eventRuntimeReady.value ? 'configured' : 'unknown',
+    tone: eventRuntimeReady.value ? 'neutral' : 'warn',
+    nodeId: 'machine-dog',
+    description: '地面巡检与现场复核任务。',
   },
   {
     key: 'safety-event',
@@ -977,11 +1052,104 @@ const visibleDependencyServices = computed(() => serviceItems.value
   }))
   .sort((first, second) => dependencyToneRank(first.tone) - dependencyToneRank(second.tone)))
 
+const dependencyGroupMeta = [
+  { key: 'Core', label: '核心运行' },
+  { key: 'Perception', label: '感知接入' },
+  { key: 'Data', label: '数据底座' },
+  { key: 'Time Series', label: '时序链路' },
+  { key: 'Video', label: '视频链路' },
+  { key: 'Model', label: '模型服务' },
+  { key: 'Decision', label: '决策调度' },
+  { key: 'Analysis', label: '分析流程' },
+  { key: 'Runtime', label: '事件运行' },
+  { key: 'Action', label: '联动执行' },
+  { key: 'Document', label: '文档归档' },
+  { key: 'Cache', label: '缓存队列' },
+  { key: 'Object', label: '对象存储' },
+]
+
+const dependencyGroups = computed(() => dependencyGroupMeta
+  .map((meta) => {
+    const items = visibleDependencyServices.value.filter((service) => service.group === meta.key)
+    const tone = worstTone(items.map((item) => item.tone))
+    const abnormal = items.filter((item) => item.tone === 'danger' || item.tone === 'warn').length
+    return {
+      ...meta,
+      items,
+      tone,
+      summary: abnormal ? `${abnormal}/${items.length} 关注` : `${items.length} 项正常`,
+    }
+  })
+  .filter((group) => group.items.length))
+
+const dependencyCategoryMeta = [
+  {
+    key: 'foundation',
+    label: '基础运行',
+    description: '后端、采集与数据基础设施',
+    groups: ['Core', 'Perception', 'Data', 'Time Series'],
+  },
+  {
+    key: 'media',
+    label: '视频与存储',
+    description: '实时视频、缓存与对象存储',
+    groups: ['Video', 'Cache', 'Object'],
+  },
+  {
+    key: 'intelligence',
+    label: '智能分析',
+    description: '模型推理、路由与分析流程',
+    groups: ['Model', 'Decision', 'Analysis'],
+  },
+  {
+    key: 'event',
+    label: '事件联动',
+    description: '事件总线与现场执行能力',
+    groups: ['Runtime', 'Action'],
+  },
+  {
+    key: 'archive',
+    label: '报告归档',
+    description: '报告生成与文档归档服务',
+    groups: ['Document'],
+  },
+]
+
+const dependencyCategories = computed(() => dependencyCategoryMeta.map((category) => {
+  const groups = category.groups
+    .map((key) => dependencyGroups.value.find((group) => group.key === key))
+    .filter(Boolean)
+  const items = groups.flatMap((group) => group.items)
+  const danger = items.filter((item) => item.tone === 'danger').length
+  const warn = items.filter((item) => item.tone === 'warn').length
+  const pending = items.filter((item) => item.tone === 'neutral').length
+  const tone = danger ? 'danger' : warn ? 'warn' : pending ? 'neutral' : 'ok'
+  return {
+    ...category,
+    groups,
+    items,
+    tone,
+    summary: danger
+      ? `${danger} 项不可用`
+      : warn
+        ? `${warn} 项降级`
+        : pending
+          ? `${pending} 项待确认`
+          : '全部正常',
+  }
+}))
+
+const abnormalDependencyServices = computed(() => visibleDependencyServices.value
+  .filter((service) => service.tone === 'danger' || service.tone === 'warn')
+  .slice(0, 6))
+
 const dependencyTitle = computed(() => {
   const offline = visibleDependencyServices.value.filter((service) => service.tone === 'danger').length
   const degraded = visibleDependencyServices.value.filter((service) => service.tone === 'warn').length
+  const pending = visibleDependencyServices.value.filter((service) => service.tone === 'neutral').length
   if (offline) return `${offline} 项不可用`
   if (degraded) return `${degraded} 项降级`
+  if (pending) return `核心链路正常 · ${pending} 项待确认`
   return '核心依赖正常'
 })
 
@@ -997,6 +1165,10 @@ function serviceStatusText(status, tone) {
 
 function dependencyToneRank(tone) {
   return ({ danger: 0, warn: 1, neutral: 2, ok: 3 })[tone] ?? 2
+}
+
+function toggleDependencyCategory(key) {
+  expandedDependencyKey.value = expandedDependencyKey.value === key ? '' : key
 }
 
 function pushResourceSample() {
@@ -1041,7 +1213,7 @@ function onNodeDrag(event) {
   nodePositions.value = {
     ...nodePositions.value,
     [draggingNodeId.value]: {
-      x: Math.max(70, Math.min(1160, point.x - dragOffset.value.x)),
+      x: Math.max(70, Math.min(1210, point.x - dragOffset.value.x)),
       y: Math.max(86, Math.min(582, point.y - dragOffset.value.y)),
     },
   }
@@ -1080,10 +1252,10 @@ async function loadAll() {
 
     if (cameras.status === 'fulfilled') {
       const list = unwrap(cameras.value)?.cameras || []
-      const enabled = list.filter((camera) => camera.enabled !== false)
+      // 总数统计全部摄像头（含关闭的），在线只统计启用且连接的
       cameraSummary.value = {
-        online: enabled.filter((camera) => camera.connected).length,
-        total: enabled.length,
+        online: list.filter((camera) => camera.enabled !== false && camera.connected).length,
+        total: list.length,
       }
     } else {
       cameraSummary.value = { online: 0, total: 0 }
@@ -1175,9 +1347,9 @@ onUnmounted(() => {
 }
 
 .zone-band {
-  fill: rgba(255, 255, 255, 0.018);
-  stroke: rgba(137, 180, 192, 0.12);
-  stroke-dasharray: 6 9;
+  fill: rgba(255, 255, 255, 0.014);
+  stroke: rgba(137, 180, 192, 0.1);
+  stroke-dasharray: 9 12;
 }
 
 .zone-label {
@@ -1188,19 +1360,19 @@ onUnmounted(() => {
 
 .edge-path {
   fill: none;
-  stroke: rgba(105, 215, 189, 0.58);
-  stroke-width: 2;
+  stroke: rgba(105, 215, 189, 0.5);
+  stroke-width: 1.8;
   stroke-linecap: round;
 }
 
 .edge-group.warn .edge-path {
-  stroke: rgba(223, 184, 99, 0.7);
+  stroke: rgba(223, 184, 99, 0.5);
 }
 
 .edge-group.danger .edge-path,
 .edge-group.blocked .edge-path {
-  stroke: rgba(239, 126, 138, 0.78);
-  stroke-dasharray: 8 10;
+  stroke: rgba(239, 126, 138, 0.58);
+  stroke-dasharray: 9 12;
 }
 
 .edge-group.neutral .edge-path,
@@ -1209,7 +1381,7 @@ onUnmounted(() => {
 }
 
 .edge-group.highlighted .edge-path {
-  stroke-width: 4;
+  stroke-width: 3.2;
   filter: url(#node-glow);
 }
 
@@ -1221,7 +1393,7 @@ onUnmounted(() => {
 
 .flow-dot {
   fill: #bdf8ed;
-  opacity: 0.8;
+  opacity: 0.62;
   filter: url(#node-glow);
 }
 
@@ -1231,6 +1403,11 @@ onUnmounted(() => {
 
 .edge-group.warn .flow-dot {
   fill: #ffe0a1;
+}
+
+.edge-group.neutral .flow-dot {
+  fill: #8aa0ad;
+  opacity: 0.32;
 }
 
 .edge-break line {
@@ -1324,78 +1501,158 @@ onUnmounted(() => {
 
 .runtime-detail-row {
   display: grid;
-  grid-template-columns: minmax(560px, 1.15fr) minmax(360px, 0.85fr);
-  gap: 12px;
-  margin-top: 10px;
+  grid-template-columns: minmax(0, 1.55fr) minmax(360px, 0.65fr);
+  gap: 14px;
+  margin-top: 14px;
 }
 
 .node-inspector,
 .alert-locator,
 .dependency-card {
-  min-height: 118px;
-  padding: 13px;
-  border: 1px solid rgba(115, 190, 206, 0.14);
+  min-width: 0;
+  padding: 22px;
+  border: 1px solid rgba(115, 190, 206, 0.18);
   border-radius: 8px;
-  background: rgba(8, 20, 30, 0.58);
+  background: rgba(8, 22, 32, 0.82);
+}
+
+.node-inspector,
+.alert-locator {
+  min-height: 314px;
+}
+
+.node-inspector {
+  box-shadow: inset 0 2px 0 rgba(105, 215, 189, 0.52);
+}
+
+.node-inspector.warn {
+  box-shadow: inset 0 2px 0 rgba(223, 184, 99, 0.68);
+}
+
+.node-inspector.danger,
+.node-inspector.blocked {
+  box-shadow: inset 0 2px 0 rgba(239, 126, 138, 0.72);
+}
+
+.runtime-monitor-page .panel-title {
+  display: grid;
+  gap: 7px;
+}
+
+.runtime-monitor-page .panel-title > span {
+  display: block;
+  margin: 0;
+  color: #7895a5;
+  font-size: 12px;
+}
+
+.runtime-monitor-page .panel-title > strong {
+  display: block;
+  color: #f2f7f8;
+  font-size: 18px;
+  line-height: 1.3;
 }
 
 .inspector-head {
   display: grid;
-  grid-template-columns: 148px minmax(0, 1fr);
-  align-items: start;
-  gap: 14px;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.2fr);
+  align-items: center;
+  gap: 28px;
   min-width: 0;
+  padding-bottom: 20px;
+  border-bottom: 1px solid rgba(137, 180, 192, 0.12);
 }
 
-.inspector-head strong {
-  display: block;
-  margin-top: 4px;
+.inspector-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.inspector-title-row h2 {
+  margin: 0;
   color: #f2f7f8;
-  font-size: 15px;
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgba(105, 215, 189, 0.28);
+  border-radius: 999px;
+  background: rgba(105, 215, 189, 0.08);
+  color: #79ddc5;
+  font-size: 11px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.status-pill.warn {
+  border-color: rgba(223, 184, 99, 0.32);
+  background: rgba(223, 184, 99, 0.09);
+  color: #dfb863;
+}
+
+.status-pill.danger,
+.status-pill.blocked {
+  border-color: rgba(239, 126, 138, 0.34);
+  background: rgba(239, 126, 138, 0.1);
+  color: #ef7e8a;
+}
+
+.status-pill.neutral {
+  border-color: rgba(127, 149, 163, 0.3);
+  background: rgba(127, 149, 163, 0.08);
+  color: #a7b7c0;
 }
 
 .node-inspector p {
   margin: 0;
-  color: #9badb8;
-  font-size: 12px;
-  line-height: 1.5;
+  color: #a8b8c1;
+  font-size: 13px;
+  line-height: 1.8;
 }
 
 .resource-compact {
   display: grid;
-  grid-template-columns: repeat(4, minmax(120px, 1fr)) 92px;
-  gap: 10px;
-  align-items: end;
-  margin-top: 12px;
+  grid-template-columns: repeat(4, minmax(115px, 1fr)) minmax(145px, 0.8fr);
+  gap: 12px;
+  margin-top: 20px;
 }
 
 .resource-meter {
   display: grid;
-  gap: 7px;
+  grid-template-rows: auto auto 1fr;
+  gap: 11px;
   min-width: 0;
+  min-height: 132px;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  background: rgba(15, 35, 48, 0.72);
 }
 
 .resource-meter div {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  display: grid;
+  gap: 5px;
 }
 
-.resource-meter strong,
-.uptime-meter strong {
+.resource-meter strong {
   color: #eaf4f5;
-  font-size: 12px;
-  font-weight: 650;
+  font-size: 22px;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 
 .resource-meter i {
   display: block;
-  height: 7px;
+  height: 6px;
   overflow: hidden;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.055);
+  background: rgba(255, 255, 255, 0.07);
 }
 
 .resource-meter b {
@@ -1403,6 +1660,13 @@ onUnmounted(() => {
   height: 100%;
   border-radius: inherit;
   background: rgba(105, 215, 189, 0.86);
+}
+
+.resource-meter small,
+.uptime-meter small {
+  align-self: end;
+  color: #738b99;
+  font-size: 11px;
 }
 
 .resource-meter.warn b { background: rgba(223, 184, 99, 0.9); }
@@ -1413,183 +1677,432 @@ onUnmounted(() => {
 
 .uptime-meter {
   display: grid;
-  gap: 5px;
-  justify-items: end;
+  grid-template-rows: auto 1fr auto;
+  gap: 9px;
+  min-height: 132px;
+  padding: 16px;
+  border: 1px solid rgba(105, 215, 189, 0.12);
+  border-radius: 8px;
+  background: rgba(21, 51, 61, 0.52);
+}
+
+.uptime-meter strong {
+  align-self: center;
+  color: #eaf4f5;
+  font-size: 28px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 .inspector-facts {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 20px;
 }
 
 .inspector-facts div {
+  position: relative;
+  display: grid;
+  align-content: center;
+  gap: 8px;
   min-width: 0;
-  padding: 9px;
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.035);
+  min-height: 132px;
+  overflow: hidden;
+  padding: 20px 22px;
+  border: 1px solid rgba(105, 215, 189, 0.12);
+  border-radius: 8px;
+  background: rgba(15, 35, 48, 0.72);
+}
+
+.inspector-facts div > b {
+  position: absolute;
+  right: 16px;
+  top: 8px;
+  color: rgba(105, 215, 189, 0.09);
+  font-size: 48px;
+  font-weight: 800;
 }
 
 .inspector-facts strong {
   display: block;
-  margin-top: 4px;
   overflow: hidden;
   color: #eaf4f5;
-  font-size: 12px;
-  font-weight: 650;
+  font-size: 20px;
+  font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.icon-text {
-  border: 0;
-  padding: 0;
-  background: transparent;
-  color: #90cdd4;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.icon-text:hover {
-  color: #f2f7f8;
-}
-
 .alert-locator header,
-.dependency-card header {
+.dependency-card > header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 11px;
+  gap: 16px;
+  margin-bottom: 18px;
 }
 
-.alert-locator header strong,
-.dependency-card header strong {
-  display: block;
-  margin-top: 4px;
-  color: #f2f7f8;
+.issue-count {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(105, 215, 189, 0.09);
+  color: #79ddc5;
   font-size: 15px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.issue-count.active {
+  background: rgba(223, 184, 99, 0.12);
+  color: #dfb863;
 }
 
 .alert-list {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 9px;
 }
 
 .alert-node {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 5px 9px;
-  align-items: center;
-  min-height: 46px;
-  border: 1px solid rgba(255, 255, 255, 0.075);
-  border-left: 2px solid rgba(111, 130, 146, 0.74);
-  border-radius: 7px;
-  padding: 7px 9px;
-  background: rgba(255, 255, 255, 0.032);
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  min-height: 132px;
+  border: 1px solid rgba(223, 184, 99, 0.18);
+  border-radius: 8px;
+  padding: 16px;
+  background: rgba(223, 184, 99, 0.045);
   text-align: left;
   cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease;
 }
 
-.alert-node.warn {
-  border-left-color: #dfb863;
+.alert-node:hover {
+  border-color: rgba(223, 184, 99, 0.42);
+  background: rgba(223, 184, 99, 0.07);
 }
 
 .alert-node.danger {
-  border-left-color: #ef7e8a;
-  background: rgba(70, 25, 34, 0.16);
+  border-color: rgba(239, 126, 138, 0.25);
+  background: rgba(70, 25, 34, 0.2);
 }
 
-.alert-node span {
-  font-size: 10px;
+.alert-node > i {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(223, 184, 99, 0.14);
+  color: #dfb863;
+  font-size: 16px;
+  font-style: normal;
   font-weight: 700;
-  letter-spacing: 0.08em;
 }
 
-.alert-node.warn span { color: #dfb863; }
-.alert-node.danger span { color: #ef7e8a; }
+.alert-node.danger > i {
+  background: rgba(239, 126, 138, 0.14);
+  color: #ef7e8a;
+}
 
-.alert-node strong {
-  overflow: hidden;
-  color: #f2f7f8;
-  font-size: 12px;
-  font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.alert-node > span {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
 }
 
 .alert-node em {
-  grid-column: 2;
-  overflow: hidden;
+  color: #dfb863;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.alert-node.danger em { color: #ef7e8a; }
+
+.alert-node strong {
+  color: #f2f7f8;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.alert-node small,
+.alert-node b {
   color: #8fa0aa;
   font-size: 11px;
-  font-style: normal;
-  text-overflow: ellipsis;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.alert-node b { color: #718997; }
+
+.alert-node u {
+  align-self: center;
+  color: #9dcbd0;
+  font-size: 11px;
+  text-decoration: none;
   white-space: nowrap;
 }
 
 .alert-empty {
-  min-height: 58px;
   display: grid;
+  min-height: 200px;
   place-items: center;
-  border: 1px dashed rgba(105, 215, 189, 0.2);
-  border-radius: 7px;
-  color: #9badb8;
+  align-content: center;
+  gap: 8px;
+  border: 1px dashed rgba(105, 215, 189, 0.18);
+  border-radius: 8px;
+  color: #8fa4af;
   font-size: 12px;
 }
 
-.dependency-card {
-  margin-top: 12px;
-}
-
-.dependency-grid {
+.alert-empty i {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
-  gap: 8px;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 4px;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(105, 215, 189, 0.1);
+  color: #79ddc5;
+  font-size: 18px;
+  font-style: normal;
 }
 
-.dependency-node {
-  min-width: 0;
-  min-height: 68px;
-  border: 1px solid rgba(255, 255, 255, 0.075);
-  border-radius: 7px;
-  padding: 7px 9px;
-  background: rgba(255, 255, 255, 0.035);
+.alert-empty strong {
+  color: #dce9eb;
+  font-size: 14px;
+}
+
+.dependency-card {
+  margin-top: 14px;
+  padding: 24px 22px 12px;
+}
+
+.dependency-meta {
+  font-variant-numeric: tabular-nums;
+}
+
+.dependency-attention {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 52px;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  overflow-x: auto;
+  border: 1px solid rgba(223, 184, 99, 0.16);
+  border-radius: 8px;
+  background: rgba(223, 184, 99, 0.035);
+}
+
+.dependency-attention > span {
+  flex: 0 0 auto;
+  padding-right: 8px;
+  color: #dfb863;
+  font-weight: 650;
+}
+
+.dependency-attention button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 10px;
+  background: rgba(255, 255, 255, 0.045);
+  color: #dfe9eb;
+  cursor: pointer;
+}
+
+.dependency-attention button i,
+.dependency-node i {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #dfb863;
+}
+
+.dependency-attention button.danger i,
+.dependency-node.danger i { background: #ef7e8a; }
+
+.dependency-attention button strong {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.dependency-attention button em {
+  color: #dfb863;
+  font-size: 10px;
+  font-style: normal;
+}
+
+.dependency-attention button.danger em { color: #ef7e8a; }
+
+.dependency-categories {
+  border-top: 1px solid rgba(137, 180, 192, 0.11);
+}
+
+.dependency-category {
+  border-bottom: 1px solid rgba(137, 180, 192, 0.11);
+}
+
+.category-summary {
+  display: grid;
+  grid-template-columns: 12px minmax(210px, 1fr) 110px 120px 24px;
+  gap: 14px;
+  align-items: center;
+  width: 100%;
+  min-height: 78px;
+  border: 0;
+  padding: 10px 8px;
+  background: transparent;
+  color: #e8f1f5;
   text-align: left;
   cursor: pointer;
 }
 
-.dependency-node strong {
-  display: block;
-  margin-top: 4px;
-  color: #69d7bd;
-  font-size: 12px;
-  font-weight: 650;
+.category-summary:hover {
+  background: rgba(255, 255, 255, 0.022);
 }
 
-.dependency-node small {
-  display: block;
-  margin-top: 6px;
-  overflow: hidden;
-  color: #8fa0aa;
+.category-status {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #69d7bd;
+  box-shadow: 0 0 0 5px rgba(105, 215, 189, 0.08);
+}
+
+.dependency-category.warn .category-status {
+  background: #dfb863;
+  box-shadow: 0 0 0 5px rgba(223, 184, 99, 0.08);
+}
+
+.dependency-category.danger .category-status {
+  background: #ef7e8a;
+  box-shadow: 0 0 0 5px rgba(239, 126, 138, 0.08);
+}
+
+.dependency-category.neutral .category-status {
+  background: #718997;
+  box-shadow: 0 0 0 5px rgba(113, 137, 151, 0.08);
+}
+
+.category-summary > span {
+  display: grid;
+  gap: 5px;
+}
+
+.category-summary > span strong {
+  color: #edf6f7;
+  font-size: 14px;
+}
+
+.category-summary small,
+.category-summary > b {
+  color: #768d9a;
   font-size: 11px;
-  line-height: 1.35;
+  font-weight: 400;
+}
+
+.category-summary > em {
+  color: #79ddc5;
+  font-size: 11px;
+  font-style: normal;
+  text-align: right;
+}
+
+.dependency-category.warn .category-summary > em { color: #dfb863; }
+.dependency-category.danger .category-summary > em { color: #ef7e8a; }
+.dependency-category.neutral .category-summary > em { color: #93a8b3; }
+
+.category-summary > u {
+  color: #7f95a3;
+  font-size: 20px;
+  text-align: center;
+  text-decoration: none;
+  transform: rotate(0deg);
+  transition: transform 0.2s ease;
+}
+
+.dependency-category.expanded .category-summary > u {
+  transform: rotate(180deg);
+}
+
+.category-detail {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 20px;
+  padding: 4px 34px 22px;
+}
+
+.dependency-group {
+  min-width: 0;
+}
+
+.dependency-group > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.dependency-group > header strong {
+  color: #b8c8cf;
+  font-size: 11px;
+}
+
+.dependency-list {
+  display: grid;
+  gap: 2px;
+}
+
+.dependency-node {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  border: 0;
+  border-radius: 5px;
+  padding: 6px 8px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dependency-node:hover { background: rgba(255, 255, 255, 0.035); }
+.dependency-node i { background: #69d7bd; }
+.dependency-node.neutral i { background: #718997; }
+
+.dependency-node span {
+  overflow: hidden;
+  color: #aebfc7;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.dependency-node.warn {
-  border-color: rgba(223, 184, 99, 0.34);
+.dependency-node strong {
+  color: #69d7bd;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .dependency-node.warn strong {
   color: #dfb863;
-}
-
-.dependency-node.danger {
-  border-color: rgba(239, 126, 138, 0.38);
-  background: rgba(70, 25, 34, 0.16);
 }
 
 .dependency-node.danger strong {
@@ -1637,21 +2150,27 @@ onUnmounted(() => {
     min-height: 640px;
   }
 
-  .node-inspector {
-    gap: 10px;
+  .resource-compact {
+    grid-template-columns: repeat(3, minmax(120px, 1fr));
   }
 
-  .resource-compact {
-    grid-template-columns: repeat(5, minmax(92px, 1fr));
+  .uptime-meter {
+    grid-column: span 2;
   }
 }
 
 @media (max-width: 1180px) {
   .runtime-detail-row,
-  .inspector-head,
-  .resource-compact,
-  .inspector-facts {
+  .inspector-head {
     grid-template-columns: 1fr;
+  }
+
+  .resource-compact {
+    grid-template-columns: repeat(3, minmax(120px, 1fr));
+  }
+
+  .uptime-meter {
+    grid-column: auto;
   }
 
   .runtime-svg {
@@ -1662,12 +2181,41 @@ onUnmounted(() => {
     min-height: 530px;
   }
 
-  .dependency-grid {
+  .alert-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
 
+@media (max-width: 760px) {
+  .runtime-monitor-page,
+  .topology-stage {
+    padding: 8px;
+  }
+
+  .node-inspector,
+  .alert-locator,
+  .dependency-card {
+    padding: 17px;
+  }
+
+  .resource-compact,
+  .inspector-facts,
   .alert-list {
     grid-template-columns: 1fr;
+  }
+
+  .category-summary {
+    grid-template-columns: 12px minmax(0, 1fr) 24px;
+  }
+
+  .category-summary > b,
+  .category-summary > em {
+    display: none;
+  }
+
+  .category-detail {
+    grid-template-columns: 1fr;
+    padding-inline: 20px;
   }
 }
 </style>

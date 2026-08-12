@@ -16,7 +16,7 @@ const routes = [
         path: 'overview-camera-region-annotator',
         name: 'OverviewCameraRegionAnnotator',
         component: () => import('@/views/OverviewCameraRegionAnnotator.vue'),
-        meta: { title: '摄像头区域标注' }
+        meta: { title: '2号摄像头区域标注' }
       },
       // ========== 实时监控模块 ==========
       {
@@ -106,7 +106,7 @@ const routes = [
             path: 'drone',
             name: 'MonitorDroneRedirect',
             redirect: '/system/linkage/drone',
-            meta: { title: '无人机监测' }
+            meta: { title: '无人机设备' }
           },
           {
             path: 'device',
@@ -173,55 +173,96 @@ const routes = [
           {
             path: 'config',
             name: 'SystemInformationConfig',
-            redirect: '/system/linkage/events',
-            meta: { title: '联动系统' }
+            redirect: '/system/rules/events',
+            meta: { title: '规则管理' }
+          },
+          {
+            path: 'rules',
+            redirect: '/system/rules/events',
+            meta: { title: '规则管理' }
+          },
+          {
+            path: 'rules/events',
+            name: 'SystemRuleEvents',
+            component: () => import('@/views/System/EventConfig.vue'),
+            meta: { title: '事件配置' }
+          },
+          {
+            path: 'rules/actions',
+            name: 'SystemRuleActions',
+            redirect: '/system/rules/events?focus=flow',
+            meta: { title: '事件配置' }
+          },
+          {
+            path: 'rules/zones',
+            name: 'SystemRuleZones',
+            component: () => import('@/views/Monitor/ZoneConfig.vue'),
+            meta: { title: '区域配置' }
           },
           {
             path: 'linkage',
-            redirect: '/system/linkage/events',
+            redirect: '/system/linkage/broadcast',
             meta: { title: '联动系统' }
           },
           {
             path: 'linkage/events',
             name: 'SystemLinkageEvents',
-            component: () => import('@/views/System/EventConfig.vue'),
+            redirect: '/system/rules/events',
             meta: { title: '事件配置' }
           },
           {
             path: 'linkage/actions',
             name: 'SystemLinkageActions',
-            component: () => import('@/views/System/ActionConfig.vue'),
-            meta: { title: '动作配置' }
+            redirect: '/system/rules/events?focus=flow',
+            meta: { title: '事件配置' }
           },
           {
             path: 'linkage/zones',
             name: 'SystemLinkageZones',
-            component: () => import('@/views/Monitor/ZoneConfig.vue'),
+            redirect: '/system/rules/zones',
             meta: { title: '区域配置' }
+          },
+          {
+            path: 'linkage/broadcast',
+            name: 'SystemLinkageBroadcast',
+            component: () => import('@/views/System/LinkageManagement.vue'),
+            meta: { title: '广播设备', linkageModule: 'devices' }
           },
           {
             path: 'linkage/devices',
             name: 'SystemLinkageDevices',
-            component: () => import('@/views/System/LinkageManagement.vue'),
-            meta: { title: '联动设备', linkageModule: 'devices' }
+            redirect: '/system/linkage/broadcast',
+            meta: { title: '广播设备', linkageModule: 'devices' }
           },
           {
             path: 'linkage/rules',
             name: 'SystemLinkageRules',
-            redirect: '/system/linkage/actions',
-            meta: { title: '动作配置' }
+            redirect: '/system/rules/events?focus=flow',
+            meta: { title: '事件配置' }
           },
           {
             path: 'linkage/drone',
             name: 'SystemLinkageDroneView',
             component: () => import('@/views/Monitor/DroneView.vue'),
-            meta: { title: '无人机监测' }
+            meta: { title: '无人机设备' }
+          },
+          {
+            path: 'linkage/machine-dog',
+            name: 'SystemLinkageMachineDog',
+            component: () => import('@/views/System/MachineDogDevice.vue'),
+            meta: { title: '机器狗设备' }
+          },
+          {
+            path: 'linkage/staff',
+            name: 'SystemLinkageStaff',
+            component: () => import('@/views/System/StaffManagement.vue'),
+            meta: { title: '现场人员管理' }
           },
           {
             path: 'drone',
             name: 'SystemDroneViewRedirect',
             redirect: '/system/linkage/drone',
-            meta: { title: '无人机监测' }
+            meta: { title: '无人机设备' }
           },
           {
             path: 'models',

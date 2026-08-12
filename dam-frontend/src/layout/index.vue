@@ -69,15 +69,6 @@
 
       <!-- 内容区 -->
       <main class="contentBox flexBox">
-        <div v-if="showBreadcrumbBar" class="routerBox flexBox">
-          <el-icon :size="18"><SystemOverviewIcon /></el-icon>
-          <span>
-            <span v-for="(item, index) in breadcrumbs" :key="index">
-              {{ item }}
-              <span v-if="index !== breadcrumbs.length - 1"> / </span>
-            </span>
-          </span>
-        </div>
         <div class="viewBox">
           <router-view />
         </div>
@@ -163,6 +154,25 @@ const menuMap = {
   '/system': [
     { name: '数据源管理', path: '/system/devices', icon: Setting },
     {
+      name: '规则管理',
+      icon: DataAnalysis,
+      children: [
+        { name: '事件配置', path: '/system/rules/events', icon: DataAnalysis },
+        { name: '区域配置', path: '/system/rules/zones', icon: VideoCamera },
+      ],
+    },
+    {
+      name: '联动系统',
+      icon: Setting,
+      children: [
+        { name: '广播设备', path: '/system/linkage/broadcast', icon: Connection },
+        { name: '无人机设备', path: '/system/linkage/drone', icon: 'drone-custom-icon' },
+        { name: '机器狗设备', path: '/system/linkage/machine-dog', icon: Setting },
+        { name: '现场人员管理', path: '/system/linkage/staff', icon: SensorChipIcon },
+      ],
+    },
+    { name: '模型管理', path: '/system/models', icon: DataAnalysis },
+    {
       name: '场景测试',
       icon: DataAnalysis,
       children: [
@@ -170,18 +180,6 @@ const menuMap = {
         { name: '传感器测试', path: '/system/sensor-event-test', icon: SensorChipIcon },
       ],
     },
-    {
-      name: '联动系统',
-      icon: Setting,
-      children: [
-        { name: '事件配置', path: '/system/linkage/events', icon: DataAnalysis },
-        { name: '动作配置', path: '/system/linkage/actions', icon: Connection },
-        { name: '区域配置', path: '/system/linkage/zones', icon: VideoCamera },
-        { name: '联动设备', path: '/system/linkage/devices', icon: Connection },
-        { name: '无人机监测', path: '/system/linkage/drone', icon: 'drone-custom-icon' },
-      ],
-    },
-    { name: '模型管理', path: '/system/models', icon: DataAnalysis },
   ],
   '/document': [
     { name: '文档管理', path: '/document/hub', icon: DocumentSheetIcon },
@@ -203,7 +201,6 @@ const currentNav = computed(() => {
 const isDashboard = computed(() => route.path === '/dashboard')
 const isBigScreenPreview = computed(() => route.path === '/dashboard')
 const isRegionAnnotator = computed(() => route.path === '/overview-camera-region-annotator')
-const showBreadcrumbBar = computed(() => !isBigScreenPreview.value && !isRegionAnnotator.value && !route.meta.hideBreadcrumbBar)
 
 // 需要显示侧边栏的模块
 const showSiderbar = computed(() => {
@@ -226,12 +223,6 @@ const sidebarDefaultOpeneds = computed(() => {
   return currentMenu.value
     .filter(item => item.children?.some(child => child.path === sidebarActivePath.value))
     .map(item => item.name)
-})
-
-// 面包屑
-const breadcrumbs = computed(() => {
-  const matched = route.matched.filter((item) => item.meta && item.meta.title)
-  return matched.map((item) => item.meta.title)
 })
 
 // 导航点击

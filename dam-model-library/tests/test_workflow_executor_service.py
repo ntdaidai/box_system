@@ -138,6 +138,7 @@ class WorkflowExecutorServiceTests(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         second_request = mock_infer_service.infer.call_args_list[1].args[2]
         self.assertEqual(second_request["inputs"]["media_objects"], cloud_media)
+        self.assertEqual(second_request["videos"], ["cloud-tasks/workflow-media/EVT_001/videos/01_clip.mp4"])
 
     def test_final_output_keeps_local_template_data_when_cloud_node_fails(self):
         dag = {
@@ -220,6 +221,23 @@ class WorkflowExecutorServiceTests(unittest.TestCase):
         self.assertEqual(request_data["system_prompt_source"], "actor_library.local_system_prompt")
         self.assertEqual(request_data["inputs"]["actor_name"], "结构分析专家")
         self.assertEqual(request_data["inputs"]["system_prompt"], "你是边缘侧结构安全监测智能分析模型。")
+
+    def test_slim_sensor_data_preserves_suspect_fields(self):
+        """_slim_sensor_data 保留 possible_person/possible_boat 疑似字段。"""
+        sensor = {
+            "person_present": 0,
+            "person_confidence": 0.51,
+            "possible_person": 1,
+            "boat_present": 0,
+            "boat_confidence": 0.05,
+            "possible_boat": 0,
+            "risk_level": "LOW",
+            "unrelated_field": "should be dropped",
+        }
+        slim = WorkflowExecutorService._slim_sensor_data(sensor)
+        self.assertEqual(slim["possible_person"], 1)
+        self.assertEqual(slim["possible_boat"], 0)
+        self.assertNotIn("unrelated_field", slim)
 
 
 if __name__ == "__main__":

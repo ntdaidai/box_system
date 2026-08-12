@@ -27,7 +27,7 @@
           :disabled="!canStart"
           @click="startTalking"
         >
-          {{ preparingRecorder ? '正在打开麦克风' : submitting ? '正在播放' : '开始说话' }}
+          {{ talkButtonText }}
         </button>
         <button
           v-else
@@ -82,10 +82,25 @@ const onlineDevices = computed(() => devices.value.filter((device) => (
 )))
 const onlineDeviceCount = computed(() => onlineDevices.value.length)
 const canStart = computed(() => !preparingRecorder.value && !submitting.value && onlineDeviceCount.value > 0)
+const microphoneSupported = computed(() => Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder))
+const microphoneUnavailableReason = computed(() => {
+  if (!window.isSecureContext && !['localhost', '127.0.0.1'].includes(window.location.hostname)) {
+    return '当前页面不是 HTTPS 或 localhost，浏览器禁止访问麦克风'
+  }
+  if (!navigator.mediaDevices?.getUserMedia) return '当前浏览器不支持麦克风采集'
+  if (!window.MediaRecorder) return '当前浏览器不支持录音编码'
+  return ''
+})
 const talkStateText = computed(() => {
   if (submitting.value) return '正在播放'
   if (isTalking.value) return '正在说话'
+  if (!microphoneSupported.value) return '麦克风不可用'
   return '等待开始'
+})
+const talkButtonText = computed(() => {
+  if (preparingRecorder.value) return '正在打开麦克风'
+  if (submitting.value) return '正在播放'
+  return '开始说话'
 })
 const durationText = computed(() => {
   const seconds = Math.floor(elapsedMs.value / 1000)
@@ -133,7 +148,7 @@ async function startTalking() {
     return
   }
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-    ElMessage.error('当前浏览器不支持麦克风')
+    ElMessage.warning(microphoneUnavailableReason.value || '当前浏览器无法打开麦克风')
     return
   }
   preparingRecorder.value = true
@@ -159,7 +174,7 @@ async function startTalking() {
     isTalking.value = true
   } catch (error) {
     releaseStream()
-    ElMessage.error(error?.message || '无法打开麦克风')
+    ElMessage.warning(microphoneErrorMessage(error))
   } finally {
     preparingRecorder.value = false
   }
@@ -232,6 +247,26 @@ async function playRecording(audioBlob) {
   formData.append('audio', audioBlob, recordingFilename(audioBlob))
   const response = await playRecordedBroadcast(formData)
   return response.data || {}
+}
+
+function microphoneErrorMessage(error) {
+  const name = error?.name || ''
+  if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+    return '浏览器未授权麦克风，请检查地址栏权限'
+  }
+  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+    return '未检测到可用麦克风'
+  }
+  if (name === 'NotReadableError' || name === 'TrackStartError') {
+    return '麦克风被其他程序占用或系统拒绝访问'
+  }
+  if (name === 'SecurityError') {
+    return '浏览器安全策略禁止访问麦克风'
+  }
+  if (name === 'OverconstrainedError' || name === 'ConstraintNotSatisfiedError') {
+    return '当前麦克风不满足浏览器录音要求'
+  }
+  return error?.message || '无法打开麦克风'
 }
 </script>
 

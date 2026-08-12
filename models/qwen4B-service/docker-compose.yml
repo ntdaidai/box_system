@@ -19,6 +19,16 @@ services:
       - KNOWLEDGE_API_BASE=${KNOWLEDGE_API_BASE:-http://localhost:8090/api/v1/knowledge}
       - KNOWLEDGE_TOP_K=${KNOWLEDGE_TOP_K:-4}
       - KNOWLEDGE_MIN_SCORE=${KNOWLEDGE_MIN_SCORE:-0.1}
+      # 外部气象补充：温湿度/雨量/风速类事件推理前自动补充联网气象背景
+      - WEATHER_CONTEXT_ENABLED=${WEATHER_CONTEXT_ENABLED:-true}
+      # 测试阶段默认使用模拟气象，online 才会调用联网气象 API
+      - WEATHER_CONTEXT_MODE=${WEATHER_CONTEXT_MODE:-mock}
+      - WEATHER_API_BASE=${WEATHER_API_BASE:-https://api.open-meteo.com/v1/forecast}
+      - WEATHER_LATITUDE=${WEATHER_LATITUDE:-30.27}
+      - WEATHER_LONGITUDE=${WEATHER_LONGITUDE:-120.15}
+      - WEATHER_LOCATION_NAME=${WEATHER_LOCATION_NAME:-库坝现场}
+      - WEATHER_TIMEZONE=${WEATHER_TIMEZONE:-Asia/Shanghai}
+      - WEATHER_TIMEOUT=${WEATHER_TIMEOUT:-8}
       # 媒体转存：AGX 本地 MinIO -> A100 云端 MinIO
       - UPLOAD_MEDIA_TO_CLOUD=true
       - STRICT_MEDIA_UPLOAD=false

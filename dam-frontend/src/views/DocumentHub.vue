@@ -12,9 +12,9 @@
       <article class="stat-card tone-category">
         <el-icon class="stat-icon"><FolderOpened /></el-icon>
         <div class="stat-info">
-          <span class="stat-label">文档分类</span>
-          <span class="stat-value">{{ categories.length }}</span>
-          <small>按文件类型归档</small>
+          <span class="stat-label">业务类型</span>
+          <span class="stat-value">{{ businessCategoryCount }}</span>
+          <small>按报告业务归档</small>
         </div>
       </article>
       <article class="stat-card tone-month">
@@ -36,6 +36,28 @@
     </div>
 
     <div class="filter-section">
+      <div class="filter-field">
+        <span class="filter-label">业务类型</span>
+        <el-select v-model="selectedBusinessType" placeholder="全部业务类型" clearable class="business-type-select">
+          <el-option
+            v-for="type in businessTypes"
+            :key="type.value"
+            :label="type.label"
+            :value="type.value"
+          />
+        </el-select>
+      </div>
+      <div class="filter-field">
+        <span class="filter-label">风险等级</span>
+        <el-select v-model="selectedRiskLevel" placeholder="全部风险等级" clearable class="risk-level-select">
+          <el-option
+            v-for="risk in riskLevelOptions"
+            :key="risk.value"
+            :label="risk.label"
+            :value="risk.value"
+          />
+        </el-select>
+      </div>
       <div class="filter-field search-field">
         <span class="filter-label">搜索</span>
         <el-input
@@ -90,18 +112,21 @@
               @change="toggleCurrentPageSelection"
             />
           </div>
-          <button type="button" class="row-index sortable-header" @click="toggleSort('index')">
-            序号 <span class="sort-caret" :class="sortClass('index')"></span>
-          </button>
+          <div class="row-index">序号</div>
           <div class="row-name">文档</div>
-          <div class="row-event-no">事件编号</div>
+          <button type="button" class="row-risk sortable-header" :class="sortClass('risk')" @click="toggleSort('risk')">
+            <span>风险等级</span>
+            <span class="caret-wrapper"><i class="sort-caret ascending"></i><i class="sort-caret descending"></i></span>
+          </button>
           <div class="row-type">文件类型</div>
           <div class="row-size">文件大小</div>
-          <button type="button" class="row-date sortable-header" @click="toggleSort('created')">
-            创建时间 <span class="sort-caret" :class="sortClass('created')"></span>
+          <button type="button" class="row-date sortable-header" :class="sortClass('created')" @click="toggleSort('created')">
+            <span>创建时间</span>
+            <span class="caret-wrapper"><i class="sort-caret ascending"></i><i class="sort-caret descending"></i></span>
           </button>
-          <button type="button" class="row-date sortable-header" @click="toggleSort('updated')">
-            最后更新时间 <span class="sort-caret" :class="sortClass('updated')"></span>
+          <button type="button" class="row-date sortable-header" :class="sortClass('updated')" @click="toggleSort('updated')">
+            <span>最后更新时间</span>
+            <span class="caret-wrapper"><i class="sort-caret ascending"></i><i class="sort-caret descending"></i></span>
           </button>
           <div class="row-actions">操作</div>
         </div>
@@ -125,9 +150,10 @@
               <strong class="doc-name">{{ documentTitle(doc) }}</strong>
             </span>
           </div>
-          <div class="row-event-no" :class="{ 'is-empty-event': !eventNumberForDocument(doc) }" :title="eventNumberForDocument(doc) || '无关联编号'">
-            <template v-if="eventNumberForDocument(doc)">{{ eventNumberForDocument(doc) }}</template>
-            <template v-else>无关联编号</template>
+          <div class="row-risk">
+            <el-tag class="document-risk-tag" :type="riskTag(doc.riskLevel)" effect="dark">
+              {{ riskLevelLabel(doc.riskLevel) }}
+            </el-tag>
           </div>
           <div class="row-type">
             <span class="type-badge" :class="getTypeBadgeClass(doc.type)">
@@ -261,8 +287,8 @@ const exportingMonth = ref(false)
 const deletingDocumentIds = ref([])
 const documents = ref([])
 const searchQuery = ref('')
-const selectedCategory = ref('')
 const selectedBusinessType = ref('')
+const selectedRiskLevel = ref('')
 const sortBy = ref('updated')
 const sortOrder = ref('desc')
 const currentPage = ref(1)
@@ -283,12 +309,21 @@ const currentUser = ref({
 
 const businessTypes = [
   { label: '全部文档', value: '' },
-  { label: '事件报告', value: 'event' }
+  { label: '事件报告', value: 'event' },
+  { label: '每日报告', value: 'daily' },
+  { label: '每周报告', value: 'weekly' },
+  { label: '每月报告', value: 'monthly' }
 ]
 
-const categories = computed(() => {
-  const cats = new Set(documents.value.map((doc) => doc.category))
-  return Array.from(cats)
+const riskLevelOptions = [
+  { label: '低风险', value: 'LOW' },
+  { label: '中风险', value: 'MEDIUM' },
+  { label: '高风险', value: 'HIGH' }
+]
+
+const businessCategoryCount = computed(() => {
+  const types = new Set(documents.value.map((doc) => doc.businessType).filter((type) => type && type !== 'other'))
+  return types.size
 })
 
 const currentMonthCount = computed(() => {
@@ -305,27 +340,27 @@ const filteredDocuments = computed(() => {
     result = result.filter((doc) => doc.searchText.includes(query))
   }
 
-  if (selectedCategory.value) {
-    result = result.filter((doc) => doc.category === selectedCategory.value)
-  }
-
   if (selectedBusinessType.value) {
     result = result.filter((doc) => doc.businessType === selectedBusinessType.value)
+  }
+
+  if (selectedRiskLevel.value) {
+    result = result.filter((doc) => doc.riskLevel === selectedRiskLevel.value)
   }
 
   if (exportMonth.value) {
     result = result.filter((doc) => getDocumentMonth(doc.updatedAt) === exportMonth.value)
   }
 
-  result.sort((a, b) => {
-    const direction = sortOrder.value === 'asc' ? 1 : -1
-    if (sortBy.value === 'index') return (a.sourceIndex - b.sourceIndex) * direction
-    if (sortBy.value === 'created') return (dateValue(a.created_at) - dateValue(b.created_at)) * direction
-    if (sortBy.value === 'updated') return (dateValue(a.updatedAt) - dateValue(b.updatedAt)) * direction
-    if (sortBy.value === 'name') return a.name.localeCompare(b.name) * direction
-    if (sortBy.value === 'size') return (a.size - b.size) * direction
-    return 0
-  })
+  if (sortBy.value) {
+    result.sort((a, b) => {
+      const direction = sortOrder.value === 'asc' ? 1 : -1
+      if (sortBy.value === 'risk') return (riskSortValue(a.riskLevel) - riskSortValue(b.riskLevel)) * direction
+      if (sortBy.value === 'created') return (dateValue(a.created_at) - dateValue(b.created_at)) * direction
+      if (sortBy.value === 'updated') return (dateValue(a.updatedAt) - dateValue(b.updatedAt)) * direction
+      return 0
+    })
+  }
 
   return result
 })
@@ -348,7 +383,7 @@ const isCurrentPageIndeterminate = computed(() => {
   return selectedCount > 0 && selectedCount < currentPageIds.value.length
 })
 
-watch([searchQuery, selectedCategory, selectedBusinessType, sortBy, exportMonth], () => {
+watch([searchQuery, selectedBusinessType, selectedRiskLevel, sortBy, sortOrder, exportMonth], () => {
   currentPage.value = 1
 })
 
@@ -388,11 +423,13 @@ const getCategory = (extension) => {
 const detectBusinessType = (filename) => {
   const name = String(filename || '').toLowerCase()
   const eventKeywords = ['事件', '处置报告', 'event', 'dam_event_report']
-  const inspectionKeywords = ['巡查', '巡检', 'patrol', 'inspection']
-  const monitoringKeywords = ['监测', '监控', '传感器', 'sensor', 'monitor']
+  const dailyKeywords = ['每日', '日报', 'daily']
+  const weeklyKeywords = ['每周', '周报', 'weekly']
+  const monthlyKeywords = ['每月', '月报', 'monthly']
   if (eventKeywords.some((keyword) => name.includes(keyword))) return 'event'
-  if (inspectionKeywords.some((keyword) => name.includes(keyword))) return 'inspection'
-  if (monitoringKeywords.some((keyword) => name.includes(keyword))) return 'monitoring'
+  if (dailyKeywords.some((keyword) => name.includes(keyword))) return 'daily'
+  if (weeklyKeywords.some((keyword) => name.includes(keyword))) return 'weekly'
+  if (monthlyKeywords.some((keyword) => name.includes(keyword))) return 'monthly'
   return 'other'
 }
 
@@ -419,8 +456,9 @@ const getTypeBadgeClass = (type) => {
 const getTypeLabel = (extension) => String(extension || '').toUpperCase() || 'FILE'
 
 const eventReportTitle = (name) => {
-  const text = String(name || '').trim()
+  const text = stripDocumentExtension(stripInstanceSuffix(String(name || '').trim()))
   if (!text) return '事件处置报告'
+  if (text.includes('处置报告')) return text
   return text.includes('事件') ? `${text}处置报告` : `${text}事件处置报告`
 }
 
@@ -451,26 +489,62 @@ const instanceSequence = (value) => {
   return matched?.[1] || ''
 }
 
+const normalizeInstanceNo = (value, fallbackDate) => {
+  const text = String(value || '').trim()
+  const date = dateToken(text) || dateToken(fallbackDate)
+  if (!date) return text
+  const sequence = instanceSequence(text) || 1
+  return `EVT_${date}_${String(sequence).padStart(3, '0')}`
+}
+
 const formatEventDocumentId = (doc) => {
-  const instanceNo = doc?.event_instance_no || eventInstanceNoFromDocumentId(doc?.document_id)
+  const instanceNo = doc?.display_instance_no || doc?.event_instance_no || eventInstanceNoFromDocumentId(doc?.document_id)
   if (!instanceNo) return ''
-  const date = dateToken(doc?.event_started_at) || dateToken(instanceNo) || dateToken(doc?.created_at)
-  if (!date) return instanceNo
-  const sequence = instanceSequence(instanceNo) || doc?.event_instance_id
-  return `${date}_${String(sequence || 1).padStart(2, '0')}`
+  return normalizeInstanceNo(instanceNo, doc?.event_started_at || doc?.created_at)
+}
+
+const stripDocumentExtension = (value) => String(value || '').replace(/\.(docx?|xlsx?|pptx?|pdf)$/i, '')
+
+const stripInstanceSuffix = (value) => (
+  String(value || '')
+    .replace(/_?EVT_20\d{6}_[0-9a-fA-F-]+$/i, '')
+    .replace(/_?20\d{6}_[0-9a-fA-F-]+$/i, '')
+)
+
+const inferRiskLevel = (doc) => {
+  const text = `${doc?.risk_level || ''} ${doc?.risk_label || ''} ${doc?.title || ''} ${doc?.document_id || ''}`
+  if (/高风险|HIGH/i.test(text)) return 'HIGH'
+  if (/中风险|MEDIUM/i.test(text)) return 'MEDIUM'
+  if (/低风险|LOW/i.test(text)) return 'LOW'
+  return ''
+}
+
+const riskLevelLabel = (value) => {
+  return ({ LOW: '低风险', MEDIUM: '中风险', HIGH: '高风险' })[value] || '无'
+}
+
+const riskTag = (value) => {
+  return ({ LOW: 'success', MEDIUM: 'warning', HIGH: 'danger' })[value] || 'info'
+}
+
+const riskSortValue = (value) => {
+  return ({ LOW: 1, MEDIUM: 2, HIGH: 3 })[value] || 0
 }
 
 const documentTitle = (doc) => {
   if (isEventReportDocument(doc)) {
-    return eventReportTitle(doc?.event_name || doc?.event_summary || doc?.report_title)
+    const baseTitle = eventReportTitle(doc?.event_name || doc?.event_summary || doc?.report_title || doc?.name)
+    const instanceNo = doc?.displayEventNo || formatEventDocumentId(doc)
+    if (!instanceNo || baseTitle.includes(instanceNo)) return baseTitle
+    return `${baseTitle}_${instanceNo}`
   }
-  return doc?.name || '未命名文档'
+  return stripDocumentExtension(doc?.name || '未命名文档')
 }
 
 const eventNumberForDocument = (doc) => {
   // 仅事件处置报告有关联的事件编号，其余文档（如每日报告）无关联编号
   if (isEventReportDocument(doc)) {
-    return formatEventDocumentId(doc) || ''
+      return formatEventDocumentId(doc) || ''
   }
   return ''
 }
@@ -553,40 +627,50 @@ const getDocumentMonth = (value) => {
 }
 
 const normalizeDocument = (doc, index = 0) => {
+  const rawName = doc.title || doc.document_id || '未命名文档'
   const normalized = {
     ...doc,
     id: doc.document_id,
     sourceIndex: index,
-    name: doc.title || doc.document_id || '未命名文档',
+    name: rawName,
     type: getDisplayType(doc.file_type),
     category: getCategory(doc.file_type),
-    businessType: detectBusinessType(doc.title || doc.document_id),
+    businessType: detectBusinessType(rawName || doc.document_id),
+    riskLevel: inferRiskLevel(doc),
     size: doc.file_size,
     updatedAt: doc.updated_at
   }
+  normalized.displayEventNo = isEventReportDocument(normalized)
+    ? formatEventDocumentId(normalized)
+    : ''
   normalized.displayTitle = documentTitle(normalized)
-  normalized.displayEventNo = eventNumberForDocument(normalized)
   normalized.searchText = [
     normalized.name,
     normalized.document_id,
     normalized.displayTitle,
-    normalized.displayEventNo
+    normalized.displayEventNo,
+    normalized.riskLevel
   ].filter(Boolean).join(' ').toLowerCase()
   return normalized
 }
 
 const toggleSort = (field) => {
-  if (sortBy.value === field) {
-    sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc'
+  if (sortBy.value !== field) {
+    sortBy.value = field
+    sortOrder.value = 'desc'
     return
   }
-  sortBy.value = field
-  sortOrder.value = field === 'index' ? 'asc' : 'desc'
+  if (sortOrder.value === 'desc') {
+    sortOrder.value = 'asc'
+    return
+  }
+  sortBy.value = ''
+  sortOrder.value = ''
 }
 
 const sortClass = (field) => {
   if (sortBy.value !== field) return ''
-  return sortOrder.value === 'asc' ? 'is-asc' : 'is-desc'
+  return sortOrder.value === 'asc' ? 'ascending' : 'descending'
 }
 
 const loadDocuments = async () => {
@@ -752,7 +836,7 @@ const downloadDoc = async (doc) => {
     const url = window.URL.createObjectURL(new Blob([response.data]))
     const link = document.createElement('a')
     link.href = url
-    link.setAttribute('download', doc.name)
+    link.setAttribute('download', `${documentTitle(doc)}.${doc.file_type || 'docx'}`)
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -939,8 +1023,8 @@ onActivated(() => {
 }
 
 .search-field {
-  min-width: 360px;
-  flex: 1 1 420px;
+  min-width: 420px;
+  flex: 1 1 520px;
 }
 
 .filter-label {
@@ -951,10 +1035,9 @@ onActivated(() => {
   width: 100%;
 }
 
-.category-select,
 .business-type-select,
-.sort-select {
-  width: 150px;
+.risk-level-select {
+  width: 168px;
 }
 
 .month-field {
@@ -1010,6 +1093,7 @@ onActivated(() => {
 
 .filter-actions {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 12px;
   white-space: nowrap;
@@ -1065,7 +1149,7 @@ onActivated(() => {
 .document-header,
 .document-row {
   display: grid;
-  grid-template-columns: 34px 58px minmax(220px, 2fr) 150px 100px 112px 160px 160px 210px;
+  grid-template-columns: 34px 58px minmax(260px, 2fr) 112px 96px 104px 150px 150px 210px;
   align-items: center;
   gap: 12px;
 }
@@ -1080,8 +1164,8 @@ onActivated(() => {
 }
 
 .document-header .row-name,
-.document-header .row-event-no,
 .document-header .row-type,
+.document-header .row-risk,
 .document-header .row-size,
 .document-header .row-date,
 .document-header .row-actions {
@@ -1093,8 +1177,13 @@ onActivated(() => {
   justify-content: center;
 }
 
+.document-header .row-name {
+  justify-content: center;
+  text-align: center;
+}
+
 .document-header .row-index,
-.document-header .row-event-no,
+.document-header .row-risk,
 .document-header .row-size,
 .document-header .row-date {
   color: #9fb4c5;
@@ -1114,8 +1203,8 @@ onActivated(() => {
 }
 
 .row-index,
-.row-event-no,
 .row-type,
+.row-risk,
 .row-size,
 .row-date,
 .row-actions {
@@ -1126,8 +1215,7 @@ onActivated(() => {
 
 .row-index,
 .row-size,
-.row-date,
-.row-event-no {
+.row-date {
   font-size: 14px;
   font-weight: 500;
   color: #9cb6ca;
@@ -1139,16 +1227,13 @@ onActivated(() => {
   font-weight: 700;
 }
 
-.row-event-no.is-empty-event {
-  color: #9cb6ca;
-}
-
 .row-name {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 12px;
   min-width: 0;
+  text-align: left;
   cursor: pointer;
 }
 
@@ -1163,7 +1248,7 @@ onActivated(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 4px;
   border: 0;
   color: inherit;
   background: transparent;
@@ -1175,22 +1260,48 @@ onActivated(() => {
   color: #d9e8f8;
 }
 
+.document-header .sortable-header {
+  cursor: pointer;
+}
+
+.caret-wrapper {
+  width: 24px;
+  height: 14px;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  vertical-align: middle;
+}
+
 .sort-caret {
   width: 0;
   height: 0;
+  position: absolute;
+  left: 7px;
   border-left: 4px solid transparent;
   border-right: 4px solid transparent;
-  border-top: 5px solid #6e879a;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
   opacity: .65;
 }
 
-.sort-caret.is-asc {
-  border-top: 0;
-  border-bottom: 5px solid #48d8ff;
+.sort-caret.ascending {
+  top: -5px;
+  border-bottom-color: #7c96aa;
+}
+
+.sort-caret.descending {
+  bottom: -3px;
+  border-top-color: #7c96aa;
+}
+
+.sortable-header.ascending .sort-caret.ascending {
+  border-bottom-color: #48d8ff;
   opacity: 1;
 }
 
-.sort-caret.is-desc {
+.sortable-header.descending .sort-caret.descending {
   border-top-color: #48d8ff;
   opacity: 1;
 }
@@ -1240,6 +1351,32 @@ onActivated(() => {
 
 .row-type {
   display: flex;
+}
+
+.row-risk {
+  display: flex;
+}
+
+.document-risk-tag {
+  min-width: 58px;
+  justify-content: center;
+  font-weight: 700;
+}
+
+.document-row .row-size {
+  width: fit-content;
+  min-width: 58px;
+  height: 26px;
+  justify-self: center;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid rgba(72, 216, 255, .22);
+  border-radius: 5px;
+  color: #aee8ff;
+  background: rgba(72, 216, 255, .08);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .type-badge {
@@ -1680,8 +1817,8 @@ onActivated(() => {
     width: 100%;
   }
 
-  .category-select,
   .business-type-select,
+  .risk-level-select,
   .month-picker,
   .sort-select {
     width: 100%;
@@ -1713,7 +1850,7 @@ onActivated(() => {
   }
 
   .row-type,
-  .row-event-no,
+  .row-risk,
   .row-size,
   .row-date,
   .row-actions {

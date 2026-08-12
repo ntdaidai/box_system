@@ -342,15 +342,22 @@ class DamEventReportService:
                     continue
                 if isinstance(current, (dict, list)):
                     current = self.format_structured_value(current)
+                current = self.clean_model_output_field(current, allow_empty=True)
+                if current in (None, "", "—"):
+                    continue
                 overrides[field] = current
             if not overrides.get("key_observation"):
                 risk_reasoning = candidate.get("risk_reasoning")
                 if isinstance(risk_reasoning, str) and risk_reasoning.strip():
-                    overrides["key_observation"] = self.compact(risk_reasoning, 260)
+                    cleaned = self.clean_model_output_field(risk_reasoning, allow_empty=True)
+                    if cleaned not in ("", "—"):
+                        overrides["key_observation"] = self.compact(cleaned, 260)
             if not overrides.get("conclusion"):
                 conclusion = candidate.get("impact_assessment") or candidate.get("monitoring_suggestions")
                 if isinstance(conclusion, str) and conclusion.strip():
-                    overrides["conclusion"] = self.compact(conclusion, 320)
+                    cleaned = self.clean_model_output_field(conclusion, allow_empty=True)
+                    if cleaned not in ("", "—"):
+                        overrides["conclusion"] = self.compact(cleaned, 320)
         return overrides
 
     def detailed_fields_summary(self, value: dict[str, Any]) -> str:
@@ -398,7 +405,6 @@ class DamEventReportService:
         now = dt.datetime.now(dt.timezone.utc)
         report_date = self.to_local_datetime(instance.started_at or now).date()
         source = db.query(DataSource).filter(DataSource.id == instance.data_source_id).first()
-        camera = self.find_camera(db, instance)
         timeline = (
             db.query(SafetyEventTimelineLog)
             .options(
@@ -408,6 +414,7 @@ class DamEventReportService:
                     SafetyEventTimelineLog.log_type,
                     SafetyEventTimelineLog.status,
                     SafetyEventTimelineLog.message,
+                    SafetyEventTimelineLog.payload,
                     SafetyEventTimelineLog.create_time,
                 )
             )
@@ -421,7 +428,8 @@ class DamEventReportService:
             .order_by(SafetyEventEvidence.captured_at.asc(), SafetyEventEvidence.id.asc())
             .all()
         )
-        visual = self.visual_snapshot(instance)
+        visual = self.visual_snapshot(instance, timeline)
+        camera = self.find_camera(db, instance, visual)
         image_items = self.collect_image_items(workflow_payload, visual, evidence)
         video_items = self.collect_video_items(workflow_payload, visual, evidence)
         selected_text = self.clean_report_text(selected["text"])
@@ -466,7 +474,11 @@ class DamEventReportService:
             "timeline_count": len(timeline),
             "trigger_summary": self.trigger_summary(instance, event, visual, workflow_insight),
             "screening_summary": self.screening_summary(visual),
-            "model_route_summary": self.model_route_summary(workflow_payload, selected),
+            "model_route_summary": self.model_route_summary(
+                workflow_payload,
+                selected,
+                getattr(event, "event_name", None) or instance.summary or "",
+            ),
             "workflow_nodes_summary": self.workflow_nodes_summary(workflow_payload),
             "specialized_summary": self.specialized_summary(workflow_insight),
             "local_analysis_summary": self.node_analysis_summary(workflow_payload, "action_reasoning"),
@@ -596,14 +608,34 @@ class DamEventReportService:
         db.flush()
         return report
 
-    def find_camera(self, db: Session, instance: SafetyEventInstance) -> Optional[Camera]:
-        visual = self.visual_snapshot(instance)
+    def find_camera(
+        self,
+        db: Session,
+        instance: SafetyEventInstance,
+        visual: Optional[dict[str, Any]] = None,
+    ) -> Optional[Camera]:
+        visual = visual or self.visual_snapshot(instance)
         camera_id = visual.get("camera_id") or instance.source_id
         if camera_id and str(camera_id).isdigit():
             return db.query(Camera).filter(Camera.id == int(camera_id)).first()
         return None
 
-    def visual_snapshot(self, instance: SafetyEventInstance) -> dict[str, Any]:
+    def visual_snapshot(
+        self,
+        instance: SafetyEventInstance,
+        timeline: Optional[list[SafetyEventTimelineLog]] = None,
+    ) -> dict[str, Any]:
+        # Event reports must describe the trigger evidence, not the later
+        # recovery frame that may say "no target".
+        for row in timeline or []:
+            if str(row.log_type or "").upper() != "TRIGGER":
+                continue
+            payload = row.payload if isinstance(row.payload, dict) else {}
+            observation = payload.get("observation") if isinstance(payload.get("observation"), dict) else {}
+            visual = observation.get("visual") if isinstance(observation.get("visual"), dict) else {}
+            if visual:
+                return dict(visual)
+
         observation = dict(instance.latest_observation or {})
         visual = observation.get("visual")
         return dict(visual) if isinstance(visual, dict) else {}
@@ -615,11 +647,8 @@ class DamEventReportService:
         evidence: list[SafetyEventEvidence],
     ) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
-        screening = visual.get("screening") if isinstance(visual.get("screening"), dict) else {}
-        self.extend_media_items(items, visual.get("qwen_image_urls"))
-        self.extend_media_items(items, visual.get("images"))
-        self.extend_media_items(items, screening.get("qwen_image_urls"))
-        self.extend_media_items(items, screening.get("image_urls"))
+        # 0.8B 初筛帧仅用于前端初筛过程展示；正式报告证据图以
+        # 智能路由后的模型复核帧、4B代表帧和联动取证图片为准。
         self.extend_media_items(items, self.find_nested_values(workflow_payload, "representative_frame"))
         self.extend_media_items(items, self.find_nested_values(workflow_payload, "representative_frames"))
         self.extend_media_items(items, self.find_nested_values(workflow_payload, "key_frames"))
@@ -1031,6 +1060,9 @@ class DamEventReportService:
     ) -> str:
         camera_name = visual.get("camera_name") or getattr(source, "source_name", None) or "现场摄像头"
         event_name = getattr(event, "event_name", None) or instance.summary or "安全事件"
+        suspect_note = self.screening_suspect_note(visual)
+        if suspect_note:
+            return self.compact(f"{camera_name}触发{event_name}，{suspect_note}", 180)
         qwen_summary = insight.get("qwen_summary")
         if self.looks_like_model_thinking(str(qwen_summary or "")):
             qwen_summary = ""
@@ -1053,6 +1085,9 @@ class DamEventReportService:
     ) -> str:
         insight = insight or {}
         parts = []
+        suspect_note = self.screening_suspect_note(visual)
+        if suspect_note:
+            parts.append(suspect_note)
         screening = visual.get("screening") if isinstance(visual.get("screening"), dict) else {}
         if screening.get("summary") and not self.looks_like_model_thinking(str(screening.get("summary"))):
             parts.append(str(screening.get("summary")))
@@ -1114,8 +1149,26 @@ class DamEventReportService:
     ) -> str:
         event_name = getattr(event, "event_name", None) or instance.summary or "安全事件"
         camera_name = visual.get("camera_name") or "现场摄像头"
+        suspect_note = self.screening_suspect_note(visual)
+        if suspect_note:
+            return f"{camera_name}在{self.format_datetime(instance.started_at)}触发{event_name}，{suspect_note}"
         summary = insight.get("qwen_summary") or "触发时未记录初筛摘要"
         return f"{camera_name}在{self.format_datetime(instance.started_at)}触发{event_name}，初筛摘要为：{summary}。"
+
+    def screening_suspect_note(self, visual: dict[str, Any]) -> str:
+        screening = visual.get("screening") if isinstance(visual.get("screening"), dict) else {}
+        if not screening:
+            return ""
+        pieces = []
+        boat_confidence = self.numeric_value(screening.get("boat_confidence"))
+        person_confidence = self.numeric_value(screening.get("person_confidence"))
+        if self.truthy(screening.get("possible_boat")) and not self.truthy(screening.get("boat_present")):
+            confidence = f"{boat_confidence * 100:.1f}%" if boat_confidence is not None else "低置信"
+            pieces.append(f"初筛标记疑似船只/疑似捕鱼，置信度{confidence}，未达到明确确认阈值，需结合后续模型和现场证据复核")
+        if self.truthy(screening.get("possible_person")) and not self.truthy(screening.get("person_present")):
+            confidence = f"{person_confidence * 100:.1f}%" if person_confidence is not None else "低置信"
+            pieces.append(f"初筛标记疑似人员，置信度{confidence}，未达到明确确认阈值，需结合后续模型和现场证据复核")
+        return "；".join(pieces) + ("。" if pieces else "")
 
     def screening_summary(self, visual: dict[str, Any]) -> str:
         screening = visual.get("screening") if isinstance(visual.get("screening"), dict) else {}
@@ -1141,9 +1194,20 @@ class DamEventReportService:
                 negatives.append(label)
         hit_text = "、".join(hits) if hits else "未命中明确场景"
         negative_text = "、".join(negatives[:6]) if negatives else "无"
-        return f"初筛命中：{hit_text}；未命中/排除：{negative_text}；风险等级：{screening.get('qwen_risk_level') or '—'}。"
+        possible_hits = []
+        for label, flag_key in (("疑似人员", "possible_person"), ("疑似船只", "possible_boat")):
+            flag = screening.get(flag_key)
+            if str(flag) in {"1", "True", "true"} or flag == 1 or flag is True:
+                possible_hits.append(label)
+        possible_text = "、".join(possible_hits) if possible_hits else "无"
+        return (f"初筛命中：{hit_text}；疑似待复核：{possible_text}；"
+                f"未命中/排除：{negative_text}；风险等级：{screening.get('qwen_risk_level') or '—'}。")
 
-    def model_route_summary(self, workflow_payload: dict[str, Any], selected: dict[str, Any]) -> str:
+    @staticmethod
+    def truthy(value: Any) -> bool:
+        return value is True or value == 1 or str(value).lower() in {"1", "true", "yes", "y"}
+
+    def model_route_summary(self, workflow_payload: dict[str, Any], selected: dict[str, Any], event_name: str = "") -> str:
         execution = workflow_payload.get("execution_result") if isinstance(workflow_payload, dict) else {}
         nodes = (execution or {}).get("node_results") or []
         success_nodes = {
@@ -1151,16 +1215,42 @@ class DamEventReportService:
             for row in nodes
             if isinstance(row, dict) and str(row.get("status") or "").lower() == "success"
         }
+        route_label = self.route_label_for_event(event_name, workflow_payload)
         route_parts = []
         if "action_classify" in success_nodes:
-            route_parts.append("专有模型完成灾害类别复核")
+            if route_label == "极端天气环境风险分析链路":
+                route_parts.append("多源环境数据完成风险复核")
+            elif route_label == "人员异常行为分析链路":
+                route_parts.append("专有模型完成人员/目标复核")
+            else:
+                route_parts.append("专有模型完成灾害类别复核")
         if "action_reasoning" in success_nodes:
             route_parts.append("4B本地模型完成现场语义理解")
         if "action_report" in success_nodes:
             route_parts.append("35B云端模型完成增强研判与报告校核")
         route_text = "，".join(route_parts) if route_parts else "模型节点已完成可用结果回传"
         source_label = selected.get("source_label", "智能分析模型")
-        return f"ECA触发后，智能路由进入自然灾害分析链路，{route_text}；本报告以{source_label}结果作为最终分析依据。"
+        return f"ECA触发后，智能路由进入{route_label}，{route_text}；本报告以{source_label}结果作为最终分析依据。"
+
+    def route_label_for_event(self, event_name: str, workflow_payload: dict[str, Any]) -> str:
+        text_parts = [event_name]
+        if isinstance(workflow_payload, dict):
+            for key in ("event_type", "event_name", "event_group"):
+                if workflow_payload.get(key):
+                    text_parts.append(str(workflow_payload.get(key)))
+            plan = workflow_payload.get("workflow") or workflow_payload.get("dag") or workflow_payload.get("plan")
+            if isinstance(plan, dict):
+                for key in ("event_type", "event_name", "event_group", "description"):
+                    if plan.get(key):
+                        text_parts.append(str(plan.get(key)))
+        text = " ".join(text_parts)
+        if any(token in text for token in ("人员", "闯入", "亲水", "涉水", "船只", "偷捕", "电鱼", "person_behavior", "PERSON_SAFETY", "ILLEGAL_FISHING")):
+            return "人员异常行为分析链路"
+        if any(token in text for token in ("台风", "飓风", "大风", "强风", "烈风", "狂风", "暴风", "暴雨", "高温", "低温", "极高温", "极低温", "冰冻", "高湿", "低湿", "雨量", "环境", "extreme_weather")):
+            return "极端天气环境风险分析链路"
+        if any(token in text for token in ("泥石流", "滑坡", "洪水", "地震", "natural_disaster")):
+            return "自然灾害分析链路"
+        return "智能综合分析链路"
 
     def workflow_nodes_summary(self, workflow_payload: dict[str, Any]) -> str:
         execution = workflow_payload.get("execution_result") if isinstance(workflow_payload, dict) else {}
@@ -1223,21 +1313,21 @@ class DamEventReportService:
         return "\n".join(rows) if rows else "未归档媒体证据。"
 
     def frame_evidence_summary(self, image_items: list[dict[str, Any]], video_items: list[dict[str, Any]]) -> str:
-        qwen_frames = 0
-        review_frames = 0
+        model_frames = 0
+        linkage_frames = 0
         for item in image_items:
             url = str(item.get("url") or "")
-            if "/evidence/" in url or "yolo_frames" in url or "key_frame" in url:
-                review_frames += 1
+            if "workflow-media" in url or "qwen4b-proxy-media" in url or "yolo-detections" in url or "key_frame" in url:
+                model_frames += 1
             else:
-                qwen_frames += 1
+                linkage_frames += 1
         parts = []
         if video_items:
             parts.append(f"事件证据视频{len(video_items)}段")
-        if qwen_frames:
-            parts.append(f"摄像头初筛关键帧{qwen_frames}张")
-        if review_frames:
-            parts.append(f"模型复核抽帧{review_frames}张")
+        if model_frames:
+            parts.append(f"模型复核证据帧{model_frames}张")
+        if linkage_frames:
+            parts.append(f"联动取证图片{linkage_frames}张")
         if not parts:
             return "未记录可用于报告展示的抽帧图片。"
         return "已归档" + "、".join(parts) + "；报告正文嵌入代表性画面，其余图片随事件证据一并留存。"
@@ -1309,11 +1399,12 @@ class DamEventReportService:
     def final_report_field(self, selected: dict[str, Any], key: str, fallback: Any = "") -> str:
         value = self.find_in_selected(selected, key)
         if isinstance(value, list):
-            return "；".join(str(item) for item in value if item)
+            text = "；".join(str(item) for item in value if item)
+            return self.clean_model_output_field(text)
         if isinstance(value, dict):
-            return self.format_structured_value(value)
+            return self.clean_model_output_field(self.format_structured_value(value))
         text = str(value or fallback or "").strip()
-        return text or "—"
+        return self.clean_model_output_field(text)
 
     def find_in_selected(self, selected: dict[str, Any], key: str) -> Any:
         return self.find_in_value(selected.get("raw_output"), key)
@@ -1352,6 +1443,22 @@ class DamEventReportService:
         workflow_insight: dict[str, Any],
         cloud_note: str,
     ) -> str:
+        if workflow_insight.get("suspected"):
+            parts = []
+            if self.truthy(workflow_insight.get("possible_boat")) and not self.truthy(workflow_insight.get("boat_present")):
+                parts.append("疑似船只/疑似捕鱼")
+            if self.truthy(workflow_insight.get("possible_person")) and not self.truthy(workflow_insight.get("person_present")):
+                parts.append("疑似人员")
+            target_text = "、".join(parts) or "疑似目标"
+            conclusion = (
+                f"本次事件为低置信{target_text}触发，已完成智能分析、处置联动和证据归档。"
+                "当前证据不足以直接认定为明确违规行为，也不应表述为已排除目标；"
+                "后续应结合连续视频、现场巡查和专有模型复核结果确认最终处置等级。"
+            )
+            if cloud_note:
+                return self.clean_model_output_field(f"{cloud_note}\n{conclusion}")
+            return self.clean_model_output_field(conclusion)
+
         conclusion = self.final_report_field(selected, "conclusion", "")
         if self.looks_like_model_thinking(conclusion):
             conclusion = "—"
@@ -1362,9 +1469,11 @@ class DamEventReportService:
                 impact = str(workflow_insight.get("qwen4b_impact_assessment") or "").strip() or "—"
             if self.looks_like_model_thinking(monitoring):
                 monitoring = str(workflow_insight.get("qwen4b_monitoring_suggestions") or "").strip() or "—"
-            if impact != "—" and monitoring != "—":
-                conclusion = f"{impact} 后续应{monitoring.lstrip('建议')}"
-            elif impact != "—":
+            impact = self.valid_report_text(impact)
+            monitoring = self.valid_report_text(monitoring)
+            if impact and monitoring:
+                conclusion = f"{impact} 后续应{monitoring.lstrip('建议').lstrip('：:')}"
+            elif impact:
                 conclusion = impact
             else:
                 event_text = (
@@ -1372,27 +1481,69 @@ class DamEventReportService:
                     or workflow_insight.get("qwen_summary")
                     or ""
                 )
-                conclusion = (
-                    f"本次事件已完成智能路由分析和证据归档。{self.compact(str(event_text or ''), 180)}"
-                    "建议结合现场巡查与连续监测结果确认最终处置等级。"
-                )
+                event_text = self.valid_report_text(event_text)
+                if event_text:
+                    conclusion = (
+                        f"本次事件已完成智能分析、处置联动和证据归档。{self.compact(event_text, 180)}"
+                        "后续应结合现场巡查与连续监测结果确认处置效果。"
+                    )
+                else:
+                    conclusion = (
+                        "本次事件已完成智能分析、处置联动和证据归档。"
+                        "后续应结合现场巡查、传感器连续监测和现场处置记录确认处置效果。"
+                    )
         if cloud_note:
-            return f"{cloud_note}\n{conclusion}"
-        return conclusion
+            return self.clean_model_output_field(f"{cloud_note}\n{conclusion}")
+        return self.clean_model_output_field(conclusion)
 
     def clean_report_text(self, text: str) -> str:
         text = str(text or "").strip()
         text = text.replace("✅", "")
         text = text.replace("▶", "")
         text = text.replace("—\n", "")
+        text = self.strip_model_thinking(text)
         text = re.sub(r"\n{3,}", "\n\n", text)
         return text or "未生成详细分析内容。"
 
     def compact(self, value: str, limit: int) -> str:
-        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        text = self.clean_model_output_field(value)
+        text = re.sub(r"\s+", " ", str(text or "")).strip()
         if len(text) <= limit:
             return text or "—"
         return text[: max(0, limit - 1)].rstrip() + "…"
+
+    def clean_model_output_field(self, value: Any, *, allow_empty: bool = False) -> str:
+        text = str(value or "").strip()
+        text = self.strip_model_thinking(text)
+        text = re.sub(r"^\s*(结论|处置结论|最终结论)\s*[:：]\s*", "", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        if self.looks_like_model_thinking(text):
+            text = ""
+        return text if text else ("" if allow_empty else "—")
+
+    def valid_report_text(self, value: Any) -> str:
+        text = self.clean_model_output_field(value, allow_empty=True)
+        if text in {"", "—", "-", "无", "暂无", "未提供"}:
+            return ""
+        return text
+
+    @staticmethod
+    def strip_model_thinking(text: str) -> str:
+        value = str(text or "").strip()
+        if not value:
+            return ""
+        value = re.sub(r"<think>.*?</think>", "", value, flags=re.IGNORECASE | re.DOTALL).strip()
+        thinking_patterns = [
+            r"(?is)^\s*(?:结论|处置结论|最终结论)?\s*[:：]?\s*thinking\s+process\s*[:：].*$",
+            r"(?is)^\s*(?:结论|处置结论|最终结论)?\s*[:：]?\s*reasoning\s*[:：].*$",
+            r"(?is)^\s*(?:结论|处置结论|最终结论)?\s*[:：]?\s*analysis\s+process\s*[:：].*$",
+        ]
+        for pattern in thinking_patterns:
+            if re.search(pattern, value):
+                return ""
+        value = re.sub(r"(?is)\bthinking\s+process\s*[:：].*$", "", value).strip()
+        value = re.sub(r"(?is)\breasoning\s*[:：].*$", "", value).strip()
+        return value
 
     @staticmethod
     def safe_filename_part(value: str, limit: int = 50) -> str:
@@ -1428,12 +1579,20 @@ class DamEventReportService:
         selected_text: str,
     ) -> dict[str, Any]:
         screening = visual.get("screening") if isinstance(visual.get("screening"), dict) else {}
+        possible_flag = lambda key: (  # noqa: E731
+            str(screening.get(key)) in {"1", "True", "true"}
+            or screening.get(key) == 1
+            or screening.get(key) is True
+        )
         result = {
             "qwen_summary": screening.get("qwen_summary") or screening.get("summary"),
             "qwen_risk_level": screening.get("qwen_risk_level"),
             "flood_detected": screening.get("flood_detected"),
             "person_present": screening.get("person_present"),
             "boat_present": screening.get("boat_present"),
+            "possible_person": screening.get("possible_person"),
+            "possible_boat": screening.get("possible_boat"),
+            "suspected": bool(possible_flag("possible_person") or possible_flag("possible_boat")),
             "raw_excerpt": self.extract_useful_excerpt(selected_text),
         }
         classify = self.find_node_inference(workflow_payload, "action_classify")
@@ -1547,11 +1706,16 @@ class DamEventReportService:
         image_items: list[dict[str, Any]],
         video_items: list[dict[str, Any]],
     ) -> str:
+        suspect_note = self.screening_suspect_note(visual)
         detailed = self.selected_detailed_summary(selected)
         if detailed:
+            if suspect_note and suspect_note not in detailed:
+                return f"一、初筛复核：{suspect_note}\n{detailed}"
             return detailed
         detailed = self.workflow_detailed_summary(workflow_insight)
         if detailed:
+            if suspect_note and suspect_note not in detailed:
+                return f"一、初筛复核：{suspect_note}\n{detailed}"
             return detailed
 
         event_name = getattr(event, "event_name", None) or instance.summary or "安全事件"
@@ -1569,7 +1733,7 @@ class DamEventReportService:
         risk_text = RISK_NAMES.get(str(instance.max_risk_level or instance.risk_level or "").upper(), "待确认")
         lines = [
             f"一、事件复核：系统触发{event_name}，当前风险等级为{risk_text}。{cloud_text}",
-            f"二、现场证据：摄像头初筛摘要为“{qwen_summary}”。本次关联事件证据视频{len(video_items)}段、关键帧/检测图像{len(image_items)}张。",
+            f"二、现场证据：{suspect_note or f'摄像头初筛摘要为“{qwen_summary}”。'}本次关联事件证据视频{len(video_items)}段、关键帧/检测图像{len(image_items)}张。",
             f"三、模型研判：专有模型复核类别为{class_label}，置信度{confidence_text}，采样帧数{sampled_frames}。边缘侧4B和云端增强节点已结合视频证据、事件类型和上下文完成复核。",
             "四、处置建议：保持摄像头连续取证，联动相关传感器和现场巡查记录；如风险指标持续升高或现场出现人员、设施受威胁情况，应升级告警并启动现场处置。",
         ]
@@ -1606,8 +1770,12 @@ class DamEventReportService:
     @staticmethod
     def looks_like_model_thinking(text: str) -> bool:
         value = str(text or "").strip()
+        lowered = value.lower()
         return (
             value.startswith(("好的，我现在", "首先，我", "<think>"))
+            or lowered.startswith(("thinking process", "reasoning:", "analysis process"))
+            or "thinking process:" in lowered[:80]
+            or "analyze the request" in lowered[:160]
             or "</think>" in value
             or "需要处理用户" in value[:120]
             or "生成一个关于" in value[:160]

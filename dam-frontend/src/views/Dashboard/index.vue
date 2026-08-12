@@ -75,10 +75,10 @@
             </div>
           </div>
           <div class="trend-legend">
-            <span><i class="person"></i>人员</span>
-            <span><i class="boat"></i>船只</span>
+            <span><i class="person"></i>人员入侵</span>
+            <span><i class="boat"></i>船只捕鱼</span>
           </div>
-          <div ref="trendChartRef" class="line-chart echarts-chart" aria-label="人员和船只安全事件记录"></div>
+          <div ref="trendChartRef" class="line-chart echarts-chart" aria-label="人员入侵和船只捕鱼安全事件记录"></div>
         </section>
       </aside>
 
@@ -167,22 +167,45 @@
                 v-for="point in cameraPoints"
                 :key="point.no"
                 class="camera-point"
-                :class="{ active: selectedPointNo === point.no, inactive: point.no === 2 }"
+                :class="{ active: selectedPointNo === point.no }"
                 :style="{ left: `${point.x}%`, top: `${point.y}%` }"
-                :title="point.no === 2 ? '2号暂未接入摄像头' : `${point.no}号摄像头`"
+                :title="`${point.no}号摄像头`"
                 @pointerdown.stop
                 @click.stop="selectPoint(point.no)"
               >
                 <span>{{ point.no }}</span>
               </button>
             </div>
+            <aside class="map-rank-card" aria-label="区域告警排行" @pointerdown.stop>
+              <div class="map-rank-head">
+                <span>区域告警排行</span>
+                <em>TOP 5</em>
+              </div>
+              <ol class="map-rank-list">
+                <li v-for="item in alarmRegionRanking" :key="item.key">
+                  <i>{{ item.rank }}</i>
+                  <div class="map-rank-main">
+                    <div>
+                      <span>{{ item.name }}</span>
+                      <strong>{{ item.count }}<small>次</small></strong>
+                    </div>
+                    <b><em :style="{ width: `${item.percent}%` }"></em></b>
+                  </div>
+                </li>
+              </ol>
+            </aside>
             <div class="map-controls" aria-label="地图控制" @pointerdown.stop>
               <div class="zoom-cluster" :class="{ visible: showZoomTrack }">
                 <button type="button" class="zoom-button" title="放大" @click.stop="zoomMapBy(1.18)">+</button>
                 <div
                   class="zoom-track"
                   :style="zoomTrackStyle"
-                  aria-hidden="true"
+                  role="slider"
+                  :aria-valuemin="Math.round(minMapScale * 100)"
+                  :aria-valuemax="Math.round(maxMapScale * 100)"
+                  :aria-valuenow="Math.round(mapScale * 100)"
+                  aria-label="地图缩放"
+                  @pointerdown.stop.prevent="startZoomDrag"
                 >
                   <span class="zoom-track-line">
                     <i></i>
@@ -273,7 +296,6 @@
             </small>
           </div>
           <div v-else class="priority-summary empty">
-            <strong>无告警</strong>
             <span>当前无未处理告警</span>
           </div>
           <div v-if="!displayedPriorityAlert" class="alarm-idle flow-idle-visual">
@@ -283,10 +305,14 @@
             </div>
             <div class="idle-copy">
               <strong>告警监听中</strong>
-              <span>风险事件触发后将在此同步处置进度</span>
+              <span>告警触发后将在此同步处置进度</span>
             </div>
           </div>
-          <ol class="progress-timeline flow-timeline" :class="{ idle: !displayedPriorityAlert }">
+          <ol
+            ref="flowTimelineRef"
+            class="progress-timeline flow-timeline"
+            :class="{ idle: !displayedPriorityAlert }"
+          >
             <li
               v-for="item in alarmFlowSteps"
               :key="item.key"
@@ -352,7 +378,6 @@
 import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import * as echarts from 'echarts'
-import { ElMessage } from 'element-plus'
 import { BellFilled, CircleCheckFilled, Connection, Promotion, Ship, UserFilled, WarningFilled } from '@element-plus/icons-vue'
 import { getUnifiedSafetyEventDetail, getUnifiedSafetyEventStatistics, getUnifiedSafetyEvents } from '@/api/integration'
 import { getDeviceStatus } from '@/api/sensor'
@@ -360,7 +385,7 @@ import { getCameraList } from '@/api/camera'
 
 const cameraPoints = [
   { no: 1, cameraId: 4, dataSourceId: 8, x: 17.3410, y: 40.8304, areaType: 'boatForbidden', regionKey: 'boat-1' },
-  { no: 2, x: 7.3988, y: 15.2249, areaType: 'toConfirm', regionKey: 'camera-2' },
+  { no: 2, x: 7.3988, y: 15.2249, areaType: 'boatForbidden', regionKey: 'boat-2' },
   { no: 3, cameraId: 6, dataSourceId: 10, x: 41.8497, y: 74.0484, areaType: 'boatForbidden', regionKey: 'boat-3' },
   { no: 4, x: 47.3988, y: 38.0623, areaType: 'boatForbidden', regionKey: 'boat-4' },
   { no: 5, x: 49.2486, y: 38.0623, areaType: 'boatForbidden', regionKey: 'boat-5' },
@@ -379,11 +404,12 @@ const regionGroups = [
   { key: 'boat-7', type: 'boatForbidden', typeLabel: '禁船区', category: 'ILLEGAL_FISHING' },
   { key: 'boat-8', type: 'boatForbidden', typeLabel: '禁船区', category: 'ILLEGAL_FISHING' },
   { key: 'person-9', type: 'personForbidden', typeLabel: '人员禁入区', category: 'PERSON_SAFETY' },
-  { key: 'camera-2', type: 'toConfirm', typeLabel: '待确认区', category: 'OTHER' },
+  { key: 'boat-2', type: 'boatForbidden', typeLabel: '禁船区', category: 'ILLEGAL_FISHING' },
 ]
 
 const cameraRegionPaths = {
   'boat-1': 'M371 317 L297 320 L259 324 L230 336 L191 363 L176 386 L179 425 L179 453 L181 487 L178 536 L200 549 L214 554 L231 554 L244 557 L262 556 L272 560 L295 557 L298 558 L327 560 L351 567 L372 570 L374 577 L383 583 L395 581 L408 578 L422 576 L436 571 L449 569 L463 561 L477 555 L489 552 L502 553 L511 546 L521 535 L524 521 L540 510 L538 492 L542 483 L539 466 L539 450 L538 433 L541 425 L542 406 L542 391 L539 380 L539 368 L537 358 L536 347 L531 340 L524 334 L514 332 L494 330 L470 339 L448 339 L427 343 L416 339 Z',
+  'boat-2': 'M105 161 L134 169 L189 180 L247 191 L286 196 L307 201 L312 213 L304 222 L300 231 L294 242 L276 260 L260 263 L222 264 L188 256 L162 252 L130 241 L121 236 L110 231 L98 228 L96 212 L84 208 L76 199 L78 191 L84 177 Z',
   'boat-3': 'M847 460 L831 450 L830 424 L972 423 L1032 430 L1051 456 L1047 477 L1044 504 L1030 518 L1024 525 L927 544 L856 533 L852 523 L844 524 Z',
   'boat-4': 'M844 255 L847 296 L831 304 L829 413 L867 415 L968 415 L1031 422 L1043 405 L1046 376 L1044 355 L1043 335 L1038 319 L1039 302 L1033 291 L1006 276 L952 262 L928 257 Z',
   'boat-5': 'M1058 300 L1053 328 L1054 339 L1054 360 L1053 376 L1053 395 L1051 413 L1066 428 L1089 437 L1136 439 L1226 447 L1256 442 L1258 435 L1266 416 L1274 393 L1276 379 L1276 364 L1272 358 L1221 351 L1194 346 L1159 337 Z',
@@ -428,6 +454,11 @@ const trendModes = [
 const riskColors = { LOW: '#38D59C', MEDIUM: '#FFB648', HIGH: '#FF5B68' }
 const chartTextColor = '#8fc8f2'
 const chartGridColor = 'rgba(143, 200, 242, .16)'
+// 大屏图表文字随视口宽度缩放：笔记本（vw≈1707）取基准值，大屏显示器放大，上限约 1.25 倍
+const rfs = (base) => {
+  const vw = Math.max(window.innerWidth || 0, 1)
+  return Math.round(base * Math.min(1.25, Math.max(1, vw / 1707)))
+}
 const chartTooltip = {
   appendToBody: true,
   confine: true,
@@ -435,7 +466,7 @@ const chartTooltip = {
   className: 'bigscreen-chart-tooltip',
   backgroundColor: 'rgba(2, 14, 28, .96)',
   borderColor: 'rgba(67, 200, 255, .36)',
-  textStyle: { color: '#dff5ff', fontSize: 13 },
+  textStyle: { color: '#dff5ff', fontSize: rfs(13) },
   extraCssText: 'max-width:240px;white-space:normal;word-break:break-word;border-radius:8px;box-shadow:0 10px 28px rgba(0,0,0,.28);z-index:99999;',
 }
 const router = useRouter()
@@ -452,9 +483,8 @@ const currentWeek = ref('--')
 const loading = ref(false)
 const eventStats = ref({})
 const events = ref([])
-const priorityDetail = ref({ timeline: [] })
-const retainedPriorityAlert = ref(null)
-const retainedPriorityUntil = ref(0)
+const priorityDetail = ref({ id: null, timeline: [] })
+const displayedPriorityAlert = ref(null)
 const deviceStatus = ref({})
 const cameraSummary = ref({ online: 0, total: 0 })
 const mapBoardRef = ref(null)
@@ -464,6 +494,7 @@ const hourlyChartRef = ref(null)
 const compositionChartRef = ref(null)
 const disposalChartRef = ref(null)
 const deviceChartRef = ref(null)
+const flowTimelineRef = ref(null)
 const mapBaseSize = ref({ width: 0, height: 0 })
 const mapScale = ref(1)
 const mapOffset = ref({ x: 120, y: 0 })
@@ -480,15 +511,22 @@ const mapDragState = {
   startOffsetY: 0,
 }
 
+const zoomDragState = {
+  active: false,
+}
+
 let clockTimer
 let refreshTimer
 let riskTimer
 let riskResumeTimer
 let zoomTrackTimer
+let displayedAlertClearTimer
+let displayedAlertClearId = null
 let mapResizeObserver
 let currentPriorityDetailId = null
 let mapInitialFocused = false
-const priorityRetentionMs = 12000
+let fetchDataInFlight = false
+const completedAlertVisibleMs = 5000
 
 const weekLabels = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
 
@@ -509,7 +547,10 @@ const mapSceneStyle = computed(() => ({
 const zoomTrackStyle = computed(() => {
   const range = Math.max(maxMapScale - minMapScale.value, 0.01)
   const progress = Math.max(0, Math.min(1, (mapScale.value - minMapScale.value) / range))
-  return { '--zoom-thumb-top': `${(1 - progress) * 100}%` }
+  return {
+    '--zoom-progress': `${progress * 100}%`,
+    '--zoom-thumb-top': `${(1 - progress) * 100}%`,
+  }
 })
 
 const todayEvents = computed(() => eventsInWindow('today'))
@@ -528,7 +569,7 @@ const todayMetrics = computed(() => {
       label: '未处理告警',
       icon: todayMetricIcons.unhandled,
       value: formatNumber(unhandledCount.value),
-      tone: 'cyan',
+      tone: 'danger',
       trend: compareNumber(unhandledCount.value, yesterday.filter((event) => !isHandled(event)).length),
     },
   ]
@@ -598,6 +639,27 @@ const selectedEvents = computed(() => [
   ...selectedSensorEventsForNine.value,
 ])
 
+const alarmRegionRanking = computed(() => {
+  const rows = cameraPoints.map((point) => {
+    const group = regionGroups.find((item) => item.key === point.regionKey)
+    const count = eventsForCameraPoint(point).length
+    return {
+      key: point.regionKey,
+      pointNo: point.no,
+      name: `${point.no}号${group?.typeLabel || '监测区'}`,
+      count,
+    }
+  })
+    .sort((a, b) => b.count - a.count || a.pointNo - b.pointNo)
+    .slice(0, 5)
+  const max = Math.max(...rows.map((item) => item.count), 1)
+  return rows.map((item, index) => ({
+    ...item,
+    rank: index + 1,
+    percent: item.count ? Math.max(8, Math.round((item.count / max) * 100)) : 3,
+  }))
+})
+
 const selectedData = computed(() => {
   const timeline = eventTimelineBuckets(selectedEvents.value, detailTrendMode.value)
   return {
@@ -640,16 +702,6 @@ const disposalStats = computed(() => {
   const processing = source.filter((event) => event.status === 'PROCESSING').length
   const pending = Math.max(total - handled - processing, 0)
   return { total, handled, processing, pending }
-})
-
-const priorityAlert = computed(() => events.value
-  .filter((event) => !isHandled(event))
-  .slice()
-  .sort((a, b) => riskRank(b) - riskRank(a) || eventTimestamp(b) - eventTimestamp(a))[0] || null)
-const displayedPriorityAlert = computed(() => {
-  if (priorityAlert.value) return priorityAlert.value
-  if (retainedPriorityAlert.value && Date.now() < retainedPriorityUntil.value) return retainedPriorityAlert.value
-  return null
 })
 
 const alarmFlowSteps = computed(() => {
@@ -750,8 +802,8 @@ const deviceRows = computed(() => {
     const index = rows.findIndex((row) => row.key === 'camera')
     const camera = {
       key: 'camera',
-      online: cameraSummary.value.online > 0 ? 1 : 0,
-      total: 1,
+      online: cameraSummary.value.online,
+      total: cameraSummary.value.total || 1,
     }
     if (index >= 0) rows.splice(index, 1, camera)
     else rows.push(camera)
@@ -789,9 +841,28 @@ function buildTodayMetric(key, label, today, yesterday) {
     label,
     icon: todayMetricIcons[key],
     value: formatNumber(value),
-    tone: key === 'person' ? 'danger' : key === 'boat' ? 'boat' : 'purple',
+    tone: key === 'person' ? 'warning' : key === 'boat' ? 'boat' : 'purple',
     trend: compareNumber(value, previous),
   }
+}
+
+function eventsForCameraPoint(point) {
+  const cameraId = Number(point?.cameraId || 0) || null
+  const dataSourceId = Number(point?.dataSourceId || 0) || null
+  const cameraEvents = !cameraId && !dataSourceId
+    ? []
+    : events.value.filter((event) => {
+      if (String(event?.source_type || '').toLowerCase() !== 'camera') return false
+      if (dataSourceId && event?.data_source_id != null) {
+        return Number(event.data_source_id) === dataSourceId
+      }
+      return Number(event?.source_id) === cameraId
+    })
+  if (point?.no !== 9) return cameraEvents
+  return [
+    ...cameraEvents,
+    ...events.value.filter((event) => String(event?.source_type || '').toLowerCase() === 'sensor'),
+  ]
 }
 
 function getChart(el, key) {
@@ -839,10 +910,11 @@ function renderRiskCharts() {
       center: ['50%', '50%'],
       selectedOffset: 0,
       minAngle: total ? 5 : 360,
+      padAngle: 1,
       avoidLabelOverlap: true,
       label: { show: false },
       labelLine: { show: false },
-      itemStyle: { borderWidth: 0 },
+      itemStyle: { borderColor: '#06182b', borderWidth: 1, borderRadius: 4 },
       emphasis: {
         scale: true,
         scaleSize: 5,
@@ -882,17 +954,17 @@ function renderTrendChart() {
       data: intrusionTrend.value.labels,
       axisLine: { lineStyle: { color: chartGridColor } },
       axisTick: { show: false },
-      axisLabel: { color: chartTextColor, fontSize: 10, interval: 'auto', margin: 8 },
+      axisLabel: { color: chartTextColor, fontSize: rfs(10), interval: 'auto', margin: 8 },
     },
     yAxis: {
       type: 'value',
       minInterval: 1,
       splitLine: { lineStyle: { color: chartGridColor, type: 'dashed' } },
-      axisLabel: { color: chartTextColor, fontSize: 10 },
+      axisLabel: { color: chartTextColor, fontSize: rfs(10) },
     },
     series: [
-      buildLineSeries('人员', intrusionTrend.value.person, '#ff6873'),
-      buildLineSeries('船只', intrusionTrend.value.boat, '#41c8ff'),
+      buildLineSeries('人员入侵', intrusionTrend.value.person, '#ff6873'),
+      buildLineSeries('船只捕鱼', intrusionTrend.value.boat, '#41c8ff'),
     ],
   }, true)
 }
@@ -958,13 +1030,13 @@ function renderHourlyChart() {
       data: selectedData.value.labels,
       axisLine: { lineStyle: { color: chartGridColor } },
       axisTick: { show: false },
-      axisLabel: { color: chartTextColor, fontSize: 10, interval: 'auto' },
+      axisLabel: { color: chartTextColor, fontSize: rfs(10), interval: 'auto' },
     },
     yAxis: {
       type: 'value',
       minInterval: 1,
       splitLine: { lineStyle: { color: chartGridColor, type: 'dashed' } },
-      axisLabel: { color: chartTextColor, fontSize: 10 },
+      axisLabel: { color: chartTextColor, fontSize: rfs(10) },
     },
     series: [{
       name: '告警次数',
@@ -1019,28 +1091,28 @@ function renderCompositionChart() {
       valueFormatter: (value) => `${value} 次`,
     },
     legend: {
-      right: 2,
+      right: 4,
       top: 0,
       icon: 'circle',
-      itemWidth: 7,
-      itemHeight: 7,
-      itemGap: 10,
-      textStyle: { color: chartTextColor, fontSize: 10 },
+      itemWidth: 8,
+      itemHeight: 8,
+      itemGap: 12,
+      textStyle: { color: chartTextColor, fontSize: rfs(12) },
       data: ['低风险', '中风险', '高风险'],
     },
-    grid: { left: 36, right: 12, top: 26, bottom: 24 },
+    grid: { left: 36, right: 12, top: 30, bottom: 24 },
     xAxis: {
       type: 'category',
       data: riskCompositionData.value.labels,
       axisLine: { lineStyle: { color: chartGridColor } },
       axisTick: { show: false },
-      axisLabel: { color: '#bdeaff', fontSize: 12, interval: 0 },
+      axisLabel: { color: '#bdeaff', fontSize: rfs(12), interval: 0 },
     },
     yAxis: {
       type: 'value',
       minInterval: 1,
       splitLine: { lineStyle: { color: chartGridColor, type: 'dashed' } },
-      axisLabel: { color: chartTextColor, fontSize: 10 },
+      axisLabel: { color: chartTextColor, fontSize: rfs(10) },
     },
     series: ['LOW', 'MEDIUM', 'HIGH'].map((level) => ({
       name: riskLevelLabel(level),
@@ -1058,11 +1130,12 @@ function renderDisposalChart() {
   const chart = getChart(disposalChartRef.value, 'disposal')
   if (!chart) return
   const stats = disposalStats.value
+  // 每个扇区在"0 值占位"基础上增加真实面积，保证有值时不会比 0 值占位更小
   const visibleUnit = Math.max(stats.total * .018, .22)
   const data = [
-    { name: '已处置', value: stats.handled || visibleUnit, realValue: stats.handled, itemStyle: { color: '#38D59C' } },
-    { name: '处理中', value: stats.processing || visibleUnit, realValue: stats.processing, itemStyle: { color: '#FFB648' } },
-    { name: '未处置', value: stats.pending || visibleUnit, realValue: stats.pending, itemStyle: { color: '#FF5B68' } },
+    { name: '已处置', value: (stats.handled || 0) + visibleUnit, realValue: stats.handled, itemStyle: { color: '#38D59C' } },
+    { name: '处理中', value: (stats.processing || 0) + visibleUnit, realValue: stats.processing, itemStyle: { color: '#FFB648' } },
+    { name: '未处置', value: (stats.pending || 0) + visibleUnit, realValue: stats.pending, itemStyle: { color: '#FF5B68' } },
   ]
   if (!stats.total) data.splice(0, data.length, { name: '暂无数据', value: 1, realValue: 0, itemStyle: { color: 'rgba(143, 200, 242, .16)' } })
   chart.setOption({
@@ -1075,9 +1148,10 @@ function renderDisposalChart() {
       type: 'pie',
       radius: ['72%', '86%'],
       center: ['50%', '50%'],
+      padAngle: 1.5,
       label: { show: false },
       labelLine: { show: false },
-      itemStyle: { borderColor: '#06182b', borderWidth: 2 },
+      itemStyle: { borderColor: '#06182b', borderWidth: 2, borderRadius: 8 },
       emphasis: { scale: true, scaleSize: 4 },
       data,
     }],
@@ -1088,9 +1162,10 @@ function renderDeviceChart() {
   const chart = getChart(deviceChartRef.value, 'device')
   if (!chart) return
   const total = Math.max(deviceTotal.value, 0)
+  // 每个扇区在"0 值占位"基础上增加真实面积，保证有值时不会比 0 值占位更小
   const visibleUnit = total ? Math.max(total * .018, .18) : 0
-  const onlineValue = total ? (deviceOnline.value || visibleUnit) : 0
-  const offlineValue = total ? (deviceOffline.value || visibleUnit) : 0
+  const onlineValue = total ? (deviceOnline.value || 0) + visibleUnit : 0
+  const offlineValue = total ? (deviceOffline.value || 0) + visibleUnit : 0
   const data = total
     ? [
       { name: '在线', value: onlineValue, realValue: deviceOnline.value, itemStyle: { color: '#38D59C' } },
@@ -1187,7 +1262,7 @@ function roundPathValue(value) {
 
 function regionCalloutForRegion(regionKey, pointNo) {
   const points = pointsFromPath(cameraRegionPaths[regionKey])
-  if (!points.length || pointNo === 2) return null
+  if (!points.length) return null
   const imageWidth = 2168
   const imageHeight = 725
   const width = 188
@@ -1217,7 +1292,7 @@ function regionCalloutForRegion(regionKey, pointNo) {
       const x = Math.max(22, Math.min(imageWidth - width - 22, item.rawX))
       const y = Math.max(22, Math.min(imageHeight - height - 22, item.rawY))
       const rect = { x, y, width, height }
-      const overlapCount = cameraPoints.filter((point) => point.no !== 2 && pointOverlapsCallout(point, rect)).length
+      const overlapCount = cameraPoints.filter((point) => pointOverlapsCallout(point, rect)).length
       const overflowPenalty = Math.abs(x - item.rawX) + Math.abs(y - item.rawY)
       const distance = Math.hypot((x + width / 2) - centerX, (y + height / 2) - centerY)
       return {
@@ -1582,9 +1657,45 @@ function zoomMapBy(ratio) {
   clampMapOffset()
 }
 
+function setMapScaleFromZoomPointer(event) {
+  const track = event.currentTarget?.querySelector?.('.zoom-track-line')
+    || document.querySelector('.zoom-track-line')
+  if (!track) return
+  const rect = track.getBoundingClientRect()
+  const ratio = 1 - Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(rect.height, 1)))
+  const nextScale = minMapScale.value + (maxMapScale - minMapScale.value) * ratio
+  mapScale.value = Math.max(minMapScale.value, Math.min(maxMapScale, nextScale))
+  clampMapOffset()
+}
+
+function startZoomDrag(event) {
+  zoomDragState.active = true
+  revealZoomTrack()
+  event.currentTarget.setPointerCapture?.(event.pointerId)
+  setMapScaleFromZoomPointer(event)
+  window.addEventListener('pointermove', moveZoomDrag)
+  window.addEventListener('pointerup', endZoomDrag, { once: true })
+  window.addEventListener('pointercancel', endZoomDrag, { once: true })
+}
+
+function moveZoomDrag(event) {
+  if (!zoomDragState.active) return
+  revealZoomTrack()
+  setMapScaleFromZoomPointer(event)
+}
+
+function endZoomDrag() {
+  zoomDragState.active = false
+  window.removeEventListener('pointermove', moveZoomDrag)
+  window.removeEventListener('pointerup', endZoomDrag)
+  window.removeEventListener('pointercancel', endZoomDrag)
+  revealZoomTrack()
+}
+
 function revealZoomTrack() {
   showZoomTrack.value = true
   window.clearTimeout(zoomTrackTimer)
+  if (zoomDragState.active) return
   zoomTrackTimer = window.setTimeout(() => {
     showZoomTrack.value = false
   }, 950)
@@ -1661,10 +1772,6 @@ function endMapDrag(event) {
 
 function selectPoint(no) {
   if (mapDragState.moved) return
-  if (no === 2) {
-    ElMessage.warning('2号暂未接入摄像头')
-    return
-  }
   selectedPointNo.value = no
 }
 
@@ -1677,84 +1784,177 @@ function updateClock() {
 }
 
 async function fetchPriorityDetail() {
-  const id = displayedPriorityAlert.value?.id
+  const rawId = displayedPriorityAlert.value?.id
+  const id = normalizeEventId(rawId)
   if (!id) {
     currentPriorityDetailId = null
-    priorityDetail.value = { timeline: [] }
+    priorityDetail.value = { id: null, timeline: [] }
     return
   }
-  if (id !== currentPriorityDetailId) {
-    currentPriorityDetailId = id
-    priorityDetail.value = { timeline: [] }
-  }
+  const sameEvent = id === currentPriorityDetailId && priorityDetail.value.id === id
   try {
-    const res = await getUnifiedSafetyEventDetail(id)
-    priorityDetail.value = { timeline: res.data?.timeline || [] }
+    const res = await getUnifiedSafetyEventDetail(rawId)
+    const incomingTimeline = res.data?.timeline || []
+    const previousTimeline = sameEvent ? (priorityDetail.value.timeline || []) : []
+    currentPriorityDetailId = id
+    priorityDetail.value = {
+      id,
+      timeline: sameEvent ? mergePriorityTimeline(previousTimeline, incomingTimeline) : incomingTimeline,
+    }
   } catch {
-    priorityDetail.value = { timeline: [] }
+    if (priorityDetail.value.timeline?.length) return
+    priorityDetail.value = { id, timeline: [] }
   }
+}
+
+function normalizeEventId(id) {
+  return id == null || id === '' ? null : String(id)
+}
+
+function mergePriorityTimeline(previousRows = [], incomingRows = []) {
+  if (!previousRows.length) return incomingRows
+  if (!incomingRows.length) return previousRows
+  const merged = new Map()
+  previousRows.forEach((row, index) => {
+    merged.set(timelineRowKey(row, index), row)
+  })
+  incomingRows.forEach((row, index) => {
+    merged.set(timelineRowKey(row, index), row)
+  })
+  return Array.from(merged.values()).sort((a, b) => timelineRowTimestamp(a) - timelineRowTimestamp(b))
+}
+
+function timelineRowKey(row, index) {
+  if (row?.id != null) return `id:${row.id}`
+  const key = [
+    row?.log_type || 'log',
+    row?.create_time || row?.created_at || '',
+    row?.title || '',
+    row?.message || row?.action || '',
+  ].join('|')
+  return key === 'log|||' ? `fallback:${index}` : key
+}
+
+function timelineRowTimestamp(row) {
+  const value = row?.create_time || row?.created_at
+  const timestamp = value ? new Date(value).getTime() : 0
+  return Number.isFinite(timestamp) ? timestamp : 0
 }
 
 async function fetchData() {
+  if (fetchDataInFlight) return
+  fetchDataInFlight = true
   loading.value = true
-  const previousDisplayedAlert = displayedPriorityAlert.value
-  const [statsResult, eventsResult, statusResult, cameraResult] = await Promise.allSettled([
-    getUnifiedSafetyEventStatistics(),
-    fetchOverviewEvents(),
-    getDeviceStatus(),
-    getCameraList(),
-  ])
+  try {
+    const [statsResult, eventsResult, statusResult, cameraResult] = await Promise.allSettled([
+      getUnifiedSafetyEventStatistics(),
+      fetchOverviewEvents(),
+      getDeviceStatus(),
+      getCameraList(),
+    ])
 
-  if (statsResult.status === 'fulfilled' && statsResult.value?.data) {
-    eventStats.value = statsResult.value.data || {}
-  }
-  if (eventsResult.status === 'fulfilled') {
-    events.value = (eventsResult.value || []).slice().sort((a, b) => eventTimestamp(b) - eventTimestamp(a))
-    updateRetainedPriorityAlert(previousDisplayedAlert)
-  }
-  if (statusResult.status === 'fulfilled' && statusResult.value?.data) {
-    deviceStatus.value = statusResult.value.data || {}
-  }
-  if (cameraResult.status === 'fulfilled') {
-    const cameras = cameraResult.value?.data?.cameras || []
-    const enabled = cameras.filter((camera) => camera.enabled !== false)
-    cameraSummary.value = {
-      online: enabled.filter((camera) => camera.connected).length,
-      total: enabled.length,
+    if (statsResult.status === 'fulfilled' && statsResult.value?.data) {
+      eventStats.value = statsResult.value.data || {}
     }
+    if (eventsResult.status === 'fulfilled') {
+      events.value = dedupeEvents(eventsResult.value || []).sort((a, b) => eventTimestamp(b) - eventTimestamp(a))
+      syncDisplayedPriorityAlert()
+    }
+    if (statusResult.status === 'fulfilled' && statusResult.value?.data) {
+      deviceStatus.value = statusResult.value.data || {}
+    }
+    if (cameraResult.status === 'fulfilled') {
+      const cameras = cameraResult.value?.data?.cameras || []
+      // 总数统计全部摄像头（含关闭的），在线只统计启用且连接的
+      cameraSummary.value = {
+        online: cameras.filter((camera) => camera.enabled !== false && camera.connected).length,
+        total: cameras.length,
+      }
+    }
+    await fetchPriorityDetail()
+    await nextTick()
+    renderAllCharts()
+  } finally {
+    loading.value = false
+    fetchDataInFlight = false
   }
-  await fetchPriorityDetail()
-  loading.value = false
-  await nextTick()
-  renderAllCharts()
 }
 
-function updateRetainedPriorityAlert(previousDisplayedAlert) {
-  if (priorityAlert.value) {
-    retainedPriorityAlert.value = null
-    retainedPriorityUntil.value = 0
+function syncDisplayedPriorityAlert() {
+  const activeAlert = events.value
+    .filter((event) => !isHandled(event))
+    .slice()
+    .sort((a, b) => riskRank(b) - riskRank(a) || eventTimestamp(b) - eventTimestamp(a))[0] || null
+
+  if (activeAlert) {
+    window.clearTimeout(displayedAlertClearTimer)
+    displayedAlertClearId = null
+    displayedPriorityAlert.value = activeAlert
     return
   }
 
-  const previousId = previousDisplayedAlert?.id
-  const updatedPrevious = previousId
-    ? events.value.find((event) => event.id === previousId) || previousDisplayedAlert
-    : null
-  if (updatedPrevious && isHandled(updatedPrevious)) {
-    retainedPriorityAlert.value = updatedPrevious
-    retainedPriorityUntil.value = Date.now() + priorityRetentionMs
+  const currentId = normalizeEventId(displayedPriorityAlert.value?.id)
+  if (!currentId) {
+    clearDisplayedAlert()
     return
   }
 
-  if (Date.now() >= retainedPriorityUntil.value) {
-    retainedPriorityAlert.value = null
-    retainedPriorityUntil.value = 0
+  const updatedCurrent = events.value.find((event) => normalizeEventId(event.id) === currentId)
+  displayedPriorityAlert.value = updatedCurrent || displayedPriorityAlert.value
+
+  if (!displayedAlertClearId || displayedAlertClearId !== currentId) {
+    displayedAlertClearId = currentId
+    window.clearTimeout(displayedAlertClearTimer)
+    displayedAlertClearTimer = window.setTimeout(() => {
+      if (normalizeEventId(displayedPriorityAlert.value?.id) === currentId) {
+        clearDisplayedAlert()
+      }
+    }, completedAlertVisibleMs)
   }
+}
+
+function clearDisplayedAlert() {
+  displayedPriorityAlert.value = null
+  displayedAlertClearId = null
+  priorityDetail.value = { id: null, timeline: [] }
+  currentPriorityDetailId = null
+  window.clearTimeout(displayedAlertClearTimer)
+}
+
+function scrollActiveFlowNodeIntoView() {
+  const container = flowTimelineRef.value
+  if (!container || !displayedPriorityAlert.value || container.classList.contains('idle')) return
+  const activeNode = container.querySelector('li.running, li.active')
+  if (!activeNode) return
+
+  const padding = 12
+  const containerRect = container.getBoundingClientRect()
+  const nodeRect = activeNode.getBoundingClientRect()
+  const nodeTop = nodeRect.top - containerRect.top + container.scrollTop
+  const nodeHeight = activeNode.offsetHeight
+  const nodeBottom = nodeTop + nodeHeight
+  const maxScroll = Math.max(container.scrollHeight - container.clientHeight, 0)
+  if (!maxScroll) return
+
+  const centeredTop = nodeTop - ((container.clientHeight - nodeHeight) / 2)
+  let targetTop = Math.min(Math.max(centeredTop, 0), maxScroll)
+
+  const targetBottom = targetTop + container.clientHeight
+  if (nodeBottom > targetBottom - padding) {
+    targetTop = Math.min(nodeBottom - container.clientHeight + padding, maxScroll)
+  }
+  if (nodeTop < targetTop + padding) {
+    targetTop = Math.max(nodeTop - padding, 0)
+  }
+
+  if (Math.abs(targetTop - container.scrollTop) < 3) return
+  container.scrollTo({ top: targetTop, behavior: 'smooth' })
 }
 
 async function fetchOverviewEvents() {
   const pageSize = 100
-  const first = await getUnifiedSafetyEvents({ page: 1, page_size: pageSize })
+  const baseParams = { page_size: pageSize, sort_by: 'index', sort_order: 'desc' }
+  const first = await getUnifiedSafetyEvents({ ...baseParams, page: 1 })
   const data = first?.data || {}
   const items = data.items || []
   const total = Number(data.total || items.length)
@@ -1763,8 +1963,8 @@ async function fetchOverviewEvents() {
 
   const restResults = await Promise.allSettled(
     Array.from({ length: pageCount - 1 }, (_, index) => getUnifiedSafetyEvents({
+      ...baseParams,
       page: index + 2,
-      page_size: pageSize,
     })),
   )
   restResults.forEach((result) => {
@@ -1773,9 +1973,25 @@ async function fetchOverviewEvents() {
   return items
 }
 
+function dedupeEvents(source = []) {
+  const map = new Map()
+  source.forEach((event) => {
+    const key = event?.id == null ? event?.instance_no : event.id
+    if (key == null || key === '') return
+    map.set(String(key), event)
+  })
+  return Array.from(map.values())
+}
+
 watch(
   [riskDistribution, activeRiskModeKey, activeRiskLevel, intrusionTrend, selectedData, riskCompositionData, disposalStats, deviceRate],
   () => nextTick(renderAllCharts),
+  { deep: true }
+)
+
+watch(
+  [alarmFlowSteps, displayedPriorityAlert],
+  () => nextTick(scrollActiveFlowNodeIntoView),
   { deep: true }
 )
 
@@ -1789,7 +2005,7 @@ onMounted(() => {
   }
   restartRiskTimer()
   fetchData()
-  refreshTimer = window.setInterval(fetchData, 5000)
+  refreshTimer = window.setInterval(fetchData, 1000)
   window.addEventListener('resize', resizeCharts)
   nextTick(renderAllCharts)
 })
@@ -1800,7 +2016,11 @@ onBeforeUnmount(() => {
   window.clearInterval(riskTimer)
   window.clearTimeout(riskResumeTimer)
   window.clearTimeout(zoomTrackTimer)
+  window.clearTimeout(displayedAlertClearTimer)
   window.removeEventListener('resize', resizeCharts)
+  window.removeEventListener('pointermove', moveZoomDrag)
+  window.removeEventListener('pointerup', endZoomDrag)
+  window.removeEventListener('pointercancel', endZoomDrag)
   mapResizeObserver?.disconnect()
   chartInstances.forEach((chart) => chart.dispose())
   chartInstances.clear()
@@ -2065,19 +2285,20 @@ onBeforeUnmount(() => {
 .progress-clock span {
   overflow: hidden;
   color: #87abc5;
-  font-size: 12px;
+  font-size: clamp(12px, .73vw, 16px);
   text-overflow: ellipsis;
 }
 
 .progress-clock strong {
   flex: 0 0 auto;
-  font-size: 18px;
+  font-size: clamp(18px, 1.05vw, 22px);
   letter-spacing: .5px;
+  font-variant-numeric: tabular-nums;
 }
 
 .progress-clock em {
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: clamp(11px, .63vw, 14px);
 }
 
 .panel-heading,
@@ -2094,25 +2315,25 @@ onBeforeUnmount(() => {
 .sub-heading h3 {
   margin: 0;
   color: #eef7ff;
-  font-size: 20px;
+  font-size: clamp(20px, 1.17vw, 26px);
   font-weight: 800;
   letter-spacing: 0;
   text-shadow: none;
 }
 
 .sub-heading h3 {
-  font-size: 16px;
+  font-size: clamp(16px, .93vw, 20px);
 }
 
 .sub-heading span,
 .selected-title span {
   color: #9ed3f5;
-  font-size: 12px;
+  font-size: clamp(12px, .73vw, 16px);
 }
 
 .disposal-card .sub-heading span {
   color: #8fc8f2;
-  font-size: 12px;
+  font-size: clamp(12px, .73vw, 16px);
 }
 
 .segmented {
@@ -2126,12 +2347,12 @@ onBeforeUnmount(() => {
 
 .segmented button,
 .mini-segmented button {
-  height: 24px;
-  padding: 0 10px;
+  height: clamp(24px, 1.35vw, 30px);
+  padding: 0 clamp(10px, .6vw, 14px);
   border: 0;
   color: #88a9c1;
   background: transparent;
-  font-size: 12px;
+  font-size: clamp(12px, .73vw, 15px);
   cursor: pointer;
   border-radius: 4px;
   transition: background .18s ease, color .18s ease, box-shadow .18s ease;
@@ -2154,18 +2375,18 @@ onBeforeUnmount(() => {
 }
 
 .mini-segmented button {
-  height: 22px;
-  padding: 0 8px;
-  font-size: 10px;
+  height: clamp(22px, 1.25vw, 27px);
+  padding: 0 clamp(8px, .5vw, 12px);
+  font-size: clamp(10px, .6vw, 13px);
 }
 
 .today-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   grid-template-rows: 1fr 1fr;
-  gap: 10px;
+  gap: clamp(9px, .5vw, 14px);
   height: calc(100% - 32px);
-  margin-top: 10px;
+  margin-top: clamp(9px, .5vw, 13px);
 }
 
 .today-panel {
@@ -2177,9 +2398,9 @@ onBeforeUnmount(() => {
   min-height: 0;
   position: relative;
   display: grid;
-  grid-template-rows: 36px 1fr;
-  gap: 7px;
-  padding: 12px 15px 11px;
+  grid-template-rows: clamp(34px, 2vw, 44px) 1fr;
+  gap: clamp(6px, .4vw, 9px);
+  padding: clamp(11px, .7vw, 15px) clamp(13px, .8vw, 18px) clamp(10px, .6vw, 14px);
   border: 1px solid rgba(74, 163, 214, .22);
   border-radius: 8px;
   background:
@@ -2210,9 +2431,9 @@ onBeforeUnmount(() => {
 
 .metric-icon {
   position: relative;
-  flex: 0 0 36px;
-  width: 36px;
-  height: 36px;
+  flex: 0 0 clamp(34px, 2vw, 44px);
+  width: clamp(34px, 2vw, 44px);
+  height: clamp(34px, 2vw, 44px);
   display: grid;
   place-items: center;
   border-radius: 10px;
@@ -2222,8 +2443,8 @@ onBeforeUnmount(() => {
 }
 
 .metric-icon :deep(svg) {
-  width: 20px;
-  height: 20px;
+  width: clamp(18px, 1.1vw, 25px);
+  height: clamp(18px, 1.1vw, 25px);
   display: block;
 }
 
@@ -2231,14 +2452,14 @@ onBeforeUnmount(() => {
 .metric-compare {
   display: block;
   color: #a4d2ee;
-  font-size: 13px;
+  font-size: clamp(13px, .78vw, 17px);
   font-style: normal;
   line-height: 1;
 }
 
 .metric-label {
   color: #b7e5ff;
-  font-size: 16px;
+  font-size: clamp(16px, .93vw, 20px);
   font-weight: 800;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2249,16 +2470,15 @@ onBeforeUnmount(() => {
   min-width: 0;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding-left: 46px;
+  justify-content: center;
+  gap: clamp(10px, .6vw, 14px);
 }
 
 .today-card strong {
   display: block;
   margin: 0;
   color: #fff;
-  font-size: 29px;
+  font-size: clamp(29px, 1.71vw, 37px);
   line-height: 1;
   letter-spacing: 0;
   font-variant-numeric: tabular-nums;
@@ -2267,7 +2487,7 @@ onBeforeUnmount(() => {
 .metric-compare {
   flex: 0 0 auto;
   display: grid;
-  justify-items: end;
+  justify-items: start;
   gap: 4px;
   padding-bottom: 0;
   white-space: nowrap;
@@ -2275,7 +2495,7 @@ onBeforeUnmount(() => {
 
 .metric-compare span {
   color: #9ed3f5;
-  font-size: 13px;
+  font-size: clamp(13px, .78vw, 17px);
   line-height: 1;
 }
 
@@ -2288,11 +2508,12 @@ onBeforeUnmount(() => {
   font-style: normal;
   line-height: 1.1;
   font-variant-numeric: tabular-nums;
-  font-size: 13px;
+  font-size: clamp(13px, .78vw, 17px);
   font-weight: 800;
 }
 
 .today-card.danger { --metric-color: #ff6873; }
+.today-card.warning { --metric-color: #FFB648; }
 .today-card.boat { --metric-color: #41c8ff; }
 .today-card.purple { --metric-color: #9b73ff; }
 .today-card.cyan { --metric-color: #43c8ff; }
@@ -2331,12 +2552,12 @@ onBeforeUnmount(() => {
 }
 
 .risk-switch button {
-  height: 24px;
-  padding: 0 12px;
+  height: clamp(24px, 1.4vw, 30px);
+  padding: 0 clamp(12px, .7vw, 16px);
   border: 0;
   color: #88a9c1;
   background: transparent;
-  font-size: 12px;
+  font-size: clamp(12px, .7vw, 15px);
   cursor: pointer;
   border-radius: 4px;
   transition: background .18s ease, color .18s ease, box-shadow .18s ease;
@@ -2353,12 +2574,13 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: minmax(128px, 1.05fr) minmax(106px, .95fr);
   align-items: center;
+  align-content: center;
   gap: 14px;
 }
 
 .risk-chart-wrap {
   position: relative;
-  width: min(150px, 100%);
+  width: min(clamp(150px, 9vw, 200px), 100%);
   aspect-ratio: 1;
   justify-self: center;
 }
@@ -2372,18 +2594,18 @@ onBeforeUnmount(() => {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 76px;
+  width: clamp(76px, 4.5vw, 100px);
   transform: translate(-50%, -50%);
   display: grid;
   place-items: center;
-  gap: 4px;
+  gap: clamp(4px, .2vw, 6px);
   pointer-events: none;
   text-align: center;
 }
 
 .risk-center strong {
   color: #fff;
-  font-size: 32px;
+  font-size: clamp(32px, 1.8vw, 42px);
   font-weight: 800;
   line-height: 1;
   text-shadow: 0 1px 0 rgba(255, 255, 255, .12);
@@ -2391,7 +2613,7 @@ onBeforeUnmount(() => {
 
 .risk-center span {
   color: #8fc8f2;
-  font-size: 12px;
+  font-size: clamp(12px, .7vw, 15px);
   line-height: 1;
   white-space: nowrap;
 }
@@ -2414,62 +2636,65 @@ onBeforeUnmount(() => {
 .risk-summary {
   min-width: 0;
   display: grid;
-  gap: 10px;
+  gap: clamp(9px, .5vw, 14px);
   color: #8fc8f2;
 }
 
 .risk-summary span {
-  font-size: 14px;
+  font-size: clamp(14px, .85vw, 18px);
 }
 
 .risk-summary strong {
-  min-width: 74px;
-  height: 32px;
-  display: inline-grid;
-  place-items: center;
+  min-width: clamp(74px, 4.3vw, 96px);
+  height: clamp(32px, 1.85vw, 42px);
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   justify-self: start;
-  padding: 0 10px;
+  padding: 1px clamp(11px, .7vw, 16px) 0;
   border: 1px solid rgba(93, 183, 232, .26);
   border-radius: 6px;
   color: #eef7ff;
   background: rgba(14, 58, 92, .34);
-  font-size: 15px;
-  line-height: 1;
+  font-size: clamp(15px, .9vw, 19px);
+  line-height: clamp(30px, 1.75vw, 40px);
   font-weight: 800;
   box-shadow: none;
+  text-align: center;
 }
 
 .risk-summary em {
   display: inline-flex;
   width: fit-content;
   align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
+  gap: clamp(6px, .3vw, 8px);
+  padding: clamp(4px, .25vw, 6px) clamp(8px, .45vw, 12px);
   border-radius: 6px;
   color: #c4e8fb;
   background: rgba(67, 200, 255, .07);
-  font-size: 14px;
+  font-size: clamp(14px, .85vw, 18px);
   font-style: normal;
   line-height: 1;
 }
 
 .risk-summary em b {
   display: inline-flex;
-  min-width: 32px;
+  min-width: clamp(32px, 1.7vw, 42px);
   align-items: center;
   justify-content: flex-start;
   margin-left: 0;
   font-weight: 700;
-  font-size: 17px;
+  font-size: clamp(17px, 1vw, 22px);
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
 
 .trend-legend i {
   display: inline-block;
-  width: 7px;
-  height: 7px;
-  margin-right: 6px;
+  width: clamp(8px, .45vw, 10px);
+  height: clamp(8px, .45vw, 10px);
+  margin-right: clamp(5px, .3vw, 8px);
   border-radius: 50%;
 }
 
@@ -2477,6 +2702,7 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-rows: 34px 18px minmax(0, 1fr);
   align-items: stretch;
+  gap: clamp(4px, .25vw, 6px);
 }
 
 .trend-panel .panel-heading {
@@ -2486,14 +2712,14 @@ onBeforeUnmount(() => {
 
 .trend-legend {
   display: flex;
-  height: 18px;
+  height: clamp(17px, 1vw, 22px);
   min-height: 0;
   align-items: center;
   justify-content: flex-end;
-  gap: 14px;
+  gap: clamp(12px, .7vw, 18px);
   margin: 0;
   color: #a4d2ee;
-  font-size: 12px;
+  font-size: clamp(13px, .78vw, 17px);
   overflow: hidden;
 }
 
@@ -2536,6 +2762,155 @@ onBeforeUnmount(() => {
   cursor: grabbing;
 }
 
+.map-rank-card {
+  position: absolute;
+  left: clamp(12px, .9vw, 18px);
+  bottom: clamp(12px, .9vw, 18px);
+  z-index: 5;
+  width: clamp(118px, 7.2vw, 142px);
+  padding: clamp(6px, .38vw, 8px);
+  border: 1px solid rgba(105, 205, 255, .16);
+  border-radius: 6px;
+  background:
+    linear-gradient(135deg, rgba(8, 42, 70, .18), rgba(4, 19, 34, .13)),
+    rgba(3, 16, 29, .1);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, .14), inset 0 1px 0 rgba(255, 255, 255, .04);
+  backdrop-filter: blur(2px);
+  pointer-events: auto;
+}
+
+.map-rank-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: clamp(5px, .3vw, 7px);
+}
+
+.map-rank-head span {
+  color: #eef9ff;
+  font-size: clamp(10px, .56vw, 12px);
+  font-weight: 800;
+  line-height: 1;
+}
+
+.map-rank-head em {
+  padding: 1px 4px;
+  border-radius: 4px;
+  color: #7bddff;
+  background: rgba(72, 183, 255, .08);
+  font-size: clamp(8px, .45vw, 10px);
+  font-style: normal;
+  font-weight: 800;
+  letter-spacing: .04em;
+}
+
+.map-rank-list {
+  display: grid;
+  gap: clamp(4px, .22vw, 6px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.map-rank-list li {
+  display: grid;
+  grid-template-columns: clamp(14px, .74vw, 16px) minmax(0, 1fr);
+  align-items: center;
+  gap: clamp(5px, .28vw, 7px);
+  min-width: 0;
+}
+
+.map-rank-list li > i {
+  display: grid;
+  place-items: center;
+  width: clamp(14px, .74vw, 16px);
+  height: clamp(14px, .74vw, 16px);
+  border-radius: 50%;
+  color: #dff8ff;
+  background: rgba(75, 177, 238, .1);
+  border: 1px solid rgba(109, 213, 255, .15);
+  font-size: clamp(8px, .45vw, 10px);
+  font-style: normal;
+  font-weight: 800;
+}
+
+.map-rank-list li:nth-child(1) > i {
+  color: #fff2d1;
+  background: rgba(255, 179, 72, .2);
+  border-color: rgba(255, 190, 79, .36);
+}
+
+.map-rank-list li:nth-child(2) > i {
+  color: #dff8ff;
+  background: rgba(68, 201, 255, .16);
+  border-color: rgba(68, 201, 255, .32);
+}
+
+.map-rank-list li:nth-child(3) > i {
+  color: #f0e7ff;
+  background: rgba(151, 108, 255, .16);
+  border-color: rgba(151, 108, 255, .32);
+}
+
+.map-rank-main {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.map-rank-main > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.map-rank-main span {
+  min-width: 0;
+  overflow: hidden;
+  color: #bfe8ff;
+  font-size: clamp(9px, .52vw, 11px);
+  font-weight: 700;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-rank-main strong {
+  flex: 0 0 auto;
+  color: #fff;
+  font-size: clamp(10px, .58vw, 12px);
+  line-height: 1;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
+.map-rank-main small {
+  margin-left: 2px;
+  color: #8fc8f2;
+  font-size: .68em;
+  font-weight: 700;
+}
+
+.map-rank-main b {
+  position: relative;
+  display: block;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(91, 169, 214, .1);
+}
+
+.map-rank-main b em {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #43d59d, #44c9ff 62%, #ff5b68);
+  box-shadow: 0 0 10px rgba(68, 201, 255, .28);
+}
+
 .map-controls {
   position: absolute;
   right: 18px;
@@ -2552,7 +2927,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: clamp(5px, .42vw, 8px);
   opacity: 0;
   transform: translateY(5px);
   pointer-events: none;
@@ -2566,17 +2941,17 @@ onBeforeUnmount(() => {
 }
 
 .map-controls .zoom-button {
-  width: 34px;
-  height: 34px;
+  width: clamp(24px, 1.75vw, 36px);
+  height: clamp(24px, 1.75vw, 36px);
   display: grid;
   place-items: center;
   padding: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: clamp(5px, .45vw, 8px);
   color: #07111c;
   background: rgba(247, 249, 252, .94);
-  box-shadow: 0 8px 18px rgba(1, 9, 18, .2);
-  font-size: 24px;
+  box-shadow: 0 6px 14px rgba(1, 9, 18, .18);
+  font-size: clamp(17px, 1.25vw, 25px);
   font-weight: 700;
   line-height: 1;
   cursor: pointer;
@@ -2590,19 +2965,26 @@ onBeforeUnmount(() => {
 }
 
 .zoom-track {
-  width: 34px;
-  height: 108px;
+  width: clamp(24px, 1.75vw, 36px);
+  height: clamp(78px, 6vw, 118px);
   display: grid;
   place-items: center;
-  pointer-events: none;
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: none;
 }
 
 .zoom-track-line {
   position: relative;
-  width: 8px;
-  height: 98px;
+  width: clamp(5px, .42vw, 8px);
+  height: clamp(70px, 5.5vw, 108px);
   border-radius: 999px;
-  background: rgba(246, 249, 253, .9);
+  background:
+    linear-gradient(
+      to top,
+      rgba(74, 145, 226, .92) 0 var(--zoom-progress),
+      rgba(246, 249, 253, .9) var(--zoom-progress) 100%
+    );
   box-shadow: inset 0 0 0 1px rgba(226, 235, 246, .55);
 }
 
@@ -2610,13 +2992,14 @@ onBeforeUnmount(() => {
   position: absolute;
   left: 50%;
   top: var(--zoom-thumb-top);
-  width: 20px;
-  height: 20px;
+  width: clamp(15px, 1.05vw, 22px);
+  height: clamp(15px, 1.05vw, 22px);
   border-radius: 50%;
   background: #4a91e2;
-  border: 2px solid rgba(45, 123, 205, .86);
-  box-shadow: 0 6px 15px rgba(55, 139, 232, .42);
+  border: clamp(1px, .12vw, 2px) solid rgba(45, 123, 205, .86);
+  box-shadow: 0 5px 12px rgba(55, 139, 232, .38);
   transform: translate(-50%, -50%);
+  pointer-events: none;
 }
 
 .map-controls .locate {
@@ -2749,7 +3132,7 @@ onBeforeUnmount(() => {
 }
 
 .selected-region-fill.personForbidden {
-  fill: rgba(255, 91, 104, .08);
+  fill: rgba(54, 154, 255, .1);
 }
 
 .selected-region-halo {
@@ -2764,7 +3147,7 @@ onBeforeUnmount(() => {
 }
 
 .selected-region-halo.personForbidden {
-  stroke: rgba(255, 116, 128, .36);
+  stroke: rgba(54, 154, 255, .38);
 }
 
 .selected-region-line {
@@ -2777,7 +3160,11 @@ onBeforeUnmount(() => {
 }
 
 .selected-region-line.personForbidden {
-  stroke: rgba(255, 142, 150, .95);
+  stroke: rgba(93, 181, 255, .98);
+}
+
+.selected-region-scan.personForbidden {
+  stroke: rgba(190, 230, 255, .92);
 }
 
 .selected-region-scan {
@@ -2824,7 +3211,7 @@ onBeforeUnmount(() => {
 
 .region-callout .callout-text {
   fill: #e8fbff;
-  font-size: 17px;
+  font-size: clamp(17px, 1vw, 21px);
   font-weight: 800;
   letter-spacing: 0;
   text-anchor: middle;
@@ -2835,22 +3222,22 @@ onBeforeUnmount(() => {
 }
 
 .region-callout.personForbidden .callout-line {
-  stroke: rgba(255, 142, 150, .88);
+  stroke: rgba(93, 181, 255, .9);
 }
 
 .region-callout.personForbidden .callout-dot {
-  stroke: rgba(255, 142, 150, .78);
+  stroke: rgba(93, 181, 255, .82);
 }
 
 .region-callout.personForbidden .callout-box {
-  stroke: rgba(255, 142, 150, .72);
-  fill: rgba(43, 15, 24, .74);
+  stroke: rgba(93, 181, 255, .76);
+  fill: rgba(7, 28, 58, .76);
 }
 
 .camera-point {
   position: absolute;
-  width: 24px;
-  height: 24px;
+  width: clamp(22px, 1.3vw, 30px);
+  height: clamp(22px, 1.3vw, 30px);
   padding: 0;
   border: 1px solid rgba(255, 172, 178, .9);
   border-radius: 50%;
@@ -2885,9 +3272,9 @@ onBeforeUnmount(() => {
   position: relative;
   z-index: 1;
   display: block;
-  font-size: 12px;
+  font-size: clamp(12px, .7vw, 15px);
   font-weight: 800;
-  line-height: 22px;
+  line-height: clamp(20px, 1.2vw, 28px);
 }
 
 .camera-point:hover,
@@ -2895,39 +3282,41 @@ onBeforeUnmount(() => {
   transform: translate(-50%, -50%) scale(1.12);
 }
 
-.camera-point.inactive {
-  border-color: rgba(122, 159, 188, .78);
-  color: #c7d6e2;
-  background: radial-gradient(circle, #2f76c9 0 40%, rgba(24, 57, 105, .92) 42% 100%);
-  box-shadow: 0 0 0 4px rgba(47, 118, 201, .1), 0 4px 14px rgba(0, 0, 0, .24);
-  animation: none;
-}
-
-.camera-point.inactive:hover {
-  transform: translate(-50%, -50%) scale(1.06);
-  box-shadow: 0 0 0 5px rgba(47, 118, 201, .14), 0 5px 15px rgba(0, 0, 0, .28);
-}
-
 .camera-point.active {
   border-color: #fff;
   background:
-    radial-gradient(circle at 50% 48%, #ff8b91 0 34%, #e83f49 35% 62%, rgba(143, 16, 25, .98) 63% 100%);
+    radial-gradient(circle at 50% 48%, #fff2f2 0 8%, #ff9aa0 9% 34%, #ee3f4d 35% 62%, rgba(143, 16, 25, .98) 63% 100%);
   box-shadow:
     0 0 0 6px rgba(255, 91, 104, .18),
     0 0 24px rgba(255, 91, 104, .58),
     0 6px 18px rgba(0, 0, 0, .34);
-  animation: activePointGlow 1.45s ease-in-out infinite;
+  animation: activePointGlow 1.35s ease-in-out infinite;
   z-index: 4;
+}
+
+.camera-point.active span::before {
+  content: "";
+  position: absolute;
+  inset: clamp(-7px, -.4vw, -5px);
+  border-radius: 50%;
+  border: 2px solid transparent;
+  border-top-color: rgba(255, 255, 255, .95);
+  border-right-color: rgba(255, 255, 255, .38);
+  filter: drop-shadow(0 0 7px rgba(255, 255, 255, .55));
+  animation: pointOrbit 1.15s linear infinite;
+  pointer-events: none;
 }
 
 .camera-point.active::before {
   opacity: 1;
-  animation: pointRing 1.65s ease-out infinite;
+  border-color: rgba(255, 135, 143, .48);
+  animation: pointRing 1.5s ease-out infinite;
 }
 
 .camera-point.active::after {
   opacity: 1;
-  animation: pointRing 1.65s ease-out .35s infinite;
+  border-color: rgba(255, 255, 255, .3);
+  animation: pointRing 1.5s ease-out .28s infinite;
 }
 
 .selected-detail {
@@ -2936,7 +3325,7 @@ onBeforeUnmount(() => {
 }
 
 .selected-title {
-  height: 42px;
+  height: clamp(40px, 2.3vw, 50px);
   margin-bottom: 6px;
   align-items: flex-start;
 }
@@ -2948,7 +3337,7 @@ onBeforeUnmount(() => {
 
 .selected-title span {
   color: #8fc8f2;
-  font-size: 12px;
+  font-size: clamp(12px, .73vw, 16px);
   line-height: 1;
   letter-spacing: .5px;
 }
@@ -2958,7 +3347,7 @@ onBeforeUnmount(() => {
   max-width: 100%;
   margin: 0;
   color: #f2fbff;
-  font-size: 21px;
+  font-size: clamp(21px, 1.22vw, 27px);
   line-height: 1.12;
   letter-spacing: 0;
   text-shadow: none;
@@ -2971,15 +3360,15 @@ onBeforeUnmount(() => {
 .analytics-grid {
   display: grid;
   grid-template-columns: 1.1fr 1.18fr .98fr;
-  gap: 12px;
-  height: calc(100% - 48px);
+  gap: clamp(10px, .6vw, 16px);
+  height: calc(100% - clamp(46px, 2.7vw, 56px));
   min-height: 0;
 }
 
 .analytics-card {
   min-width: 0;
   min-height: 0;
-  padding: 12px 14px;
+  padding: clamp(11px, .7vw, 16px) clamp(13px, .8vw, 18px);
   border: 1px solid rgba(67, 200, 255, .2);
   border-radius: 8px;
   background: linear-gradient(180deg, rgba(9, 37, 65, .66), rgba(1, 17, 32, .58));
@@ -2988,49 +3377,49 @@ onBeforeUnmount(() => {
 }
 
 .analytics-card .sub-heading {
-  height: 28px;
+  height: clamp(26px, 1.6vw, 34px);
   align-items: flex-start;
 }
 
 .analytics-card .sub-heading h3 {
   color: #f2fbff;
-  font-size: 17px;
+  font-size: clamp(17px, .98vw, 21px);
   line-height: 1.1;
   font-weight: 800;
 }
 
 .analytics-card .sub-heading span {
   color: #8ecaf1;
-  font-size: 12px;
+  font-size: clamp(12px, .73vw, 16px);
   line-height: 1.1;
 }
 
 .bar-chart {
-  height: calc(100% - 30px);
+  height: calc(100% - clamp(32px, 2vw, 40px));
   min-height: 0;
   margin-top: 6px;
 }
 
 .risk-composition {
-  height: calc(100% - 30px);
+  height: calc(100% - clamp(32px, 2vw, 40px));
   min-height: 0;
   margin-top: 6px;
   overflow: hidden;
 }
 
 .disposal-body {
-  display: grid;
-  grid-template-columns: minmax(126px, .9fr) minmax(150px, 1.1fr);
-  gap: 14px;
+  display: flex;
   align-items: center;
-  height: calc(100% - 30px);
+  justify-content: center;
+  gap: clamp(10px, .55vw, 14px);
+  height: calc(100% - clamp(32px, 2vw, 40px));
   margin-top: 6px;
 }
 
 .disposal-ring-wrap {
   position: relative;
-  width: 132px;
-  height: 132px;
+  width: min(clamp(132px, 8vw, 178px), 100%);
+  aspect-ratio: 1;
   justify-self: center;
 }
 
@@ -3043,18 +3432,18 @@ onBeforeUnmount(() => {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 86px;
+  width: clamp(86px, 4.9vw, 108px);
   transform: translate(-50%, -50%);
   display: grid;
   place-items: center;
-  gap: 2px;
+  gap: clamp(2px, .15vw, 4px);
   pointer-events: none;
   text-align: center;
 }
 
 .disposal-center strong {
   color: #fff;
-  font-size: 31px;
+  font-size: clamp(31px, 1.76vw, 40px);
   font-weight: 800;
   line-height: 1;
   letter-spacing: 0;
@@ -3063,24 +3452,25 @@ onBeforeUnmount(() => {
 
 .disposal-center span {
   color: #8fc8f2;
-  font-size: 13px;
+  font-size: clamp(13px, .73vw, 17px);
   line-height: 1;
   white-space: nowrap;
 }
 
 .disposal-list {
   display: grid;
-  gap: 14px;
+  gap: clamp(13px, .7vw, 19px);
   min-width: 0;
+  flex: 0 1 auto;
   color: #d8eefc;
-  font-size: 15px;
+  font-size: clamp(15px, .83vw, 19px);
 }
 
 .disposal-list i {
   display: inline-block;
-  width: 8px;
-  height: 8px;
-  margin-right: 9px;
+  width: clamp(8px, .4vw, 11px);
+  height: clamp(8px, .4vw, 11px);
+  margin-right: clamp(8px, .45vw, 12px);
   border-radius: 50%;
   box-shadow: none;
 }
@@ -3116,7 +3506,7 @@ onBeforeUnmount(() => {
 }
 
 .priority-summary strong {
-  font-size: 14px;
+  font-size: clamp(14px, .83vw, 18px);
   line-height: 1;
   white-space: nowrap;
 }
@@ -3127,7 +3517,7 @@ onBeforeUnmount(() => {
 
 .priority-summary span {
   color: #eef7ff;
-  font-size: 15px;
+  font-size: clamp(15px, .88vw, 19px);
   line-height: 1.35;
   font-weight: 700;
 }
@@ -3143,7 +3533,7 @@ onBeforeUnmount(() => {
 .priority-summary small i {
   min-width: 0;
   color: #8fc8f2;
-  font-size: 12px;
+  font-size: clamp(12px, .73vw, 16px);
   font-style: normal;
   white-space: nowrap;
 }
@@ -3153,12 +3543,12 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 22px;
-  padding: 0 8px;
+  height: clamp(22px, 1.25vw, 28px);
+  padding: 0 clamp(8px, .5vw, 12px);
   border-radius: 999px;
   color: #9ed3f5;
   background: rgba(143, 200, 242, .08);
-  font-size: 12px;
+  font-size: clamp(12px, .73vw, 15px);
   font-weight: 700;
   white-space: nowrap;
 }
@@ -3195,13 +3585,13 @@ onBeforeUnmount(() => {
 
 .detail-button {
   flex: 0 0 auto;
-  height: 28px;
-  padding: 0 11px;
+  height: clamp(28px, 1.6vw, 34px);
+  padding: 0 clamp(11px, .65vw, 15px);
   border: 1px solid rgba(67, 200, 255, .36);
   border-radius: 6px;
   color: #cceeff;
   background: rgba(22, 84, 134, .32);
-  font-size: 12px;
+  font-size: clamp(12px, .73vw, 15px);
   cursor: pointer;
   transition: background .18s ease, border-color .18s ease;
 }
@@ -3232,10 +3622,10 @@ onBeforeUnmount(() => {
 
 .flow-idle-visual {
   flex: 0 0 auto;
-  grid-template-columns: 58px minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: clamp(52px, 3vw, 68px) minmax(0, 1fr);
+  gap: clamp(10px, .6vw, 16px);
   margin-top: 12px;
-  padding: 12px 13px;
+  padding: clamp(11px, .7vw, 15px) clamp(12px, .75vw, 17px);
   border-color: rgba(67, 200, 255, .14);
   background:
     radial-gradient(circle at 34px 36px, rgba(56, 213, 156, .12), transparent 54px),
@@ -3243,22 +3633,22 @@ onBeforeUnmount(() => {
 }
 
 .flow-idle-visual .idle-orbit {
-  width: 54px;
-  height: 54px;
+  width: clamp(48px, 2.8vw, 62px);
+  height: clamp(48px, 2.8vw, 62px);
 }
 
 .flow-idle-visual .idle-copy strong {
-  font-size: 15px;
+  font-size: clamp(15px, .88vw, 19px);
 }
 
 .flow-idle-visual .idle-copy span {
-  font-size: 12px;
+  font-size: clamp(12px, .73vw, 16px);
 }
 
 .idle-orbit {
   position: relative;
-  width: 64px;
-  height: 64px;
+  width: clamp(58px, 3.4vw, 76px);
+  height: clamp(58px, 3.4vw, 76px);
   border: 1px solid rgba(67, 200, 255, .22);
   border-radius: 50%;
   background: rgba(3, 18, 33, .58);
@@ -3313,13 +3703,13 @@ onBeforeUnmount(() => {
 
 .idle-copy strong {
   color: #e9f8ff;
-  font-size: 16px;
+  font-size: clamp(16px, .93vw, 20px);
   line-height: 1;
 }
 
 .idle-copy span {
   color: #8fc8f2;
-  font-size: 12px;
+  font-size: clamp(12px, .73vw, 16px);
   line-height: 1.35;
 }
 
@@ -3356,10 +3746,12 @@ onBeforeUnmount(() => {
   align-content: start;
   gap: 10px;
   margin: 12px 0 0;
-  padding: 0 2px 0 22px;
+  padding: 0 2px 10px 22px;
   list-style: none;
   overflow: auto;
   min-height: 0;
+  scroll-padding: 12px 0;
+  overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: rgba(67, 200, 255, .36) transparent;
 }
@@ -3438,7 +3830,7 @@ onBeforeUnmount(() => {
   min-width: 0;
   overflow: hidden;
   color: #f1fbff;
-  font-size: 14px;
+  font-size: clamp(14px, .83vw, 18px);
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3448,7 +3840,7 @@ onBeforeUnmount(() => {
 .progress-timeline footer span {
   flex: 0 0 auto;
   color: #8fc8f2;
-  font-size: 12px;
+  font-size: clamp(12px, .73vw, 16px);
   line-height: 1;
   white-space: nowrap;
 }
@@ -3458,14 +3850,19 @@ onBeforeUnmount(() => {
   margin: 8px 0 10px;
   overflow: hidden;
   color: #b7d0e3;
-  font-size: 12px;
+  font-size: clamp(12px, .73vw, 16px);
   line-height: 1.45;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
 }
 
 .flow-timeline {
-  gap: 12px;
+  --flow-rail-center: -27px;
+  --flow-icon-size: clamp(32px, 1.9vw, 42px);
+  --flow-icon-top: 9px;
+  --flow-gap: 12px;
+  gap: var(--flow-gap);
   margin-top: 12px;
   padding-left: 52px;
 }
@@ -3478,11 +3875,12 @@ onBeforeUnmount(() => {
 .flow-timeline > li:not(:last-child)::after {
   content: "";
   position: absolute;
-  left: -27px;
-  top: 47px;
-  bottom: -12px;
-  width: 1px;
+  left: var(--flow-rail-center);
+  top: calc(var(--flow-icon-top) + var(--flow-icon-size));
+  bottom: calc(-1 * (var(--flow-gap) + var(--flow-icon-top)));
+  width: 4px;
   border-radius: 999px;
+  transform: translateX(-50%);
   background: linear-gradient(180deg, rgba(143, 200, 242, .16), rgba(143, 200, 242, .06));
   pointer-events: none;
   z-index: 0;
@@ -3507,12 +3905,13 @@ onBeforeUnmount(() => {
 }
 
 .progress-timeline > li > .flow-node-icon {
-  left: -44px;
-  top: 9px;
-  width: 34px;
-  height: 34px;
+  left: var(--flow-rail-center);
+  top: var(--flow-icon-top);
+  width: var(--flow-icon-size);
+  height: var(--flow-icon-size);
   display: grid;
   place-items: center;
+  transform: translateX(-50%);
   border: 1px solid rgba(143, 200, 242, .22);
   border-radius: 9px;
   color: #8fc8f2;
@@ -3522,8 +3921,8 @@ onBeforeUnmount(() => {
 }
 
 .flow-node-icon :deep(svg) {
-  width: 18px;
-  height: 18px;
+  width: clamp(17px, 1vw, 22px);
+  height: clamp(17px, 1vw, 22px);
 }
 
 .flow-timeline li.done > .flow-node-icon,
@@ -3578,13 +3977,48 @@ onBeforeUnmount(() => {
 }
 
 .flow-timeline.idle {
-  flex: 0 0 auto;
-  overflow: visible;
+  --flow-gap: clamp(8px, 1.2vh, 14px);
+  flex: 1 1 0;
+  grid-template-rows: repeat(4, minmax(0, 1fr));
+  align-content: stretch;
+  gap: var(--flow-gap);
+  padding-bottom: 0;
+  overflow: hidden;
+}
+
+.flow-timeline.idle > li {
+  min-height: 0;
+}
+
+.flow-timeline.idle > li > .flow-node-icon {
+  top: calc(50% - var(--flow-icon-size) / 2);
+}
+
+.flow-timeline.idle > li:not(:last-child)::after {
+  top: calc(50% + var(--flow-icon-size) / 2);
+  bottom: calc(-50% + var(--flow-icon-size) / 2 - var(--flow-gap));
+}
+
+.flow-timeline.idle article {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, auto) auto;
+  align-content: center;
+  padding: clamp(7px, 1.2vh, 10px) 11px;
+  box-sizing: border-box;
 }
 
 .flow-timeline.idle header strong,
 .flow-timeline.idle p {
   color: #88a9c1;
+}
+
+.flow-timeline.idle p {
+  margin: clamp(5px, .9vh, 8px) 0 clamp(6px, .9vh, 10px);
+  line-height: 1.35;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
 }
 
 .flow-node-logs {
@@ -3609,7 +4043,7 @@ onBeforeUnmount(() => {
   min-width: 0;
   overflow: hidden;
   color: #e7f7ff;
-  font-size: 12px;
+  font-size: clamp(12px, .73vw, 15px);
   font-weight: 800;
   line-height: 1.25;
   text-overflow: ellipsis;
@@ -3621,9 +4055,10 @@ onBeforeUnmount(() => {
   display: -webkit-box;
   overflow: hidden;
   color: #9ed3f5;
-  font-size: 11px;
+  font-size: clamp(11px, .63vw, 14px);
   line-height: 1.35;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
 }
 
@@ -3644,7 +4079,7 @@ onBeforeUnmount(() => {
   position: relative;
   min-width: 0;
   min-height: 0;
-  width: min(126px, 100%);
+  width: min(clamp(118px, 7.4vw, 158px), 100%);
   aspect-ratio: 1;
   justify-self: center;
   border: 0;
@@ -3668,8 +4103,8 @@ onBeforeUnmount(() => {
   top: 50%;
   display: grid;
   place-items: center;
-  gap: 4px;
-  width: 62px;
+  gap: clamp(3px, .2vw, 6px);
+  width: clamp(58px, 3.4vw, 78px);
   transform: translate(-50%, -50%);
   pointer-events: none;
   text-align: center;
@@ -3677,7 +4112,7 @@ onBeforeUnmount(() => {
 
 .device-center strong {
   color: #fff;
-  font-size: 24px;
+  font-size: clamp(19px, 1.1vw, 23px);
   line-height: 1;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
@@ -3685,7 +4120,7 @@ onBeforeUnmount(() => {
 
 .device-center span {
   color: #8fc8f2;
-  font-size: 12px;
+  font-size: clamp(12px, .73vw, 16px);
   line-height: 1;
   white-space: nowrap;
 }
@@ -3708,10 +4143,10 @@ onBeforeUnmount(() => {
   position: relative;
   min-width: 0;
   display: grid;
-  grid-template-rows: 14px 24px;
+  grid-template-rows: clamp(13px, .8vw, 18px) clamp(22px, 1.3vw, 30px);
   place-items: center;
-  gap: 4px;
-  padding: 8px 10px;
+  gap: clamp(3px, .2vw, 6px);
+  padding: clamp(7px, .45vw, 11px) clamp(9px, .55vw, 13px);
   border: 1px solid rgba(67, 200, 255, .14);
   border-radius: 7px;
   background: rgba(2, 16, 30, .32);
@@ -3720,7 +4155,7 @@ onBeforeUnmount(() => {
 
 .device-counts span {
   color: #a4d2ee;
-  font-size: 12px;
+  font-size: clamp(12px, .73vw, 16px);
   line-height: 1;
 }
 
@@ -3728,7 +4163,7 @@ onBeforeUnmount(() => {
   display: grid;
   place-items: center;
   color: #38d59c;
-  font-size: 22px;
+  font-size: clamp(22px, 1.27vw, 28px);
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
@@ -3738,15 +4173,15 @@ onBeforeUnmount(() => {
 }
 
 .device-report {
-  min-height: 48px;
+  min-height: clamp(44px, 2.6vw, 58px);
   display: flex;
   align-items: center;
   margin: 0;
-  padding: 8px 10px;
+  padding: clamp(7px, .45vw, 11px) clamp(9px, .55vw, 13px);
   border-radius: 7px;
   color: #cfe6f5;
   background: rgba(56, 213, 156, .07);
-  font-size: 12px;
+  font-size: clamp(12px, .73vw, 16px);
   line-height: 1.35;
 }
 
@@ -3786,6 +4221,10 @@ onBeforeUnmount(() => {
     opacity: 0;
     transform: scale(1.62);
   }
+}
+
+@keyframes pointOrbit {
+  to { transform: rotate(360deg); }
 }
 
 @keyframes regionBreath {
@@ -3880,7 +4319,6 @@ onBeforeUnmount(() => {
 
   .metric-value-row {
     gap: 8px;
-    padding-left: 42px;
   }
 
   .today-card strong {
@@ -3911,7 +4349,6 @@ onBeforeUnmount(() => {
   }
 
   .metric-value-row {
-    padding-left: 40px;
     gap: 6px;
   }
 
@@ -3929,10 +4366,6 @@ onBeforeUnmount(() => {
 
   .metric-label {
     font-size: 13px;
-  }
-
-  .metric-value-row {
-    padding-left: 36px;
   }
 
   .today-card strong {
@@ -3959,6 +4392,80 @@ onBeforeUnmount(() => {
 @container progressPanel (max-width: 360px) {
   .progress-clock span {
     max-width: 78px;
+  }
+}
+
+@media (max-height: 820px) {
+  .flow-idle-visual {
+    grid-template-columns: 46px minmax(0, 1fr);
+    gap: 10px;
+    padding: 10px 12px;
+  }
+
+  .flow-idle-visual .idle-orbit {
+    width: 44px;
+    height: 44px;
+  }
+
+  .flow-idle-visual .idle-copy strong {
+    font-size: 14px;
+  }
+
+  .flow-idle-visual .idle-copy span {
+    font-size: 11px;
+  }
+
+  .flow-timeline.idle {
+    gap: 8px;
+  }
+
+  .flow-timeline.idle article {
+    padding: 7px 10px;
+  }
+
+  .flow-timeline.idle header strong {
+    font-size: 13px;
+  }
+
+  .flow-timeline.idle time,
+  .flow-timeline.idle footer span,
+  .flow-timeline.idle p {
+    font-size: 11px;
+  }
+
+  .flow-timeline.idle footer b {
+    height: 20px;
+    padding: 0 7px;
+    font-size: 11px;
+  }
+}
+
+@media (max-height: 720px) {
+  .priority-summary {
+    gap: 7px;
+    margin-top: 9px;
+    padding: 10px 12px;
+  }
+
+  .alarm-idle {
+    margin-top: 9px;
+  }
+
+  .flow-timeline.idle {
+    margin-top: 9px;
+    gap: 6px;
+  }
+
+  .flow-timeline.idle article {
+    padding: 6px 9px;
+  }
+
+  .flow-timeline.idle header strong {
+    font-size: 12px;
+  }
+
+  .flow-timeline.idle p {
+    margin: 4px 0 5px;
   }
 }
 

@@ -281,6 +281,8 @@ class DamWorkflowClient:
             "person_confidence",
             "boat_present",
             "boat_confidence",
+            "possible_person",
+            "possible_boat",
         }
         compact = {key: value for key, value in sensor_data.items() if key in keep_keys}
         video_values = DamWorkflowClient._extract_values(sensor_data, VIDEO_KEYS)

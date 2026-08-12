@@ -100,13 +100,13 @@ class CameraZoneStore:
 
 
 VISUAL_ZONE_EVENT_DEFINITIONS = {
-    "PERSON_LOW": (("PERSON_INTRUSION", "person_present == 1", "人员闯入", 5),),
-    "PERSON_MEDIUM": (("PERSON_WATERFRONT", "person_present == 1", "人员亲水", 3),),
-    "PERSON_HIGH": (("PERSON_WADING", "person_present == 1", "人员涉水", 0),),
+    "PERSON_LOW": (("PERSON_INTRUSION", "person_present == 1 OR possible_person == 1", "人员闯入", 5),),
+    "PERSON_MEDIUM": (("PERSON_WATERFRONT", "person_present == 1 OR possible_person == 1", "人员亲水", 3),),
+    "PERSON_HIGH": (("PERSON_WADING", "person_present == 1 OR possible_person == 1", "人员涉水", 0),),
     "FISHING": (
-        ("BOAT_INTRUSION", "boat_present == 1", "船只闯入", 0),
-        ("BOAT_STAY", "boat_present == 1", "船只停留", 30),
-        ("BOAT_ILLEGAL_FISHING", "boat_present == 1", "船只偷捕", 120),
+        ("BOAT_INTRUSION", "boat_present == 1 OR possible_boat == 1", "船只闯入", 0),
+        ("BOAT_STAY", "boat_present == 1 OR possible_boat == 1", "船只停留", 30),
+        ("BOAT_ILLEGAL_FISHING", "boat_present == 1 OR possible_boat == 1", "船只偷捕", 120),
     ),
 }
 

@@ -68,9 +68,19 @@ SELECT `id`, 'camera_screening', 'qwen0_8b',
 - target_variables 之间互斥，只允许最主要、证据最充分的一类输出 1，其余全部输出 0。
 - 如果画面主要是洪水/大面积积水/水流上涨，不要同时输出泥石流或滑坡。
 - confidence 范围是 0 到 1。
-- 看不清或证据不足时输出 0，并在 uncertainties 说明。
+- 人员/船只规则：画面清晰、明确看到人员或船只时，detected 输出 1，confidence 给 0.65 以上。
+  如果画质差、距离远、夜间红外、目标很小或目标被遮挡，只能确认存在疑似迹象而无法确认时，
+  detected 输出 0，但请给出 0.3 ~ 0.6 的 confidence（不要直接给 0），并把不确定因素写入 uncertainties。
+  系统会根据该置信度自动标记 possible_person/possible_boat 疑似位，你无需输出这两个字段。
+- 夜间电鱼/偷捕弱特征：小船或漂浮目标在水面移动、船后尾迹/扰动水纹、靠近水面的异常强光/探照灯、
+  凌晨或夜间河面活动，即使目标小或模糊，也应作为船只/捕鱼疑似线索处理：
+  boat_present 输出 0，boat_confidence 给 0.35 ~ 0.60，并在 evidence 中说明。
+- 特别注意夜间河面小目标：如果连续帧中出现水面移动暗斑、细长漂浮目标、尾迹/扰动水纹，
+  或靠近水面的异常强光，即使看不清船体，也不允许把 boat_confidence 写成 0；
+  应按“疑似船只/疑似捕鱼”输出 boat_present=0、boat_confidence=0.35~0.60，并在 uncertainties 中说明待复核确认。
+- 自然灾害（泥石流/滑坡/洪水/地震）规则不变：看不清或证据不足时输出 0，不要用低置信度硬凑。
 - 地震不能只凭普通画面轻易判定，除非画面有明显震动破坏迹象。',
-JSON_OBJECT('type', 'camera_screening_json'), 1024, 0.10, 1, 'v1'
+JSON_OBJECT('type', 'camera_screening_json'), 512, 0.00, 1, 'v2'
 FROM `actor_library` WHERE `actor_name` = '摄像头初筛专家'
 ON DUPLICATE KEY UPDATE
     `system_prompt` = VALUES(`system_prompt`),

@@ -2,61 +2,429 @@
   <div class="event-config-page">
     <header class="page-header">
       <div>
-        <p>系统管理 / 联动系统</p>
+        <p>系统管理 / 规则管理</p>
         <h2>事件配置</h2>
       </div>
       <el-button :icon="Refresh" :loading="loading" @click="loadConfig">刷新</el-button>
     </header>
 
     <section class="filter-bar">
-      <el-segmented v-model="activeSource" :options="sourceOptions" />
-      <el-select v-model="activeCategory" placeholder="事件类型" clearable>
-        <el-option v-for="item in categoryOptions" :key="item.value" :label="item.label" :value="item.value" />
+      <el-input
+        v-model.trim="keyword"
+        :prefix-icon="Search"
+        clearable
+        placeholder="搜索事件"
+        class="event-search"
+      />
+      <el-select v-model="sourceFilter" class="event-filter-select" placeholder="事件类型">
+        <el-option v-for="item in sourceOptions" :key="item.value" :label="item.label" :value="item.value" />
+      </el-select>
+      <el-select v-model="riskFilter" class="event-filter-select" placeholder="风险等级">
+        <el-option v-for="item in riskOptions" :key="item.value" :label="item.label" :value="item.value" />
+      </el-select>
+      <el-select v-model="enabledFilter" class="event-filter-select" placeholder="启用状态">
+        <el-option v-for="item in enabledOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
     </section>
 
-    <section class="event-list" v-loading="loading">
-      <article v-for="event in filteredEvents" :key="event.id" class="event-row">
-        <div class="event-main">
-          <strong>{{ event.name }}</strong>
-          <span>{{ event.category_label || '未分类' }} · {{ event.code || `事件 ${event.id}` }}</span>
+    <section class="event-list-panel" v-loading="loading">
+      <div class="config-table" role="table" aria-label="事件配置列表">
+        <div class="config-table-head" role="row">
+          <span>事件名称</span>
+          <span>类型</span>
+          <span>触发规则</span>
+          <span>持续</span>
+          <span>恢复</span>
+          <span>风险</span>
+          <span>状态</span>
+          <span>操作</span>
         </div>
-        <div class="event-info">
-          <span>{{ sourceLabel(event) }}</span>
-          <span>{{ conditionSummary(event) }}</span>
-          <el-tag :type="riskTag(event.risk_level)" effect="dark">{{ event.risk_label || '未知风险' }}</el-tag>
+
+        <div
+          v-for="event in filteredEvents"
+          :key="event.id"
+          class="config-row"
+          :class="{ editing: editingEventId === event.id }"
+          role="row"
+        >
+          <div class="event-name-cell">
+            <strong>{{ event.name }}</strong>
+          </div>
+          <div><span class="type-tag">{{ compactSourceLabel(event) }}</span></div>
+
+          <div class="rule-cell">
+            <template v-if="editingEventId === event.id">
+              <div v-if="isVisualEvent(event)" class="visual-inline-editor">
+                <el-select v-model="ruleForm.zone" class="compact-select" placeholder="区域">
+                  <el-option v-for="item in visualZoneOptions" :key="item" :label="item" :value="item" />
+                </el-select>
+                <el-select v-model="ruleForm.target" class="compact-select target" placeholder="目标">
+                  <el-option v-for="item in visualTargetOptions" :key="item" :label="item" :value="item" />
+                </el-select>
+                <el-button link type="primary" :icon="View" @click="goZoneConfig">查看 / 编辑区域</el-button>
+              </div>
+              <div v-else class="condition-editor">
+                <strong>{{ parseCondition(event.conditions?.[0]).metricLabel }}</strong>
+                <b>{{ parseCondition(event.conditions?.[0]).operatorLabel }}</b>
+                <el-input
+                  v-if="parseCondition(event.conditions?.[0]).editableThreshold"
+                  v-model.number="ruleForm.threshold"
+                  type="number"
+                >
+                  <template #append>{{ parseCondition(event.conditions?.[0]).unit || '数值' }}</template>
+                </el-input>
+                <strong v-else>{{ parseCondition(event.conditions?.[0]).valueText }}</strong>
+              </div>
+            </template>
+            <span v-else>{{ listRuleSummary(event) }}</span>
+          </div>
+
+          <div class="duration-cell">
+            <el-input
+              v-if="editingEventId === event.id"
+              v-model.number="ruleForm.duration"
+              type="number"
+              min="0"
+              max="3600"
+            >
+              <template #append>秒</template>
+            </el-input>
+            <span v-else>{{ durationText(event) }}</span>
+          </div>
+
+          <div class="duration-cell">
+            <el-input
+              v-if="editingEventId === event.id"
+              v-model.number="ruleForm.recovery_duration"
+              type="number"
+              min="0"
+              max="3600"
+            >
+              <template #append>秒</template>
+            </el-input>
+            <span v-else>{{ recoveryText(event) }}</span>
+          </div>
+
+          <div><i :class="riskClass(event.risk_level, event.risk_label)">{{ riskLabel(event.risk_level, event.risk_label) }}</i></div>
+          <div>
+            <el-switch
+              size="small"
+              :model-value="event.enabled"
+              :loading="savingEventId === event.id"
+              @change="toggleListEvent(event, $event)"
+            />
+          </div>
+          <div class="row-actions">
+            <template v-if="editingEventId === event.id">
+              <el-button plain size="small" @click="cancelInlineRuleEdit">取消</el-button>
+              <el-button type="primary" size="small" :loading="savingRule" @click="saveInlineRule(event)">保存</el-button>
+            </template>
+            <template v-else>
+              <el-button link type="primary" @click="startInlineRuleEdit(event)">编辑规则</el-button>
+              <el-button link type="primary" @click="openFlowWorkspace(event)">查看联动</el-button>
+            </template>
+          </div>
         </div>
-        <div class="event-actions">
-          <label>
-            <span>触发持续</span>
-            <el-input-number v-model="event.trigger_duration" :min="0" :max="3600" controls-position="right" />
-            <em>秒</em>
-          </label>
-          <label>
-            <span>恢复确认</span>
-            <el-input-number v-model="event.recovery_duration" :min="0" :max="3600" controls-position="right" />
-            <em>秒</em>
-          </label>
-          <el-switch v-model="event.enabled" active-text="启用" inactive-text="停用" />
-          <el-button type="primary" plain :loading="savingId === event.id" @click="saveEvent(event)">保存</el-button>
-        </div>
-      </article>
-      <el-empty v-if="!filteredEvents.length && !loading" description="暂无事件配置" />
+
+        <div v-if="!filteredEvents.length" class="empty-list">暂无匹配事件</div>
+      </div>
     </section>
+
+    <el-dialog
+      v-model="flowDialogVisible"
+      class="flow-workspace-dialog"
+      width="min(1400px, 90vw)"
+      top="6vh"
+      :show-close="false"
+      destroy-on-close
+      @closed="closeFlowWorkspace"
+    >
+      <template #header>
+        <div class="flow-dialog-header">
+          <div>
+            <h3>{{ currentEvent?.name }} · {{ flowEditMode ? '编辑联动流程' : '联动流程' }}</h3>
+          </div>
+          <div class="flow-dialog-actions" v-if="!flowEditMode">
+            <el-button plain @click="fitFlowView">适应视图</el-button>
+            <el-button type="primary" plain :icon="EditPen" @click="enterFlowEdit">编辑流程</el-button>
+            <el-button plain @click="flowDialogVisible = false">关闭</el-button>
+          </div>
+          <div class="flow-dialog-actions" v-else>
+            <el-button :icon="Plus" type="primary" plain @click="addNodeDialogVisible = true">添加动作</el-button>
+            <el-button :icon="RefreshRight" plain @click="autoLayoutDraft">自动布局</el-button>
+            <el-button plain @click="cancelFlowEdit">取消</el-button>
+            <el-button type="primary" :loading="savingFlow" @click="saveFlow">保存流程</el-button>
+          </div>
+        </div>
+      </template>
+
+      <div class="flow-workspace-body" :class="{ 'with-inspector': editingNode?.action }">
+        <div
+          ref="canvasRef"
+          class="flow-canvas"
+          :class="{ editing: flowEditMode }"
+          @pointermove="handleCanvasPointerMove"
+          @pointerup="finishDrag"
+          @pointerleave="finishDrag"
+          @click="clearFlowSelection"
+        >
+          <div class="flow-stage" :style="flowStageStyle">
+            <svg
+              class="flow-edges"
+              :viewBox="`0 0 ${FLOW_STAGE_WIDTH} ${flowStageHeight}`"
+              preserveAspectRatio="none"
+              aria-hidden="true"
+            >
+              <defs>
+                <marker id="event-flow-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+                  <path d="M 0 0 L 8 4 L 0 8 z" />
+                </marker>
+              </defs>
+              <path
+                v-for="edge in flowEdgesForView"
+                :key="edge.id"
+                :d="edgePathForRender(edge)"
+                class="flow-edge"
+                :class="{ active: edge.active, selected: flowEditMode && selectedEdgeId === edge.id }"
+                @click.stop="selectEdge(edge.id)"
+              />
+            </svg>
+
+            <article
+              v-for="node in flowNodesForView"
+              :key="node.id"
+              class="canvas-node"
+              :class="[node.kind, node.role, { selected: selectedNodeId === node.id, disabled: node.disabled, editable: flowEditMode }]"
+              :style="nodeStyle(node)"
+              @click.stop="selectNode(node)"
+              @dblclick.stop="openNodeConfig(node)"
+              @pointerdown.stop="startNodeDrag(node, $event)"
+            >
+              <button
+                v-if="flowEditMode"
+                type="button"
+                class="node-handle target"
+                :class="{ ready: connectingFromId && connectingFromId !== node.id }"
+                @pointerdown.stop
+                @click.stop="completeConnection(node)"
+              ></button>
+              <el-icon><component :is="node.icon" /></el-icon>
+              <div class="node-copy">
+                <strong>{{ node.title }}</strong>
+                <span>{{ node.subtitle }}</span>
+                <em v-if="node.detail">{{ node.detail }}</em>
+              </div>
+              <button
+                v-if="node.configurable"
+                type="button"
+                class="node-config"
+                title="配置"
+                @pointerdown.stop
+                @click.stop="openNodeConfig(node)"
+              >
+                <el-icon><Setting /></el-icon>
+              </button>
+              <button
+                v-if="flowEditMode"
+                type="button"
+                class="node-handle source"
+                :class="{ active: connectingFromId === node.id }"
+                @pointerdown.stop
+                @click.stop="startConnection(node)"
+              ></button>
+            </article>
+          </div>
+        </div>
+
+        <aside v-if="editingNode?.action" class="action-inspector">
+          <header>
+            <span>{{ flowEditMode ? '配置动作' : '动作详情' }}</span>
+            <strong>{{ actionBusinessLabel(editingNode.action) }}</strong>
+            <button type="button" @click="editingNode = null">×</button>
+          </header>
+
+          <div v-if="!flowEditMode" class="action-readonly">
+            <span>资源</span>
+            <strong>{{ actionBusinessSummary(editingNode.action) }}</strong>
+            <span v-if="actionBusinessDetail(editingNode.action)">执行</span>
+            <strong v-if="actionBusinessDetail(editingNode.action)">{{ actionBusinessDetail(editingNode.action) }}</strong>
+          </div>
+
+          <el-form v-else class="inspector-form" label-position="top">
+            <template v-if="editingNode.action.action_type === 'broadcast'">
+              <el-form-item label="广播设备">
+                <el-select v-model="actionForm.broadcast_device_id" placeholder="请选择广播设备" clearable>
+                  <el-option v-for="item in enabledBroadcastDevices" :key="item.id" :label="item.name" :value="item.id" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="播报模板">
+                <el-select v-model="actionForm.template_id" placeholder="请选择播报模板" clearable>
+                  <el-option v-for="item in enabledBroadcastTemplates" :key="item.id" :label="item.name" :value="item.id" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="执行方式">
+                <el-radio-group v-model="actionForm.repeat_mode">
+                  <el-radio-button label="once">单次</el-radio-button>
+                  <el-radio-button label="repeat">周期</el-radio-button>
+                </el-radio-group>
+              </el-form-item>
+              <template v-if="actionForm.repeat_mode === 'repeat'">
+                <el-form-item label="间隔">
+                  <el-input v-model.number="actionForm.repeat_interval_seconds" type="number" min="1" max="86400">
+                    <template #append>秒</template>
+                  </el-input>
+                </el-form-item>
+                <el-form-item label="最多">
+                  <el-input v-model.number="actionForm.max_executions" type="number" min="2" max="100">
+                    <template #append>次</template>
+                  </el-input>
+                </el-form-item>
+              </template>
+            </template>
+
+            <template v-else-if="editingNode.action.action_type === 'drone_dispatch'">
+              <el-form-item label="无人机">
+                <el-select v-model="actionForm.drone_id" filterable allow-create default-first-option placeholder="选择或输入无人机">
+                  <el-option v-for="item in droneOptions" :key="item" :label="item" :value="item" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="航线">
+                <el-select v-model="actionForm.route_id" filterable allow-create default-first-option placeholder="选择或输入航线">
+                  <el-option v-for="item in routeOptions" :key="item" :label="item" :value="item" />
+                </el-select>
+              </el-form-item>
+            </template>
+
+            <template v-else-if="editingNode.action.action_type === 'staff_task'">
+              <el-form-item label="处置工作组">
+                <el-select v-model="actionForm.staff_group" filterable allow-create default-first-option placeholder="选择或输入处置组">
+                  <el-option v-for="item in staffGroupOptions" :key="item" :label="item" :value="item" />
+                </el-select>
+              </el-form-item>
+            </template>
+
+            <div class="inspector-actions">
+              <el-button
+                v-if="canDeleteInspectorNode"
+                plain
+                type="danger"
+                @click="deleteInspectorNode"
+              >
+                删除动作
+              </el-button>
+              <el-button plain @click="editingNode = null">取消</el-button>
+              <el-button type="primary" @click="saveNodeConfig">应用</el-button>
+            </div>
+          </el-form>
+        </aside>
+      </div>
+    </el-dialog>
+
+    <el-dialog v-model="addNodeDialogVisible" title="添加联动动作" width="460px" destroy-on-close>
+      <div class="add-action-grid">
+        <button v-for="item in addActionOptions" :key="item.type" type="button" @click="addActionNode(item.type)">
+          <el-icon><component :is="item.icon" /></el-icon>
+          <span>{{ item.label }}</span>
+        </button>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
-import { getIntegrationConfig, updateConditionConfig, updateEventConfig } from '@/api/integration'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  Bell,
+  Camera,
+  Connection,
+  EditPen,
+  Finished,
+  Plus,
+  Promotion,
+  Refresh,
+  RefreshRight,
+  Search,
+  Setting,
+  User,
+  VideoCamera,
+  View,
+  Warning,
+} from '@element-plus/icons-vue'
+import {
+  createActionConfig,
+  deleteActionConfig,
+  getIntegrationConfig,
+  updateActionConfig,
+  updateConditionConfig,
+  updateEventConfig,
+} from '@/api/integration'
+
+const FLOW_STAGE_WIDTH = 1180
+const FLOW_STAGE_PADDING = 54
+const LAST_EVENT_KEY = 'dam.eventConfig.lastSelectedEventId'
+const FLOW_LAYOUT_PREFIX = 'dam.eventConfig.flowLayout.'
+
+const route = useRoute()
+const router = useRouter()
+const canvasRef = ref(null)
 
 const loading = ref(false)
-const savingId = ref('')
-const activeSource = ref('all')
-const activeCategory = ref('')
-const events = ref([])
+const savingRule = ref(false)
+const savingFlow = ref(false)
+const savingEventId = ref(null)
+const keyword = ref('')
+const sourceFilter = ref('all')
+const riskFilter = ref('all')
+const enabledFilter = ref('all')
+const sortFilter = ref('risk')
+const selectedEventId = ref(null)
+const editingEventId = ref(null)
+const flowDialogVisible = ref(false)
+const addNodeDialogVisible = ref(false)
+const flowEditMode = ref(false)
+const selectedNodeId = ref('')
+const selectedEdgeId = ref('')
+const connectingFromId = ref('')
+const editingNode = ref(null)
+const dragging = ref(null)
+const deletedActionIds = ref([])
+const flowLayoutVersion = ref(0)
+const canvasSize = reactive({ width: 0, height: 0 })
+const fitTransform = reactive({ scale: 1, x: 0, y: 0 })
+let canvasResizeObserver = null
+
+const config = reactive({
+  events: [],
+  action_configs: [],
+  broadcast_devices: [],
+  broadcast_templates: [],
+})
+
+const ruleForm = reactive({
+  threshold: '',
+  duration: 0,
+  recovery_duration: 0,
+  zone: '',
+  target: '',
+})
+
+const actionForm = reactive({
+  broadcast_device_id: null,
+  template_id: '',
+  repeat_mode: 'once',
+  repeat_interval_seconds: 60,
+  max_executions: 1,
+  drone_id: '',
+  route_id: '',
+  staff_group: '',
+})
+
+const flowDraft = reactive({
+  nodes: [],
+  edges: [],
+})
 
 const sourceOptions = [
   { label: '全部', value: 'all' },
@@ -64,43 +432,184 @@ const sourceOptions = [
   { label: '传感器事件', value: 'sensor' },
 ]
 
-const categoryOptions = computed(() => {
-  const map = new Map()
-  events.value.forEach((event) => {
-    if (event.category) map.set(event.category, event.category_label || event.category)
+const riskOptions = [
+  { label: '全部', value: 'all' },
+  { label: '低风险', value: 'low' },
+  { label: '中风险', value: 'medium' },
+  { label: '高风险', value: 'high' },
+]
+
+const enabledOptions = [
+  { label: '全部', value: 'all' },
+  { label: '已启用', value: 'enabled' },
+  { label: '已停用', value: 'disabled' },
+]
+
+const metricMap = {
+  wind_speed_ms: { label: '风速', unit: 'm/s' },
+  wind_speed: { label: '风速', unit: 'm/s' },
+  rainfall: { label: '降雨量', unit: 'mm' },
+  rain: { label: '降雨量', unit: 'mm' },
+  temperature: { label: '温度', unit: '℃' },
+  humidity: { label: '湿度', unit: '%' },
+  vibration: { label: '振动', unit: '' },
+  person_present: { label: '人员', unit: '' },
+  boat_present: { label: '船只', unit: '' },
+}
+
+const operatorMap = {
+  '>=': '≥',
+  '<=': '≤',
+  '>': '>',
+  '<': '<',
+  '==': '=',
+}
+
+const actionIconMap = {
+  camera_snapshot: Camera,
+  broadcast: Bell,
+  drone_dispatch: Promotion,
+  staff_task: User,
+  report: Finished,
+}
+
+const actionLabelMap = {
+  camera_snapshot: '摄像头抓拍',
+  broadcast: '广播驱离',
+  drone_dispatch: '无人机巡查',
+  staff_task: '人工处置',
+}
+
+const addActionOptions = [
+  { label: '摄像头抓拍', type: 'camera_snapshot', icon: Camera },
+  { label: '广播任务', type: 'broadcast', icon: Bell },
+  { label: '无人机任务', type: 'drone_dispatch', icon: Promotion },
+  { label: '人工处置', type: 'staff_task', icon: User },
+]
+
+const visualZoneOptions = ['禁捕区 A', '禁入区 A', '检测区域']
+const visualTargetOptions = ['船只', '人员', '目标']
+
+const events = computed(() => config.events)
+const filteredEvents = computed(() => {
+  const text = keyword.value.toLowerCase()
+  const list = events.value.filter((event) => {
+    if (sourceFilter.value !== 'all' && event.source_type !== sourceFilter.value) return false
+    if (riskFilter.value !== 'all' && riskKey(event) !== riskFilter.value) return false
+    if (enabledFilter.value === 'enabled' && !event.enabled) return false
+    if (enabledFilter.value === 'disabled' && event.enabled) return false
+    if (!text) return true
+    return `${event.name || ''} ${event.category_label || ''}`.toLowerCase().includes(text)
   })
-  return Array.from(map, ([value, label]) => ({ value, label }))
+  return list.sort((first, second) => {
+    if (sortFilter.value === 'name') return String(first.name || '').localeCompare(String(second.name || ''), 'zh-CN')
+    if (sortFilter.value === 'enabled') return Number(second.enabled) - Number(first.enabled) || riskWeight(second) - riskWeight(first)
+    return riskWeight(second) - riskWeight(first) || String(first.name || '').localeCompare(String(second.name || ''), 'zh-CN')
+  })
+})
+const currentEvent = computed(() => events.value.find((event) => event.id === selectedEventId.value) || null)
+const currentActions = computed(() => {
+  if (!currentEvent.value) return []
+  return config.action_configs
+    .filter((action) => action.event_id === currentEvent.value.id)
+    .slice()
+    .sort((a, b) => (a.step_order || 0) - (b.step_order || 0) || (a.id || 0) - (b.id || 0))
+})
+const primaryCondition = computed(() => currentEvent.value?.conditions?.[0] || null)
+const triggerDuration = computed(() => Number(primaryCondition.value?.duration ?? 0))
+const recoveryDuration = computed(() => Number(currentEvent.value?.recovery_duration ?? 0))
+const parsedCondition = computed(() => parseCondition(primaryCondition.value))
+const defaultSourceName = computed(() => isVisualEvent(currentEvent.value) ? '摄像头视觉识别' : '传感器数据源')
+const enabledBroadcastDevices = computed(() => config.broadcast_devices.filter((item) => item.enabled !== false))
+const enabledBroadcastTemplates = computed(() => config.broadcast_templates.filter((item) => item.enabled !== false))
+const droneOptions = computed(() => uniqueActionValues('drone_id'))
+const routeOptions = computed(() => uniqueActionValues('route_id'))
+const staffGroupOptions = computed(() => {
+  const values = config.action_configs
+    .filter((item) => item.action_type === 'staff_task')
+    .map((item) => item.route_id)
+    .filter(Boolean)
+  return Array.from(new Set(['安全巡查组', '现场处置组', '应急值守组', ...values]))
+})
+const canDeleteInspectorNode = computed(() => {
+  if (!flowEditMode.value || !editingNode.value) return false
+  const node = flowDraft.nodes.find((item) => item.id === editingNode.value.id)
+  return Boolean(node && !node.locked && node.kind === 'action')
 })
 
-const filteredEvents = computed(() => events.value.filter((event) => {
-  if (activeSource.value !== 'all' && event.source_type !== activeSource.value) return false
-  if (activeCategory.value && event.category !== activeCategory.value) return false
-  return true
+const visualTargetLabel = computed(() => {
+  const expr = primaryCondition.value?.expression || currentEvent.value?.code || currentEvent.value?.name || ''
+  const text = expr.toLowerCase()
+  if (text.includes('boat') || text.includes('船')) return '船只'
+  if (text.includes('person') || text.includes('人员')) return '人员'
+  return '目标'
+})
+const visualZoneLabel = computed(() => {
+  if (`${currentEvent.value?.code || ''}`.toLowerCase().includes('fishing')) return '禁捕区 A'
+  return '检测区域'
+})
+const visualTriggerText = computed(() => `${visualTargetLabel.value}持续出现 ≥ ${triggerDuration.value} 秒`)
+const visualRuleExpression = computed(() => {
+  const zone = visualZoneLabel.value && visualZoneLabel.value !== '检测区域' ? `${visualZoneLabel.value} · ` : ''
+  return `${zone}${visualTargetLabel.value}持续出现 ≥ ${triggerDuration.value} 秒`
+})
+const ruleDirty = computed(() => {
+  if (!currentEvent.value) return false
+  const durationDirty = Number(ruleForm.duration) !== triggerDuration.value
+  const recoveryDirty = Number(ruleForm.recovery_duration) !== recoveryDuration.value
+  const thresholdDirty = parsedCondition.value.editableThreshold
+    && Number(ruleForm.threshold) !== Number(parsedCondition.value.value)
+  return Boolean(durationDirty || recoveryDirty || thresholdDirty)
+})
+const readableRuleSummary = computed(() => {
+  if (!currentEvent.value) return ''
+  if (isVisualEvent(currentEvent.value)) return `${visualTriggerText.value}时触发，恢复 ${recoveryDuration.value} 秒后自动闭环。`
+  const condition = parsedCondition.value
+  return `${condition.metricLabel} ${condition.operatorLabel} ${condition.valueText} 时触发，恢复 ${recoveryDuration.value} 秒后自动闭环。`
+})
+const flowDisplayModel = computed(() => {
+  flowLayoutVersion.value
+  return applySavedFlowLayout(buildAutoFlowModel(currentActions.value))
+})
+const flowNodesForView = computed(() => flowEditMode.value ? flowDraft.nodes : flowDisplayModel.value.nodes)
+const flowEdgesForView = computed(() => flowEditMode.value ? flowDraft.edges : flowDisplayModel.value.edges)
+const flowBounds = computed(() => calculateFlowBounds(flowNodesForView.value))
+const flowStageHeight = computed(() => Math.max(620, Math.ceil(flowBounds.value.rawMaxY + FLOW_STAGE_PADDING)))
+const flowStageStyle = computed(() => ({
+  width: `${FLOW_STAGE_WIDTH}px`,
+  height: `${flowStageHeight.value}px`,
+  transform: `translate(${fitTransform.x}px, ${fitTransform.y}px) scale(${fitTransform.scale})`,
 }))
+watch(filteredEvents, (list) => {
+  if (!list.length || flowEditMode.value || ruleDirty.value) return
+  if (!list.some((event) => event.id === selectedEventId.value)) selectEvent(list[0].id)
+})
 
-function normalizeEvent(row) {
-  const conditions = Array.isArray(row.conditions) ? row.conditions : []
-  const primary = conditions[0] || {}
-  return {
-    ...row,
-    conditions,
-    primary_condition_id: primary.id || null,
-    trigger_duration: Number(primary.duration ?? 0),
-    source_type: primary.source_type || inferSourceType(row),
-  }
-}
+watch(
+  [flowNodesForView, flowEdgesForView, () => canvasSize.width, () => canvasSize.height, flowEditMode],
+  () => nextTick(fitFlowView),
+  { deep: true },
+)
 
-function inferSourceType(row) {
-  const text = `${row.category || ''} ${row.code || ''}`.toLowerCase()
-  if (text.includes('person') || text.includes('boat') || text.includes('camera')) return 'camera'
-  return 'sensor'
-}
+watch(currentEvent, () => {
+  resetRuleForm()
+  nextTick(() => {
+    setupCanvasObserver()
+    updateCanvasSize()
+    fitFlowView()
+  })
+})
 
 async function loadConfig() {
   loading.value = true
   try {
     const res = await getIntegrationConfig()
-    events.value = (res.data?.events || []).map(normalizeEvent)
+    const data = res.data || {}
+    config.events = (data.events || []).map(normalizeEvent)
+    config.action_configs = data.action_configs || []
+    config.broadcast_devices = data.broadcast_devices || []
+    config.broadcast_templates = data.broadcast_templates || []
+    ensureSelectedEvent()
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '事件配置加载失败')
   } finally {
@@ -108,76 +617,1536 @@ async function loadConfig() {
   }
 }
 
-async function saveEvent(event) {
-  savingId.value = event.id
-  try {
-    await updateEventConfig(event.id, {
-      recovery_duration: event.recovery_duration,
-      enabled: event.enabled,
-    })
-    if (event.primary_condition_id) {
-      await updateConditionConfig(event.primary_condition_id, {
-        duration: event.trigger_duration,
-        enabled: event.enabled,
-      })
+function normalizeEvent(row) {
+  const conditions = Array.isArray(row.conditions) ? row.conditions : []
+  const primary = conditions[0] || {}
+  return {
+    ...row,
+    conditions,
+    enabled: row.enabled !== false,
+    source_type: primary.source_type || inferSourceType(row),
+  }
+}
+
+function inferSourceType(row) {
+  const text = `${row.category || ''} ${row.category_label || ''} ${row.code || ''} ${row.name || ''}`.toLowerCase()
+  if (text.includes('person') || text.includes('boat') || text.includes('camera') || text.includes('视觉')) return 'camera'
+  return 'sensor'
+}
+
+function ensureSelectedEvent() {
+  const routeEventId = Number(route.query.eventId)
+  const storedEventId = Number(localStorage.getItem(LAST_EVENT_KEY))
+  const preferredId = [routeEventId, storedEventId].find((id) => events.value.some((event) => event.id === id))
+  const enabledEvent = events.value.find((event) => event.enabled)
+  const firstEvent = events.value[0]
+  const nextId = preferredId || enabledEvent?.id || firstEvent?.id || null
+  if (nextId) selectEvent(nextId, { replaceQuery: !route.query.eventId })
+}
+
+function selectEvent(id, options = {}) {
+  selectedEventId.value = id
+  selectedNodeId.value = ''
+  selectedEdgeId.value = ''
+  resetRuleForm()
+  localStorage.setItem(LAST_EVENT_KEY, String(id))
+  if (options.replaceQuery === false) return
+  router.replace({ query: { ...route.query, eventId: id } }).catch(() => null)
+}
+
+async function openFlowWorkspace(event) {
+  if (editingEventId.value && ruleDirty.value) {
+    try {
+      await ElMessageBox.confirm('当前规则修改尚未保存，是否放弃并查看联动？', '查看联动', { type: 'warning' })
+    } catch {
+      return
     }
-    ElMessage.success('事件配置已保存')
+    editingEventId.value = null
+  }
+  selectedEventId.value = event.id
+  resetRuleForm()
+  flowDialogVisible.value = true
+  flowEditMode.value = false
+  selectedNodeId.value = ''
+  selectedEdgeId.value = ''
+  editingNode.value = null
+  await nextTick()
+  updateCanvasSize()
+  setupCanvasObserver()
+  fitFlowView()
+}
+
+function closeFlowWorkspace() {
+  if (flowEditMode.value) cancelFlowEdit()
+  editingNode.value = null
+  selectedNodeId.value = ''
+  selectedEdgeId.value = ''
+  connectingFromId.value = ''
+  teardownCanvasObserver()
+}
+
+async function toggleListEvent(event, nextEnabled) {
+  if (flowEditMode.value && event.id === selectedEventId.value) {
+    try {
+      await ElMessageBox.confirm('当前流程修改尚未保存，是否继续修改事件状态？', '事件状态', { type: 'warning' })
+    } catch {
+      return
+    }
+  }
+  if (!nextEnabled) {
+    try {
+      await ElMessageBox.confirm('停用后，该事件规则将不再参与触发判断。', '停用事件', { type: 'warning' })
+    } catch {
+      return
+    }
+  }
+  savingEventId.value = event.id
+  try {
+    await updateEventConfig(event.id, { enabled: nextEnabled })
+    for (const condition of event.conditions || []) {
+      await updateConditionConfig(condition.id, { enabled: nextEnabled })
+    }
+    ElMessage.success(nextEnabled ? '事件已启用' : '事件已停用')
     await loadConfig()
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || '保存失败')
+    ElMessage.error(error.response?.data?.detail || '状态更新失败')
   } finally {
-    savingId.value = ''
+    savingEventId.value = null
+  }
+}
+
+function parseCondition(condition) {
+  const fallback = {
+    metricLabel: condition?.name || '系统规则',
+    operatorLabel: '',
+    key: '',
+    operator: '',
+    value: '',
+    unit: '',
+    valueText: '系统预置条件',
+    editableThreshold: false,
+  }
+  const expression = condition?.expression || ''
+  const match = expression.match(/([a-zA-Z_][\w.]*)\s*(>=|<=|==|>|<)\s*([0-9.]+)/)
+  if (!match) return fallback
+  const [, key, operator, value] = match
+  const metric = metricMap[key] || { label: condition?.name || key, unit: '' }
+  const operatorLabel = operatorMap[operator] || operator
+  const isBooleanPresence = ['person_present', 'boat_present'].includes(key) && operator === '==' && Number(value) === 1
+  return {
+    metricLabel: metric.label,
+    operatorLabel,
+    key,
+    operator,
+    value,
+    unit: metric.unit,
+    valueText: isBooleanPresence ? '出现' : `${value}${metric.unit ? ` ${metric.unit}` : ''}`,
+    editableThreshold: !isBooleanPresence,
   }
 }
 
 function sourceLabel(event) {
-  if (event.source_type === 'camera') return '视觉'
-  if (event.source_type === 'sensor') return '传感器'
-  return event.source_type || '未绑定数据源'
+  if (event?.source_type === 'camera') return '视觉事件'
+  if (event?.source_type === 'sensor') return '传感器事件'
+  return event?.source_type || '未绑定数据源'
 }
 
-function conditionSummary(event) {
-  const condition = event.conditions?.[0]
-  if (!condition) return '未绑定触发条件'
-  return condition.expression || condition.name || '已绑定触发条件'
+function compactSourceLabel(event) {
+  if (event?.source_type === 'camera') return '视觉'
+  if (event?.source_type === 'sensor') return '传感器'
+  return event?.source_type || '未知'
 }
 
-function riskTag(level) {
-  return ({ 1: 'success', 2: 'warning', 3: 'danger', LOW: 'success', MEDIUM: 'warning', HIGH: 'danger' })[level] || 'info'
+function riskLabel(level, fallback = '') {
+  return ({ 1: '低风险', 2: '中风险', 3: '高风险', LOW: '低风险', MEDIUM: '中风险', HIGH: '高风险' })[level] || fallback || '未知风险'
 }
 
-onMounted(loadConfig)
+function riskClass(level, fallback = '') {
+  const label = riskLabel(level, fallback)
+  if (label.includes('高')) return 'risk-badge high'
+  if (label.includes('中')) return 'risk-badge medium'
+  if (label.includes('低')) return 'risk-badge low'
+  return 'risk-badge'
+}
+
+function riskKey(event) {
+  const label = riskLabel(event?.risk_level, event?.risk_label)
+  if (label.includes('高')) return 'high'
+  if (label.includes('中')) return 'medium'
+  if (label.includes('低')) return 'low'
+  return 'unknown'
+}
+
+function riskWeight(event) {
+  const label = riskLabel(event?.risk_level, event?.risk_label)
+  if (label.includes('高')) return 3
+  if (label.includes('中')) return 2
+  if (label.includes('低')) return 1
+  return 0
+}
+
+function listRuleSummary(event) {
+  const condition = event?.conditions?.[0] || null
+  if (isVisualEvent(event)) {
+    const text = `${condition?.expression || event?.code || event?.name || ''}`.toLowerCase()
+    const target = text.includes('boat') || text.includes('船') ? '船只' : text.includes('person') || text.includes('人员') ? '人员' : '目标'
+    const zone = `${event?.code || ''}`.toLowerCase().includes('fishing') ? '禁捕区 · ' : ''
+    return `${zone}${target}持续出现 ≥ ${Number(condition?.duration ?? 0)} 秒`
+  }
+  const parsed = parseCondition(condition)
+  return parsed.operatorLabel ? `${parsed.metricLabel} ${parsed.operatorLabel} ${parsed.valueText}` : parsed.valueText
+}
+
+function durationText(event) {
+  return `${Number(event?.conditions?.[0]?.duration ?? 0)} 秒`
+}
+
+function recoveryText(event) {
+  return `${Number(event?.recovery_duration ?? 0)} 秒`
+}
+
+function isVisualEvent(event) {
+  return event?.source_type === 'camera'
+}
+
+function resetRuleForm() {
+  ruleForm.threshold = ''
+  ruleForm.duration = triggerDuration.value
+  ruleForm.recovery_duration = recoveryDuration.value
+  ruleForm.zone = visualZoneLabel.value
+  ruleForm.target = visualTargetLabel.value
+  if (parsedCondition.value.editableThreshold) {
+    ruleForm.threshold = parsedCondition.value.value
+  }
+}
+
+async function startInlineRuleEdit(event) {
+  if (editingEventId.value && editingEventId.value !== event.id && ruleDirty.value) {
+    try {
+      await ElMessageBox.confirm('当前规则修改尚未保存，是否放弃？', '切换编辑行', { type: 'warning' })
+    } catch {
+      return
+    }
+  }
+  selectedEventId.value = event.id
+  editingEventId.value = event.id
+  resetRuleForm()
+}
+
+function cancelInlineRuleEdit() {
+  editingEventId.value = null
+  resetRuleForm()
+}
+
+async function saveInlineRule(event) {
+  selectedEventId.value = event.id
+  await saveRule()
+  editingEventId.value = null
+}
+
+async function saveRule() {
+  if (!currentEvent.value) return
+  savingRule.value = true
+  try {
+    const duration = clampNumber(ruleForm.duration, 0, 3600)
+    const recoveryDurationValue = clampNumber(ruleForm.recovery_duration, 0, 3600)
+    await updateEventConfig(currentEvent.value.id, { recovery_duration: recoveryDurationValue })
+    if (primaryCondition.value?.id) {
+      const payload = { duration }
+      if (parsedCondition.value.editableThreshold) {
+        payload.expression = expressionWithThreshold(primaryCondition.value.expression, ruleForm.threshold)
+      }
+      await updateConditionConfig(primaryCondition.value.id, payload)
+    }
+    ElMessage.success('事件规则已保存')
+    await loadConfig()
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '保存失败')
+  } finally {
+    savingRule.value = false
+  }
+}
+
+function expressionWithThreshold(expression, threshold) {
+  const nextValue = Number(threshold)
+  if (!Number.isFinite(nextValue)) return expression
+  const formatted = Number.isInteger(nextValue) ? String(nextValue) : String(Number(nextValue.toFixed(3)))
+  return String(expression || '').replace(/([a-zA-Z_][\w.]*\s*(?:>=|<=|==|>|<)\s*)([0-9.]+)/, `$1${formatted}`)
+}
+
+function goZoneConfig() {
+  router.push({ path: '/system/rules/zones', query: currentEvent.value ? { fromEventId: currentEvent.value.id } : {} })
+}
+
+function buildAutoFlowModel(actions) {
+  if (!currentEvent.value) return { nodes: [], edges: [] }
+  const actionCount = actions.length
+  const sourceW = 200
+  const judgeW = 220
+  const routeW = 196
+  const eventW = 238
+  const closeW = 190
+  const archiveW = 176
+  const nodeH = 96
+  const eventH = 110
+  const topY = 64
+  const x = {
+    source: 70,
+    judge: 316,
+    route: 574,
+    event: 552,
+    close: 552,
+    archive: 792,
+  }
+  const sourceIcon = isVisualEvent(currentEvent.value) ? VideoCamera : Connection
+  const nodes = [
+    baseNode('source', 'source', x.source, topY, sourceW, nodeH, sourceIcon, primaryCondition.value?.source_name || defaultSourceName.value, sourceLabel(currentEvent.value), '', true, 'source-node'),
+    baseNode('judge', 'system', x.judge, topY, judgeW, nodeH, Warning, isVisualEvent(currentEvent.value) ? '规则判断' : '阈值判断', isVisualEvent(currentEvent.value) ? visualRuleExpression.value : `${parsedCondition.value.metricLabel} ${parsedCondition.value.operatorLabel} ${parsedCondition.value.valueText}`, '', true, 'rule-node'),
+    baseNode('route', 'system', x.route, topY, routeW, nodeH, Setting, '风险路由', riskLabel(currentEvent.value.risk_level, currentEvent.value.risk_label), '', true, 'route-node'),
+    baseNode('event', 'system', x.event, 228, eventW, eventH, Bell, '安全事件创建', '进入处置流程', readableRuleSummary.value, true, 'event-node'),
+  ]
+  const edges = [
+    edge('source', 'judge'),
+    edge('judge', 'route'),
+    edge('route', 'event'),
+  ]
+
+  if (!actions.length) {
+    nodes.push(
+      baseNode('auto-close', 'system', x.close, 404, closeW, 92, Finished, '自动闭环', `恢复 ${recoveryDuration.value} 秒`, '', true, 'close-node'),
+      baseNode('archive', 'system close', x.archive, 404, archiveW, 92, Finished, '归档', '证据留痕', '', true, 'archive-node'),
+    )
+    edges.push(edge('event', 'auto-close'), edge('auto-close', 'archive'))
+    return { nodes, edges }
+  }
+
+  const actionW = 206
+  const actionH = 100
+  const columns = Math.min(3, Math.max(1, actionCount))
+  const rows = Math.ceil(actionCount / columns)
+  const columnGap = 54
+  const rowGap = 34
+  const totalActionWidth = columns * actionW + (columns - 1) * columnGap
+  const actionStartX = Math.round((FLOW_STAGE_WIDTH - totalActionWidth) / 2)
+  const actionStartY = 414
+  const actionX = (index) => actionStartX + (index % columns) * (actionW + columnGap)
+  const actionY = (index) => actionStartY + Math.floor(index / columns) * (actionH + rowGap)
+  const closeY = actionStartY + rows * (actionH + rowGap) + 26
+
+  actions.forEach((action, index) => {
+    const nodeId = actionNodeId(action)
+    const node = baseNode(
+      nodeId,
+      'action',
+      actionX(index),
+      actionY(index),
+      actionW,
+      actionH,
+      actionIcon(action.action_type),
+      actionBusinessLabel(action),
+      actionBusinessSummary(action),
+      actionBusinessDetail(action),
+      false,
+    )
+    node.action = { ...action }
+    node.configurable = isConfigurableAction(action)
+    node.disabled = action.enabled === false
+    node.temp = Boolean(action.temp)
+    nodes.push(node)
+    edges.push(edge('event', node.id, action.enabled !== false), edge(node.id, 'auto-close', action.enabled !== false))
+  })
+
+  nodes.push(
+    baseNode('auto-close', 'system', x.close, closeY, closeW, 92, Finished, '自动闭环', `恢复 ${recoveryDuration.value} 秒`, '', true, 'close-node'),
+    baseNode('archive', 'system close', x.archive, closeY, archiveW, 92, Finished, '归档', '证据留痕', '', true, 'archive-node'),
+  )
+  edges.push(edge('auto-close', 'archive'))
+  return { nodes, edges }
+}
+
+function baseNode(id, kind, x, y, w, h, icon, title, subtitle, detail = '', locked = false, role = '') {
+  return { id, kind, role, x, y, w, h, icon, title, subtitle, detail, locked, configurable: false, disabled: false }
+}
+
+function edge(from, to, active = true) {
+  return { id: `${from}-${to}`, from, to, active }
+}
+
+function applySavedFlowLayout(model) {
+  const saved = readFlowLayout()
+  if (!saved) return model
+  const nodeMap = new Map(model.nodes.map((node) => [node.id, node]))
+  for (const savedNode of saved.nodes || []) {
+    const node = nodeMap.get(savedNode.id)
+    if (node) {
+      node.x = Number(savedNode.x) || node.x
+      node.y = Number(savedNode.y) || node.y
+    }
+  }
+  if (Array.isArray(saved.edges)) {
+    const validIds = new Set(model.nodes.map((node) => node.id))
+    const edges = saved.edges
+      .filter((item) => validIds.has(item.from) && validIds.has(item.to))
+      .map((item) => edge(item.from, item.to, item.active !== false))
+    if (edges.length) model.edges = edges
+  }
+  return model
+}
+
+function readFlowLayout() {
+  if (!currentEvent.value) return null
+  try {
+    return JSON.parse(localStorage.getItem(`${FLOW_LAYOUT_PREFIX}${currentEvent.value.id}`) || 'null')
+  } catch {
+    return null
+  }
+}
+
+function writeFlowLayout(nodes, edges) {
+  if (!currentEvent.value) return
+  const payload = {
+    nodes: nodes.map(({ id, x, y }) => ({ id, x: Math.round(x), y: Math.round(y) })),
+    edges: edges.map(({ from, to, active }) => ({ from, to, active })),
+  }
+  localStorage.setItem(`${FLOW_LAYOUT_PREFIX}${currentEvent.value.id}`, JSON.stringify(payload))
+  flowLayoutVersion.value += 1
+}
+
+function enterFlowEdit() {
+  const model = cloneFlowModel(flowDisplayModel.value)
+  flowDraft.nodes = model.nodes
+  flowDraft.edges = model.edges
+  deletedActionIds.value = []
+  flowEditMode.value = true
+  selectedNodeId.value = ''
+  selectedEdgeId.value = ''
+  connectingFromId.value = ''
+  nextTick(fitFlowView)
+}
+
+function cancelFlowEdit() {
+  flowEditMode.value = false
+  selectedNodeId.value = ''
+  selectedEdgeId.value = ''
+  connectingFromId.value = ''
+  deletedActionIds.value = []
+  flowDraft.nodes = []
+  flowDraft.edges = []
+  nextTick(fitFlowView)
+}
+
+function cloneFlowModel(model) {
+  return {
+    nodes: model.nodes.map((node) => ({ ...node, action: node.action ? { ...node.action } : null })),
+    edges: model.edges.map((item) => ({ ...item })),
+  }
+}
+
+function selectNode(node) {
+  selectedNodeId.value = node.id
+  selectedEdgeId.value = ''
+  if (!flowEditMode.value && node.configurable) openNodeConfig(node)
+}
+
+function selectEdge(id) {
+  if (!flowEditMode.value) return
+  selectedEdgeId.value = id
+  selectedNodeId.value = ''
+}
+
+function clearFlowSelection() {
+  selectedNodeId.value = ''
+  selectedEdgeId.value = ''
+  connectingFromId.value = ''
+  editingNode.value = null
+}
+
+function startNodeDrag(node, event) {
+  if (!flowEditMode.value || event.button !== 0) return
+  selectedNodeId.value = node.id
+  selectedEdgeId.value = ''
+  dragging.value = { id: node.id, startX: event.clientX, startY: event.clientY, nodeX: node.x, nodeY: node.y }
+}
+
+function handleCanvasPointerMove(event) {
+  if (!dragging.value || !canvasRef.value) return
+  const node = flowDraft.nodes.find((item) => item.id === dragging.value.id)
+  if (!node) return
+  const scale = fitTransform.scale || 1
+  node.x = clampNumber(dragging.value.nodeX + (event.clientX - dragging.value.startX) / scale, 8, FLOW_STAGE_WIDTH - node.w - 8)
+  node.y = clampNumber(dragging.value.nodeY + (event.clientY - dragging.value.startY) / scale, 38, flowStageHeight.value - node.h - 8)
+}
+
+function finishDrag() {
+  dragging.value = null
+}
+
+function startConnection(node) {
+  if (!flowEditMode.value) return
+  connectingFromId.value = node.id
+}
+
+function completeConnection(node) {
+  if (!flowEditMode.value || !connectingFromId.value || connectingFromId.value === node.id) return
+  const from = connectingFromId.value
+  const to = node.id
+  flowDraft.edges = flowDraft.edges.filter((item) => !(item.from === from && item.to === to))
+  flowDraft.edges.push(edge(from, to, true))
+  connectingFromId.value = ''
+}
+
+function deleteSelectedEdge() {
+  if (!selectedEdgeId.value) return
+  flowDraft.edges = flowDraft.edges.filter((item) => item.id !== selectedEdgeId.value)
+  selectedEdgeId.value = ''
+}
+
+function deleteSelectedNode() {
+  const node = flowDraft.nodes.find((item) => item.id === selectedNodeId.value)
+  if (!node || node.locked || node.kind !== 'action') return
+  if (node.action?.id && !node.temp) deletedActionIds.value.push(node.action.id)
+  flowDraft.nodes = flowDraft.nodes.filter((item) => item.id !== node.id)
+  flowDraft.edges = flowDraft.edges.filter((item) => item.from !== node.id && item.to !== node.id)
+  selectedNodeId.value = ''
+}
+
+function autoLayoutDraft() {
+  const actions = flowDraft.nodes.filter((node) => node.kind === 'action').map((node) => node.action)
+  const model = buildAutoFlowModel(actions)
+  flowDraft.nodes = model.nodes
+  flowDraft.edges = model.edges
+  selectedNodeId.value = ''
+  selectedEdgeId.value = ''
+  nextTick(fitFlowView)
+}
+
+function addActionNode(type) {
+  const tempId = `temp-${Date.now()}`
+  const action = defaultAction(type, tempId)
+  const actions = flowDraft.nodes.filter((item) => item.kind === 'action').map((item) => item.action).concat(action)
+  const model = buildAutoFlowModel(actions)
+  flowDraft.nodes = model.nodes
+  flowDraft.edges = model.edges
+  selectedNodeId.value = actionNodeId(action)
+  addNodeDialogVisible.value = false
+  nextTick(fitFlowView)
+}
+
+function defaultAction(type, tempId) {
+  return {
+    id: tempId,
+    temp: true,
+    event_id: currentEvent.value?.id,
+    action_type: type,
+    action_name: actionLabelMap[type] || '联动动作',
+    enabled: true,
+    step_order: flowDraft.nodes.filter((item) => item.kind === 'action').length + 1,
+    timeout_seconds: 60,
+    failure_strategy: 'continue',
+    retry_count: 0,
+    repeat_interval_seconds: 60,
+    max_executions: 1,
+    broadcast_device_id: null,
+    template_id: null,
+    drone_id: '',
+    route_id: '',
+  }
+}
+
+function openNodeConfig(node) {
+  if (!node?.configurable) return
+  editingNode.value = node
+  const action = node.action
+  actionForm.broadcast_device_id = action.broadcast_device_id ?? null
+  actionForm.template_id = action.template_id || ''
+  actionForm.repeat_mode = Number(action.max_executions || 1) > 1 ? 'repeat' : 'once'
+  actionForm.repeat_interval_seconds = Number(action.repeat_interval_seconds || 60)
+  actionForm.max_executions = Math.max(1, Number(action.max_executions || 1))
+  actionForm.drone_id = action.drone_id || ''
+  actionForm.route_id = action.route_id || ''
+  actionForm.staff_group = action.action_type === 'staff_task' ? (action.route_id || '安全巡查组') : ''
+}
+
+function saveNodeConfig() {
+  if (!editingNode.value?.action) return
+  const action = editingNode.value.action
+  if (action.action_type === 'broadcast') {
+    action.broadcast_device_id = actionForm.broadcast_device_id
+    action.template_id = actionForm.template_id || null
+    action.repeat_interval_seconds = actionForm.repeat_mode === 'repeat' ? clampNumber(actionForm.repeat_interval_seconds, 1, 86400) : 60
+    action.max_executions = actionForm.repeat_mode === 'repeat' ? clampNumber(actionForm.max_executions, 2, 100) : 1
+  } else if (action.action_type === 'drone_dispatch') {
+    action.drone_id = actionForm.drone_id || null
+    action.route_id = actionForm.route_id || null
+  } else if (action.action_type === 'staff_task') {
+    action.route_id = actionForm.staff_group || '安全巡查组'
+  }
+  editingNode.value.title = actionBusinessLabel(action)
+  editingNode.value.subtitle = actionBusinessSummary(action)
+  editingNode.value.detail = actionBusinessDetail(action)
+  ElMessage.success('动作配置已应用')
+}
+
+function deleteInspectorNode() {
+  if (!canDeleteInspectorNode.value) return
+  selectedNodeId.value = editingNode.value.id
+  deleteSelectedNode()
+  editingNode.value = null
+}
+
+async function saveFlow() {
+  if (!currentEvent.value) return
+  savingFlow.value = true
+  try {
+    for (const id of deletedActionIds.value) await deleteActionConfig(id)
+    const actionNodes = flowDraft.nodes.filter((node) => node.kind === 'action')
+    for (let index = 0; index < actionNodes.length; index += 1) {
+      const node = actionNodes[index]
+      const payload = actionPayloadForSave(node.action, index + 1)
+      if (node.temp) {
+        const res = await createActionConfig(payload)
+        const created = res.data || {}
+        const oldId = node.id
+        node.action = { ...node.action, ...created, id: created.id, temp: false }
+        node.id = actionNodeId(node.action)
+        node.temp = false
+        flowDraft.edges = flowDraft.edges.map((item) => ({
+          ...item,
+          id: item.id.replace(oldId, node.id),
+          from: item.from === oldId ? node.id : item.from,
+          to: item.to === oldId ? node.id : item.to,
+        }))
+      } else {
+        await updateActionConfig(node.action.id, payload)
+      }
+    }
+    writeFlowLayout(flowDraft.nodes, flowDraft.edges)
+    ElMessage.success('联动流程已保存')
+    flowEditMode.value = false
+    await loadConfig()
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '保存失败')
+  } finally {
+    savingFlow.value = false
+  }
+}
+
+function actionPayloadForSave(action, stepOrder) {
+  return {
+    event_id: currentEvent.value.id,
+    enabled: action.enabled !== false,
+    step_order: stepOrder,
+    action_type: action.action_type,
+    action_name: action.action_name || actionLabelMap[action.action_type] || '联动动作',
+    timeout_seconds: action.timeout_seconds || 60,
+    failure_strategy: action.failure_strategy || 'continue',
+    retry_count: action.retry_count || 0,
+    broadcast_device_id: action.broadcast_device_id ?? null,
+    template_id: action.template_id || null,
+    drone_id: action.drone_id || null,
+    route_id: action.route_id || null,
+    repeat_interval_seconds: action.repeat_interval_seconds || 60,
+    max_executions: action.max_executions || 1,
+  }
+}
+
+function actionNodeId(action) {
+  return action.temp ? `action-${action.id}` : `action-${action.id}`
+}
+
+function actionIcon(type) {
+  return actionIconMap[type] || Setting
+}
+
+function actionBusinessLabel(action) {
+  if (!action) return ''
+  return actionLabelMap[action.action_type] || action.action_label || action.action_name || '联动动作'
+}
+
+function actionBusinessSummary(action) {
+  if (!action) return ''
+  if (action.enabled === false) return '当前动作已停用'
+  if (action.action_type === 'broadcast') {
+    const device = findBroadcastDevice(action.broadcast_device_id)
+    return device?.name || '未选择广播设备'
+  }
+  if (action.action_type === 'drone_dispatch') return action.drone_id || '未选择无人机'
+  if (action.action_type === 'staff_task') return action.route_id || '安全巡查组'
+  if (action.action_type === 'camera_snapshot') return '自动抓拍留证'
+  return action.action_name || '业务动作'
+}
+
+function actionBusinessDetail(action) {
+  if (!action || action.enabled === false) return ''
+  if (action.action_type === 'broadcast') {
+    const template = findBroadcastTemplate(action.template_id)
+    const templateText = template?.name || '未选择模板'
+    return Number(action.max_executions || 1) > 1
+      ? `${templateText} · ${action.repeat_interval_seconds || 60}s × ${action.max_executions}`
+      : `${templateText} · 单次`
+  }
+  if (action.action_type === 'drone_dispatch') return action.route_id || '未选择航线'
+  return ''
+}
+
+function isConfigurableAction(action) {
+  return ['broadcast', 'drone_dispatch', 'staff_task'].includes(action?.action_type)
+}
+
+function findBroadcastDevice(id) {
+  return config.broadcast_devices.find((item) => item.id === id)
+}
+
+function findBroadcastTemplate(id) {
+  return config.broadcast_templates.find((item) => item.id === id)
+}
+
+function uniqueActionValues(field) {
+  return Array.from(new Set(config.action_configs.map((item) => item[field]).filter(Boolean)))
+}
+
+function edgePathForRender(edgeItem) {
+  const from = flowNodesForView.value.find((node) => node.id === edgeItem.from)
+  const to = flowNodesForView.value.find((node) => node.id === edgeItem.to)
+  if (!from || !to) return ''
+  const fromCenterX = from.x + from.w / 2
+  const fromCenterY = from.y + from.h / 2
+  const toCenterX = to.x + to.w / 2
+  const toCenterY = to.y + to.h / 2
+
+  if (to.y > from.y + from.h + 18) {
+    const sx = fromCenterX
+    const sy = from.y + from.h
+    const tx = toCenterX
+    const ty = to.y
+    const dy = Math.max(54, Math.abs(ty - sy) * 0.48)
+    return `M ${sx} ${sy} C ${sx} ${sy + dy}, ${tx} ${ty - dy}, ${tx} ${ty}`
+  }
+
+  if (from.y > to.y + to.h + 18) {
+    const sx = fromCenterX
+    const sy = from.y
+    const tx = toCenterX
+    const ty = to.y + to.h
+    const dy = Math.max(54, Math.abs(sy - ty) * 0.48)
+    return `M ${sx} ${sy} C ${sx} ${sy - dy}, ${tx} ${ty + dy}, ${tx} ${ty}`
+  }
+
+  if (toCenterX >= fromCenterX) {
+    const sx = from.x + from.w
+    const sy = fromCenterY
+    const tx = to.x
+    const ty = toCenterY
+    const dx = Math.max(58, Math.abs(tx - sx) * 0.44)
+    return `M ${sx} ${sy} C ${sx + dx} ${sy}, ${tx - dx} ${ty}, ${tx} ${ty}`
+  }
+
+  const sx = from.x
+  const sy = fromCenterY
+  const tx = to.x + to.w
+  const ty = toCenterY
+  const dx = Math.max(58, Math.abs(sx - tx) * 0.44)
+  return `M ${sx} ${sy} C ${sx - dx} ${sy}, ${tx + dx} ${ty}, ${tx} ${ty}`
+}
+
+function nodeStyle(node) {
+  return {
+    left: `${node.x}px`,
+    top: `${node.y}px`,
+    width: `${node.w}px`,
+    minHeight: `${node.h}px`,
+  }
+}
+
+function calculateFlowBounds(nodes) {
+  if (!nodes.length) {
+    return { x: 0, y: 0, width: FLOW_STAGE_WIDTH, height: 300, rawMaxY: 300 }
+  }
+  const minX = Math.min(...nodes.map((node) => node.x))
+  const minY = Math.min(...nodes.map((node) => node.y))
+  const maxX = Math.max(...nodes.map((node) => node.x + node.w))
+  const maxY = Math.max(...nodes.map((node) => node.y + node.h))
+  const x = Math.max(0, minX - FLOW_STAGE_PADDING)
+  const y = Math.max(0, minY - FLOW_STAGE_PADDING)
+  const right = Math.min(FLOW_STAGE_WIDTH, maxX + FLOW_STAGE_PADDING)
+  const bottom = maxY + FLOW_STAGE_PADDING
+  return {
+    x,
+    y,
+    width: Math.max(1, right - x),
+    height: Math.max(1, bottom - y),
+    rawMaxY: bottom,
+  }
+}
+
+function fitFlowView() {
+  if (!canvasRef.value || !canvasSize.width || !canvasSize.height) return
+  const bounds = flowBounds.value
+  const padding = canvasSize.width < 900 ? 32 : 44
+  const availableWidth = Math.max(1, canvasSize.width - padding * 2)
+  const availableHeight = Math.max(1, canvasSize.height - padding * 2)
+  const rawScale = Math.min(availableWidth / bounds.width, availableHeight / bounds.height)
+  const maxZoom = flowEditMode.value ? 1.08 : 1.12
+  const minZoom = flowEditMode.value ? 0.34 : 0.32
+  const nextScale = clampFloat(rawScale, minZoom, maxZoom)
+  fitTransform.scale = nextScale
+  fitTransform.x = Math.round((canvasSize.width - bounds.width * nextScale) / 2 - bounds.x * nextScale)
+  fitTransform.y = Math.round((canvasSize.height - bounds.height * nextScale) / 2 - bounds.y * nextScale)
+}
+
+function updateCanvasSize() {
+  if (!canvasRef.value) return
+  const rect = canvasRef.value.getBoundingClientRect()
+  canvasSize.width = Math.round(rect.width)
+  canvasSize.height = Math.round(rect.height)
+}
+
+function setupCanvasObserver() {
+  if (!canvasRef.value || canvasResizeObserver) return
+  updateCanvasSize()
+  if ('ResizeObserver' in window) {
+    canvasResizeObserver = new ResizeObserver(() => {
+      updateCanvasSize()
+      nextTick(fitFlowView)
+    })
+    canvasResizeObserver.observe(canvasRef.value)
+  } else {
+    window.addEventListener('resize', updateCanvasSize)
+  }
+}
+
+function teardownCanvasObserver() {
+  if (canvasResizeObserver) {
+    canvasResizeObserver.disconnect()
+    canvasResizeObserver = null
+  }
+}
+
+function clampNumber(value, min, max) {
+  const next = Number(value)
+  if (!Number.isFinite(next)) return min
+  return Math.min(max, Math.max(min, Math.round(next)))
+}
+
+function clampFloat(value, min, max) {
+  const next = Number(value)
+  if (!Number.isFinite(next)) return min
+  return Math.min(max, Math.max(min, next))
+}
+
+onMounted(async () => {
+  await loadConfig()
+  await nextTick()
+  setupCanvasObserver()
+  fitFlowView()
+})
+
+onBeforeUnmount(() => {
+  teardownCanvasObserver()
+  window.removeEventListener('resize', updateCanvasSize)
+})
 </script>
 
 <style scoped>
-.event-config-page { min-height: 100%; padding: 22px; color: #d9e8f8; background: #071422; }
+.event-config-page {
+  min-height: 100%;
+  padding: 22px;
+  color: #d9e8f8;
+  background: #071422;
+}
+
 .page-header,
-.filter-bar,
-.event-row,
-.event-info,
-.event-actions,
-.event-actions label { display: flex; align-items: center; }
-.page-header { justify-content: space-between; gap: 16px; }
-.page-header p { margin: 0 0 5px; color: #79acd0; font-size: 13px; }
-.page-header h2 { margin: 0; color: #f3f8fd; font-size: 25px; letter-spacing: 0; }
-.filter-bar { gap: 12px; margin: 18px 0; }
-.filter-bar :deep(.el-select) { width: 180px; }
-.event-list { display: grid; gap: 10px; }
-.event-row { min-height: 76px; padding: 14px 18px; gap: 18px; border: 1px solid rgba(96,151,191,.18); border-radius: 8px; background: #0b1d30; }
-.event-main { min-width: 240px; flex: 1.1; }
-.event-main strong { display: block; overflow: hidden; color: #f3f8fd; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
-.event-main span { display: block; margin-top: 5px; overflow: hidden; color: #8fb0c9; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-.event-info { flex: 1.2; min-width: 260px; gap: 10px; color: #9bb7cb; }
-.event-info > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.event-info > span:first-child { width: 72px; color: #63dcf7; }
-.event-actions { gap: 12px; justify-content: flex-end; }
-.event-actions label { gap: 8px; color: #9fbcd0; white-space: nowrap; }
-.event-actions label :deep(.el-input-number) { width: 112px; }
-.event-actions em { color: #8fb0c9; font-style: normal; }
-@media (max-width: 1200px) {
-  .event-row { align-items: flex-start; flex-direction: column; }
-  .event-main,
-  .event-info { width: 100%; }
-  .event-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+.condition-editor {
+  display: flex;
+  align-items: center;
+}
+
+.page-header {
+  justify-content: space-between;
+  min-height: 60px;
+  margin-bottom: 18px;
+  padding: 14px;
+  border: 1px solid rgba(104, 161, 200, .18);
+  border-radius: 8px;
+  background: rgba(11, 29, 48, .72);
+}
+
+.page-header p {
+  margin: 0 0 3px;
+  color: #789bb4;
+  font-size: 12px;
+}
+
+.page-header h2 {
+  margin: 0;
+  color: #f3f8fd;
+  font-size: 22px;
+  letter-spacing: 0;
+}
+
+.page-header :deep(.el-button) {
+  height: 40px;
+  border-color: rgba(104, 161, 200, .28);
+  color: #d9e8f8;
+  background: rgba(6, 25, 42, .82);
+}
+
+.risk-badge,
+.type-tag {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 58px;
+  height: 26px;
+  padding: 0 12px;
+  border: 1px solid rgba(143, 174, 198, .22);
+  border-radius: 5px;
+  color: #9fb7c8;
+  background: rgba(143, 174, 198, .08);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.risk-badge.low {
+  border-color: rgba(98, 215, 177, .24);
+  color: #b8f3dc;
+  background: rgba(98, 215, 177, .08);
+}
+
+.risk-badge.medium {
+  border-color: rgba(240, 199, 93, .26);
+  color: #ffe4a5;
+  background: rgba(240, 199, 93, .1);
+}
+
+.risk-badge.high {
+  border-color: rgba(255, 107, 118, .3);
+  color: #ffbdc4;
+  background: rgba(255, 107, 118, .1);
+}
+
+.type-tag {
+  min-width: 62px;
+  border-color: rgba(72, 216, 255, .22);
+  color: #aee8ff;
+  background: rgba(72, 216, 255, .08);
+}
+
+.condition-editor :deep(.el-input) {
+  width: 180px;
+}
+
+.condition-editor :deep(.el-input__wrapper) {
+  min-height: 36px;
+}
+
+.condition-editor :deep(.el-input-group__append) {
+  width: 52px;
+  justify-content: center;
+  padding: 0;
+  color: #9db8ca;
+  background: rgba(17, 39, 58, .95);
+  box-shadow: 0 0 0 1px rgba(112, 157, 190, .16) inset;
+}
+
+.condition-editor {
+  gap: 10px;
+  min-width: 0;
+}
+
+.condition-editor b {
+  color: #2fd6c4;
+  font-size: 18px;
+}
+
+.flow-canvas {
+  flex: 1;
+  position: relative;
+  min-height: 530px;
+  overflow: hidden;
+  border: 1px solid rgba(112, 157, 190, .18);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle, rgba(126, 173, 205, .07) 1px, transparent 1px) 0 0 / 20px 20px,
+    linear-gradient(180deg, rgba(8, 27, 44, .94), rgba(5, 18, 31, .98));
+}
+
+.flow-canvas.editing {
+  border-color: rgba(47, 214, 196, .34);
+}
+
+.flow-stage {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+}
+
+.flow-edges {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.flow-canvas.editing .flow-edges {
+  pointer-events: auto;
+}
+
+.flow-edge {
+  fill: none;
+  stroke: rgba(104, 151, 177, .44);
+  stroke-width: 2;
+  marker-end: url(#event-flow-arrow);
+  cursor: pointer;
+}
+
+.flow-edge.active {
+  stroke: rgba(73, 206, 194, .78);
+  stroke-dasharray: 8 10;
+  animation: flow-dash 4.6s linear infinite;
+}
+
+.flow-edge.selected {
+  stroke: #f0bd58;
+  stroke-width: 3;
+}
+
+.flow-edges marker path {
+  fill: rgba(73, 206, 194, .86);
+}
+
+.canvas-node {
+  position: absolute;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(112, 157, 190, .24);
+  border-radius: 8px;
+  background: rgba(10, 29, 47, .96);
+  box-shadow: 0 14px 28px rgba(0, 0, 0, .18);
+}
+
+.canvas-node.editable {
+  cursor: grab;
+}
+
+.canvas-node.editable:active {
+  cursor: grabbing;
+}
+
+.canvas-node :deep(.el-icon) {
+  width: 42px;
+  height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: #bff6ef;
+  background: rgba(47, 214, 196, .12);
+  font-size: 23px;
+}
+
+.canvas-node.source {
+  border-color: rgba(78, 164, 210, .34);
+}
+
+.canvas-node.source :deep(.el-icon) {
+  color: #bfe6ff;
+  background: rgba(78, 164, 210, .14);
+}
+
+.canvas-node.rule-node {
+  border-color: rgba(240, 189, 88, .28);
+}
+
+.canvas-node.rule-node :deep(.el-icon),
+.canvas-node.route-node :deep(.el-icon) {
+  color: #ffe0a0;
+  background: rgba(240, 189, 88, .13);
+}
+
+.canvas-node.event-node {
+  grid-template-columns: 48px minmax(0, 1fr);
+  border-color: rgba(47, 214, 196, .48);
+  background: rgba(13, 45, 62, .98);
+  box-shadow: 0 0 0 1px rgba(47, 214, 196, .12), 0 18px 36px rgba(0, 0, 0, .24);
+}
+
+.canvas-node.event-node :deep(.el-icon) {
+  width: 48px;
+  height: 48px;
+  font-size: 26px;
+}
+
+.canvas-node.action {
+  grid-template-columns: 42px minmax(0, 1fr) 30px;
+  border-color: rgba(102, 186, 170, .32);
+  background: rgba(10, 38, 51, .97);
+}
+
+.canvas-node.close-node,
+.canvas-node.archive-node {
+  opacity: .94;
+}
+
+.canvas-node.selected {
+  border-color: #f0bd58;
+  box-shadow: 0 0 0 1px rgba(240, 189, 88, .3), 0 16px 32px rgba(0, 0, 0, .2);
+}
+
+.canvas-node.disabled {
+  opacity: .58;
+}
+
+.node-copy {
+  min-width: 0;
+}
+
+.node-copy strong {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #f2f8ff;
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.22;
+  white-space: normal;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.node-copy span,
+.node-copy em {
+  display: block;
+  overflow: hidden;
+  margin-top: 6px;
+  color: #9bb6c8;
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-copy em {
+  color: #74d8cf;
+}
+
+.node-config {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(116, 216, 207, .24);
+  border-radius: 6px;
+  background: rgba(6, 20, 34, .72);
+  color: #74d8cf;
+  cursor: pointer;
+}
+
+.node-handle {
+  position: absolute;
+  z-index: 3;
+  width: 13px;
+  height: 13px;
+  border: 2px solid #2fd6c4;
+  border-radius: 50%;
+  background: #092238;
+  opacity: 0;
+  cursor: crosshair;
+}
+
+.flow-canvas.editing .canvas-node:hover .node-handle,
+.flow-canvas.editing .canvas-node.selected .node-handle,
+.node-handle.active,
+.node-handle.ready {
+  opacity: 1;
+}
+
+.node-handle.source {
+  right: -7px;
+  top: calc(50% - 7px);
+}
+
+.node-handle.target {
+  left: -7px;
+  top: calc(50% - 7px);
+}
+
+.node-handle.active {
+  background: #2fd6c4;
+}
+
+.node-handle.ready {
+  border-color: #f0bd58;
+}
+
+.add-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.add-action-grid button {
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px solid rgba(112, 157, 190, .2);
+  border-radius: 8px;
+  background: #0b1d30;
+  color: #d9e8f8;
+  cursor: pointer;
+}
+
+.add-action-grid button:hover {
+  border-color: rgba(47, 214, 196, .44);
+}
+
+@keyframes flow-dash {
+  to {
+    stroke-dashoffset: -36;
+  }
+}
+
+.event-list-panel {
+  min-height: calc(100vh - 214px);
+  margin-top: 18px;
+  padding: 0;
+  border: 1px solid rgba(104, 161, 200, .18);
+  border-radius: 8px;
+  background: rgba(11, 29, 48, .72);
+  overflow: hidden;
+}
+
+.filter-bar {
+  min-height: 72px;
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) 150px 140px 140px;
+  gap: 12px;
+  align-items: center;
+  padding: 14px;
+  border: 1px solid rgba(104, 161, 200, .22);
+  border-radius: 8px;
+  background: #0b1d30;
+}
+
+.filter-bar .event-search :deep(.el-input__wrapper),
+.filter-bar .event-filter-select :deep(.el-select__wrapper) {
+  min-height: 44px;
+  border-radius: 6px;
+  background: rgba(6, 25, 42, .82);
+  box-shadow: inset 0 0 0 1px rgba(60, 150, 214, .46) !important;
+}
+
+.filter-bar .event-search :deep(.el-input__wrapper:hover),
+.filter-bar .event-filter-select :deep(.el-select__wrapper:hover),
+.filter-bar .event-search :deep(.el-input__wrapper.is-focused),
+.filter-bar .event-filter-select :deep(.el-select__wrapper.is-focused),
+.filter-bar .event-filter-select :deep(.el-select__wrapper.is-focus) {
+  box-shadow: inset 0 0 0 1px rgba(87, 190, 255, .82), 0 0 0 2px rgba(72, 216, 255, .08) !important;
+}
+
+.filter-bar :deep(.el-input__inner),
+.filter-bar :deep(.el-select__selected-item),
+.filter-bar :deep(.el-select__placeholder) {
+  color: #d9e8f8;
+}
+
+.filter-bar :deep(.el-input__inner::placeholder) {
+  color: #7898ad;
+}
+
+.config-table {
+  overflow-x: auto;
+}
+
+.config-table-head,
+.config-row {
+  min-width: 1120px;
+  display: grid;
+  grid-template-columns: minmax(150px, 1.1fr) 86px minmax(280px, 2fr) 96px 96px 92px 80px 180px;
+  align-items: center;
+  gap: 12px;
+}
+
+.config-table-head {
+  min-height: 50px;
+  padding: 0 22px;
+  color: #9fb4c5;
+  background: rgba(30, 58, 95, .58);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.config-row {
+  min-height: 72px;
+  padding: 12px 22px;
+  color: #d8e7ff;
+  border-top: 1px solid rgba(104, 161, 200, .1);
+  background: rgba(10, 28, 47, .38);
+  transition: background .16s ease, box-shadow .16s ease;
+}
+
+.config-row:hover {
+  background: rgba(30, 74, 112, .46);
+}
+
+.config-row.editing {
+  min-height: 84px;
+  background: rgba(30, 74, 112, .56);
+  box-shadow: inset 3px 0 0 #48d8ff;
+}
+
+.event-name-cell strong {
+  display: block;
+  overflow: hidden;
+  color: #f3f8fd;
+  font-size: 14px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rule-cell {
+  min-width: 0;
+}
+
+.rule-cell > span {
+  display: block;
+  overflow: hidden;
+  color: #9cb6ca;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.visual-inline-editor {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.compact-select {
+  width: 112px;
+}
+
+.compact-select.target {
+  width: 86px;
+}
+
+.duration-cell {
+  color: #9cb6ca;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.duration-cell :deep(.el-input) {
+  width: 86px;
+}
+
+.duration-cell :deep(.el-input-group__append) {
+  width: 34px;
+  justify-content: center;
+  padding: 0;
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.row-actions :deep(.el-button.is-link) {
+  color: #7dd7ff;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.row-actions :deep(.el-button.is-link:hover) {
+  color: #c7f0ff;
+}
+
+.empty-list {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+  color: #789bb4;
+  font-size: 13px;
+}
+
+:deep(.flow-workspace-dialog.el-dialog),
+.flow-workspace-dialog :deep(.el-dialog) {
+  height: min(820px, 88vh);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(112, 157, 190, .2);
+  border-radius: 10px;
+  background: #071422;
+}
+
+:deep(.flow-workspace-dialog.el-dialog) .el-dialog__header,
+.flow-workspace-dialog :deep(.el-dialog__header) {
+  flex: none;
+  padding: 14px 16px;
+  margin: 0;
+  border-bottom: 1px solid rgba(112, 157, 190, .16);
+}
+
+:deep(.flow-workspace-dialog.el-dialog) .el-dialog__body,
+.flow-workspace-dialog :deep(.el-dialog__body) {
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+}
+
+.flow-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.flow-dialog-header h3 {
+  margin: 0;
+  color: #f3f8fd;
+  font-size: 18px;
+  letter-spacing: 0;
+}
+
+.flow-dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.flow-workspace-body {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+
+.flow-workspace-body.with-inspector {
+  grid-template-columns: minmax(0, 1fr) 340px;
+}
+
+.flow-workspace-body .flow-canvas {
+  min-height: 0;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+}
+
+.action-inspector {
+  min-width: 0;
+  padding: 16px;
+  border-left: 1px solid rgba(112, 157, 190, .16);
+  background: #091a2b;
+}
+
+.action-inspector header {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  margin-bottom: 16px;
+  padding-right: 28px;
+}
+
+.action-inspector header span {
+  color: #789bb4;
+  font-size: 12px;
+}
+
+.action-inspector header strong {
+  color: #f3f8fd;
+  font-size: 17px;
+}
+
+.action-inspector header button {
+  position: absolute;
+  top: -3px;
+  right: 0;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .05);
+  color: #9bb6c8;
+  cursor: pointer;
+}
+
+.action-readonly {
+  display: grid;
+  gap: 8px;
+}
+
+.action-readonly span {
+  color: #789bb4;
+  font-size: 12px;
+}
+
+.action-readonly strong {
+  color: #eaf6ff;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.inspector-form :deep(.el-select),
+.inspector-form :deep(.el-input) {
+  width: 100%;
+}
+
+.inspector-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+@media (max-width: 1280px) {
+  .config-table-head,
+  .config-row {
+    grid-template-columns: minmax(140px, 1fr) 76px minmax(230px, 1.6fr) 78px 78px 82px 70px 160px;
+    gap: 8px;
+  }
+}
+
+@media (max-width: 960px) {
+  .filter-bar {
+    height: auto;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .config-table {
+    overflow-x: auto;
+  }
+
+  .config-table-head,
+  .config-row {
+    min-width: 980px;
+  }
+
+  .flow-workspace-body.with-inspector {
+    grid-template-columns: 1fr;
+  }
+
+  .action-inspector {
+    border-left: 0;
+    border-top: 1px solid rgba(112, 157, 190, .16);
+  }
 }
 </style>

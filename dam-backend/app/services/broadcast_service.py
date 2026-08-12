@@ -441,6 +441,16 @@ class BroadcastService:
             return
         db = SessionLocal()
         try:
+            # 疑似事件（latest_observation.suspected）不自动广播；不影响 4B/35B 复核链路
+            try:
+                from app.models.safety_integration import SafetyEventInstance
+                inst = db.query(SafetyEventInstance).filter(
+                    SafetyEventInstance.instance_no == str(event_id)
+                ).first()
+                if inst and bool((inst.latest_observation or {}).get("suspected")):
+                    return
+            except Exception:
+                pass  # 查询失败不阻断既有广播逻辑
             configured_template, configured_devices = self._configured_action_targets(
                 db, str(event_id), str(camera_id)
             )

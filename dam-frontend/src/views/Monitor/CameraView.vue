@@ -64,11 +64,10 @@
           </section>
 
           <section class="camera-point-actions">
-            <div class="rail-section-divider"></div>
-            <div class="point-action-heading">
-              <span>当前点位</span>
-              <strong>{{ selectedPointTitle }}</strong>
-            </div>
+            <button type="button" class="map-nav-entry" @click="mapDialogVisible = true">
+              <el-icon><Aim /></el-icon>
+              <strong>查看点位图</strong>
+            </button>
 
             <el-tooltip
               :disabled="!broadcastUnavailableReason"
@@ -82,28 +81,20 @@
                   :disabled="Boolean(broadcastUnavailableReason)"
                   @click="openEmergencyBroadcast"
                 >
-                  <el-icon><Connection /></el-icon>
+                  <el-icon><Microphone /></el-icon>
                   <span>一键喊话</span>
                 </button>
               </div>
             </el-tooltip>
 
             <div class="assist-setting-row">
-              <div>
-                <span>画面辅助</span>
-                <strong>显示辅助框</strong>
-              </div>
+              <strong>显示辅助框</strong>
               <el-switch
                 :model-value="assistOverlayVisible"
                 size="small"
                 @change="toggleAssistOverlay"
               />
             </div>
-
-            <button type="button" class="map-nav-entry" @click="mapDialogVisible = true">
-              <span><el-icon><Aim /></el-icon>查看点位地图</span>
-              <b>›</b>
-            </button>
           </section>
         </aside>
 
@@ -116,8 +107,13 @@
               :class="{
                 online: slot.camera?.connected,
                 empty: !slot.camera,
-                active: slot.camera?.id === currentCameraId,
+                active: isActiveGridSlot(slot),
               }"
+              role="button"
+              tabindex="0"
+              @click="activateGridSlot(slot)"
+              @keydown.enter.prevent="activateGridSlot(slot)"
+              @keydown.space.prevent="activateGridSlot(slot)"
             >
               <div class="tile-video-box">
                 <video
@@ -142,7 +138,7 @@
                   @error="handleGridStreamError(slot.camera.id)"
                 />
                 <svg
-                  v-if="gridZoneOverlayVisible(slot.camera)"
+                  v-if="gridZoneOverlayVisible(slot)"
                   class="tile-zone-overlay"
                   :viewBox="`0 0 ${gridOverlaySize(slot.camera.id).width} ${gridOverlaySize(slot.camera.id).height}`"
                   preserveAspectRatio="xMidYMid meet"
@@ -152,7 +148,7 @@
                       class="ops-zone-polygon"
                       :points="zonePolygonPointsForSize(zone, gridOverlaySize(slot.camera.id).width, gridOverlaySize(slot.camera.id).height)"
                       :stroke="zoneStroke(zone)"
-                      :fill="zoneFill(zone)"
+                      :fill="zoneAssistFill(zone)"
                       :stroke-width="Math.max(2, gridOverlaySize(slot.camera.id).width / 520)"
                     />
                     <text
@@ -277,7 +273,7 @@
                   class="ops-zone-polygon"
                   :points="zonePolygonPoints(zone)"
                   :stroke="zoneStroke(zone)"
-                  :fill="zoneFill(zone)"
+                  :fill="zoneAssistFill(zone)"
                   :stroke-width="Math.max(2, overlayWidth / 520)"
                 />
                 <polyline
@@ -956,7 +952,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  Aim, ArrowLeft, Camera, Connection, Crop, DataAnalysis, Delete, Files, FullScreen, Loading, Monitor,
+  Aim, ArrowLeft, Camera, Crop, DataAnalysis, Delete, Files, FullScreen, Loading, Microphone, Monitor,
   Hide, Picture, UploadFilled, VideoCamera, VideoPlay, View,
 } from '@element-plus/icons-vue'
 import {
@@ -1024,6 +1020,7 @@ const gridStreamUrls = ref({})
 const gridStreamModes = ref({})
 const gridStreamStates = ref({})
 const gridSlotCameraIds = ref([])
+const activeGridSlotIndex = ref(0)
 const gridCameraZones = ref({})
 const gridImageMetrics = ref({})
 const assistOverlayVisible = ref(false)
@@ -1077,6 +1074,7 @@ let webRtcPlayer = null
 const gridVideoRefs = new Map()
 const gridWebRtcPlayers = new Map()
 let gridStreamRefreshAt = 0
+let gridStreamGeneration = 0
 let cameraFallbackNoticeAt = 0
 
 const imageWidth = computed(() => Number(latestDetection.value.image_width) || 0)
@@ -1118,10 +1116,14 @@ const analysisTaskLabel = computed(() => taskTypeLabel(analysisTask.value))
 const selectedModelReady = computed(() => Boolean(modelStatus.value.models?.[analysisTask.value]?.loaded))
 const canToggleDetection = computed(() => Boolean(currentCamera.value?.configured || currentCamera.value?.connected))
 const canRenderCurrentStream = computed(() => Boolean(currentCamera.value?.configured || currentCamera.value?.connected))
-const emergencyBroadcastCamera = computed(() => selectedPointSlot.value?.camera || null)
+const emergencyBroadcastCamera = computed(() => {
+  if (isMultiCameraMode.value) return gridSlots.value[activeGridSlotIndex.value]?.camera || currentCamera.value || null
+  return selectedPointSlot.value?.camera || currentCamera.value || null
+})
 const broadcastUnavailableReason = computed(() => {
-  if (!selectedPointSlot.value?.camera) return '当前点位未接入摄像头'
-  if (!selectedPointSlot.value.camera.connected) return '当前摄像头离线'
+  const camera = emergencyBroadcastCamera.value
+  if (!camera) return '当前点位未接入摄像头'
+  if (!camera.connected) return '当前摄像头离线'
   return ''
 })
 const isMultiCameraMode = computed(() => cameraViewMode.value !== 'single')
@@ -1502,8 +1504,11 @@ function openEmergencyBroadcast() {
   broadcastDialogVisible.value = true
 }
 
-function toggleAssistOverlay() {
-  assistOverlayVisible.value = !assistOverlayVisible.value
+async function toggleAssistOverlay(value) {
+  assistOverlayVisible.value = Boolean(value)
+  if (!assistOverlayVisible.value || !isMultiCameraMode.value) return
+  const activeSlot = gridSlots.value[activeGridSlotIndex.value]
+  if (activeSlot?.camera?.id) await ensureGridCameraZones(activeSlot.camera.id)
 }
 
 async function openPatrolReport(persist = false) {
@@ -1640,12 +1645,7 @@ async function selectPointFromPanel(pointNo) {
   currentCameraId.value = slot.camera.id
   currentCamera.value = slot.camera
   if (isMultiCameraMode.value) {
-    gridSlotCameraIds.value = [
-      slot.camera.id,
-      ...gridSlotCameraIds.value.filter((cameraId) => cameraId && cameraId !== slot.camera.id),
-    ].slice(0, gridCameraLimit.value)
-    await refreshGridStreams(true)
-    await activateGridCamera(slot.camera.id)
+    await setGridSlotCamera(activeGridSlotIndex.value, slot.camera.id)
     return
   }
   await selectCameraFromPanel(slot.camera.id)
@@ -1653,6 +1653,7 @@ async function selectPointFromPanel(pointNo) {
 
 function syncGridSlots() {
   const limit = gridCameraLimit.value
+  activeGridSlotIndex.value = Math.min(activeGridSlotIndex.value, limit - 1)
   const orderedCameras = cameraPointSlots.value.map((point) => point.camera).filter(Boolean)
   const validIds = new Set(cameras.value.map((camera) => camera.id))
   const nextSlots = gridSlotCameraIds.value
@@ -1742,6 +1743,7 @@ function stopLiveStream() {
 }
 
 function stopGridStreams() {
+  gridStreamGeneration += 1
   gridWebRtcPlayers.forEach((player) => player.close())
   gridWebRtcPlayers.clear()
   gridVideoRefs.clear()
@@ -1803,9 +1805,11 @@ function gridZonesForCamera(cameraId) {
   return Array.isArray(zones) ? zones : []
 }
 
-function gridZoneOverlayVisible(camera) {
+function gridZoneOverlayVisible(slot) {
+  const camera = slot?.camera
   return Boolean(
     assistOverlayVisible.value
+    && slot?.index === activeGridSlotIndex.value
     && camera?.id
     && gridSlotHasStream({ camera })
     && gridZonesForCamera(camera.id).length,
@@ -1837,6 +1841,7 @@ async function ensureGridCameraZones(cameraId) {
 }
 
 async function startGridMjpegStream(cameraId) {
+  const generation = gridStreamGeneration
   const player = gridWebRtcPlayers.get(cameraId)
   if (player) {
     player.close()
@@ -1852,7 +1857,7 @@ async function startGridMjpegStream(cameraId) {
   }
   try {
     const response = await createStreamTicket(cameraId, false)
-    if (!isMultiCameraMode.value) return
+    if (!isMultiCameraMode.value || generation !== gridStreamGeneration || !gridSlotCameraIds.value.includes(cameraId)) return
     gridStreamUrls.value = {
       ...gridStreamUrls.value,
       [cameraId]: response.data.stream_url,
@@ -1862,6 +1867,7 @@ async function startGridMjpegStream(cameraId) {
       [cameraId]: 'connected',
     }
   } catch {
+    if (generation !== gridStreamGeneration || !gridSlotCameraIds.value.includes(cameraId)) return
     gridStreamStates.value = {
       ...gridStreamStates.value,
       [cameraId]: 'failed',
@@ -1869,7 +1875,8 @@ async function startGridMjpegStream(cameraId) {
   }
 }
 
-function handleGridWebRtcStreamFailure(cameraId) {
+function handleGridWebRtcStreamFailure(cameraId, generation = gridStreamGeneration) {
+  if (generation !== gridStreamGeneration || !gridSlotCameraIds.value.includes(cameraId)) return
   const player = gridWebRtcPlayers.get(cameraId)
   if (player) {
     player.close()
@@ -1889,15 +1896,28 @@ function handleGridWebRtcStreamFailure(cameraId) {
 }
 
 async function startGridWebRtcStream(camera) {
+  const generation = gridStreamGeneration
   const cameraId = camera?.id
   if (!cameraId || !camera.connected) return
   if (camera.source_type !== 'rtsp') {
     await startGridMjpegStream(cameraId)
     return
   }
-  if (gridWebRtcPlayers.has(cameraId) && gridStreamModes.value[cameraId] === 'webrtc') return
+  // 复用条件：已有连接、模式为 webrtc、且播放器绑定的 video 元素与当前 DOM 元素一致。
+  // 四宫格中点击点位会把该摄像头移到首位，格子 key 变化导致 video 元素重建，
+  // 若直接复用旧播放器则新元素没有画面（黑屏），必须在新元素上重新建立连接。
+  const existingPlayer = gridWebRtcPlayers.get(cameraId)
+  const currentVideoElement = gridVideoRefs.get(cameraId)
+  if (existingPlayer
+    && gridStreamModes.value[cameraId] === 'webrtc'
+    && currentVideoElement
+    && existingPlayer.videoElement === currentVideoElement) {
+    return
+  }
 
+  const boundVideoElement = currentVideoElement || null
   stopGridCameraStream(cameraId)
+  if (boundVideoElement) gridVideoRefs.set(cameraId, boundVideoElement)
   gridStreamModes.value = {
     ...gridStreamModes.value,
     [cameraId]: 'webrtc',
@@ -1907,24 +1927,25 @@ async function startGridWebRtcStream(camera) {
     [cameraId]: 'connecting',
   }
   await nextTick()
+  if (generation !== gridStreamGeneration || !gridSlotCameraIds.value.includes(cameraId)) return
 
   const videoElement = gridVideoRefs.get(cameraId)
   if (!videoElement) {
-    handleGridWebRtcStreamFailure(cameraId)
+    handleGridWebRtcStreamFailure(cameraId, generation)
     return
   }
 
   const player = new CameraWebRtcPlayer(videoElement, cameraId, {
     onConnected() {
-      if (gridWebRtcPlayers.get(cameraId) !== player || !isMultiCameraMode.value) return
+      if (generation !== gridStreamGeneration || gridWebRtcPlayers.get(cameraId) !== player || !isMultiCameraMode.value) return
       gridStreamStates.value = {
         ...gridStreamStates.value,
         [cameraId]: 'connected',
       }
     },
     onError() {
-      if (gridWebRtcPlayers.get(cameraId) !== player || !isMultiCameraMode.value) return
-      handleGridWebRtcStreamFailure(cameraId)
+      if (generation !== gridStreamGeneration || gridWebRtcPlayers.get(cameraId) !== player || !isMultiCameraMode.value) return
+      handleGridWebRtcStreamFailure(cameraId, generation)
     },
   })
   gridWebRtcPlayers.set(cameraId, player)
@@ -1932,7 +1953,7 @@ async function startGridWebRtcStream(camera) {
     await player.connect()
   } catch {
     if (gridWebRtcPlayers.get(cameraId) === player && isMultiCameraMode.value) {
-      handleGridWebRtcStreamFailure(cameraId)
+      handleGridWebRtcStreamFailure(cameraId, generation)
     }
   }
 }
@@ -2043,10 +2064,12 @@ async function refreshGridStreams(force = false) {
     stopGridStreams()
     return
   }
+  const generation = gridStreamGeneration
   const now = Date.now()
   if (!force && now - gridStreamRefreshAt < 15000) return
   gridStreamRefreshAt = now
   await fetchCameras({ silent: true }).catch(() => null)
+  if (generation !== gridStreamGeneration) return
   const gridCameras = gridSlots.value
     .map((slot) => slot.camera)
     .filter((camera, index, list) => camera && list.findIndex((item) => item?.id === camera.id) === index)
@@ -2063,7 +2086,8 @@ async function refreshGridStreams(force = false) {
       stopGridCameraStream(camera.id)
       return
     }
-    if (force && gridStreamModes.value[camera.id] === 'mjpeg') stopGridCameraStream(camera.id)
+    // 强制刷新时仅重建没有有效画面的 MJPEG 流，已有画面的保留，避免点击点位后闪黑
+    if (force && gridStreamModes.value[camera.id] === 'mjpeg' && !gridStreamUrls.value[camera.id]) stopGridCameraStream(camera.id)
     await startGridWebRtcStream(camera)
   }))
 }
@@ -2171,7 +2195,7 @@ function regionCalloutFromPath(path, pointNo) {
 }
 
 function gridSlotEmptyText(slot) {
-  if (!slot.camera) return '不展示摄像头'
+  if (!slot.camera) return '未接入'
   if (gridStreamStates.value[slot.camera.id] === 'failed') {
     return gridStreamModes.value[slot.camera.id] === 'webrtc' ? 'WebRTC 连接失败' : '视频连接失败'
   }
@@ -2180,11 +2204,19 @@ function gridSlotEmptyText(slot) {
 }
 
 async function setGridSlotCamera(slotIndex, cameraId) {
+  gridStreamGeneration += 1
   const previousCameraId = gridSlotCameraIds.value[slotIndex] || ''
-  gridSlotCameraIds.value = Array.from({ length: gridCameraLimit.value }, (_, index) => {
-    if (index === slotIndex) return cameraId || ''
-    return gridSlotCameraIds.value[index] || ''
+  const nextSlots = Array.from({ length: gridCameraLimit.value }, (_, index) => gridSlotCameraIds.value[index] || '')
+  const duplicateSlotIndex = cameraId
+    ? nextSlots.findIndex((item, index) => index !== slotIndex && item === cameraId)
+    : -1
+  if (duplicateSlotIndex >= 0) nextSlots[duplicateSlotIndex] = previousCameraId
+  nextSlots[slotIndex] = cameraId || ''
+  gridSlotCameraIds.value = nextSlots.map((item, index) => {
+    if (index === slotIndex || index === duplicateSlotIndex) return item
+    return item || ''
   })
+  activeGridSlotIndex.value = slotIndex
   if (cameraId) {
     await activateGridCamera(cameraId)
   } else if (previousCameraId && previousCameraId === currentCameraId.value) {
@@ -2202,6 +2234,17 @@ async function activateGridCamera(cameraId) {
   currentCamera.value = cameras.value.find((camera) => camera.id === cameraId) || null
   syncSelectedPointFromCamera(currentCamera.value)
   if (cameraViewMode.value === 'single') await activateCamera(cameraId)
+}
+
+async function activateGridSlot(slot) {
+  activeGridSlotIndex.value = slot.index
+  if (!slot.camera) return
+  await activateGridCamera(slot.camera.id)
+  await ensureGridCameraZones(slot.camera.id)
+}
+
+function isActiveGridSlot(slot) {
+  return slot.index === activeGridSlotIndex.value
 }
 
 function handleStreamError() {
@@ -2775,6 +2818,11 @@ function zoneFill(zone) {
   })[zone.type] || 'rgba(72, 216, 255, 0.10)'
 }
 
+function zoneAssistFill(zone) {
+  if (zoneConfigVisible.value || zoneDrawing.value || liveAlertZoneIds.value.has(zone.id)) return zoneFill(zone)
+  return 'transparent'
+}
+
 function detectionLabel(detection) {
   return `${detectionName(detection)} ${confidencePercent(detection)}%`
 }
@@ -3160,8 +3208,10 @@ h1, h2, h3, p { margin-top: 0; }
 .inline-error { margin: 10px 0 0; color: #ff8792; font-size: 11px; }
 
 .command-monitor {
-  min-height: 100%;
-  padding: 12px;
+  min-height: calc(100vh - 64px);
+  display: flex;
+  align-items: center;
+  padding: 22px 12px 20px;
   color: #e9f7ff;
   background:
     linear-gradient(90deg, rgba(29, 49, 55, 0.72), rgba(9, 25, 35, 0.92)),
@@ -3313,15 +3363,16 @@ h1, h2, h3, p { margin-top: 0; }
   background: #62d7b1;
 }
 .ops-layout {
+  width: 100%;
   display: grid;
-  grid-template-columns: minmax(190px, 220px) minmax(0, 1fr);
+  grid-template-columns: minmax(270px, 320px) minmax(0, 1fr);
   align-items: stretch;
-  gap: 10px;
+  gap: 14px;
   margin-top: 0;
 }
 .ops-camera-rail {
   min-width: 0;
-  height: min(760px, calc(100vh - 36px));
+  height: min(740px, calc(100vh - 112px));
   min-height: 540px;
   display: flex;
   flex-direction: column;
@@ -3335,22 +3386,22 @@ h1, h2, h3, p { margin-top: 0; }
   background: rgba(5, 24, 34, 0.72);
 }
 .rail-card > header {
-  min-height: 40px;
+  min-height: 54px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 0 9px;
+  padding: 0 14px;
   border-bottom: 1px solid rgba(137, 174, 184, 0.1);
 }
 .rail-card h3 {
   margin: 0;
   color: #e0f3fb;
-  font-size: 13px;
+  font-size: 17px;
 }
 .rail-card header span {
   color: #7897a8;
-  font-size: 11px;
+  font-size: 12px;
 }
 .camera-list-card {
   min-height: 0;
@@ -3365,20 +3416,20 @@ h1, h2, h3, p { margin-top: 0; }
   min-width: 0;
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 8px;
 }
 .camera-list-title span {
   color: #73a6bc;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 800;
 }
 .rail-view-select {
-  width: 82px;
+  width: 98px;
   flex: 0 0 auto;
 }
 .rail-view-select :deep(.el-select__wrapper) {
-  min-height: 26px;
-  padding: 0 7px;
+  min-height: 34px;
+  padding: 0 10px;
   border-radius: 6px;
   background: rgba(2, 12, 16, 0.72);
   box-shadow: 0 0 0 1px rgba(72, 216, 255, 0.2) inset;
@@ -3386,7 +3437,7 @@ h1, h2, h3, p { margin-top: 0; }
 .rail-view-select :deep(.el-select__selected-item),
 .rail-view-select :deep(.el-select__placeholder) {
   color: #d7edf6;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 800;
 }
 .rail-view-select :deep(.el-select__caret) {
@@ -3396,7 +3447,7 @@ h1, h2, h3, p { margin-top: 0; }
   min-height: 0;
   flex: 1 1 auto;
   overflow-y: auto;
-  padding: 6px 7px 7px;
+  padding: 10px 10px 12px;
   scrollbar-width: thin;
   scrollbar-color: rgba(100, 142, 158, 0.28) transparent;
 }
@@ -3415,34 +3466,36 @@ h1, h2, h3, p { margin-top: 0; }
 }
 .rail-camera-list button {
   width: 100%;
-  min-height: 38px;
+  min-height: 58px;
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 7px;
-  margin-bottom: 3px;
-  padding: 0 7px;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding: 0 14px;
   border: 0;
-  border-left: 3px solid transparent;
-  border-radius: 5px;
+  border-left: 4px solid transparent;
+  border-radius: 7px;
   color: #bdd5e1;
-  background: transparent;
+  background: rgba(3, 18, 25, 0.34);
   cursor: pointer;
+  transition: background .18s ease, border-color .18s ease, transform .18s ease;
 }
 .rail-camera-list button:hover,
 .rail-camera-list button.active {
-  background: rgba(18, 68, 88, 0.44);
+  background: rgba(18, 68, 88, 0.62);
 }
 .rail-camera-list button.active {
   border-left-color: #48d8ff;
+  box-shadow: inset 0 0 0 1px rgba(72, 216, 255, .1);
 }
 .rail-camera-list button.empty {
   color: #829aa5;
-  background: transparent;
+  background: rgba(3, 18, 25, 0.18);
 }
 .rail-camera-list b {
   color: #7ebbd0;
-  font: 800 10px/1 "Consolas", "Monaco", monospace;
+  font: 900 12px/1 "Consolas", "Monaco", monospace;
 }
 .rail-camera-list button.empty b {
   color: #6f8791;
@@ -3451,7 +3504,7 @@ h1, h2, h3, p { margin-top: 0; }
   min-width: 0;
   overflow: hidden;
   color: #bdd5e1;
-  font-size: 12px;
+  font-size: 16px;
   font-weight: 900;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3459,14 +3512,14 @@ h1, h2, h3, p { margin-top: 0; }
 .rail-camera-list em {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   color: #7f9bad;
-  font-size: 10px;
+  font-size: 13px;
   font-style: normal;
 }
 .rail-camera-list em i {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: #607985;
 }
@@ -3583,50 +3636,29 @@ h1, h2, h3, p { margin-top: 0; }
 }
 .camera-point-actions {
   flex: 0 0 auto;
-  padding: 0 2px 2px;
-}
-.rail-section-divider {
-  height: 1px;
-  margin: 0 0 10px;
-  background: rgba(137, 174, 184, 0.14);
-}
-.point-action-heading {
-  margin-bottom: 9px;
-}
-.point-action-heading span,
-.assist-setting-row span {
-  display: block;
-  color: #7897a8;
-  font-size: 10px;
-}
-.point-action-heading strong {
-  display: block;
-  margin-top: 3px;
-  overflow: hidden;
-  color: #e0f3fb;
-  font-size: 13px;
-  font-weight: 900;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: grid;
+  gap: 12px;
+  padding: 0;
 }
 .talk-action-wrap {
   width: 100%;
 }
 .primary-talk-button {
   width: 100%;
-  min-height: 44px;
+  min-height: 58px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
+  gap: 9px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 8px;
   color: #061412;
   background: linear-gradient(135deg, #48d8ff, #62d7b1);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 900;
   cursor: pointer;
-  box-shadow: 0 10px 22px rgba(72, 216, 255, 0.16);
+  box-shadow: 0 12px 26px rgba(72, 216, 255, 0.2);
+  transition: filter .18s ease, transform .18s ease, box-shadow .18s ease;
 }
 .primary-talk-button:hover:not(:disabled) {
   filter: brightness(1.08);
@@ -3642,55 +3674,73 @@ h1, h2, h3, p { margin-top: 0; }
   box-shadow: none;
 }
 .primary-talk-button .el-icon {
-  font-size: 17px;
+  font-size: 20px;
 }
 .assist-setting-row {
-  min-height: 38px;
+  min-height: 56px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-top: 12px;
+  padding: 0 14px;
+  border: 1px solid rgba(137, 174, 184, 0.16);
+  border-radius: 8px;
+  background: rgba(4, 20, 28, 0.62);
 }
 .assist-setting-row strong {
   display: block;
-  margin-top: 2px;
   color: #c6dce6;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 800;
 }
 .assist-setting-row :deep(.el-switch__core) {
-  min-width: 34px;
+  min-width: 42px;
+  height: 22px;
 }
 .map-nav-entry {
   width: 100%;
-  min-height: 34px;
+  min-height: 88px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 8px;
-  padding: 0 2px;
-  border: 0;
-  color: #9dc7d6;
-  background: transparent;
-  font-size: 12px;
+  justify-content: center;
+  gap: 12px;
+  padding: 18px 18px;
+  border: 1px solid rgba(72, 216, 255, 0.26);
+  border-radius: 8px;
+  color: #d7edf6;
+  background:
+    linear-gradient(135deg, rgba(20, 77, 96, .78), rgba(8, 35, 45, .82)),
+    rgba(4, 20, 28, 0.72);
+  font-size: 14px;
   font-weight: 800;
   cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(213, 247, 255, .05), 0 10px 24px rgba(0, 7, 18, .18);
+  transition: border-color .18s ease, transform .18s ease, background .18s ease;
 }
 .map-nav-entry:hover {
   color: #e0f3fb;
+  border-color: rgba(72, 216, 255, 0.52);
+  background:
+    linear-gradient(135deg, rgba(28, 99, 122, .82), rgba(9, 44, 56, .86)),
+    rgba(4, 20, 28, 0.72);
+  transform: translateY(-1px);
 }
-.map-nav-entry span {
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.map-nav-entry b {
-  color: #76bed8;
+.map-nav-entry .el-icon {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 8px;
+  color: #48d8ff;
+  background: rgba(72, 216, 255, .12);
   font-size: 18px;
-  line-height: 1;
+}
+.map-nav-entry strong {
+  color: #e9f7ff;
+  font-size: 21px;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 .multi-camera-layout {
   position: relative;
@@ -3739,6 +3789,7 @@ h1, h2, h3, p { margin-top: 0; }
   grid-template-rows: repeat(3, minmax(0, 1fr));
 }
 .multi-camera-tile {
+  position: relative;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -3746,6 +3797,8 @@ h1, h2, h3, p { margin-top: 0; }
   border-radius: 8px;
   background: rgba(7, 20, 25, 0.86);
   box-shadow: 0 14px 32px rgba(0, 5, 10, 0.2);
+  cursor: pointer;
+  outline: none;
   transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
 }
 .multi-camera-tile:hover {
@@ -3754,7 +3807,11 @@ h1, h2, h3, p { margin-top: 0; }
 }
 .multi-camera-tile.active {
   border-color: rgba(72, 216, 255, 0.62);
-  box-shadow: 0 18px 38px rgba(0, 5, 10, 0.28), inset 0 0 0 2px rgba(72, 216, 255, 0.34);
+  box-shadow: 0 18px 38px rgba(0, 5, 10, 0.28), inset 0 0 0 3px rgba(72, 216, 255, 0.46);
+}
+.multi-camera-tile:focus-visible {
+  border-color: rgba(72, 216, 255, 0.72);
+  box-shadow: 0 0 0 2px rgba(72, 216, 255, 0.18), 0 16px 34px rgba(0, 5, 10, 0.24);
 }
 .multi-camera-tile.empty {
   border-style: dashed;
@@ -3817,7 +3874,7 @@ h1, h2, h3, p { margin-top: 0; }
 }
 .ops-video-panel {
   position: relative;
-  height: min(760px, calc(100vh - 36px));
+  height: min(740px, calc(100vh - 112px));
   min-height: 540px;
   display: flex;
   flex-direction: column;

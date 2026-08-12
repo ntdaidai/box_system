@@ -2,6 +2,7 @@
 
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 from minio import Minio
 from minio.error import S3Error
@@ -43,6 +44,29 @@ class MinIOClient:
             return True
         except S3Error:
             return False
+
+    def upload_file(
+        self,
+        bucket: str,
+        object_key: str,
+        file_path: Path,
+        content_type: Optional[str] = None,
+    ) -> str:
+        """上传本地文件到 MinIO。"""
+
+        try:
+            found = self.client.bucket_exists(bucket)
+            if not found:
+                self.client.make_bucket(bucket)
+            self.client.fput_object(
+                bucket,
+                object_key,
+                str(file_path),
+                content_type=content_type or "application/octet-stream",
+            )
+            return f"{bucket}/{object_key}"
+        except S3Error as exc:
+            raise RuntimeError(f"MinIO 上传失败: {exc}")
 
     def cleanup_temp_file(self, file_path: Path) -> None:
         """清理临时文件。"""

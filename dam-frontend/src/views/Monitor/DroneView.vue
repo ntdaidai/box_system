@@ -1,4 +1,4 @@
-<!-- 无人机监测页面 - 对接 DJI Cloud API -->
+<!-- 无人机设备页面 - 对接 DJI Cloud API -->
 <template>
   <div class="drone-page">
     <!-- 顶部：三列布局 -->

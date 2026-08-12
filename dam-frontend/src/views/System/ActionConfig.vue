@@ -2,7 +2,7 @@
   <div class="action-config-page">
     <header class="page-header">
       <div>
-        <p>系统管理 / 联动系统</p>
+        <p>系统管理 / 规则管理</p>
         <h2>动作配置</h2>
       </div>
       <el-button :icon="Refresh" :loading="loading" @click="loadConfig">刷新</el-button>

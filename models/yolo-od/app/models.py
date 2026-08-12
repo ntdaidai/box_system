@@ -40,17 +40,24 @@ class FrameResult(BaseModel):
     """视频帧检测结果。"""
 
     frame_id: int = Field(..., description="帧 ID")
+    frame_time_sec: float | None = Field(default=None, description="帧时间")
     detections: list[DetectionResult] = Field(..., description="检测结果")
     detection_count: int = Field(..., description="检测目标数量")
     annotated_path: str | None = Field(default=None, description="本地标注帧路径")
+    annotated_ref: str | None = Field(default=None, description="MinIO 标注帧路径")
 
 
 class VideoResponse(BaseModel):
     """视频检测响应。"""
 
     total_frames: int = Field(..., description="总帧数")
+    processed_frames: int | None = Field(default=None, description="逐帧检测处理帧数")
+    fps: float | None = Field(default=None, description="视频帧率")
+    duration_sec: float | None = Field(default=None, description="视频时长")
     sampled_frames: int = Field(..., description="采样帧数")
-    frame_interval: int = Field(..., description="抽帧间隔")
+    frame_interval: int | None = Field(default=None, description="抽帧间隔")
+    sampling_strategy: str | None = Field(default=None, description="采样策略")
+    annotated_video_path: str | None = Field(default=None, description="本地标注视频路径")
     frames: list[FrameResult] = Field(..., description="各采样帧检测结果")
     detections: list[DetectionResult] = Field(..., description="所有采样帧检测框")
     detection_count: int = Field(..., description="检测目标总数")

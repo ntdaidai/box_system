@@ -21,6 +21,7 @@ from typing import List, Optional, Any, Dict
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -56,6 +57,14 @@ WORKFLOW_VIDEO_PROXY_CRF = int(os.getenv("WORKFLOW_VIDEO_PROXY_CRF", "35"))
 EDGE_PROXY_MEDIA_PREFIX = os.getenv("EDGE_PROXY_MEDIA_PREFIX", "qwen4b-proxy-media")
 REPRESENTATIVE_FRAME_ENABLED = os.getenv("REPRESENTATIVE_FRAME_ENABLED", "true").lower() == "true"
 REPRESENTATIVE_FRAME_CANDIDATE_COUNT = int(os.getenv("REPRESENTATIVE_FRAME_CANDIDATE_COUNT", "4"))
+WEATHER_CONTEXT_ENABLED = os.getenv("WEATHER_CONTEXT_ENABLED", "true").lower() == "true"
+WEATHER_CONTEXT_MODE = os.getenv("WEATHER_CONTEXT_MODE", "mock").strip().lower()
+WEATHER_API_BASE = os.getenv("WEATHER_API_BASE", "https://api.open-meteo.com/v1/forecast").rstrip("/")
+WEATHER_LATITUDE = os.getenv("WEATHER_LATITUDE", os.getenv("DAM_LATITUDE", "30.27"))
+WEATHER_LONGITUDE = os.getenv("WEATHER_LONGITUDE", os.getenv("DAM_LONGITUDE", "120.15"))
+WEATHER_LOCATION_NAME = os.getenv("WEATHER_LOCATION_NAME", os.getenv("DAM_LOCATION_NAME", "库坝现场"))
+WEATHER_TIMEZONE = os.getenv("WEATHER_TIMEZONE", "Asia/Shanghai")
+WEATHER_TIMEOUT = float(os.getenv("WEATHER_TIMEOUT", "8"))
 
 CLOUD_MINIO_ENDPOINT = os.getenv("CLOUD_MINIO_ENDPOINT", os.getenv("A100_MINIO_ENDPOINT", "10.196.85.11:9469"))
 CLOUD_MINIO_ACCESS_KEY = os.getenv("CLOUD_MINIO_ACCESS_KEY", os.getenv("A100_MINIO_ACCESS_KEY", "minioadmin"))
@@ -71,6 +80,15 @@ KNOWLEDGE_MIN_SCORE = float(os.getenv("KNOWLEDGE_MIN_SCORE", "0.1"))
 DEFAULT_DATA_SOURCES = (
     "SafetyEventInstance, SafetyEventTimelineLog, SafetyEventEvidence, "
     "VisualEventDetail, SensorData, Qwen-VL-4B"
+)
+WEATHER_EVENT_KEYWORDS = (
+    "天气", "气象", "暴雨", "大暴雨", "特大暴雨", "雨", "降雨", "高温", "极高温",
+    "低温", "极低温", "冰冻", "结冰", "高湿", "低湿", "湿度", "大风", "强风",
+    "烈风", "狂风", "暴风", "飓风", "台风",
+)
+WEATHER_SENSOR_KEYS = (
+    "temperature", "humidity", "wind_speed_ms", "wind_level", "hour_rain", "today_rain",
+    "last_hour_rain", "rainfall_1h", "rainfall_24h",
 )
 RISK_LABELS = {
     "critical": "严重风险",
@@ -170,6 +188,11 @@ class WorkflowInferRequest(BaseModel):
     )
     knowledge_query: Optional[str] = Field(None, description="显式知识库检索问题；为空时由事件上下文自动生成")
     knowledge_context: Optional[Dict[str, Any]] = Field(None, description="上游已检索的知识库上下文")
+    enable_weather_context: bool = Field(
+        WEATHER_CONTEXT_ENABLED,
+        description="是否为极端天气/环境类事件补充外部天气上下文",
+    )
+    weather_context: Optional[Dict[str, Any]] = Field(None, description="上游已提供的外部天气上下文")
     template_id: str = Field(DEFAULT_TEMPLATE_ID, description="OnlyOffice/docxtpl 模板标识")
     output_profile: str = Field("onlyoffice_template", description="输出剖面：onlyoffice_template=返回模板填充字段")
 
@@ -1118,6 +1141,86 @@ async def upload_workflow_media_to_cloud(request: WorkflowInferRequest) -> Dict[
     }
 
 
+async def upload_representative_frame_to_cloud(
+    request: WorkflowInferRequest,
+    representative_frame: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """把 4B 选中的代表帧单独上传到云端 MinIO，并作为下游优先证据。"""
+    if not representative_frame or not request.upload_media_to_cloud:
+        return None
+    try:
+        data = await load_media_bytes(representative_frame)
+        task_key = task_key_from_request(request)
+        source_name = Path(
+            str(
+                representative_frame.get("object_name")
+                or representative_frame.get("object_key")
+                or representative_frame.get("path")
+                or "representative_frame.jpg"
+            )
+        ).name or "representative_frame.jpg"
+        suffix = Path(source_name).suffix.lower() or ".jpg"
+        object_name = (
+            f"{CLOUD_MEDIA_PREFIX}/{task_key}/representative-frames/"
+            f"00_qwen4b_selected_representative_frame{suffix}"
+        )
+        content_type = mimetypes.guess_type(source_name)[0] or "image/jpeg"
+        await upload_bytes_to_cloud(data, object_name, content_type)
+        uploaded = {
+            "type": "image",
+            "role": "qwen4b_selected_representative_frame",
+            "bucket": CLOUD_MINIO_BUCKET,
+            "object_name": object_name,
+            "object_key": object_name,
+            "path": f"{CLOUD_MINIO_BUCKET}/{object_name}",
+            "source": representative_frame,
+            "caption": representative_frame.get("caption") or representative_frame.get("description") or "",
+            "description": representative_frame.get("description") or representative_frame.get("caption") or "",
+            "timestamp_seconds": representative_frame.get("timestamp_seconds"),
+            "selected_by": representative_frame.get("selected_by") or "qwen4b_action_reasoning",
+            "bytes": len(data),
+            "content_type": content_type,
+        }
+        logger.info("4B代表帧已上传到云端 MinIO: %s/%s", CLOUD_MINIO_BUCKET, object_name)
+        return uploaded
+    except Exception as exc:
+        logger.warning("4B代表帧上传到云端 MinIO 失败: {}", exc)
+        return None
+
+
+def promoted_media_objects(
+    *,
+    representative_frame: Optional[Dict[str, Any]],
+    cloud_representative_frame: Optional[Dict[str, Any]],
+    cloud_media_objects: List[Dict[str, Any]],
+    fallback_media_objects: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """下游媒体证据排序：4B代表帧优先，其次云端媒体，最后原始输入媒体。"""
+    result: List[Dict[str, Any]] = []
+    if cloud_representative_frame:
+        result.append(cloud_representative_frame)
+    elif representative_frame:
+        local_frame = dict(representative_frame)
+        local_frame.setdefault("role", "qwen4b_selected_representative_frame")
+        result.append(local_frame)
+
+    result.extend(item for item in cloud_media_objects if isinstance(item, dict))
+    if not cloud_media_objects:
+        result.extend(item for item in fallback_media_objects if isinstance(item, dict))
+
+    seen: set[str] = set()
+    deduped: List[Dict[str, Any]] = []
+    for item in result:
+        key = str(item.get("path") or item.get("object_name") or item.get("object_key") or "")
+        if not key:
+            key = json.dumps(item, ensure_ascii=False, sort_keys=True)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
 def first_text(*values: Any, default: str = "—") -> str:
     """取第一个非空文本。"""
     for value in values:
@@ -1501,10 +1604,341 @@ async def retrieve_knowledge_context(request: WorkflowInferRequest) -> Dict[str,
     }
 
 
-def build_workflow_prompt(request: WorkflowInferRequest, knowledge_context: Optional[Dict[str, Any]] = None) -> str:
+def weather_context_required(request: WorkflowInferRequest) -> bool:
+    if not WEATHER_CONTEXT_ENABLED:
+        return False
+    inputs = request.inputs if isinstance(request.inputs, dict) else {}
+    sensor_data = request.sensor_data if isinstance(request.sensor_data, dict) else {}
+    nested_sensor_data = inputs.get("sensor_data") if isinstance(inputs.get("sensor_data"), dict) else {}
+    text = " ".join(
+        str(item)
+        for item in (
+            request.event_type,
+            inputs.get("event_type"),
+            inputs.get("event_name"),
+            inputs.get("summary"),
+            sensor_data.get("event_name"),
+            sensor_data.get("event_type"),
+            nested_sensor_data.get("event_name"),
+            nested_sensor_data.get("event_type"),
+        )
+        if item
+    )
+    if any(keyword in text for keyword in WEATHER_EVENT_KEYWORDS):
+        return True
+    return any(key in sensor_data or key in nested_sensor_data for key in WEATHER_SENSOR_KEYS)
+
+
+def _float_or_none(value: Any) -> Optional[float]:
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def weather_now_iso() -> str:
+    try:
+        return datetime.now(ZoneInfo(WEATHER_TIMEZONE)).isoformat()
+    except Exception:
+        return datetime.now().isoformat()
+
+
+def first_number(*values: Any, default: float) -> float:
+    for value in values:
+        number = _float_or_none(value)
+        if number is not None:
+            return number
+    return default
+
+
+def mock_weather_context(request: WorkflowInferRequest) -> Dict[str, Any]:
+    inputs = request.inputs if isinstance(request.inputs, dict) else {}
+    sensor_data = request.sensor_data if isinstance(request.sensor_data, dict) else {}
+    nested_sensor_data = inputs.get("sensor_data") if isinstance(inputs.get("sensor_data"), dict) else {}
+    event_text = " ".join(
+        str(item)
+        for item in (
+            request.event_type,
+            inputs.get("event_type"),
+            inputs.get("event_name"),
+            sensor_data.get("event_name"),
+            nested_sensor_data.get("event_name"),
+        )
+        if item
+    )
+    temperature = first_number(sensor_data.get("temperature"), nested_sensor_data.get("temperature"), default=24.0)
+    humidity = first_number(sensor_data.get("humidity"), nested_sensor_data.get("humidity"), default=78.0)
+    precipitation = first_number(
+        sensor_data.get("hour_rain"),
+        nested_sensor_data.get("hour_rain"),
+        sensor_data.get("rainfall_1h"),
+        nested_sensor_data.get("rainfall_1h"),
+        default=0.0,
+    )
+    today_rain = first_number(sensor_data.get("today_rain"), nested_sensor_data.get("today_rain"), default=precipitation * 3)
+    wind_speed_ms = first_number(sensor_data.get("wind_speed_ms"), nested_sensor_data.get("wind_speed_ms"), default=3.5)
+    wind_speed_kmh = round(wind_speed_ms * 3.6, 1)
+    weather_label = "多云"
+    hourly_summary = "短时预报：未来6小时天气变化平稳。"
+
+    if any(word in event_text for word in ("冰冻", "结冰")):
+        temperature = min(temperature, -1.5)
+        humidity = max(humidity, 88.0)
+        precipitation = max(precipitation, 0.2)
+        weather_label = "低温高湿"
+        hourly_summary = "短时预报：未来6小时温度约 -3.0--1.0℃，湿度约 88-94%，局地存在结冰或结霜条件。"
+    elif any(word in event_text for word in ("低温", "极低温")):
+        temperature = min(temperature, -3.0 if "极低温" not in event_text else -11.0)
+        humidity = max(humidity, 60.0)
+        weather_label = "低温"
+        hourly_summary = f"短时预报：未来6小时温度维持在 {temperature - 1:.1f}-{temperature + 1:.1f}℃，低温状态持续。"
+    elif any(word in event_text for word in ("高温", "极高温")):
+        temperature = max(temperature, 37.0 if "极高温" not in event_text else 41.0)
+        humidity = max(humidity, 45.0)
+        weather_label = "高温"
+        hourly_summary = f"短时预报：未来6小时温度约 {temperature - 1:.1f}-{temperature + 1:.1f}℃，高温状态持续。"
+    elif any(word in event_text for word in ("暴雨", "大暴雨", "特大暴雨", "降雨", "雨量")):
+        precipitation = max(precipitation, 18.0)
+        today_rain = max(today_rain, 100.0 if "大暴雨" in event_text else 55.0)
+        humidity = max(humidity, 90.0)
+        weather_label = "强降雨"
+        hourly_summary = f"短时预报：未来6小时仍有降雨，预计累计降水约 {max(8.0, precipitation / 2):.1f}-{max(16.0, precipitation):.1f}mm，湿度维持在90%以上。"
+    elif any(word in event_text for word in ("大风", "强风", "烈风", "狂风", "暴风", "飓风", "台风")):
+        wind_speed_ms = max(wind_speed_ms, 18.0)
+        if "飓风" in event_text:
+            wind_speed_ms = max(wind_speed_ms, 33.0)
+        wind_speed_kmh = round(wind_speed_ms * 3.6, 1)
+        weather_label = "大风"
+        hourly_summary = f"短时预报：未来6小时阵风仍较明显，10米风速约 {wind_speed_kmh - 8:.1f}-{wind_speed_kmh + 6:.1f}km/h。"
+    elif any(word in event_text for word in ("高湿", "湿度")):
+        humidity = max(humidity, 86.0)
+        weather_label = "高湿"
+        hourly_summary = "短时预报：未来6小时湿度维持在85%以上，雾气、结露或设备受潮风险上升。"
+
+    current = {
+        "time": weather_now_iso(),
+        "temperature_2m": round(temperature, 1),
+        "relative_humidity_2m": round(humidity, 0),
+        "precipitation": round(precipitation, 1),
+        "rain": round(precipitation, 1),
+        "today_rain": round(today_rain, 1),
+        "wind_speed_10m": wind_speed_kmh,
+        "wind_direction_10m": first_number(sensor_data.get("wind_direction"), nested_sensor_data.get("wind_direction"), default=135.0),
+        "weather": weather_label,
+    }
+    lines = [
+        f"外部气象补充来源：测试模拟气象（{WEATHER_LOCATION_NAME}）。",
+        "该数据为测试环境生成，用于模拟联网气象证据；不得替代现场传感器触发事实。",
+        (
+            "当前气象："
+            f"天气 {weather_label}，"
+            f"温度 {current['temperature_2m']}℃，"
+            f"湿度 {current['relative_humidity_2m']}%，"
+            f"降水 {current['precipitation']}mm，"
+            f"当天累计雨量 {current['today_rain']}mm，"
+            f"风速 {current['wind_speed_10m']}km/h，"
+            f"风向 {current['wind_direction_10m']}°。"
+        ),
+        hourly_summary,
+    ]
+    return {
+        "enabled": True,
+        "available": True,
+        "source": "mock_weather",
+        "mode": "mock",
+        "location_name": WEATHER_LOCATION_NAME,
+        "fetched_at": weather_now_iso(),
+        "current": current,
+        "hourly_summary": hourly_summary,
+        "prompt_context": "\n".join(lines),
+    }
+
+
+async def fetch_weather_context(request: WorkflowInferRequest) -> Dict[str, Any]:
+    """Fetch external weather evidence for environment-triggered events."""
+    if not WEATHER_CONTEXT_ENABLED:
+        return {"enabled": False, "available": False, "source": "disabled", "prompt_context": ""}
+    if not weather_context_required(request):
+        return {
+            "enabled": True,
+            "available": False,
+            "source": "not_required",
+            "reason": "非气象/环境类事件，未请求外部气象补充。",
+            "prompt_context": "",
+        }
+    if WEATHER_CONTEXT_MODE in {"mock", "simulate", "simulation", "test"}:
+        return mock_weather_context(request)
+    if WEATHER_CONTEXT_MODE in {"off", "none", "disabled"}:
+        return {"enabled": False, "available": False, "source": "disabled", "prompt_context": ""}
+
+    inputs = request.inputs if isinstance(request.inputs, dict) else {}
+    sensor_data = request.sensor_data if isinstance(request.sensor_data, dict) else {}
+    latitude = (
+        _float_or_none(sensor_data.get("latitude"))
+        or _float_or_none(sensor_data.get("lat"))
+        or _float_or_none(inputs.get("latitude"))
+        or _float_or_none(inputs.get("lat"))
+        or _float_or_none(WEATHER_LATITUDE)
+    )
+    longitude = (
+        _float_or_none(sensor_data.get("longitude"))
+        or _float_or_none(sensor_data.get("lng"))
+        or _float_or_none(sensor_data.get("lon"))
+        or _float_or_none(inputs.get("longitude"))
+        or _float_or_none(inputs.get("lng"))
+        or _float_or_none(inputs.get("lon"))
+        or _float_or_none(WEATHER_LONGITUDE)
+    )
+    if latitude is None or longitude is None:
+        return {
+            "enabled": True,
+            "available": False,
+            "source": "open_meteo",
+            "reason": "未配置经纬度，无法获取外部气象数据。",
+            "prompt_context": "外部气象补充：未配置经纬度，当前仅使用本地传感器与现场视频证据。",
+        }
+
+    params = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "current": ",".join([
+            "temperature_2m",
+            "relative_humidity_2m",
+            "precipitation",
+            "rain",
+            "wind_speed_10m",
+            "wind_direction_10m",
+            "weather_code",
+        ]),
+        "hourly": ",".join([
+            "temperature_2m",
+            "relative_humidity_2m",
+            "precipitation",
+            "rain",
+            "wind_speed_10m",
+        ]),
+        "forecast_days": 1,
+        "timezone": WEATHER_TIMEZONE,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=WEATHER_TIMEOUT) as http_client:
+            response = await http_client.get(WEATHER_API_BASE, params=params)
+            response.raise_for_status()
+            payload = response.json()
+    except Exception as exc:
+        logger.warning(f"外部气象获取失败: event={request.event_type}, error={exc}")
+        return {
+            "enabled": True,
+            "available": False,
+            "source": "open_meteo",
+            "error": str(exc),
+            "prompt_context": "外部气象补充：联网气象接口暂不可用，当前仅使用本地传感器与现场视频证据。",
+        }
+
+    current = payload.get("current") if isinstance(payload, dict) else {}
+    hourly = payload.get("hourly") if isinstance(payload, dict) else {}
+    hourly_summary = summarize_hourly_weather(hourly if isinstance(hourly, dict) else {})
+    lines = [
+        f"外部气象补充来源：Open-Meteo（{WEATHER_LOCATION_NAME}，lat={latitude}, lon={longitude}）。",
+        "该数据仅用于补充环境背景，不得替代现场传感器触发事实。",
+    ]
+    if isinstance(current, dict) and current:
+        lines.append(
+            "当前气象："
+            f"温度 {current.get('temperature_2m', '—')}℃，"
+            f"湿度 {current.get('relative_humidity_2m', '—')}%，"
+            f"降水 {current.get('precipitation', current.get('rain', '—'))}mm，"
+            f"风速 {current.get('wind_speed_10m', '—')}km/h，"
+            f"风向 {current.get('wind_direction_10m', '—')}°。"
+        )
+    if hourly_summary:
+        lines.append(hourly_summary)
+    return {
+        "enabled": True,
+        "available": True,
+        "source": "open_meteo",
+        "location_name": WEATHER_LOCATION_NAME,
+        "latitude": latitude,
+        "longitude": longitude,
+        "fetched_at": weather_now_iso(),
+        "current": current,
+        "hourly_summary": hourly_summary,
+        "prompt_context": "\n".join(lines),
+    }
+
+
+def summarize_hourly_weather(hourly: Dict[str, Any], hours: int = 6) -> str:
+    times = hourly.get("time") or []
+    if not isinstance(times, list) or not times:
+        return ""
+    end = min(len(times), max(1, hours))
+    fields = {
+        "temperature_2m": hourly.get("temperature_2m") or [],
+        "relative_humidity_2m": hourly.get("relative_humidity_2m") or [],
+        "precipitation": hourly.get("precipitation") or [],
+        "rain": hourly.get("rain") or [],
+        "wind_speed_10m": hourly.get("wind_speed_10m") or [],
+    }
+    def values(name: str) -> List[float]:
+        result = []
+        source = fields.get(name) if isinstance(fields.get(name), list) else []
+        for item in source[:end]:
+            number = _float_or_none(item)
+            if number is not None:
+                result.append(number)
+        return result
+
+    temp_values = values("temperature_2m")
+    humidity_values = values("relative_humidity_2m")
+    precipitation_values = values("precipitation") or values("rain")
+    wind_values = values("wind_speed_10m")
+    parts = []
+    if temp_values:
+        parts.append(f"未来{end}小时温度约 {min(temp_values):.1f}-{max(temp_values):.1f}℃")
+    if humidity_values:
+        parts.append(f"湿度约 {min(humidity_values):.0f}-{max(humidity_values):.0f}%")
+    if precipitation_values:
+        parts.append(f"累计降水约 {sum(precipitation_values):.1f}mm")
+    if wind_values:
+        parts.append(f"最大风速约 {max(wind_values):.1f}km/h")
+    return "短时预报：" + "，".join(parts) + "。" if parts else ""
+
+
+def build_weather_prompt_context(weather_context: Optional[Dict[str, Any]]) -> str:
+    if not weather_context or not weather_context.get("prompt_context"):
+        return ""
+    return (
+        "\n\n## 外部气象补充\n"
+        f"{weather_context['prompt_context']}\n"
+        "请在风险研判中说明外部气象数据与现场传感器是否一致；"
+        "如果不一致，应以现场传感器和事件证据为主，并把外部数据作为不确定性说明。\n"
+    )
+
+
+def build_workflow_prompt(
+    request: WorkflowInferRequest,
+    knowledge_context: Optional[Dict[str, Any]] = None,
+    weather_context: Optional[Dict[str, Any]] = None,
+) -> str:
     """构建 DAG 工作流文本 prompt。"""
     if request.prompt:
-        base_prompt = request.prompt
+        context_payload = {
+            "event_type": request.event_type,
+            "sensor_data": request.sensor_data,
+            "inputs": {
+                key: value
+                for key, value in (request.inputs or {}).items()
+                if key in {"event_name", "event_type", "summary", "sensor_data", "source_name", "camera_name"}
+            },
+        }
+        base_prompt = (
+            f"{request.prompt}\n\n"
+            "## 工作流结构化上下文\n"
+            "以下结构化数据为事件触发事实；传感器阈值命中时，不要仅凭画面或外部天气否定告警。\n"
+            f"{compact_json(context_payload, limit=1600)}"
+        )
     else:
         payload = {
             "event_type": request.event_type,
@@ -1526,8 +1960,9 @@ def build_workflow_prompt(request: WorkflowInferRequest, knowledge_context: Opti
             "不要编造知识库中没有的制度条款。\n"
             f"{knowledge_context['prompt_context']}\n"
         )
+    weather_text = build_weather_prompt_context(weather_context)
     return (
-        f"{base_prompt}{knowledge_text}\n\n"
+        f"{base_prompt}{knowledge_text}{weather_text}\n\n"
         "输出必须是一个合法 JSON 对象，并额外包含以下详细字段："
         "detailed_scene_analysis、risk_reasoning、impact_assessment、response_plan、monitoring_suggestions。"
         "这些字段要用于正式报告，不能只写短语；每项请写成完整中文段落。"
@@ -1721,7 +2156,8 @@ async def workflow_infer(request: WorkflowInferRequest):
         raise HTTPException(status_code=503, detail="推理服务未初始化")
 
     knowledge_context = await retrieve_knowledge_context(request)
-    prompt = build_workflow_prompt(request, knowledge_context)
+    weather_context = await fetch_weather_context(request)
+    prompt = build_workflow_prompt(request, knowledge_context, weather_context)
     media_upload = {
         "enabled": False,
         "endpoint": CLOUD_MINIO_ENDPOINT,
@@ -1763,8 +2199,21 @@ async def workflow_infer(request: WorkflowInferRequest):
         content = response.choices[0].message.content or ""
         scene_analysis = parse_scene_analysis(content)
         representative_frame = selected_representative_frame(content, media_transform)
+        cloud_representative_frame = await upload_representative_frame_to_cloud(request, representative_frame)
+        response_representative_frame = cloud_representative_frame or representative_frame
         cloud_media_objects = media_upload.get("objects") or []
-        media_objects_for_next_node = cloud_media_objects or request.media_objects
+        cloud_media_objects_for_next_node = promoted_media_objects(
+            representative_frame=representative_frame,
+            cloud_representative_frame=cloud_representative_frame,
+            cloud_media_objects=cloud_media_objects,
+            fallback_media_objects=[],
+        )
+        media_objects_for_next_node = promoted_media_objects(
+            representative_frame=representative_frame,
+            cloud_representative_frame=cloud_representative_frame,
+            cloud_media_objects=cloud_media_objects,
+            fallback_media_objects=request.media_objects,
+        )
         final_report = build_local_final_report(scene_analysis)
         template_data = build_local_template_data(request, scene_analysis)
         template_fields = flatten_template_fields(template_data)
@@ -1789,9 +2238,9 @@ async def workflow_infer(request: WorkflowInferRequest):
             "template_fields": template_fields,
             "template_tables": template_tables,
             "docx_context": template_data,
-            "representative_frame": representative_frame,
-            "key_frames": [representative_frame] if representative_frame else [],
-            "image_urls": [representative_frame["path"]] if representative_frame else [],
+            "representative_frame": response_representative_frame,
+            "key_frames": [response_representative_frame] if response_representative_frame else [],
+            "image_urls": [response_representative_frame["path"]] if response_representative_frame else [],
             "result_source": "local_qwen4b",
             "actor_name": workflow_actor_name(request),
             "system_prompt_source": workflow_system_prompt_source(request),
@@ -1800,6 +2249,8 @@ async def workflow_infer(request: WorkflowInferRequest):
             "prompt_model_scope": workflow_meta_value(request, "prompt_model_scope"),
             "cloud_enhancement": final_report["risk_level"] == "high" or scene_analysis.confidence < 0.7,
             "knowledge_context": knowledge_context,
+            "weather_context": weather_context,
+            "external_weather_context": weather_context,
             "knowledge_sources": [
                 {
                     "chunk_id": item.get("chunk_id"),
@@ -1811,16 +2262,16 @@ async def workflow_infer(request: WorkflowInferRequest):
                 for item in knowledge_context.get("results", [])
             ],
             "media_objects": media_objects_for_next_node,
-            "cloud_media_objects": cloud_media_objects,
-            "uploaded_media_objects": cloud_media_objects,
+            "cloud_media_objects": cloud_media_objects_for_next_node,
+            "uploaded_media_objects": cloud_media_objects_for_next_node,
             "minio_context": {
                 "endpoint": f"http{'s' if CLOUD_MINIO_SECURE else ''}://{CLOUD_MINIO_ENDPOINT}",
                 "bucket": CLOUD_MINIO_BUCKET,
                 "objects": [
                     {"type": item.get("type"), "object_name": item.get("object_name")}
-                    for item in cloud_media_objects
+                    for item in cloud_media_objects_for_next_node
                 ],
-            } if cloud_media_objects else None,
+            } if cloud_media_objects_for_next_node else None,
             "media_upload": media_upload,
             "media_used": {
                 "mode": request.media_mode,
@@ -1841,6 +2292,7 @@ async def workflow_infer(request: WorkflowInferRequest):
             "report": "",
             "risk_level": "unknown",
             "knowledge_context": knowledge_context if "knowledge_context" in locals() else None,
+            "weather_context": weather_context if "weather_context" in locals() else None,
             "media_upload": media_upload,
             "cloud_media_objects": media_upload.get("objects") or [],
         }
