@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     port: int = 5001
 
     # 常驻模型：run 模式下不会在推理后停止这些模型。
-    resident_model_ids: str = "9,10,14"
+    resident_model_ids: str = "10,14"
 
     @property
     def resident_model_id_set(self) -> set[int]:

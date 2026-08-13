@@ -29,7 +29,7 @@ class Settings:
     """应用配置 — 敏感值必须从环境变量读取，无默认值"""
 
     # ── vLLM 视觉模型 ──────────────────────────────────────────
-    VLLM_QWEN3VL_URL: str = _get_env("VLLM_QWEN3VL_URL", "http://localhost:8000")
+    VLLM_QWEN3VL_URL: str = _get_env("VLLM_QWEN3VL_URL", "http://localhost:8001")
 
     # ── 边缘侧本地大模型（Qwen-VL-4B）─────────────────────────
     LOCAL_LLM_URL: str = _get_env("LOCAL_LLM_URL", "http://localhost:8001")
@@ -40,10 +40,10 @@ class Settings:
 
     # ── Qwen 摄像头初筛 ─────────────────────────────────────
     QWEN_CAMERA_SCREENING_LLM_URL: str = _get_env(
-        "QWEN_CAMERA_SCREENING_LLM_URL", "http://localhost:8003"
+        "QWEN_CAMERA_SCREENING_LLM_URL", "http://localhost:8001"
     )
     QWEN_CAMERA_SCREENING_MODEL_NAME: str = _get_env(
-        "QWEN_CAMERA_SCREENING_MODEL_NAME", "qwen0.8B"
+        "QWEN_CAMERA_SCREENING_MODEL_NAME", "qwen4B"
     )
     QWEN_CAMERA_SCREENING_ENABLED: bool = (
         _get_env("QWEN_CAMERA_SCREENING_ENABLED", "true").lower() == "true"
@@ -102,6 +102,9 @@ class Settings:
         "DAM_MODEL_LIBRARY_BASE_URL", "http://localhost:5001"
     ).rstrip("/")
     DAM_MODEL_LIBRARY_TIMEOUT: float = float(_get_env("DAM_MODEL_LIBRARY_TIMEOUT", "300"))
+    DAM_MODEL_LIBRARY_WORKFLOW_TIMEOUT: float = float(
+        _get_env("DAM_MODEL_LIBRARY_WORKFLOW_TIMEOUT", "120")
+    )
     DAM_MODEL_LIBRARY_WORKFLOW_EXECUTE_ENABLED: bool = (
         _get_env("DAM_MODEL_LIBRARY_WORKFLOW_EXECUTE_ENABLED", "true").lower() == "true"
     )

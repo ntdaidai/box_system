@@ -99,6 +99,7 @@ class DamModelLibraryClient:
         media_mode: str = "auto",
         max_frames: int = 8,
         mode: str = settings.DAM_MODEL_LIBRARY_WORKFLOW_MODE,
+        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         payload = {
             "dag": dag,
@@ -113,7 +114,7 @@ class DamModelLibraryClient:
             "fallback_to_frames": True,
             "mode": mode,
         }
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout or self.timeout) as client:
             response = await client.post(
                 f"{self.base_url}/api/workflow/execute",
                 json=payload,

@@ -27,19 +27,89 @@ from app.services.minio_service import minio_service
 from app.services.vision_detector import vision_detector
 
 
-SYSTEM_PROMPT = """你是库坝/河道摄像头初筛模型，只做疑似筛查。只输出 JSON：
-{"scene":{"mudslide_detected":0,"landslide_detected":0,"earthquake_detected":0,"flood_detected":0,"person_present":0,"boat_present":0},"confidence":{"mudslide_confidence":0,"landslide_confidence":0,"earthquake_confidence":0,"flood_confidence":0,"person_confidence":0,"boat_confidence":0},"risk_level":"LOW","summary":"一句话","evidence":["依据"],"uncertainties":["不确定"]}
-规则：detected 只能 0/1；只允许最主要一类为 1；confidence 0~1。
-优先判自然灾害：浑浊急流、水位暴涨、漫堤/漫路、淹没道路、泄洪水流、桥下异常大水 => flood_detected=1、risk_level=HIGH。自然灾害明显时，桥上/栈道/栏杆内普通行人只算背景，不触发人员。
-无效画面优先归零：室内、墙面、设备近景、天空/地面局部、严重遮挡、无水域/岸线/滩涂/坝体环境 => 所有 scene=0、所有 confidence=0、risk_level=LOW，summary 写“非库坝河道有效画面”。
-人员只在无明显自然灾害且画面明确包含水域/岸线/滩涂/坝体环境时判：人员清晰进入滩涂、河滩、消落带、水边危险区 => person_present=1、confidence>=0.65；必须同时看到岸线/滩涂/水边环境和连续小人形/活动目标，才允许 person_confidence=0.35~0.60，summary 写“疑似人员亲水/滩涂活动待复核”。墙面纹理、反光、设备边缘、阴影、污点不能作为人员疑似。
-船只/捕鱼只在有明确水面线索时判：夜间水面细长移动目标、移动暗斑、尾迹/扰动水纹、近水异常强光/探照灯、小船轮廓 => boat_present=0、boat_confidence=0.35~0.60，summary 写“疑似船只/捕鱼待复核”。如果只是普通水面、远岸、滩涂或没有这些线索，boat_confidence=0。
-输出一致性：如果 summary/evidence 写“无船只、未见船只、未出现尾迹/强光、无异常”，对应 confidence 必须为 0；如果 confidence >=0.3，summary 必须写“疑似...待复核”，不能写“无异常”。
-地震需明显震动破坏迹象；证据不足才输出 0。"""
+SYSTEM_PROMPT = """你是库坝、河道、库区摄像头的本地 qwen4B 初筛模型，职责是为 ECA 规则引擎提供“宁可疑似进入复核，也不要漏报”的结构化事实快照。
+
+重要边界：
+1. 你不是最终裁判，不要给处置结论；你只做低延迟初筛和疑似线索保留。
+2. 输入是同一段视频抽取的多张连续全景帧，请把它们当作一个短时间窗口分析，关注“是否有连续变化/移动/水流/活动目标”。
+3. 只输出一个 JSON 对象，不要 Markdown，不要解释文字，不要代码块。
+
+输出 schema 必须完整，字段名不能改：
+{
+  "scene": {
+    "mudslide_detected": 0,
+    "landslide_detected": 0,
+    "earthquake_detected": 0,
+    "flood_detected": 0,
+    "person_present": 0,
+    "boat_present": 0
+  },
+  "confidence": {
+    "mudslide_confidence": 0.0,
+    "landslide_confidence": 0.0,
+    "earthquake_confidence": 0.0,
+    "flood_confidence": 0.0,
+    "person_confidence": 0.0,
+    "boat_confidence": 0.0
+  },
+  "risk_level": "LOW",
+  "summary": "一句话概括最主要风险或无异常原因",
+  "evidence": ["列出可见证据，最多8条"],
+  "uncertainties": ["列出不确定原因，最多8条"]
+}
+
+硬性规则：
+- detected 字段只能是 0 或 1；confidence 必须是 0 到 1 的数字。
+- 只允许证据最充分的一个主类 detected=1；其它主类 detected=0。洪水明显时不要同时报人员/船只。
+- confirmed 档：看清目标且证据充分时，detected=1，confidence >= 0.65。
+- suspect 档：有有效场景和弱线索，但看不清或尺度小，不要 detected=1；detected=0，confidence 给 0.35~0.60，并在 summary/evidence/uncertainties 中写“疑似...待复核”。系统会自动派生 possible_person/possible_boat。
+- absent 档：没有有效线索时，detected=0，confidence=0，不要给 0.1/0.2 这种安慰分。
+- 如果 summary/evidence/uncertainties 写“无异常、未见船只、无船只、未见人员、无尾迹、无强光”，对应 person_confidence/boat_confidence 必须为 0。
+- 如果 person_confidence 或 boat_confidence >= 0.35，summary 必须包含“疑似...待复核”，不能写“无异常”。
+
+有效画面判断：
+- 有效库坝/河道画面包括：水面、岸线、滩涂、河滩、消落带、坝体、泄洪通道、桥下河床、库区道路、堤坡、近水平台。
+- 无效画面包括：室内、墙面、设备近景、天空/地面局部、严重遮挡、过曝/全黑、没有水域/岸线/滩涂/坝体上下文。无效画面必须所有 scene=0、所有 confidence=0、risk_level=LOW，summary 写“非库坝河道有效画面”或“画面无有效水域岸线线索”。
+
+自然灾害判定：
+- 洪水 flood_detected=1 的强证据：浑浊急流、水位明显暴涨、漫堤/漫路、道路或桥下被水淹没、泄洪水流、桥下异常大水、持续湍急冲刷、河床被异常大流量覆盖。confidence 通常 0.80~0.98，risk_level=HIGH。
+- 普通平静水面、正常河道、雨后浅积水，不要报洪水。
+- 泥石流/滑坡需要看到坡体流动、塌方、新鲜土石堆积、坡面大面积破坏等明确证据；只有浑浊水流时优先判洪水，不判泥石流/滑坡。
+- 地震只能在画面出现明显震动破坏、结构开裂坍塌、摄像头剧烈晃动且有破坏后果时判定；普通抖动或模糊不能判地震。
+- 自然灾害明显时，桥上、栏杆内、远处道路上的普通行人只算背景，不触发人员。
+
+人员/滩涂游玩判定：
+- 只有在没有明显自然灾害，且画面包含水域/岸线/滩涂/坝体等有效环境时，才评估人员。
+- confirmed 人员：清晰看到人形目标进入滩涂、河滩、消落带、水边危险区、堤坡或亲水区域活动，person_present=1，person_confidence>=0.65，risk_level 至少 MEDIUM。
+- suspect 人员：连续帧中在滩涂/河滩/水边出现远距离小人形、移动小黑点、活动点、疑似站立/行走轮廓，但目标小、模糊或被遮挡，person_present=0，person_confidence=0.35~0.60，summary 写“疑似人员亲水/滩涂活动待复核”。
+- 不能作为人员疑似的内容：墙面纹理、反光、树影、浪花、设备边缘、栏杆、污点、静止石块、纯噪声。
+
+船只/电鱼捕鱼判定：
+- 只有画面包含明确水面/岸线/河道上下文时，才评估船只或捕鱼。
+- confirmed 船只：清晰看到船体、皮划艇、渔船、漂浮作业平台或人在船上活动，boat_present=1，boat_confidence>=0.65，risk_level 至少 MEDIUM。
+- suspect 船只/捕鱼：连续帧中出现以下任一弱线索时，boat_present=0，boat_confidence=0.35~0.60，summary 写“疑似船只/捕鱼待复核”：
+  1. 水面细长移动目标、移动暗斑、疑似船头/船尾轮廓；
+  2. 船后尾迹、V形水纹、局部扰动水纹，且位置随帧变化；
+  3. 夜间或昏暗水面靠近水线的异常强光、探照灯、手电光、反复移动光斑；
+  4. 水边人员伴随长杆、网具、灯光或靠水作业迹象；
+  5. 凌晨/夜间河面有非固定小目标活动，即使船体不清晰。
+- 如果只是普通水面、远岸、滩涂纹理、固定灯光倒影、静止石块、桥梁阴影，boat_confidence=0。
+
+风险等级：
+- 任一自然灾害 confirmed => risk_level=HIGH。
+- 人员或船只 confirmed => risk_level=MEDIUM；若靠近湍急水流、夜间捕鱼、电鱼强光明显，可为 HIGH。
+- 只有 suspect 人员/船只且没有自然灾害 => risk_level=LOW 或 MEDIUM 均可，但 summary 必须说明“疑似...待复核”；不要写无异常。
+- 全部无证据或无效画面 => risk_level=LOW，summary 写清楚为什么无异常。
+
+输出质量要求：
+- evidence 写画面事实，例如“桥下浑浊急流覆盖河床”“连续帧水面有移动暗斑和扰动水纹”“滩涂远处有小人形活动点”。
+- uncertainties 写不确定来源，例如“目标距离远、尺度小”“夜间红外画质低”“只能看到水面扰动，船体不清晰”。
+- 不要输出 possible_person、possible_boat、illegal_fishing 字段；系统会根据 confidence 和文本自动派生。
+"""
 
 CAMERA_SCREENING_ACTOR_NAME = "摄像头初筛专家"
 CAMERA_SCREENING_STAGE_CODE = "camera_screening"
-CAMERA_SCREENING_MODEL_SCOPE = "qwen0_8b"
+CAMERA_SCREENING_MODEL_SCOPE = "qwen4b"
 PROMPT_CACHE_SECONDS = 60.0
 
 
@@ -252,7 +322,7 @@ class QwenCameraScreeningService:
         )
 
     def _augment_screening_frames(self, frames: List[tuple[float, bytes]]) -> List[tuple[float, bytes]]:
-        """Keep 0.8B screening scene-neutral: only use evenly sampled full frames."""
+        """Keep 4B screening scene-neutral: only use evenly sampled full frames."""
         return list(frames)
 
     def _extract_video_frames(
@@ -600,7 +670,7 @@ class QwenCameraScreeningService:
                 temperature=max(0.0, min(float(prompt_config.get("temperature", 0.0) or 0.0), 1.0)),
                 max_tokens=min(
                     max(128, int(prompt_config.get("max_tokens", settings.LOCAL_LLM_MAX_TOKENS) or 1024)),
-                    1024,
+                    8192,
                 ),
             )
             content = response.choices[0].message.content or ""
@@ -710,6 +780,7 @@ class QwenCameraScreeningService:
                     confidence[key] = 0.0
             self._apply_person_suspect_text_fallback(data, confidence)
             self._clear_negated_boat_suspect(data, confidence)
+            self._apply_boat_suspect_text_fallback(data, confidence)
             self._apply_flood_text_fallback(data, scene, confidence)
             for scene_key, confidence_key in zip(scene_keys, confidence_keys):
                 if confidence[confidence_key] < min_confidence:
@@ -809,7 +880,7 @@ class QwenCameraScreeningService:
             "risk_level": (risk_match.group(1) if risk_match else "LOW"),
             "summary": summary_match.group(1) if summary_match else "摄像头初筛输出不完整，已提取结构化置信度进入复核",
             "evidence": evidence,
-            "uncertainties": ["0.8B 初筛 JSON 输出被截断，已按已返回的 scene/confidence 字段保留疑似线索"],
+            "uncertainties": ["4B 初筛 JSON 输出被截断，已按已返回的 scene/confidence 字段保留疑似线索"],
         }
 
     @staticmethod
@@ -892,6 +963,72 @@ class QwenCameraScreeningService:
         has_positive = any(term in text for term in positive_terms)
         if has_negative or absent_positive or ("无明显异常" in text and not has_positive):
             confidence["boat_confidence"] = 0.0
+
+    @staticmethod
+    def _apply_boat_suspect_text_fallback(data: Dict[str, Any], confidence: Dict[str, Any]) -> None:
+        """Preserve Qwen's textual boat/fishing suspect when it forgot the confidence field."""
+        current = float(confidence.get("boat_confidence", 0.0) or 0.0)
+        if current > 0:
+            return
+        text = " ".join(
+            str(item)
+            for item in [
+                data.get("summary"),
+                *(data.get("evidence") or []),
+                *(data.get("uncertainties") or []),
+            ]
+            if item is not None
+        )
+        water_terms = (
+            "水面",
+            "水域",
+            "河道",
+            "河面",
+            "桥下",
+            "岸线",
+            "库区",
+        )
+        suspect_terms = (
+            "疑似船",
+            "疑似船只",
+            "疑似船体",
+            "疑似捕鱼",
+            "疑似电鱼",
+            "捕鱼待复核",
+            "电鱼待复核",
+            "细长移动目标",
+            "细长目标",
+            "移动暗斑",
+            "疑似船体轮廓",
+            "尾迹",
+            "扰动水纹",
+            "异常强光",
+            "探照灯",
+        )
+        negative_terms = (
+            "无船",
+            "无船只",
+            "未见船",
+            "没有船",
+            "未见捕鱼",
+            "未见电鱼",
+            "未出现尾迹",
+            "尾迹/扰动水纹未出现",
+            "强光/探照灯未出现",
+            "未出现异常强光",
+        )
+        if (
+            any(term in text for term in water_terms)
+            and any(term in text for term in suspect_terms)
+            and not any(term in text for term in negative_terms)
+        ):
+            confidence["boat_confidence"] = max(
+                current,
+                settings.QWEN_CAMERA_SCREENING_SUSPECT_MIN_CONFIDENCE + 0.05,
+            )
+            evidence = data.setdefault("evidence", [])
+            if isinstance(evidence, list) and not any("疑似船只/捕鱼" in str(item) for item in evidence):
+                evidence.append("初筛文本包含水面船只/捕鱼疑似线索，按疑似档进入复核")
 
     @staticmethod
     def _apply_flood_text_fallback(
@@ -1023,7 +1160,7 @@ class QwenCameraScreeningService:
     ) -> None:
         """Drop low-confidence person suspects without scene context and evidence.
 
-        The 0.8B screening model is allowed to raise a low-confidence person
+        The 4B screening model is allowed to raise a low-confidence person
         suspect only when it describes both a waterfront/tidal-flat/dam context
         and a human-like target. Plain walls, indoor views, device close-ups,
         shadows or reflections must not enter ECA.

@@ -104,38 +104,6 @@ export function simulateCameraVideoScreening(cameraId, file, options = {}) {
   )
 }
 
-// 创建临时视频检测任务，视频本体不会进入历史记录。
-export function createVideoDetection(file, options = {}) {
-  const formData = new FormData()
-  formData.append('file', file)
-  return request.post('/v1/camera/detect/video', formData, {
-    params: {
-      confidence: options.confidence ?? 0.5,
-      sample_fps: options.sampleFps ?? 2,
-      task_type: options.taskType ?? 'detect',
-    },
-    timeout: 120000,
-    onUploadProgress: options.onUploadProgress,
-  })
-}
-
-export function getVideoDetectionStatus(jobId) {
-  return request.get(`/v1/camera/detect/video/${encodeURIComponent(jobId)}/status`, {
-    localCache: false,
-  })
-}
-
-export function getVideoDetectionResult(jobId) {
-  return request.get(`/v1/camera/detect/video/${encodeURIComponent(jobId)}/result`, {
-    localCache: false,
-    timeout: 60000,
-  })
-}
-
-export function deleteVideoDetectionJob(jobId) {
-  return request.delete(`/v1/camera/detect/video/${encodeURIComponent(jobId)}`)
-}
-
 // 获取模型状态
 export function getModelStatus(config = {}) {
   return request.get('/v1/camera/model/status', { localCache: false, ...config })

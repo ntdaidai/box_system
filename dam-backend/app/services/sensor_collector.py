@@ -21,6 +21,9 @@ from app.services.durable_sensor_queue import DurableSensorQueue
 from app.services.vibration_processor import vibration_processor
 
 
+SENSOR_ONLINE_WINDOW_SECONDS = 20
+
+
 class SensorCollector:
     """传感器数据采集器"""
 
@@ -439,7 +442,7 @@ class SensorCollector:
         with self.lock:
             for name, info in self.sensors.items():
                 latest = self.latest_data.get(name)
-                if latest and (time.time() - latest["timestamp"]) < 10:
+                if latest and (time.time() - latest["timestamp"]) < SENSOR_ONLINE_WINDOW_SECONDS:
                     status[name] = {
                         "device_id": info["device_id"],
                         "status": "online",

@@ -29,7 +29,6 @@ from app.services.sensor_collector import sensor_collector
 from app.services.camera_stream import camera_manager
 from app.services.camera_live_relay import camera_live_relay_manager
 from app.services.camera_web_proxy import camera_web_proxy_manager
-from app.services.video_detection import video_detection_service
 from app.services.eca_engine import set_main_event_loop, eca_scheduler, eca_engine
 from app.services.broadcast_service import broadcast_service
 from app.services.drone_adapter import drone_dispatch_service
@@ -50,20 +49,6 @@ import traceback
 
 async def catch_all_exceptions(request: Request, call_next):
     """捕获全部未处理异常，返回统一 JSON 格式，避免泄漏堆栈信息"""
-    # dai: Reject oversized video bodies before Starlette's multipart parser
-    # spools them to disk. The endpoint still enforces the streamed byte count.
-    if request.url.path == "/api/v1/camera/detect/video":
-        content_length = request.headers.get("content-length")
-        if content_length:
-            try:
-                max_bytes = settings.MAX_VIDEO_SIZE_MB * 1024 * 1024 + 1024 * 1024
-                if int(content_length) > max_bytes:
-                    return JSONResponse(
-                        status_code=413,
-                        content={"detail": "视频文件大小超过限制"},
-                    )
-            except ValueError:
-                return JSONResponse(status_code=400, content={"detail": "Content-Length 无效"})
     try:
         return await call_next(request)
     except Exception:
@@ -96,7 +81,7 @@ async def lifespan(app: FastAPI):
 
     app.state.http_client = httpx.AsyncClient(timeout=httpx.Timeout(120.0))
     logger.info("Python后端服务启动完成")
-    logger.info(f"模型: Qwen3-VL-8B @ {settings.VLLM_QWEN3VL_URL}")
+    logger.info(f"模型: Qwen3-VL-4B @ {settings.VLLM_QWEN3VL_URL}")
 
     # 连接 MinIO
     from app.services.minio_service import minio_service
@@ -167,7 +152,6 @@ async def lifespan(app: FastAPI):
     camera_web_proxy_manager.stop_all()
     camera_live_relay_manager.stop_all()
     camera_manager.stop_all()
-    video_detection_service.shutdown()
     await app.state.http_client.aclose()
     await redis_manager.disconnect()
     logger.info("Python后端服务已关闭")

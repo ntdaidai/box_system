@@ -84,8 +84,10 @@ services:
     environment:
       TZ: Asia/Shanghai
       # vLLM 视觉模型
-      VLLM_QWEN3VL_URL: "${VLLM_QWEN3VL_URL:-http://localhost:8003}"
-      QWEN_CAMERA_SCREENING_ENABLED: "${QWEN_CAMERA_SCREENING_ENABLED:-true}"
+      VLLM_QWEN3VL_URL: "${VLLM_QWEN3VL_URL:-http://localhost:8001}"
+      QWEN_CAMERA_SCREENING_ENABLED: "${QWEN_CAMERA_SCREENING_ENABLED:-false}"
+      QWEN_CAMERA_SCREENING_LLM_URL: "${QWEN_CAMERA_SCREENING_LLM_URL:-http://localhost:8001}"
+      QWEN_CAMERA_SCREENING_MODEL_NAME: "${QWEN_CAMERA_SCREENING_MODEL_NAME:-qwen4B}"
       # IoTDB
       IOTDB_HOST: 127.0.0.1
       IOTDB_PORT: 6667
@@ -197,7 +199,7 @@ services:
       DB_USER: root
       DB_PASSWORD: root
       DB_NAME: dam_system
-      RESIDENT_MODEL_IDS: "9,10,14"
+      RESIDENT_MODEL_IDS: "10,14"
     network_mode: host
 
   # ========== DAM 工作流生成服务 ==========
@@ -228,7 +230,7 @@ services:
       # DAM 工作流默认模型：14 为 Qwen4B 封装服务，内部调用常驻 10 号 vLLM 并转存云端 MinIO
       LLM_LOCAL_MODEL_ID: "14"
       LLM_CLOUD_MODEL_ID: "13"
-      LLM_FALLBACK_MODEL_ID: "9"
+      LLM_FALLBACK_MODEL_ID: "10"
       # 服务配置
       HOST: "0.0.0.0"
       PORT: "5002"

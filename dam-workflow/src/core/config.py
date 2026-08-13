@@ -27,10 +27,10 @@ class Settings(BaseSettings):
     llm_local_model_id: Optional[int] = None     # 本地大模型 ID
     # 云端模型：qwen35B，用于综合分析和最终报告生成
     llm_cloud_model_id: Optional[int] = None     # 云端大模型 ID
-    # 兜底模型：qwen0.8B，用于 IO 匹配等轻量任务
+    # 兜底模型：qwen4B，用于 IO 匹配等轻量任务
     llm_fallback_model_id: Optional[int] = None  # 兜底模型 ID
-    llm_fallback_direct_url: str = "http://127.0.0.1:8003/v1/chat/completions"
-    llm_fallback_model_name: str = "qwen0.8B"
+    llm_fallback_direct_url: str = "http://127.0.0.1:8001/v1/chat/completions"
+    llm_fallback_model_name: str = "qwen4B"
     llm_fallback_timeout: float = 20.0
 
     @field_validator("llm_local_model_id", "llm_cloud_model_id", "llm_fallback_model_id", mode="before")

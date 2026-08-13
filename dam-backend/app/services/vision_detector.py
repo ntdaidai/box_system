@@ -32,47 +32,47 @@ class VisionDetector:
         self.detection_types = {
             "mudslide": {
                 "name": "泥石流灾害初筛",
-                "model": "Qwen3.5-0.8B",
+                "model": "Qwen3-VL-4B",
                 "variable": "mudslide_detected",
             },
             "landslide": {
                 "name": "滑坡灾害初筛",
-                "model": "Qwen3.5-0.8B",
+                "model": "Qwen3-VL-4B",
                 "variable": "landslide_detected",
             },
             "earthquake": {
                 "name": "地震灾害初筛",
-                "model": "Qwen3.5-0.8B",
+                "model": "Qwen3-VL-4B",
                 "variable": "earthquake_detected",
             },
             "flood": {
                 "name": "洪水灾害初筛",
-                "model": "Qwen3.5-0.8B",
+                "model": "Qwen3-VL-4B",
                 "variable": "flood_detected",
             },
             "person": {
                 "name": "人员出现初筛",
-                "model": "Qwen3.5-0.8B",
+                "model": "Qwen3-VL-4B",
                 "variable": "person_present",
             },
             "boat": {
                 "name": "船只出现初筛",
-                "model": "Qwen3.5-0.8B",
+                "model": "Qwen3-VL-4B",
                 "variable": "boat_present",
             },
             "possible_person": {
                 "name": "疑似人员初筛",
-                "model": "Qwen3.5-0.8B",
+                "model": "Qwen3-VL-4B",
                 "variable": "possible_person",
             },
             "possible_boat": {
                 "name": "疑似船只初筛",
-                "model": "Qwen3.5-0.8B",
+                "model": "Qwen3-VL-4B",
                 "variable": "possible_boat",
             },
             "illegal_fishing": {
                 "name": "疑似电鱼捕鱼初筛",
-                "model": "Qwen3.5-0.8B",
+                "model": "Qwen3-VL-4B",
                 "variable": "illegal_fishing",
             },
             "crack": {

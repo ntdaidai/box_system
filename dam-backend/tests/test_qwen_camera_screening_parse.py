@@ -14,8 +14,8 @@ def build_payload(scene, confidence, risk_level="LOW"):
         "scene": scene,
         "confidence": confidence,
         "risk_level": risk_level,
-        "summary": "测试",
-        "evidence": [],
+        "summary": "河道滩涂水边疑似人员或船只活动待复核",
+        "evidence": ["画面包含水域、岸线、滩涂和活动目标"],
         "uncertainties": [],
     }, ensure_ascii=False)
 
@@ -99,6 +99,21 @@ class QwenCameraScreeningParseTests(unittest.TestCase):
         self.assertEqual(result["confidence"]["boat_confidence"], 0.35)
         self.assertEqual(result["scene"]["boat_present"], 0)
         self.assertEqual(result["scene"]["possible_boat"], 1)
+
+    def test_textual_boat_suspect_without_confidence_is_preserved(self):
+        payload = {
+            "scene": {"boat_present": 0},
+            "confidence": {"boat_confidence": 0.0},
+            "risk_level": "LOW",
+            "summary": "夜间水面有细长移动目标，疑似船只/捕鱼待复核",
+            "evidence": ["水面连续帧出现细长移动目标", "移动目标后方伴随扰动水纹"],
+            "uncertainties": ["目标距离远、尺度小，无法确认船体结构"],
+        }
+        result = SERVICE._parse_result(json.dumps(payload, ensure_ascii=False))
+        self.assertEqual(result["scene"]["boat_present"], 0)
+        self.assertEqual(result["scene"]["possible_boat"], 1)
+        self.assertEqual(result["scene"]["illegal_fishing"], 1)
+        self.assertGreaterEqual(result["confidence"]["boat_confidence"], 0.3)
 
 
 class EcaExpressionTests(unittest.TestCase):

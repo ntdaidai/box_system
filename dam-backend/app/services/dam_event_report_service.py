@@ -332,9 +332,13 @@ class DamEventReportService:
         self.collect_template_dicts(value, candidates)
         overrides: dict[str, Any] = {}
         for candidate in candidates:
-            detailed = self.detailed_fields_summary(candidate)
-            if detailed:
-                overrides["handling_summary"] = detailed
+            explicit_summary = self.valid_report_text(candidate.get("handling_summary"))
+            if explicit_summary:
+                overrides["handling_summary"] = explicit_summary
+            else:
+                detailed = self.detailed_fields_summary(candidate)
+                if detailed and not overrides.get("handling_summary"):
+                    overrides["handling_summary"] = detailed
             for field in TEMPLATE_FIELDS:
                 current = candidate.get(field)
                 if current in (None, "", []):
@@ -650,7 +654,7 @@ class DamEventReportService:
         evidence: list[SafetyEventEvidence],
     ) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
-        # 0.8B 初筛帧仅用于前端初筛过程展示；正式报告证据图以
+        # 4B 初筛帧仅用于前端初筛过程展示；正式报告证据图以
         # 智能路由后的模型复核帧、4B代表帧和联动取证图片为准。
         self.extend_media_items(items, self.find_nested_values(workflow_payload, "representative_frame"))
         self.extend_media_items(items, self.find_nested_values(workflow_payload, "representative_frames"))

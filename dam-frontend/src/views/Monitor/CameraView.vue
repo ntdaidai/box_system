@@ -604,18 +604,6 @@
         </div>
         <div class="media-control-group">
           <label class="media-control">
-            <span>分析类型</span>
-            <el-select
-              :model-value="mediaTab"
-              class="media-select"
-              popper-class="vision-select-popper"
-              @change="switchMediaTab"
-            >
-              <el-option label="图片分析" value="image" />
-              <el-option label="视频分析" value="video" />
-            </el-select>
-          </label>
-          <label class="media-control">
             <span>分析方式</span>
             <el-select
               v-model="analysisTask"
@@ -710,112 +698,6 @@
         </div>
       </div>
 
-      <div v-show="mediaTab === 'video'" class="lab-content video-lab">
-        <div class="video-upload-column">
-          <el-upload
-            drag
-            :auto-upload="false"
-            :show-file-list="false"
-            accept="video/mp4,video/quicktime,video/x-msvideo,video/webm,video/x-matroska,.m4v"
-            class="drop-zone video-drop"
-            :on-change="handleVideoUpload"
-          >
-            <div class="upload-symbol video-symbol"><el-icon :size="32"><Files /></el-icon></div>
-            <h3>拖入视频文件进行{{ analysisTaskLabel }}</h3>
-            <p>支持 MP4、MOV、AVI、MKV、WEBM、M4V，最大 200MB / 10分钟</p>
-          </el-upload>
-
-          <div v-if="videoJob" class="job-panel">
-            <div class="job-title">
-              <div><small>当前任务</small><strong>{{ videoJob.filename }}</strong></div>
-              <span :class="['job-state', videoJob.state]">{{ videoStateText }}</span>
-            </div>
-            <el-progress
-              :percentage="videoProgress"
-              :stroke-width="8"
-              :show-text="false"
-              color="#42d9c3"
-            />
-            <div class="job-meta">
-              <span>{{ videoProgress }}%</span>
-              <span>已分析 {{ videoJob.processed_samples || 0 }} 个采样帧</span>
-            </div>
-            <p v-if="videoJob.error" class="inline-error">{{ videoJob.error }}</p>
-          </div>
-
-        </div>
-
-        <div class="video-analysis-stage">
-          <div v-if="videoPreviewUrl" class="uploaded-video-wrap">
-            <video
-              ref="uploadedVideoRef"
-              :src="videoPreviewUrl"
-              controls
-              playsinline
-              @timeupdate="syncVideoDetection"
-              @seeked="syncVideoDetection"
-            ></video>
-            <svg
-              v-if="videoSample?.task_type === 'detect' && videoWidth > 0 && videoHeight > 0"
-              class="box-overlay uploaded-overlay"
-              :viewBox="`0 0 ${videoWidth} ${videoHeight}`"
-              preserveAspectRatio="xMidYMid meet"
-            >
-              <g v-for="(detection, index) in videoDetections" :key="`video-${videoSample.time}-${index}`">
-                <rect
-                  class="detection-box"
-                  :x="detection.bbox.x1"
-                  :y="detection.bbox.y1"
-                  :width="detection.bbox.x2 - detection.bbox.x1"
-                  :height="detection.bbox.y2 - detection.bbox.y1"
-                  :stroke="getClassColor(detection.class_id)"
-                  :stroke-width="videoBoxStrokeWidth"
-                />
-                <rect
-                  :x="detection.bbox.x1"
-                  :y="labelY(detection, videoLabelHeight)"
-                  :width="labelWidth(detection, videoLabelFontSize, videoLabelPadding)"
-                  :height="videoLabelHeight"
-                  :fill="getClassColor(detection.class_id)"
-                  rx="3"
-                />
-                <text
-                  :x="detection.bbox.x1 + videoLabelPadding"
-                  :y="labelY(detection, videoLabelHeight) + videoLabelHeight * 0.72"
-                  :font-size="videoLabelFontSize"
-                  class="detection-label"
-                >{{ detectionLabel(detection) }}</text>
-              </g>
-            </svg>
-            <div v-if="videoJob && !videoResult" class="video-processing-overlay">
-              <el-icon class="is-loading" :size="34"><Loading /></el-icon>
-              <span>{{ videoStateText }} {{ videoProgress }}%</span>
-            </div>
-          </div>
-          <div v-else class="result-placeholder video-placeholder-result">
-            <el-icon><VideoPlay /></el-icon><span>上传后可立即预览，分析完成后随播放同步显示结果</span>
-          </div>
-
-          <div v-if="videoResult" class="playback-targets">
-            <div class="playback-heading">
-              <span>当前播放位置{{ videoResult.task_type === 'detect' ? '检测' : '分类' }}</span>
-              <b v-if="videoResult.task_type === 'detect'">{{ videoDetections.length }} 个目标</b>
-              <b v-else>{{ detectionName(videoPrediction) }} {{ confidencePercent(videoPrediction) }}%</b>
-            </div>
-            <div v-if="videoDetections.length" class="playback-list">
-              <span v-for="(item, index) in videoDetections" :key="index" :style="{ '--item-color': getClassColor(item.class_id) }">
-                {{ detectionName(item) }} {{ confidencePercent(item) }}%
-              </span>
-            </div>
-            <div v-else-if="videoClassifications.length" class="playback-list classification-playback">
-              <span v-for="item in videoClassifications" :key="item.class_id" :style="{ '--item-color': getClassColor(item.class_id) }">
-                {{ detectionName(item) }} {{ confidencePercent(item) }}%
-              </span>
-            </div>
-            <p v-else>当前采样画面暂无分析结果</p>
-          </div>
-        </div>
-      </div>
     </section>
 
     <el-dialog
@@ -953,18 +835,18 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   Aim, ArrowLeft, Camera, Crop, DataAnalysis, Delete, Files, FullScreen, Loading, Microphone, Monitor,
-  Hide, Picture, UploadFilled, VideoCamera, VideoPlay, View,
+  Hide, Picture, UploadFilled, VideoCamera, View,
 } from '@element-plus/icons-vue'
 import {
-  createStreamTicket, createVideoDetection, deleteVideoDetectionJob,
+  createStreamTicket,
   detectImage, getCameraList, getCameraStatus, getCameraZones, getModelStatus,
   getTodaySafetyReport,
-  getVideoDetectionResult, getVideoDetectionStatus, saveCameraZones,
+  saveCameraZones,
   snapshotDetect,
 } from '@/api/camera'
 import {
   classColor as getClassColor, confidencePercent, detectionName,
-  detectionInZone, findVideoSample, formatDeviceCommTime, isValidDetection,
+  detectionInZone, formatDeviceCommTime, isValidDetection,
   normalizeClassifications, normalizeDetections, normalizeZones, primaryClassification,
   shouldStartLiveStreamOnStatus, zoneTypeLabel,
 } from '@/utils/cameraDetectionView'
@@ -1054,18 +936,10 @@ const cameraRegionPaths = {
 
 const imageUploading = ref(false)
 const uploadResult = ref(null)
-const videoPreviewUrl = ref('')
-const uploadedVideoRef = ref(null)
-const videoJob = ref(null)
-const videoResult = ref(null)
-const videoSample = ref(null)
-const videoDetections = ref([])
-const videoUploadProgress = ref(0)
 
 let statusTimer = null
 let clockTimer = null
 let streamRetryTimer = null
-let videoPollTimer = null
 let closeDetectionEvents = null
 let streamRequestGeneration = 0
 let cameraMutationRevision = 0
@@ -1151,19 +1025,11 @@ const overallRiskLevel = computed(() => activeRiskEvents.value.reduce((level, ev
   riskRank(event.risk_level) > riskRank(level) ? event.risk_level : level
 ), 'NONE'))
 const overallRiskText = computed(() => (overallRiskLevel.value === 'NONE' ? '安全' : riskLevelText(overallRiskLevel.value)))
-const videoWidth = computed(() => Number(videoSample.value?.image_width) || 0)
-const videoHeight = computed(() => Number(videoSample.value?.image_height) || 0)
-const videoLabelFontSize = computed(() => Math.max(14, videoWidth.value / 55))
-const videoLabelPadding = computed(() => videoLabelFontSize.value * 0.35)
-const videoLabelHeight = computed(() => videoLabelFontSize.value * 1.35)
-const videoBoxStrokeWidth = computed(() => Math.max(2, videoWidth.value / 500))
 const imageDetections = computed(() => normalizeDetections(uploadResult.value))
 const liveClassifications = computed(() => normalizeClassifications(latestDetection.value))
 const livePrediction = computed(() => primaryClassification(latestDetection.value))
 const imageClassifications = computed(() => normalizeClassifications(uploadResult.value))
 const imagePrediction = computed(() => primaryClassification(uploadResult.value))
-const videoClassifications = computed(() => normalizeClassifications(videoSample.value))
-const videoPrediction = computed(() => primaryClassification(videoSample.value))
 const reportRiskCounts = computed(() => patrolReport.value?.risk_counts || {})
 const reportActionCounts = computed(() => patrolReport.value?.action_counts || {})
 const reportEvents = computed(() => Array.isArray(patrolReport.value?.events) ? patrolReport.value.events : [])
@@ -1259,14 +1125,6 @@ const detectionStatusText = computed(() => {
   return '启动中'
 })
 const detectionStatusClass = computed(() => detectionEnabled.value ? 'metric-active' : '')
-const videoProgress = computed(() => {
-  if (videoJob.value?.state === 'uploading') return videoUploadProgress.value
-  return Number(videoJob.value?.progress || 0)
-})
-const videoStateText = computed(() => ({
-  uploading: '正在上传', queued: '等待推理', processing: 'AI 分析中',
-  completed: '分析完成', failed: '分析失败', cancelled: '已取消',
-}[videoJob.value?.state] || '准备中'))
 const isMediaAnalysisRoute = computed(() => ['image', 'video'].includes(route.meta.mediaTab))
 const mediaTab = computed(() => route.meta.mediaTab === 'video' ? 'video' : 'image')
 
@@ -2316,7 +2174,6 @@ async function handleAnalysisTaskChange(taskType) {
     latestDetection.value = { task_type: taskType, detections: [], classifications: [] }
     detections.value = []
     uploadResult.value = null
-    await clearVideoJob()
     if (!detectionEnabled.value || !currentCameraId.value) return
     detectionEnabled.value = false
     currentCamera.value = {
@@ -2398,11 +2255,6 @@ async function takeSnapshot() {
   }
 }
 
-function switchMediaTab(tab) {
-  const target = tab === 'video' ? '/monitor/camera/video' : '/monitor/camera/image'
-  if (route.path !== target) router.push(target)
-}
-
 async function handleFileUpload(file) {
   const rawFile = file.raw
   if (!rawFile?.type.startsWith('image/')) return ElMessage.error('请选择图片文件')
@@ -2429,88 +2281,6 @@ function fileToBase64(file) {
     reader.onerror = reject
     reader.readAsDataURL(file)
   })
-}
-
-async function handleVideoUpload(file) {
-  const rawFile = file.raw
-  if (!rawFile) return
-  const suffix = rawFile.name.split('.').pop()?.toLowerCase()
-  if (!['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v'].includes(suffix)) {
-    ElMessage.error('请选择 MP4、MOV、AVI、MKV、WEBM 或 M4V 视频')
-    return
-  }
-  if (rawFile.size > 200 * 1024 * 1024) {
-    ElMessage.error('视频大小不能超过 200MB')
-    return
-  }
-  await clearVideoJob()
-  if (route.path !== '/monitor/camera/video') router.push('/monitor/camera/video')
-  videoPreviewUrl.value = URL.createObjectURL(rawFile)
-  videoUploadProgress.value = 0
-  videoJob.value = { filename: rawFile.name, state: 'uploading', progress: 0, processed_samples: 0 }
-  try {
-    const response = await createVideoDetection(rawFile, {
-      confidence: 0.5,
-      sampleFps: 2,
-      taskType: analysisTask.value,
-      onUploadProgress(event) {
-        if (event.total) videoUploadProgress.value = Math.min(99, Math.round(event.loaded / event.total * 100))
-      },
-    })
-    videoJob.value = response.data
-    scheduleVideoPoll(300)
-  } catch (error) {
-    videoJob.value = { ...videoJob.value, state: 'failed', error: error?.response?.data?.detail || '视频上传失败' }
-  }
-}
-
-function scheduleVideoPoll(delay = 800) {
-  clearTimeout(videoPollTimer)
-  videoPollTimer = setTimeout(pollVideoJob, delay)
-}
-
-async function pollVideoJob() {
-  const jobId = videoJob.value?.job_id
-  if (!jobId) return
-  try {
-    const response = await getVideoDetectionStatus(jobId)
-    videoJob.value = response.data
-    if (response.data.state === 'completed') {
-      const result = await getVideoDetectionResult(jobId)
-      videoResult.value = result.data
-      syncVideoDetection()
-      ElMessage.success(
-        result.data.task_type === 'detect'
-          ? '视频检测完成，可播放查看同步标框'
-          : '视频分类完成，可播放查看各采样位置结果',
-      )
-      return
-    }
-    if (['failed', 'cancelled'].includes(response.data.state)) return
-    scheduleVideoPoll()
-  } catch {
-    scheduleVideoPoll(1600)
-  }
-}
-
-function syncVideoDetection() {
-  const timeline = videoResult.value?.timeline
-  if (!timeline?.length || !uploadedVideoRef.value) return
-  const sample = findVideoSample(timeline, uploadedVideoRef.value.currentTime)
-  videoSample.value = sample
-  videoDetections.value = normalizeDetections(sample)
-}
-
-async function clearVideoJob() {
-  clearTimeout(videoPollTimer)
-  const jobId = videoJob.value?.job_id
-  if (jobId) deleteVideoDetectionJob(jobId).catch(() => null)
-  if (videoPreviewUrl.value) URL.revokeObjectURL(videoPreviewUrl.value)
-  videoPreviewUrl.value = ''
-  videoJob.value = null
-  videoResult.value = null
-  videoSample.value = null
-  videoDetections.value = []
 }
 
 function zonePolygonPoints(zone) {
@@ -2870,7 +2640,6 @@ onBeforeUnmount(() => {
   stopLiveStream()
   stopGridStreams()
   stopDetectionSubscription()
-  clearVideoJob()
 })
 </script>
 
@@ -3095,8 +2864,7 @@ h1, h2, h3, p { margin-top: 0; }
 .corner-tr { right: 12px; top: 12px; border-right: 2px solid; border-top: 2px solid; }
 .corner-bl { left: 12px; bottom: 12px; border-left: 2px solid; border-bottom: 2px solid; }
 .corner-br { right: 12px; bottom: 12px; border-right: 2px solid; border-bottom: 2px solid; }
-.stage-loading, .video-processing-overlay { position: absolute; inset: 0; z-index: 6; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: #8ddcf0; background: rgba(3, 14, 23, 0.76); backdrop-filter: blur(3px); }
-.stage-loading { pointer-events: none; }
+.stage-loading { position: absolute; inset: 0; z-index: 6; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: #8ddcf0; background: rgba(3, 14, 23, 0.76); backdrop-filter: blur(3px); pointer-events: none; }
 .stage-badge { position: absolute; z-index: 5; top: 14px; padding: 6px 9px; color: #89a7b9; font-family: monospace; font-size: 10px; border-radius: 5px; background: rgba(2, 13, 21, 0.76); }
 .left-badge { left: 16px; }.right-badge { right: 16px; }
 .stage-badge i { display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: #71808a; }
@@ -4408,12 +4176,10 @@ h1, h2, h3, p { margin-top: 0; }
 }
 .lab-content { display: grid; gap: 14px; padding-top: 16px; }
 .image-lab { grid-template-columns: minmax(360px, 0.34fr) minmax(0, 1fr); align-items: stretch; }
-.video-lab { grid-template-columns: minmax(360px, 0.34fr) minmax(0, 1fr); align-items: stretch; }
 .drop-zone :deep(.el-upload), .drop-zone :deep(.el-upload-dragger) { width: 100%; height: 100%; }
 .drop-zone :deep(.el-upload-dragger) { min-height: 360px; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 1px dashed rgba(77, 202, 233, 0.28); border-radius: 12px; background: rgba(5, 25, 39, 0.46); }
 .drop-zone :deep(.el-upload-dragger:hover) { border-color: var(--cyan); background: rgba(14, 62, 82, 0.4); }
 .upload-symbol { width: 58px; height: 58px; display: grid; place-items: center; margin-bottom: 14px; color: var(--cyan); border-radius: 16px; background: rgba(58, 183, 217, 0.1); }
-.video-symbol { color: var(--mint); background: rgba(64, 210, 169, 0.1); }
 .drop-zone h3 { margin-bottom: 7px; color: #c6dce7; font-size: 14px; }
 .drop-zone p { max-width: 280px; margin: 0; color: #668397; font-size: 10px; }
 .media-result { min-height: 360px; overflow: hidden; position: relative; border: 1px solid rgba(80, 165, 200, 0.12); border-radius: 12px; background: #05111b; }
@@ -4444,29 +4210,6 @@ h1, h2, h3, p { margin-top: 0; }
 .image-target-empty span { max-width: 190px; font-size: 10px; line-height: 1.6; }
 .result-placeholder { min-height: 360px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: #4f7186; }
 .result-placeholder .el-icon { font-size: 42px; }
-
-.video-upload-column { display: flex; flex-direction: column; gap: 10px; }
-.video-drop :deep(.el-upload-dragger) { min-height: 360px; }
-.job-panel { padding: 12px; border: 1px solid rgba(74, 174, 204, 0.13); border-radius: 10px; background: rgba(4, 19, 31, 0.5); }
-.job-title { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
-.job-title > div { min-width: 0; display: flex; flex-direction: column; }
-.job-title strong { overflow: hidden; margin-top: 3px; color: #bdd5e1; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.job-state { height: 22px; padding: 4px 8px; color: #89a9bb; font-size: 9px; border-radius: 11px; background: rgba(65, 115, 140, 0.18); }
-.job-state.processing, .job-state.completed { color: var(--mint); background: rgba(54, 181, 147, 0.14); }
-.job-state.failed { color: #ff8792; }
-.job-meta { display: flex; justify-content: space-between; margin-top: 7px; color: #5e7c91; font-size: 9px; }
-.video-analysis-stage { min-width: 0; }
-.uploaded-video-wrap { position: relative; min-height: 520px; overflow: hidden; border: 1px solid rgba(74, 178, 210, 0.14); border-radius: 12px; background: #02080d; }
-.uploaded-video-wrap video { display: block; width: 100%; height: 520px; object-fit: contain; }
-.uploaded-overlay { bottom: 48px; height: calc(100% - 48px); }
-.video-processing-overlay { bottom: 48px; }
-.video-placeholder-result { min-height: 430px; border: 1px solid rgba(70, 151, 180, 0.12); border-radius: 12px; background: rgba(4, 18, 29, 0.5); }
-.playback-targets { min-height: 116px; margin-top: 12px; padding: 18px 20px; border: 1px solid rgba(76, 160, 192, 0.16); border-radius: 10px; background: rgba(5, 22, 34, 0.64); }
-.playback-heading { display: flex; justify-content: space-between; gap: 16px; color: #8db0c2; font-size: 13px; }
-.playback-heading b { color: var(--cyan); }
-.playback-list { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
-.playback-list span { min-height: 34px; display: inline-flex; align-items: center; padding: 7px 12px; color: #d7edf5; font-size: 12px; border-left: 3px solid var(--item-color); border-radius: 6px; background: rgba(35, 77, 94, 0.34); }
-.playback-targets p { margin: 16px 0 0; color: #6f91a5; font-size: 12px; }
 
 .dialog-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .source-type-group { width: 100%; }
@@ -5371,11 +5114,10 @@ h1, h2, h3, p { margin-top: 0; }
   .task-control { padding: 0; border: none; }
   .media-control-group { align-items: stretch; flex-direction: column; }
   .media-control { align-items: flex-start; flex-direction: column; gap: 5px; }
-  .live-workspace, .image-lab, .video-lab { grid-template-columns: 1fr; }
+  .live-workspace, .image-lab { grid-template-columns: 1fr; }
   .image-result.has-result { grid-template-columns: 1fr; }
   .image-target-panel { min-height: 250px; border-top: 1px solid rgba(75, 175, 211, 0.16); border-left: none; }
   .telemetry-card { min-height: 420px; }
   .media-select, .camera-select { width: 100%; }
-  .uploaded-video-wrap video { height: 320px; }
 }
 </style>

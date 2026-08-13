@@ -10,12 +10,13 @@ import httpx
 
 app = FastAPI(
     title="Qwen3.5-35B 云端增强推理代理",
-    description="转发请求到云端 Cloud API 10.196.85.11:9458",
+    description="统一 DAG 工作流推理代理，转发请求到云端 Cloud API 10.196.85.11:9458",
     version="1.0.0",
 )
 
 CLOUD_URL = os.getenv("CLOUD_URL", "http://10.196.85.11:9458")
 INFERENCE_PATH = os.getenv("INFERENCE_PATH", "/infer")
+CLOUD_PROBE_TIMEOUT = float(os.getenv("CLOUD_PROBE_TIMEOUT", "5"))
 
 client = httpx.Client(timeout=300.0)
 
@@ -100,6 +101,20 @@ def _normalize_workflow_payload(payload: dict) -> dict:
         normalized["sensor_data"] = _strip_media_refs(sensor_data)
 
     return normalized
+
+
+def _cloud_reachable() -> bool:
+    """检测云端推理服务是否可用。
+
+    通过探测云端 /health 接口判断服务是否可达。探测失败（连接失败、
+    超时、非 2xx/3xx 状态）即视为不可用，避免推理请求在云端离线时
+    等待 300 秒超时。
+    """
+    try:
+        resp = client.get(f"{CLOUD_URL}/health", timeout=CLOUD_PROBE_TIMEOUT)
+        return resp.status_code < 400
+    except Exception:
+        return False
 
 
 def _cloud_error_detail(resp: httpx.Response) -> str:
@@ -198,29 +213,12 @@ async def health():
     return {"status": "healthy", "cloud": "unreachable"}
 
 
-@app.post("/api/v1/cloud-inference")
-async def infer(request: InferRequest):
-    """转发推理请求到云端。"""
-    try:
-        payload = _normalize_workflow_payload(request.model_dump(exclude_none=True))
-        resp = client.post(
-            f"{CLOUD_URL}{INFERENCE_PATH}",
-            json=payload,
-        )
-        resp.raise_for_status()
-        return resp.json()
-    except httpx.ConnectError:
-        raise HTTPException(status_code=502, detail="云端服务不可达")
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=502, detail=_cloud_error_detail(e.response))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.post("/infer")
 @app.post("/predict")
 async def workflow_infer(request: InferRequest):
     """统一 DAG 工作流入口，透传 prompt、视频路径、上游结果给云端服务。"""
+    if not _cloud_reachable():
+        raise HTTPException(status_code=502, detail="云端服务不可用，请稍后重试")
     try:
         payload = _normalize_workflow_payload(request.model_dump(exclude_none=True))
         if "report_requirement" not in payload:

@@ -322,7 +322,7 @@ def _fallback_score_candidate(candidate: Dict[str, Any], node: Dict[str, Any], e
 
 
 def select_model_with_qwen_selector(node: Dict, event_type: str, model_category: str, db: Session) -> Optional[Dict]:
-    """Use resident Qwen0.8B to select a model from model_registry candidates."""
+    """Use resident Qwen4B to select a model from model_registry candidates."""
     if not settings.llm_fallback_model_id:
         return None
 
@@ -368,7 +368,7 @@ def select_model_with_qwen_selector(node: Dict, event_type: str, model_category:
         )
         decision = _parse_json_object(_extract_llm_content(result)) or {}
     except Exception as exc:
-        logger.warning("Qwen0.8B 模型选择失败，使用规则兜底: %s", exc)
+        logger.warning("Qwen4B 模型选择失败，使用规则兜底: %s", exc)
         decision = {}
 
     candidate_ids = {item["model_id"] for item in candidates}
@@ -389,13 +389,13 @@ def select_model_with_qwen_selector(node: Dict, event_type: str, model_category:
         selected_id = scored[0]["model_id"]
         decision = {
             "confidence": 0.0,
-            "reason": "Qwen0.8B 未返回有效候选，使用规则评分兜底",
+            "reason": "Qwen4B 未返回有效候选，使用规则评分兜底",
         }
     else:
         selected_candidate = next((item for item in candidates if item["model_id"] == selected_id), None)
         if not selected_candidate or _fallback_score_candidate(selected_candidate, node, event_type) <= 0:
             logger.warning(
-                "Qwen0.8B选择的模型与任务不兼容: event=%s, node=%s, selected_id=%s",
+                "Qwen4B选择的模型与任务不兼容: event=%s, node=%s, selected_id=%s",
                 event_type,
                 node.get("node_type"),
                 selected_id,
@@ -404,11 +404,11 @@ def select_model_with_qwen_selector(node: Dict, event_type: str, model_category:
 
     model_info = get_model_with_inference_url(selected_id, db)
     if model_info:
-        model_info["selection_source"] = "qwen0.8b_model_selector"
+        model_info["selection_source"] = "qwen4b_model_selector"
         model_info["selection_reason"] = decision.get("reason")
         model_info["selection_confidence"] = decision.get("confidence")
         logger.info(
-            "Qwen0.8B模型选择: event=%s, node=%s, model_id=%s, reason=%s",
+            "Qwen4B模型选择: event=%s, node=%s, model_id=%s, reason=%s",
             event_type,
             node.get("node_type"),
             selected_id,
@@ -549,13 +549,13 @@ def select_model_for_action(node: Dict, event_type: str, db: Session = None) -> 
             return model_info
 
     if db:
-        # specialized 节点使用常驻 Qwen0.8B 从模型库候选中选择
+        # specialized 节点使用常驻 Qwen4B 从模型库候选中选择
         if model_category == "specialized":
             model_info = select_model_with_qwen_selector(node, event_type, model_category, db)
             if model_info:
                 return model_info
 
-        # Qwen0.8B 未选出结果时，回退到运行中模型模糊匹配
+        # Qwen4B 未选出结果时，回退到运行中模型模糊匹配
         model_info = fuzzy_match_model(node_type, model_category, db)
         if model_info:
             return model_info

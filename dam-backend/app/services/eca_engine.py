@@ -977,12 +977,46 @@ class ECAEngine:
                         media_objects=request_payload.get("media_objects") or [],
                         sensor_data=request_payload["sensor_data"],
                         event_type=result.get("event_type"),
+                        timeout=settings.DAM_MODEL_LIBRARY_WORKFLOW_TIMEOUT,
                     )
                 except Exception as execute_error:
                     execution_error = str(execute_error)
                     logger.warning(
                         f"DAM工作流提交模型库执行失败: event={event.event_name}, error={execute_error}"
                     )
+            fallback_used = False
+            fallback_reason = None
+            if execution_result is None:
+                fallback_used = True
+                fallback_reason = execution_error or "模型库工作流未提交，启用本地报告兜底"
+                execution_result = self._build_local_report_fallback_result(
+                    instance=instance,
+                    event=event,
+                    sensor_data=sensor_data,
+                    request_payload=request_payload,
+                    final_dag=final_dag,
+                    event_type=result.get("event_type"),
+                    visual_tasks=result.get("visual_tasks") or [],
+                    execution_error=fallback_reason,
+                )
+            elif not self._execution_has_report_candidate(execution_result):
+                fallback_used = True
+                fallback_reason = (
+                    self._execution_failure_summary(execution_result)
+                    or execution_error
+                    or "模型库未返回可用于生成报告的云端/本地报告节点"
+                )
+                execution_result = self._build_local_report_fallback_result(
+                    instance=instance,
+                    event=event,
+                    sensor_data=sensor_data,
+                    request_payload=request_payload,
+                    final_dag=final_dag,
+                    event_type=result.get("event_type"),
+                    visual_tasks=result.get("visual_tasks") or [],
+                    execution_error=fallback_reason,
+                    original_execution_result=execution_result,
+                )
             execution_status = (
                 (execution_result or {}).get("status")
                 if execution_result is not None
@@ -995,6 +1029,8 @@ class ECAEngine:
                 "final_dag": final_dag,
                 "execution_result": execution_result,
                 "execution_error": execution_error,
+                "fallback_used": fallback_used,
+                "fallback_reason": fallback_reason,
             }
             safety_event_runtime_service.append_timeline(
                 db,
@@ -1002,16 +1038,20 @@ class ECAEngine:
                 action_key=execute_action_key,
                 log_type="DAM_WORKFLOW",
                 trigger_type="AUTO",
-                status="SUCCESS" if not execution_error else "FAILED",
+                status="SUCCESS" if not execution_error or fallback_used else "FAILED",
                 title="模型库工作流执行",
                 message=(
                     f"模型库工作流执行完成：{node_count}个节点，{edge_count}条边；"
                     f"执行状态 {execution_status}"
+                    + (
+                        "；云端增强/报告节点不可用，已启用本地报告兜底"
+                        if fallback_used
+                        else ""
+                    )
                 ),
                 payload=workflow_payload,
             )
-            if execution_result is not None:
-                self.generate_dam_event_report(instance, event, workflow_payload, db)
+            self.generate_dam_event_report(instance, event, workflow_payload, db)
             db.commit()
             return result
         except Exception as e:
@@ -1033,6 +1073,223 @@ class ECAEngine:
             )
             db.commit()
             return None
+
+    def _execution_has_report_candidate(self, execution_result: Dict[str, Any]) -> bool:
+        """Whether model-library returned a successful report/reasoning node."""
+        if not isinstance(execution_result, dict):
+            return False
+        for row in execution_result.get("node_results") or []:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("node_id") or "") not in {"action_report", "action_reasoning"}:
+                continue
+            if str(row.get("status") or "").lower() != "success":
+                continue
+            output = row.get("output")
+            if isinstance(output, str) and output.strip():
+                return True
+            if isinstance(output, dict) and any(
+                output.get(key)
+                for key in (
+                    "report",
+                    "summary",
+                    "analysis",
+                    "content",
+                    "text",
+                    "final_report",
+                    "inference_result",
+                    "template_fields",
+                )
+            ):
+                return True
+        return False
+
+    def _execution_failure_summary(self, execution_result: Dict[str, Any]) -> Optional[str]:
+        if not isinstance(execution_result, dict):
+            return None
+        messages = []
+        for row in execution_result.get("node_results") or []:
+            if not isinstance(row, dict):
+                continue
+            status = str(row.get("status") or "").lower()
+            if status in {"success", "skipped"}:
+                continue
+            node_id = str(row.get("node_id") or row.get("id") or "unknown")
+            error = row.get("error") or row.get("message")
+            output = row.get("output")
+            if not error and isinstance(output, dict):
+                error = output.get("error") or output.get("message")
+            messages.append(f"{node_id}: {error or status or 'failed'}")
+            if len(messages) >= 3:
+                break
+        return "；".join(messages) or None
+
+    def _build_local_report_fallback_result(
+        self,
+        *,
+        instance: SafetyEventInstance,
+        event: EventLibrary,
+        sensor_data: Dict[str, Any],
+        request_payload: Dict[str, Any],
+        final_dag: Dict[str, Any],
+        event_type: Optional[str],
+        visual_tasks: List[Any],
+        execution_error: str,
+        original_execution_result: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Synthesize a local reasoning node so the existing DOCX report path can finish."""
+        visual = sensor_data.get("visual") if isinstance(sensor_data.get("visual"), dict) else {}
+        screening = visual.get("screening") if isinstance(visual.get("screening"), dict) else sensor_data
+        event_name = getattr(event, "event_name", None) or instance.summary or "安全事件"
+        risk = str(instance.max_risk_level or instance.risk_level or screening.get("risk_level") or "LOW").upper()
+        risk_label = {"HIGH": "高风险", "MEDIUM": "中风险", "LOW": "低风险"}.get(risk, "待确认")
+        summary = (
+            screening.get("summary")
+            or screening.get("qwen_summary")
+            or instance.summary
+            or f"{event_name}已触发，云端增强不可用，采用本地证据生成兜底报告。"
+        )
+        confidence = self._max_camera_confidence(screening if isinstance(screening, dict) else sensor_data)
+        confidence_text = f"{confidence * 100:.1f}%" if confidence is not None else "待复核"
+        evidence_bits = self._local_fallback_evidence_bits(screening if isinstance(screening, dict) else {})
+        evidence_text = "；".join(evidence_bits) if evidence_bits else "本地初筛已记录触发摘要与关联视频/关键帧，需现场复核确认。"
+        video_count = len(request_payload.get("videos") or sensor_data.get("video_urls") or [])
+        image_count = len(request_payload.get("images") or sensor_data.get("qwen_image_urls") or [])
+        cloud_note = f"云端增强/报告节点异常：{execution_error}。"
+        detailed_scene = (
+            f"{event_name}由边缘侧摄像头/ECA触发。本地初筛摘要：{summary} "
+            f"关联视频{video_count}段、图像/抽帧{image_count}张；{evidence_text}"
+        )
+        risk_reasoning = (
+            f"当前按{risk_label}处置，初筛综合置信度为{confidence_text}。"
+            f"{cloud_note}系统未等待云端增强结论，已降级采用本地4B初筛、事件条件和证据清单生成处置报告。"
+        )
+        response_plan = (
+            "保持摄像头连续取证，通知值守人员查看现场视频；必要时安排人员到场复核。"
+            "若水位、雨量、风速、坝体监测或画面目标持续异常，应升级告警并启动对应应急预案。"
+        )
+        monitoring = (
+            "继续跟踪后续Qwen初筛结果、视频关键帧和相关传感器指标；云端服务恢复后可重新提交增强分析并更新报告。"
+        )
+        conclusion = (
+            f"本报告为云端不可用场景下的本地兜底报告，已保证{event_name}事件形成处置闭环；"
+            "最终风险结论仍建议结合现场巡查复核。"
+        )
+        template_fields = {
+            "summary": f"{event_name}触发，本地兜底报告已生成。",
+            "key_observation": evidence_text,
+            "source_summary": "Qwen3-VL-4B 本地场景理解（云端增强不可用）",
+            "handling_summary": "\n".join([
+                f"一、现场场景：{detailed_scene}",
+                f"二、风险研判：{risk_reasoning}",
+                "三、影响评估：事件可能影响现场通行、人员安全或工程运行状态，需结合实时监测确认影响范围。",
+                f"四、处置建议：{response_plan}",
+                f"五、持续监测：{monitoring}",
+            ]),
+            "scene_detail": detailed_scene,
+            "risk_assessment_detail": risk_reasoning,
+            "impact_assessment": "云端增强不可用期间，影响范围以本地视频证据、传感器状态和现场复核为准。",
+            "response_plan": response_plan,
+            "monitoring_suggestions": monitoring,
+            "recommendations_text": "现场复核；持续取证；云端恢复后补充增强分析。",
+            "analysis_limitations": "云端增强/报告节点超时或失败，本报告未包含云端35B增强结论。",
+            "follow_up_actions": "确认现场状态，补充巡查记录，云端恢复后重新生成增强报告。",
+            "conclusion": conclusion,
+        }
+        local_output = {
+            "source": "local_fallback",
+            "model": settings.QWEN_CAMERA_SCREENING_MODEL_NAME,
+            "summary": template_fields["handling_summary"],
+            "handling_summary": template_fields["handling_summary"],
+            "report": template_fields["handling_summary"],
+            "detailed_scene_analysis": detailed_scene,
+            "risk_reasoning": risk_reasoning,
+            "impact_assessment": template_fields["impact_assessment"],
+            "response_plan": response_plan,
+            "monitoring_suggestions": monitoring,
+            "risk_level": risk,
+            "confidence": confidence,
+            "evidence": evidence_bits,
+            "recommendations": template_fields["recommendations_text"],
+            "template_fields": template_fields,
+            "final_report": {
+                "detailed_scene_analysis": detailed_scene,
+                "risk_reasoning": risk_reasoning,
+                "impact_assessment": template_fields["impact_assessment"],
+                "response_plan": response_plan,
+                "monitoring_suggestions": monitoring,
+                "recommendations": template_fields["recommendations_text"],
+                "conclusion": conclusion,
+                "template_fields": template_fields,
+            },
+            "inference_result": {
+                "scene_description": detailed_scene,
+                "suspected_event": event_name,
+                "risk_level": risk,
+                "confidence": confidence,
+                "risk_assessment": risk_reasoning,
+                "emergency_suggestion": response_plan,
+                "template_fields": template_fields,
+            },
+            "images": request_payload.get("images") or [],
+            "videos": request_payload.get("videos") or [],
+            "media_objects": request_payload.get("media_objects") or [],
+        }
+        node_results = [
+            {
+                "node_id": "start_0",
+                "status": "success",
+                "output": {
+                    "event_type": event_type,
+                    "visual_tasks": visual_tasks,
+                    "sensor_data": request_payload.get("sensor_data") or sensor_data,
+                    "images": request_payload.get("images") or [],
+                    "videos": request_payload.get("videos") or [],
+                    "media_objects": request_payload.get("media_objects") or [],
+                },
+            },
+            {"node_id": "action_reasoning", "status": "success", "output": local_output},
+            {
+                "node_id": "action_report",
+                "status": "failed",
+                "error": execution_error,
+                "output": {"fallback_to_local_report": True, "error": execution_error},
+            },
+            {"node_id": "end_0", "status": "success", "output": local_output},
+        ]
+        return {
+            "status": "fallback",
+            "mode": "local_report_fallback",
+            "node_results": node_results,
+            "fallback_used": True,
+            "fallback_reason": execution_error,
+            "original_execution_result": original_execution_result,
+            "final_dag": final_dag,
+        }
+
+    def _local_fallback_evidence_bits(self, screening: Dict[str, Any]) -> List[str]:
+        fields = [
+            ("flood_detected", "flood_confidence", "洪水/水面异常"),
+            ("person_present", "person_confidence", "人员出现"),
+            ("possible_person", "person_confidence", "疑似人员"),
+            ("boat_present", "boat_confidence", "船只出现"),
+            ("possible_boat", "boat_confidence", "疑似船只/捕鱼目标"),
+            ("illegal_fishing", "illegal_fishing_confidence", "疑似非法捕捞"),
+        ]
+        bits = []
+        for flag_key, confidence_key, label in fields:
+            if int(screening.get(flag_key) or 0) != 1:
+                continue
+            confidence = screening.get(confidence_key)
+            try:
+                confidence_text = f"{float(confidence) * 100:.1f}%" if confidence not in (None, "") else ""
+            except (TypeError, ValueError):
+                confidence_text = ""
+            if confidence_text:
+                bits.append(f"{label}，置信度{confidence_text}")
+            else:
+                bits.append(label)
+        return bits
 
     def generate_dam_event_report(
         self,
@@ -1463,7 +1720,7 @@ class ECAEngine:
                 user_content = prompt
 
             payload = {
-                "model": "qwen",
+                "model": settings.LOCAL_LLM_MODEL_NAME,
                 "messages": [
                     {"role": "system", "content": "你是一个大坝安全分析专家，负责分析传感器数据和图像并给出专业的安全评估。"},
                     {"role": "user", "content": user_content}
@@ -1889,7 +2146,7 @@ class ECAEngine:
             risk = "LOW"
             observation["suspected"] = True
             observation["suspected_label"] = "疑似人员/船只待复核"
-            observation["screening_note"] = "0.8B 初筛低置信命中，已进入 4B/35B 复核，风险等级按 LOW 降级处理"
+            observation["screening_note"] = "4B 初筛低置信命中，已进入 4B/35B 复核，风险等级按 LOW 降级处理"
         camera = db.query(Camera).filter(Camera.id == source.device_id).first() if source.device_id else None
         observation["visual"] = {
             **dict(observation.get("visual") or {}),
@@ -1965,8 +2222,8 @@ class ECAEngine:
             SafetyEventTimelineLog.event_instance_id == instance.id,
             SafetyEventTimelineLog.log_type == "DAM_WORKFLOW",
             SafetyEventTimelineLog.status == "PROCESSING",
-        ).first()
-        if running:
+        ).order_by(SafetyEventTimelineLog.id.desc()).first()
+        if running and not self._is_stale_workflow_processing_log(running):
             return False
         latest_workflow = db.query(SafetyEventTimelineLog).filter(
             SafetyEventTimelineLog.event_instance_id == instance.id,
@@ -1976,6 +2233,20 @@ class ECAEngine:
             return True
         message = str(latest_workflow.message or "")
         return latest_workflow.status == "FAILED" or "not_submitted" in message
+
+    def _is_stale_workflow_processing_log(self, log: SafetyEventTimelineLog) -> bool:
+        created_at = getattr(log, "create_time", None)
+        if not created_at:
+            return False
+        try:
+            age = datetime.now() - created_at
+        except TypeError:
+            age = datetime.utcnow() - created_at.replace(tzinfo=None)
+        timeout_seconds = max(
+            60.0,
+            float(getattr(settings, "DAM_MODEL_LIBRARY_WORKFLOW_TIMEOUT", 120) or 120) + 30.0,
+        )
+        return age.total_seconds() > timeout_seconds
 
     def _dispatch_async_event_actions(
         self,

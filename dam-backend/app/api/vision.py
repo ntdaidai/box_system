@@ -27,7 +27,7 @@ class AnalyzeResponse(BaseModel):
 
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze_image(request: AnalyzeRequest, req: Request, _user: User = Depends(require_auth)):
-    """使用Qwen3-VL-8B分析图像"""
+    """使用Qwen3-VL-4B分析图像"""
     start_time = time.time()
 
     # 验证base64大小
@@ -40,7 +40,7 @@ async def analyze_image(request: AnalyzeRequest, req: Request, _user: User = Dep
         response = await client.post(
             f"{settings.VLLM_QWEN3VL_URL}/v1/chat/completions",
             json={
-                "model": "qwen",
+                "model": settings.LOCAL_LLM_MODEL_NAME,
                 "messages": [{
                     "role": "user",
                     "content": [

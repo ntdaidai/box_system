@@ -45,7 +45,6 @@ from app.services.camera_zone_store import get_camera_zone_store
 from app.services.minio_service import minio_service
 from app.services.qwen_camera_screening import qwen_camera_screening_service
 from app.services.stream_ticket import stream_ticket_store
-from app.services.video_detection import video_detection_service
 from app.services.vision_model_registry import vision_model_registry
 from app.services.broadcast_service import broadcast_service
 
@@ -177,23 +176,6 @@ PEER_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{8,80}$")
 
 def _owner_id(user: User) -> str:
     return str(getattr(user, "id", None) or getattr(user, "username", "authenticated"))
-
-
-def _persist_video(upload_file, target: Path, max_bytes: int) -> int:
-    written = 0
-    with target.open("xb") as output:
-        target.chmod(0o600)
-        while True:
-            chunk = upload_file.read(1024 * 1024)
-            if not chunk:
-                break
-            written += len(chunk)
-            if written > max_bytes:
-                raise ValueError("视频文件大小超过限制")
-            output.write(chunk)
-    if written == 0:
-        raise ValueError("视频文件为空")
-    return written
 
 
 async def _persist_upload_video(upload_file: UploadFile, target: Path, max_bytes: int) -> int:
@@ -1231,113 +1213,6 @@ async def simulate_camera_screening_video(
 # dai: Video detection returns a short-lived timeline instead of generating a
 # second large video. The browser plays its local file and synchronizes boxes
 # to these sampled timestamps, so uploads never become permanent history.
-@router.post(
-    "/detect/video",
-    response_model=DetectResponse,
-    status_code=202,
-    summary="上传视频并创建检测任务",
-)
-async def create_video_detection_job(
-    file: UploadFile = File(...),
-    task_type: AnalysisTask = Query("detect", description="模型任务类型"),
-    confidence: float = Query(0.5, ge=0.0, le=1.0),
-    sample_fps: float = Query(settings.VIDEO_DETECTION_FPS, ge=0.2, le=10.0),
-    _user: User = Depends(require_auth),
-):
-    model = _get_model_or_503(task_type)
-    safe_name = Path(file.filename or "video").name
-    suffix = Path(safe_name).suffix.lower()
-    if suffix not in VIDEO_SUFFIXES:
-        raise HTTPException(status_code=400, detail="仅支持 MP4/MOV/AVI/MKV/WEBM/M4V 视频")
-    if file.content_type and not (
-        file.content_type.startswith("video/")
-        or file.content_type == "application/octet-stream"
-    ):
-        raise HTTPException(status_code=400, detail="上传文件不是视频格式")
-
-    temp_dir = Path(tempfile.gettempdir()) / "dam_camera_video_jobs"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    temp_dir.chmod(0o700)
-    target = temp_dir / f"{time.time_ns()}{suffix}"
-    try:
-        await asyncio.to_thread(
-            _persist_video,
-            file.file,
-            target,
-            settings.MAX_VIDEO_SIZE_MB * 1024 * 1024,
-        )
-        source_video_url = None
-        job = video_detection_service.submit(
-            file_path=str(target),
-            filename=safe_name,
-            owner_id=_owner_id(_user),
-            model=model,
-            task_type=task_type,
-            confidence=confidence,
-            iou=settings.YOLO_IOU,
-            sample_fps=sample_fps,
-            source_video_url=source_video_url,
-        )
-    except ValueError as exc:
-        target.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception:
-        target.unlink(missing_ok=True)
-        raise
-    finally:
-        await file.close()
-    return DetectResponse(code=200, data=job)
-
-
-@router.get(
-    "/detect/video/{job_id}/status",
-    response_model=DetectResponse,
-    summary="查询视频检测进度",
-)
-async def get_video_detection_status(
-    job_id: str,
-    _user: User = Depends(require_auth),
-):
-    job = video_detection_service.get_status(job_id, _owner_id(_user))
-    if not job:
-        raise HTTPException(status_code=404, detail="视频检测任务不存在或已过期")
-    return DetectResponse(code=200, data=job)
-
-
-@router.get(
-    "/detect/video/{job_id}/result",
-    response_model=DetectResponse,
-    summary="获取视频检测时间轴",
-)
-async def get_video_detection_result(
-    job_id: str,
-    _user: User = Depends(require_auth),
-):
-    result = video_detection_service.get_result(job_id, _owner_id(_user))
-    if not result:
-        raise HTTPException(status_code=404, detail="视频检测任务不存在或已过期")
-    if result["state"] != "completed":
-        raise HTTPException(
-            status_code=409,
-            detail=result.get("error") or "视频检测尚未完成",
-        )
-    return DetectResponse(code=200, data=result)
-
-
-@router.delete(
-    "/detect/video/{job_id}",
-    response_model=DetectResponse,
-    summary="取消或清理视频检测任务",
-)
-async def delete_video_detection_job(
-    job_id: str,
-    _user: User = Depends(require_auth),
-):
-    if not video_detection_service.cancel(job_id, _owner_id(_user)):
-        raise HTTPException(status_code=404, detail="视频检测任务不存在或已过期")
-    return DetectResponse(code=200, data={"job_id": job_id, "message": "任务已清理"})
-
-
 @router.post(
     "/stream/{camera_id}/ticket",
     response_model=DetectResponse,

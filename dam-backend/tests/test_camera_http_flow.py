@@ -164,50 +164,6 @@ class SyntheticRegistry:
         }
 
 
-class ImmediateVideoService:
-    def __init__(self):
-        self.submitted_path = None
-
-    def submit(self, file_path, filename, owner_id, **_kwargs):
-        self.submitted_path = file_path
-        self.filename = filename
-        self.owner_id = owner_id
-        self.payload = Path(file_path).read_bytes()
-        Path(file_path).unlink(missing_ok=True)
-        return {
-            "job_id": "a" * 32,
-            "filename": filename,
-            "state": "queued",
-            "progress": 0,
-        }
-
-    def get_status(self, job_id, owner_id):
-        if job_id != "a" * 32 or owner_id != self.owner_id:
-            return None
-        return {
-            "job_id": job_id,
-            "filename": self.filename,
-            "state": "completed",
-            "progress": 100,
-            "processed_samples": 1,
-        }
-
-    def get_result(self, job_id, owner_id):
-        if not self.get_status(job_id, owner_id):
-            return None
-        return {
-            "state": "completed",
-            "duration_s": 1.0,
-            "processed_samples": 1,
-            "total_occurrences": 0,
-            "class_summary": [],
-            "timeline": [],
-        }
-
-    def cancel(self, job_id, owner_id):
-        return bool(self.get_status(job_id, owner_id))
-
-
 class ConnectedRequest:
     async def is_disconnected(self):
         return False
@@ -260,7 +216,6 @@ class CameraHttpFlowTests(unittest.TestCase):
         self.classifier = SyntheticClassifier()
         self.registry = SyntheticRegistry(self.detector, self.classifier)
         self.ticket_store = StreamTicketStore(ttl_seconds=60)
-        self.video_service = ImmediateVideoService()
         app = FastAPI()
         self.webrtc_client = FakeWebRtcClient()
         app.state.http_client = self.webrtc_client
@@ -271,7 +226,6 @@ class CameraHttpFlowTests(unittest.TestCase):
             patch.object(camera_api, "camera_manager", self.manager),
             patch.object(camera_api, "vision_model_registry", self.registry),
             patch.object(camera_api, "stream_ticket_store", self.ticket_store),
-            patch.object(camera_api, "video_detection_service", self.video_service),
         ]
         for active_patch in self.patches:
             active_patch.start()
@@ -471,32 +425,6 @@ class CameraHttpFlowTests(unittest.TestCase):
         self.assertIn(b"Content-Type: image/jpeg", chunk)
         self.assertIn(b"\xff\xd8", chunk)
         self.assertTrue(chunk.endswith(b"\r\n"))
-
-    def test_video_upload_job_status_result_and_cleanup_contract(self):
-        created = self.client.post(
-            "/api/v1/camera/detect/video",
-            params={"confidence": 0.5, "sample_fps": 2},
-            files={"file": ("sample.mp4", b"synthetic-video", "video/mp4")},
-        )
-        self.assertEqual(created.status_code, 202)
-        self.assertEqual(created.json()["data"]["state"], "queued")
-        self.assertEqual(self.video_service.payload, b"synthetic-video")
-
-        job_id = created.json()["data"]["job_id"]
-        status = self.client.get(f"/api/v1/camera/detect/video/{job_id}/status")
-        result = self.client.get(f"/api/v1/camera/detect/video/{job_id}/result")
-        removed = self.client.delete(f"/api/v1/camera/detect/video/{job_id}")
-        self.assertEqual(status.status_code, 200)
-        self.assertEqual(status.json()["data"]["progress"], 100)
-        self.assertEqual(result.status_code, 200)
-        self.assertEqual(result.json()["data"]["processed_samples"], 1)
-        self.assertEqual(removed.status_code, 200)
-
-        invalid = self.client.post(
-            "/api/v1/camera/detect/video",
-            files={"file": ("notes.txt", b"not-video", "text/plain")},
-        )
-        self.assertEqual(invalid.status_code, 400)
 
 
 if __name__ == "__main__":

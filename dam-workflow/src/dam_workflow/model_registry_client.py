@@ -140,7 +140,7 @@ class ModelRegistryClient:
     def _infer_via_direct_fallback(self, model_id: int, payload: Dict, model_name: str = None) -> Optional[Dict]:
         """Directly call the resident fallback LLM when model-library HTTP is unhealthy.
 
-        DAM planning uses Qwen0.8B only for light routing/IO JSON decisions. Calling
+        DAM planning uses Qwen4B only for light routing/IO JSON decisions. Calling
         its vLLM endpoint directly avoids blocking the whole route on model-library
         metadata APIs.
         """
