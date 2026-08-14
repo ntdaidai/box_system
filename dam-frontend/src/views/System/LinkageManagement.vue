@@ -840,11 +840,11 @@ onMounted(refreshCurrent)
 }
 .broadcast-list-header-row,
 .broadcast-row {
-  grid-template-columns: minmax(210px, 1fr) minmax(340px, 1.55fr) 112px 116px 244px;
+  grid-template-columns: minmax(240px, 1.15fr) minmax(320px, 1.45fr) 124px 132px 300px;
 }
 .template-list-header-row,
 .template-row {
-  grid-template-columns: minmax(190px, 1fr) 160px 116px minmax(360px, 1.6fr) 104px 148px;
+  grid-template-columns: minmax(210px, 1fr) 150px 112px minmax(340px, 1.45fr) 122px 190px;
 }
 .col-device,
 .col-device-desc,
@@ -891,14 +891,15 @@ onMounted(refreshCurrent)
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 12px;
+  flex-wrap: nowrap;
 }
 .list-actions :deep(.el-button) {
   width: auto;
   height: 34px;
   min-height: 34px;
   margin: 0;
-  padding: 0 13px;
+  padding: 0 16px;
   border-radius: 5px;
   font-size: 13px;
   font-weight: 800;

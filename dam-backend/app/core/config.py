@@ -345,9 +345,28 @@ class Settings:
     BROADCAST_USB_ALSA_DEVICE: str = _get_env("BROADCAST_USB_ALSA_DEVICE", "default")
     BROADCAST_TTS_VOICE: str = _get_env("BROADCAST_TTS_VOICE", "cmn")
     BROADCAST_TTS_SPEED_WPM: int = int(_get_env("BROADCAST_TTS_SPEED_WPM", "150"))
+    BROADCAST_TTS_PROVIDER: str = _get_env("BROADCAST_TTS_PROVIDER", "auto")
+    BROADCAST_PIPER_BIN: str = _get_env("BROADCAST_PIPER_BIN", "piper")
+    BROADCAST_PIPER_MODEL: str = _get_env(
+        "BROADCAST_PIPER_MODEL",
+        os.path.join(BASE_DIR, "data", "model-imports", "piper", "zh_CN-huayan-medium", "model.onnx"),
+    )
+    BROADCAST_PIPER_CONFIG: str = _get_env(
+        "BROADCAST_PIPER_CONFIG",
+        os.path.join(BASE_DIR, "data", "model-imports", "piper", "zh_CN-huayan-medium", "model.onnx.json"),
+    )
+    BROADCAST_PIPER_LENGTH_SCALE: float = float(_get_env("BROADCAST_PIPER_LENGTH_SCALE", "1.12"))
+    BROADCAST_PIPER_NOISE_SCALE: float = float(_get_env("BROADCAST_PIPER_NOISE_SCALE", "0.55"))
+    BROADCAST_PIPER_NOISE_W_SCALE: float = float(_get_env("BROADCAST_PIPER_NOISE_W_SCALE", "0.65"))
+    BROADCAST_PIPER_SENTENCE_SILENCE: float = float(_get_env("BROADCAST_PIPER_SENTENCE_SILENCE", "0.35"))
+    BROADCAST_PIPER_VOLUME: float = float(_get_env("BROADCAST_PIPER_VOLUME", "1.15"))
     BROADCAST_AUDIO_DIR: str = _get_env(
         "BROADCAST_AUDIO_DIR",
         os.path.join(BASE_DIR, "data", "broadcast_audio"),
+    )
+    BROADCAST_TEMPLATE_AUDIO_DIR: str = _get_env(
+        "BROADCAST_TEMPLATE_AUDIO_DIR",
+        os.path.join(BASE_DIR, "data", "broadcast_template_audio"),
     )
     BROADCAST_AUDIO_MAX_MB: int = int(_get_env("BROADCAST_AUDIO_MAX_MB", "20"))
     BROADCAST_AUDIO_CONVERT_TIMEOUT_SECONDS: int = int(

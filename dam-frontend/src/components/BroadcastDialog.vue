@@ -12,6 +12,7 @@
         <strong>{{ event?.camera_name || event?.camera_id || '未选择摄像头' }}</strong>
         <small>{{ onlineDeviceCount ? `${onlineDeviceCount} 个广播设备可用` : '暂无可用广播设备' }}</small>
       </section>
+      <p v-if="startUnavailableReason" class="broadcast-warning">{{ startUnavailableReason }}</p>
 
       <section class="talk-card" :class="{ active: isTalking }">
         <div class="talk-state">
@@ -81,7 +82,6 @@ const onlineDevices = computed(() => devices.value.filter((device) => (
   && String(device.vendor_type || '').toUpperCase() !== 'LOCAL_AUDIO'
 )))
 const onlineDeviceCount = computed(() => onlineDevices.value.length)
-const canStart = computed(() => !preparingRecorder.value && !submitting.value && onlineDeviceCount.value > 0)
 const microphoneSupported = computed(() => Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder))
 const microphoneUnavailableReason = computed(() => {
   if (!window.isSecureContext && !['localhost', '127.0.0.1'].includes(window.location.hostname)) {
@@ -91,15 +91,25 @@ const microphoneUnavailableReason = computed(() => {
   if (!window.MediaRecorder) return '当前浏览器不支持录音编码'
   return ''
 })
+const startUnavailableReason = computed(() => {
+  if (onlineDeviceCount.value <= 0) return '暂无可用广播设备'
+  return microphoneUnavailableReason.value
+})
+const canStart = computed(() => (
+  !preparingRecorder.value
+  && !submitting.value
+  && !startUnavailableReason.value
+))
 const talkStateText = computed(() => {
   if (submitting.value) return '正在播放'
   if (isTalking.value) return '正在说话'
-  if (!microphoneSupported.value) return '麦克风不可用'
+  if (startUnavailableReason.value) return '无法开始'
   return '等待开始'
 })
 const talkButtonText = computed(() => {
   if (preparingRecorder.value) return '正在打开麦克风'
   if (submitting.value) return '正在播放'
+  if (startUnavailableReason.value) return '不可用'
   return '开始说话'
 })
 const durationText = computed(() => {
@@ -138,13 +148,15 @@ function preferredMimeType() {
     'audio/webm',
     'audio/ogg;codecs=opus',
     'audio/ogg',
+    'audio/mp4',
+    'audio/mpeg',
   ]
   return candidates.find((type) => window.MediaRecorder?.isTypeSupported?.(type)) || ''
 }
 
 async function startTalking() {
   if (!canStart.value) {
-    ElMessage.warning('暂无可用广播设备')
+    ElMessage.warning(startUnavailableReason.value || '暂时无法开始喊话')
     return
   }
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
@@ -170,7 +182,7 @@ async function startTalking() {
     durationTimer = window.setInterval(() => {
       elapsedMs.value = Date.now() - recordingStartedAt.value
     }, 250)
-    mediaRecorder.start()
+    mediaRecorder.start(250)
     isTalking.value = true
   } catch (error) {
     releaseStream()
@@ -188,6 +200,11 @@ function stopTalking(shouldPlay) {
   }
   if (isTalking.value && recorder.value?.state !== 'inactive') {
     elapsedMs.value = Date.now() - recordingStartedAt.value
+    try {
+      recorder.value.requestData?.()
+    } catch {
+      // Some browsers do not allow requestData during the stop transition.
+    }
     recorder.value.stop()
   } else {
     releaseStream()
@@ -205,6 +222,7 @@ async function handleRecorderStop() {
   }
   if (!audioBlob.size) {
     ElMessage.warning('未捕获到有效声音')
+    releaseRecording()
     return
   }
   submitting.value = true
@@ -234,7 +252,15 @@ function releaseRecording() {
 
 function recordingFilename(blob) {
   const type = blob?.type || ''
-  const suffix = type.includes('ogg') ? 'ogg' : type.includes('wav') ? 'wav' : 'webm'
+  const suffix = type.includes('ogg')
+    ? 'ogg'
+    : type.includes('wav')
+      ? 'wav'
+      : type.includes('mpeg')
+        ? 'mp3'
+        : type.includes('mp4')
+          ? 'm4a'
+          : 'webm'
   return `one-touch-talk.${suffix}`
 }
 
@@ -294,6 +320,15 @@ function microphoneErrorMessage(error) {
 .broadcast-target strong {
   color: #f2fbff;
   font-size: 18px;
+}
+.broadcast-warning {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 194, 102, .28);
+  border-radius: 6px;
+  color: #ffd596;
+  background: rgba(255, 194, 102, .08);
+  font-size: 13px;
 }
 .talk-card {
   padding: 18px;

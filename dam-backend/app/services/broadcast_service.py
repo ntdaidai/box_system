@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import shutil
 import subprocess
 import threading
@@ -58,9 +59,6 @@ class BroadcastException(Exception):
 class BroadcastAdapter:
     vendor_type = ""
 
-    def play(self, device: BroadcastDevice, audio: BroadcastAudio) -> BroadcastPlayResult:
-        raise NotImplementedError
-
     def play_file(self, device: BroadcastDevice, audio: BroadcastAudioFile) -> BroadcastPlayResult:
         raise NotImplementedError
 
@@ -81,15 +79,12 @@ class LocalAudioAdapter(BroadcastAdapter):
 
     vendor_type = "LOCAL_AUDIO"
 
-    def play(self, device: BroadcastDevice, audio: BroadcastAudio) -> BroadcastPlayResult:
+    def play_file(self, device: BroadcastDevice, audio: BroadcastAudioFile) -> BroadcastPlayResult:
         return BroadcastPlayResult(True, "LOCAL_AUDIO accepted", audio.uri)
 
 
 class MockBroadcastAdapter(BroadcastAdapter):
     vendor_type = "MOCK"
-
-    def play(self, device: BroadcastDevice, audio: BroadcastAudio) -> BroadcastPlayResult:
-        return BroadcastPlayResult(True, "MOCK accepted", audio.uri)
 
     def play_file(self, device: BroadcastDevice, audio: BroadcastAudioFile) -> BroadcastPlayResult:
         return BroadcastPlayResult(True, "MOCK audio accepted", audio.uri)
@@ -103,17 +98,6 @@ class UsbAudioAdapter(BroadcastAdapter):
         # and manual callouts can arrive from different threads, so serialize
         # access instead of letting the second aplay fail with EBUSY.
         self._play_lock = threading.Lock()
-
-    def play(self, device: BroadcastDevice, audio: BroadcastAudio) -> BroadcastPlayResult:
-        wav_path = self._synthesize_text_to_wav(audio.text)
-        return self.play_file(
-            device,
-            BroadcastAudioFile(
-                path=str(wav_path),
-                format="audio/wav",
-                uri=str(wav_path),
-            ),
-        )
 
     def play_file(self, device: BroadcastDevice, audio: BroadcastAudioFile) -> BroadcastPlayResult:
         source_path = Path(audio.path)
@@ -190,8 +174,12 @@ class UsbAudioAdapter(BroadcastAdapter):
             raise BroadcastException(detail or "Recorded audio conversion failed")
         return wav_path
 
+
+class EspeakTtsProvider:
+    name = "espeak"
+
     @staticmethod
-    def _synthesize_text_to_wav(text: str) -> Path:
+    def synthesize_to_file(text: str) -> BroadcastAudioFile:
         cleaned = " ".join((text or "").split())
         if not cleaned:
             raise BroadcastException("Broadcast text is empty")
@@ -227,7 +215,88 @@ class UsbAudioAdapter(BroadcastAdapter):
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout or "").strip()
             raise BroadcastException(detail or "Template broadcast TTS failed")
-        return wav_path
+        return BroadcastAudioFile(
+            path=str(wav_path),
+            format="audio/wav",
+            uri=str(wav_path),
+        )
+
+
+class PiperTtsProvider:
+    name = "piper"
+
+    @staticmethod
+    def is_available() -> bool:
+        return bool(
+            shutil.which(settings.BROADCAST_PIPER_BIN)
+            and Path(settings.BROADCAST_PIPER_MODEL).exists()
+            and Path(settings.BROADCAST_PIPER_CONFIG).exists()
+        )
+
+    @staticmethod
+    def synthesize_to_file(text: str) -> BroadcastAudioFile:
+        cleaned = " ".join((text or "").split())
+        if not cleaned:
+            raise BroadcastException("Broadcast text is empty")
+        piper_bin = shutil.which(settings.BROADCAST_PIPER_BIN)
+        if not piper_bin:
+            raise BroadcastException("piper is not installed for template broadcast TTS")
+        model_path = Path(settings.BROADCAST_PIPER_MODEL)
+        config_path = Path(settings.BROADCAST_PIPER_CONFIG)
+        if not model_path.exists() or not config_path.exists():
+            raise BroadcastException("piper Chinese voice model is not installed")
+
+        directory = Path(settings.BROADCAST_AUDIO_DIR)
+        directory.mkdir(parents=True, exist_ok=True)
+        wav_path = directory / f"template_{dt.datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex}.wav"
+        command = [
+            piper_bin,
+            "--model",
+            str(model_path),
+            "--config",
+            str(config_path),
+            "--length-scale",
+            str(settings.BROADCAST_PIPER_LENGTH_SCALE),
+            "--noise-scale",
+            str(settings.BROADCAST_PIPER_NOISE_SCALE),
+            "--noise-w-scale",
+            str(settings.BROADCAST_PIPER_NOISE_W_SCALE),
+            "--sentence-silence",
+            str(settings.BROADCAST_PIPER_SENTENCE_SILENCE),
+            "--volume",
+            str(settings.BROADCAST_PIPER_VOLUME),
+            "--output_file",
+            str(wav_path),
+        ]
+        env = {
+            **os.environ,
+            "OMP_NUM_THREADS": os.environ.get("OMP_NUM_THREADS", "1"),
+            "OPENBLAS_NUM_THREADS": os.environ.get("OPENBLAS_NUM_THREADS", "1"),
+            "MKL_NUM_THREADS": os.environ.get("MKL_NUM_THREADS", "1"),
+        }
+        try:
+            completed = subprocess.run(
+                command,
+                input=cleaned,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=max(1, int(settings.BROADCAST_AUDIO_CONVERT_TIMEOUT_SECONDS)),
+            )
+        except subprocess.TimeoutExpired as exc:
+            wav_path.unlink(missing_ok=True)
+            raise BroadcastException("Piper template broadcast TTS timed out") from exc
+
+        if completed.returncode != 0:
+            wav_path.unlink(missing_ok=True)
+            detail = (completed.stderr or completed.stdout or "").strip()
+            raise BroadcastException(detail or "Piper template broadcast TTS failed")
+        return BroadcastAudioFile(
+            path=str(wav_path),
+            format="audio/wav",
+            uri=str(wav_path),
+        )
 
 
 class BroadcastAdapterFactory:
@@ -243,13 +312,41 @@ class BroadcastAdapterFactory:
 
 
 class TtsService:
+    def __init__(self):
+        self.providers = self._providers()
+
+    @staticmethod
+    def _providers() -> List[Any]:
+        preferred = (settings.BROADCAST_TTS_PROVIDER or "auto").lower()
+        if preferred == "piper":
+            return [PiperTtsProvider(), EspeakTtsProvider()]
+        if preferred == "espeak":
+            return [EspeakTtsProvider()]
+        if PiperTtsProvider.is_available():
+            return [PiperTtsProvider(), EspeakTtsProvider()]
+        return [EspeakTtsProvider()]
+
     def synthesize(self, text: str) -> BroadcastAudio:
         cleaned = " ".join((text or "").split())
         if not cleaned:
             raise BroadcastException("Broadcast text is empty")
         if len(cleaned) > 500:
             raise BroadcastException("Broadcast text exceeds 500 characters")
-        return BroadcastAudio(text=cleaned)
+        provider_name = self.providers[0].name if self.providers else "unknown"
+        return BroadcastAudio(text=cleaned, format=f"text/plain;tts={provider_name}")
+
+    def synthesize_to_file(self, text: str) -> BroadcastAudioFile:
+        audio = self.synthesize(text)
+        errors = []
+        for provider in self.providers:
+            try:
+                result = provider.synthesize_to_file(audio.text)
+                result.format = f"audio/wav;tts={provider.name}"
+                return result
+            except Exception as exc:
+                errors.append(f"{provider.name}: {exc}")
+                logger.warning(f"TTS provider failed: provider={provider.name}, error={exc}")
+        raise BroadcastException("；".join(errors) or "No TTS provider is available")
 
 
 class BroadcastService:
@@ -287,55 +384,68 @@ class BroadcastService:
         if trigger_type not in {TRIGGER_AUTO, TRIGGER_MANUAL}:
             raise BroadcastException("trigger_type must be AUTO or MANUAL")
 
-        event_id = command.get("event_id")
         camera_id = command.get("camera_id")
         template_id = command.get("template_id")
-        operator = command.get("operator") or ("SYSTEM" if trigger_type == TRIGGER_AUTO else "UNKNOWN")
-        text = self._resolve_text(db, template_id, command.get("custom_text"))
-        audio = self.tts_service.synthesize(text)
+        custom_text = command.get("custom_text")
         devices = self._resolve_devices(db, camera_id, command.get("device_ids"))
-
         if not devices:
             raise BroadcastException("No broadcast device is selected or enabled")
 
-        items = []
-        for device in devices:
-            try:
-                if not device.enabled:
-                    raise BroadcastException("Device is disabled")
-                if (device.status or "").upper() == "OFFLINE":
-                    raise BroadcastException("Device is offline")
-                adapter = self.adapter_factory.get(device.vendor_type)
-                result = adapter.play(device, audio)
-                final_result = "SUCCESS" if result.success else "FAILED"
-                message = result.message
-            except Exception as exc:
-                final_result = "FAILED"
-                message = str(exc)
-                logger.warning(f"Broadcast play failed: device={device.id}, error={exc}")
-            items.append({
-                "device_id": device.id,
-                "device_name": device.name,
-                "vendor_type": device.vendor_type,
-                "result": final_result,
-                "message": message,
-            })
+        audio, text, delete_after_play = self._resolve_play_audio(db, template_id, custom_text)
+        try:
+            response = self._play_audio_file(
+                db,
+                command,
+                devices,
+                audio,
+                one_touch=False,
+                raise_when_all_failed=False,
+                log_prefix="Broadcast play failed",
+                failure_prefix="广播播放失败",
+            )
+            response["text"] = text
+            response["browser_tts"] = any(item["vendor_type"] == "LOCAL_AUDIO" for item in response["items"])
+            return response
+        finally:
+            if delete_after_play:
+                self._delete_audio_file(audio)
 
-        success_count = sum(1 for item in items if item["result"] == "SUCCESS")
-        if success_count == len(items):
-            result = "SUCCESS"
-        elif success_count > 0:
-            result = "PARTIAL_SUCCESS"
-        else:
-            result = "FAILED"
-        self._record_execution(db, command, items, result, one_touch=False)
-        return {
-            "success": success_count > 0,
-            "result": result,
-            "text": audio.text,
-            "browser_tts": any(item["vendor_type"] == "LOCAL_AUDIO" for item in items),
-            "items": items,
-        }
+    def _resolve_play_audio(
+        self,
+        db: Session,
+        template_id: Optional[str],
+        custom_text: Optional[str],
+    ) -> tuple[BroadcastAudioFile, str, bool]:
+        if custom_text and custom_text.strip():
+            text = custom_text.strip()
+            return self.tts_service.synthesize_to_file(text), text, True
+        template = self._resolve_template(db, template_id)
+        return self.ensure_template_audio(template), template.content, False
+
+    def ensure_template_audio(self, template: BroadcastTemplate, *, force: bool = False) -> BroadcastAudioFile:
+        path = self.template_audio_path(template.id)
+        if path.exists() and not force:
+            return BroadcastAudioFile(path=str(path), format="audio/wav", uri=str(path))
+        generated = self.tts_service.synthesize_to_file(template.content)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = path.with_suffix(f".{uuid.uuid4().hex}.tmp.wav")
+            Path(generated.path).replace(tmp_path)
+            tmp_path.replace(path)
+            return BroadcastAudioFile(path=str(path), format=generated.format, uri=str(path))
+        finally:
+            self._delete_audio_file(generated)
+
+    def refresh_template_audio(self, template: BroadcastTemplate) -> BroadcastAudioFile:
+        return self.ensure_template_audio(template, force=True)
+
+    def remove_template_audio(self, template_id: str) -> None:
+        self.template_audio_path(template_id).unlink(missing_ok=True)
+
+    @staticmethod
+    def template_audio_path(template_id: str) -> Path:
+        safe_id = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in str(template_id))
+        return Path(settings.BROADCAST_TEMPLATE_AUDIO_DIR) / f"{safe_id}.wav"
 
     def store_recorded_audio(
         self,
@@ -365,20 +475,41 @@ class BroadcastService:
         try:
             return self._play_recorded_audio(db, command, audio)
         finally:
-            self._delete_recorded_audio(audio)
+            self._delete_audio_file(audio)
 
     def _play_recorded_audio(self, db: Session, command: Dict[str, Any], audio: BroadcastAudioFile) -> Dict[str, Any]:
         trigger_type = (command.get("trigger_type") or TRIGGER_MANUAL).upper()
         if trigger_type != TRIGGER_MANUAL:
             raise BroadcastException("Recorded audio playback only supports MANUAL trigger")
 
-        event_id = command.get("event_id")
         camera_id = command.get("camera_id")
-        operator = command.get("operator") or "UNKNOWN"
         devices = self._resolve_devices(db, camera_id, command.get("device_ids"))
         if not devices:
             raise BroadcastException("No broadcast device is selected or enabled")
 
+        return self._play_audio_file(
+            db,
+            command,
+            devices,
+            audio,
+            one_touch=True,
+            raise_when_all_failed=True,
+            log_prefix="Recorded broadcast play failed",
+            failure_prefix="喊话播放失败",
+        )
+
+    def _play_audio_file(
+        self,
+        db: Session,
+        command: Dict[str, Any],
+        devices: List[BroadcastDevice],
+        audio: BroadcastAudioFile,
+        *,
+        one_touch: bool,
+        raise_when_all_failed: bool,
+        log_prefix: str,
+        failure_prefix: str,
+    ) -> Dict[str, Any]:
         items = []
         for device in devices:
             try:
@@ -393,7 +524,7 @@ class BroadcastService:
             except Exception as exc:
                 final_result = "FAILED"
                 message = str(exc)
-                logger.warning(f"Recorded broadcast play failed: device={device.id}, error={exc}")
+                logger.warning(f"{log_prefix}: device={device.id}, error={exc}")
             items.append({
                 "device_id": device.id,
                 "device_name": device.name,
@@ -409,12 +540,12 @@ class BroadcastService:
             result = "PARTIAL_SUCCESS"
         else:
             result = "FAILED"
-        self._record_execution(db, command, items, result, one_touch=True)
-        if success_count == 0:
+        self._record_execution(db, command, items, result, one_touch=one_touch)
+        if raise_when_all_failed and success_count == 0:
             details = "；".join(
                 f"{item['device_name']}：{item['message']}" for item in items
             )
-            raise BroadcastException(f"喊话播放失败：{details}")
+            raise BroadcastException(f"{failure_prefix}：{details}")
         return {
             "success": success_count > 0,
             "result": result,
@@ -422,7 +553,7 @@ class BroadcastService:
         }
 
     @staticmethod
-    def _delete_recorded_audio(audio: BroadcastAudioFile) -> None:
+    def _delete_audio_file(audio: BroadcastAudioFile) -> None:
         source_path = Path(audio.path)
         converted_path = source_path.with_suffix(".wav")
         source_path.unlink(missing_ok=True)
@@ -588,6 +719,9 @@ class BroadcastService:
     def _resolve_text(self, db: Session, template_id: Optional[str], custom_text: Optional[str]) -> str:
         if custom_text and custom_text.strip():
             return custom_text.strip()
+        return self._resolve_template(db, template_id).content
+
+    def _resolve_template(self, db: Session, template_id: Optional[str]) -> BroadcastTemplate:
         if not template_id:
             raise BroadcastException("template_id or custom_text is required")
         self.ensure_defaults(db)
@@ -598,7 +732,7 @@ class BroadcastService:
         )
         if not template:
             raise BroadcastException("Broadcast template does not exist or is disabled")
-        return template.content
+        return template
 
     def _resolve_devices(self, db: Session, camera_id: Optional[str], device_ids: Optional[List[int]]) -> List[BroadcastDevice]:
         if device_ids:

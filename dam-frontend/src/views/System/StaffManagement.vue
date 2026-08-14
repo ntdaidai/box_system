@@ -1,20 +1,20 @@
 <template>
   <div class="staff-page">
-    <header class="admin-header">
-      <div class="title-block">
-        <h2>现场人员管理</h2>
-        <p>维护小程序人工处置人员、所属组别和微信绑定状态</p>
+    <header class="page-header">
+      <div>
+        <h2>现场人员</h2>
+        <p>维护小程序现场处置人员、所属组别和微信绑定状态</p>
       </div>
       <el-button :icon="Refresh" :loading="loading" @click="loadStaff">刷新</el-button>
     </header>
 
-    <section class="data-panel staff-toolbar-card">
-      <div class="panel-head">
+    <section class="resource-control-card staff-toolbar-card">
+      <header class="tab-header">
         <div>
           <h3>人员列表</h3>
           <span>共 {{ total }} 人</span>
         </div>
-        <div class="panel-toolbar">
+        <div class="tab-actions panel-toolbar">
           <el-input
             v-model.trim="filters.keyword"
             class="keyword-input"
@@ -33,10 +33,10 @@
           </el-select>
           <el-button type="primary" :icon="Search" @click="applyFilters">筛选</el-button>
         </div>
-      </div>
+      </header>
     </section>
 
-    <section class="data-panel staff-list-card" v-loading="loading">
+    <section class="resource-list-card staff-list-card" v-loading="loading">
       <div class="staff-list" :class="{ 'is-empty': !staffRows.length }">
         <div v-if="staffRows.length" class="staff-list-header-row">
           <div class="col-name">人员名称</div>
@@ -79,9 +79,9 @@
               {{ row.status_label || statusLabel(row.status) }}
             </span>
           </div>
-          <div class="col-actions action-buttons">
-            <el-button class="edit-action" disabled>编辑</el-button>
-            <el-button class="qr-action" disabled>登录码</el-button>
+          <div class="col-actions action-buttons list-actions">
+            <el-button class="edit-action" @click="showPendingAction('编辑')">编辑</el-button>
+            <el-button class="test-action" @click="showPendingAction('登录码')">登录码</el-button>
           </div>
         </article>
 
@@ -105,6 +105,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
+import { ElMessage } from 'element-plus'
 import { Refresh, Search } from '@element-plus/icons-vue'
 import { getMiniProgramStaff } from '@/api/miniprogramStaff'
 
@@ -176,6 +177,10 @@ function avatarColor(row) {
   const seed = String(row.staff_no || row.id || '').split('').reduce((sum, char) => sum + char.charCodeAt(0), 0)
   return palette[seed % palette.length]
 }
+
+function showPendingAction(label) {
+  ElMessage.info(`${label}功能待接入`)
+}
 </script>
 
 <style scoped>
@@ -186,66 +191,108 @@ function avatarColor(row) {
   background: #071422;
 }
 
-.admin-header,
-.panel-head,
+.page-header,
+.tab-header,
 .panel-toolbar {
   display: flex;
   align-items: center;
-}
-
-.admin-header {
   justify-content: space-between;
-  gap: 18px;
+  gap: 16px;
 }
 
-.title-block p,
-.panel-head span {
-  margin: 6px 0 0;
-  color: #79acd0;
-  font-size: 13px;
+.page-header {
+  min-height: 62px;
+  margin-bottom: 14px;
+  padding: 16px 20px;
+  border: 1px solid rgba(96, 151, 191, .22);
+  border-radius: 8px;
+  background: linear-gradient(90deg, rgba(14, 48, 76, .82) 0%, rgba(9, 29, 48, .72) 58%, rgba(7, 20, 34, .46) 100%);
+  box-shadow: inset 0 1px 0 rgba(147, 206, 241, .08);
 }
 
-h2,
-h3 {
+.page-header h2,
+.tab-header h3 {
   margin: 0;
   color: #f3f8fd;
   letter-spacing: 0;
 }
 
-h2 {
+.page-header h2 {
   font-size: 25px;
-  line-height: 1.1;
+  line-height: 1.15;
 }
 
-h3 {
+.page-header p {
+  margin: 7px 0 0;
+  color: #87a5bb;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.page-header :deep(.el-button) {
+  min-width: 92px;
+  height: 36px;
+  border-color: #1b7fa5;
+  color: #dcefff;
+  background: #103954;
+  font-weight: 700;
+}
+
+.tab-header span {
+  margin: 6px 0 0;
+  color: #79acd0;
+  font-size: 13px;
+}
+
+.tab-header h3 {
   font-size: 18px;
 }
 
-.data-panel {
-  margin-top: 16px;
-  padding: 18px 22px;
+.resource-control-card,
+.resource-list-card {
   border: 1px solid rgba(96, 151, 191, .18);
   border-radius: 8px;
   background: #0b1d30;
 }
 
-.staff-toolbar-card {
+.resource-control-card {
   min-height: 82px;
   display: flex;
   align-items: center;
+  padding: 18px 20px;
 }
 
-.staff-toolbar-card .panel-head {
+.resource-control-card .tab-header {
   width: 100%;
-  justify-content: space-between;
-  gap: 18px;
 }
 
-.panel-toolbar {
+.resource-list-card {
+  margin-top: 16px;
+  overflow: hidden;
+}
+
+.staff-toolbar-card {
+  padding: 18px 20px;
+}
+
+.staff-toolbar-card .tab-header {
+  width: 100%;
+}
+
+.tab-actions {
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 10px;
   flex-wrap: nowrap;
+}
+
+.tab-actions :deep(.el-button) {
+  min-width: 108px;
+  height: 36px;
+  margin-left: 0;
+  padding: 0 15px;
 }
 
 .keyword-input {
@@ -263,7 +310,7 @@ h3 {
 .keyword-input :deep(.el-input__wrapper),
 .group-select :deep(.el-select__wrapper),
 .status-select :deep(.el-select__wrapper) {
-  min-height: 36px;
+  min-height: 34px;
   border-radius: 6px;
   background: #0d2740;
   box-shadow: 0 0 0 1px rgba(84, 148, 193, .36) inset;
@@ -281,11 +328,11 @@ h3 {
 
 .staff-list-card {
   padding: 0;
-  overflow: hidden;
+  overflow-x: auto;
 }
 
 .staff-list {
-  min-width: 1180px;
+  min-width: 1320px;
   overflow: hidden;
   border-radius: 8px 8px 0 0;
   background: #081b2d;
@@ -294,9 +341,9 @@ h3 {
 .staff-list-header-row,
 .staff-row {
   display: grid;
-  grid-template-columns: minmax(220px, 1.1fr) minmax(160px, .8fr) minmax(170px, .8fr) minmax(210px, 1fr) minmax(180px, .9fr) 100px 150px;
+  grid-template-columns: minmax(240px, 1.15fr) minmax(170px, .8fr) minmax(170px, .78fr) minmax(220px, .95fr) minmax(190px, .85fr) 118px 190px;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
 }
 
 .staff-list-header-row {
@@ -310,7 +357,7 @@ h3 {
 }
 
 .staff-row {
-  min-height: 78px;
+  min-height: 72px;
   padding: 12px 20px;
   border-top: 1px solid rgba(149, 190, 220, .10);
   color: #d7e8f8;
@@ -377,11 +424,12 @@ small {
   align-items: center;
   width: fit-content;
   min-width: 62px;
-  height: 26px;
+  height: 24px;
   justify-content: center;
-  border-radius: 5px;
+  border-radius: 4px;
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 600;
+  line-height: 1;
 }
 
 .bind-pill.is-bound,
@@ -405,7 +453,7 @@ small {
 }
 
 .account-cell span {
-  max-width: 96px;
+  max-width: 106px;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -426,21 +474,47 @@ small {
   font-weight: 700;
 }
 
-.action-buttons {
+.list-actions {
   display: flex;
+  align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 12px;
+  flex-wrap: nowrap;
 }
 
-.edit-action,
-.qr-action {
-  min-width: 62px;
+.list-actions :deep(.el-button) {
+  width: auto;
   height: 34px;
+  min-height: 34px;
   margin-left: 0;
-  border-radius: 6px;
-  color: #cde8f8;
-  background: #103954;
-  border-color: rgba(52, 142, 182, .42);
+  padding: 0 16px;
+  border-radius: 5px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.list-actions :deep(.test-action) {
+  border-color: rgba(82, 178, 143, .46);
+  color: #b9f1d8;
+  background: rgba(30, 103, 78, .38);
+}
+
+.list-actions :deep(.edit-action) {
+  border-color: rgba(66, 164, 224, .50);
+  color: #d5f0ff;
+  background: rgba(29, 91, 133, .70);
+}
+
+.list-actions :deep(.test-action:hover) {
+  border-color: rgba(82, 178, 143, .7);
+  color: #e3fff1;
+  background: rgba(36, 123, 92, .52);
+}
+
+.list-actions :deep(.edit-action:hover) {
+  border-color: rgba(66, 164, 224, .72);
+  color: #effaff;
+  background: rgba(33, 107, 156, .82);
 }
 
 .empty-list {
@@ -458,23 +532,35 @@ small {
 }
 
 .list-pagination {
-  padding: 14px 0;
+  min-height: 46px;
   justify-content: center;
-  background: #081b2d;
+  border-top: 1px solid rgba(149, 190, 220, .10);
+  background: #092034;
 }
 
 .list-pagination :deep(.el-pager li),
 .list-pagination :deep(.btn-prev),
 .list-pagination :deep(.btn-next) {
-  border: 1px solid rgba(75, 137, 181, .34);
+  min-width: 34px;
+  height: 32px;
+  margin: 0 3px;
+  border: 1px solid rgba(70, 145, 190, .34);
   border-radius: 5px;
-  color: #8fb6d0;
-  background: #0b2740;
+  color: #8fb6d1;
+  background: #0b2238;
+  font-weight: 700;
 }
 
 .list-pagination :deep(.el-pager li.is-active) {
+  border-color: #4ba7e6;
   color: #ffffff;
-  background: #2e9bdd;
+  background: #3f95d7;
+}
+
+.list-pagination :deep(.btn-prev:disabled),
+.list-pagination :deep(.btn-next:disabled) {
+  color: rgba(143, 182, 209, .35);
+  background: #0b2238;
 }
 
 @media (max-width: 1280px) {

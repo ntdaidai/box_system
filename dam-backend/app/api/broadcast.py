@@ -52,6 +52,7 @@ class BroadcastTemplatePayload(BaseModel):
 def _device_dict(row: BroadcastDevice) -> dict:
     return {
         "id": row.id, "name": row.name, "description": row.description,
+        "vendor_type": row.vendor_type, "device_code": row.device_code,
         "status": row.status, "enabled": bool(row.enabled),
         "create_time": row.create_time.isoformat() if row.create_time else None,
         "update_time": row.update_time.isoformat() if row.update_time else None,
@@ -143,9 +144,16 @@ async def create_template(payload: BroadcastTemplatePayload, db: Session = Depen
     if db.query(BroadcastTemplate.id).filter(BroadcastTemplate.name == payload.name).first():
         raise HTTPException(status_code=409, detail="广播模板名称已存在")
     row = BroadcastTemplate(id=f"tpl_{uuid.uuid4().hex[:12]}", **payload.model_dump())
-    db.add(row)
-    db.commit()
-    db.refresh(row)
+    try:
+        db.add(row)
+        db.flush()
+        broadcast_service.refresh_template_audio(row)
+        db.commit()
+        db.refresh(row)
+    except BroadcastException as exc:
+        db.rollback()
+        broadcast_service.remove_template_audio(row.id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return Result.success(_template_dict(row), "广播模板已添加")
 
 
@@ -157,10 +165,16 @@ async def update_template(template_id: str, payload: BroadcastTemplatePayload, d
     duplicate = db.query(BroadcastTemplate.id).filter(BroadcastTemplate.name == payload.name, BroadcastTemplate.id != template_id).first()
     if duplicate:
         raise HTTPException(status_code=409, detail="广播模板名称已存在")
-    for key, value in payload.model_dump().items():
-        setattr(row, key, value)
-    db.commit()
-    db.refresh(row)
+    try:
+        for key, value in payload.model_dump().items():
+            setattr(row, key, value)
+        db.flush()
+        broadcast_service.refresh_template_audio(row)
+        db.commit()
+        db.refresh(row)
+    except BroadcastException as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return Result.success(_template_dict(row), "广播模板已更新")
 
 
@@ -173,6 +187,7 @@ async def delete_template(template_id: str, db: Session = Depends(get_db), _user
         raise HTTPException(status_code=409, detail="模板仍被动作配置使用，请先解除关联")
     db.delete(row)
     db.commit()
+    broadcast_service.remove_template_audio(template_id)
     return Result.success({"id": template_id}, "广播模板已删除")
 
 

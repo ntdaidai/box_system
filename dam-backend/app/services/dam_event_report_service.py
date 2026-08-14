@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import re
 import shutil
 import subprocess
 import tempfile
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import unquote, urlparse, urlunparse
@@ -17,6 +19,7 @@ from zoneinfo import ZoneInfo
 from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.shared import RGBColor
 from docx.shared import Mm, Pt
 from docxtpl import DocxTemplate, InlineImage
 from loguru import logger
@@ -95,6 +98,7 @@ STATUS_NAMES = {
 }
 SYSTEM_FACT_FIELDS = {
     "report_date",
+    "report_date_cn",
     "report_time",
     "event_name",
     "instance_no",
@@ -534,6 +538,7 @@ class DamEventReportService:
         context = {
             "workflow_insight": workflow_insight,
             "report_date": report_date,
+            "report_date_cn": self.format_chinese_date(report_date),
             "report_time": self.format_datetime(dt.datetime.now(LOCAL_TIMEZONE)),
             "event_name": getattr(event, "event_name", None) or instance.summary or "安全事件",
             "instance_no": instance.instance_no,
@@ -602,6 +607,7 @@ class DamEventReportService:
             if key not in SYSTEM_FACT_FIELDS
         })
         context["report_date"] = report_date
+        context["report_date_cn"] = self.format_chinese_date(report_date)
         context["report_time"] = self.format_datetime(dt.datetime.now(LOCAL_TIMEZONE))
         context["event_name"] = getattr(event, "event_name", None) or instance.summary or "安全事件"
         context["instance_no"] = instance.instance_no
@@ -632,12 +638,14 @@ class DamEventReportService:
             context["conclusion"] = self.build_conclusion(selected, workflow_insight, cloud_note)
         else:
             context["conclusion"] = self.build_conclusion(selected, workflow_insight, cloud_note)
+        self.normalize_report_context_citations(context, selected)
         return context
 
     def render_docx(self, context: dict[str, Any]) -> bytes:
         template = DocxTemplate(str(TEMPLATE_PATH))
         image_path = context.pop("evidence_image", None)
         render_context = dict(context)
+        render_context.setdefault("report_date_cn", self.format_chinese_date(render_context.get("report_date")))
         if image_path:
             render_context["evidence_image"] = InlineImage(template, str(image_path), width=Mm(130))
         else:
@@ -652,7 +660,14 @@ class DamEventReportService:
                 (context.get("workflow_insight") or {}).get("knowledge_sources_summary")
                 or context.get("knowledge_sources_summary"),
             )
+            self.normalize_docx_knowledge_refs(
+                temp_path,
+                (context.get("workflow_insight") or {}).get("knowledge_sources_summary")
+                or context.get("knowledge_sources_summary"),
+            )
+            self.rebuild_toc_bookmark_links(temp_path)
             self.disable_docx_proofing(temp_path)
+            self.refresh_toc_page_number_fallbacks(temp_path)
             return temp_path.read_bytes()
         finally:
             try:
@@ -671,36 +686,30 @@ class DamEventReportService:
             return
         try:
             document = Document(str(docx_path))
-            existing_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
-            if "6  知识依据" in existing_text or "06  知识依据" in existing_text or "06 知识依据" in existing_text:
+            heading_exists = any(
+                paragraph.style.name.startswith("Heading")
+                and re.sub(r"\s+", "", paragraph.text) in {"6知识依据", "06知识依据"}
+                for paragraph in document.paragraphs
+            )
+            if heading_exists:
                 return
             heading = document.add_paragraph()
-            heading.paragraph_format.space_before = Pt(12)
-            heading.paragraph_format.space_after = Pt(6)
+            heading.style = "Heading 1"
+            heading.paragraph_format.space_before = Pt(14)
+            heading.paragraph_format.space_after = Pt(8)
+            heading.paragraph_format.line_spacing = Pt(20)
             run = heading.add_run("6  知识依据")
             run.bold = True
-            run.font.size = Pt(16)
-            run.font.name = "SimHei"
-            run._element.rPr.rFonts.set(qn("w:eastAsia"), "SimHei")
+            run.font.size = Pt(15)
+            run.font.name = "经典宋体简"
+            run.font.color.rgb = RGBColor(0, 0, 0)
+            run._element.rPr.rFonts.set(qn("w:eastAsia"), "经典宋体简")
             run._element.rPr.append(OxmlElement("w:noProof"))
-
-            divider = document.add_paragraph()
-            p_pr = divider._p.get_or_add_pPr()
-            p_bdr = p_pr.find(qn("w:pBdr"))
-            if p_bdr is None:
-                p_bdr = OxmlElement("w:pBdr")
-                p_pr.append(p_bdr)
-            bottom = OxmlElement("w:bottom")
-            bottom.set(qn("w:val"), "single")
-            bottom.set(qn("w:sz"), "8")
-            bottom.set(qn("w:space"), "1")
-            bottom.set(qn("w:color"), "000000")
-            p_bdr.append(bottom)
 
             for run in heading.runs:
                 run.bold = True
             for line in text.splitlines():
-                cleaned = line.strip()
+                cleaned = self.normalize_punctuation(line.strip())
                 if not cleaned:
                     continue
                 paragraph = document.add_paragraph()
@@ -708,12 +717,348 @@ class DamEventReportService:
                 paragraph.paragraph_format.space_after = Pt(3)
                 run = paragraph.add_run(cleaned)
                 run.font.size = Pt(11)
-                run.font.name = "SimSun"
-                run._element.rPr.rFonts.set(qn("w:eastAsia"), "SimSun")
+                run.font.name = "FangSong_GB2312"
+                run._element.rPr.rFonts.set(qn("w:eastAsia"), "FangSong_GB2312")
                 run._element.rPr.append(OxmlElement("w:noProof"))
             document.save(str(docx_path))
         except Exception as exc:
             logger.warning("追加报告知识依据章节失败: {}", exc)
+
+    def normalize_docx_knowledge_refs(self, docx_path: Path, knowledge_summary: Any) -> None:
+        summary = str(knowledge_summary or "").strip()
+        match = re.search(r"\[(\d+)\]", summary)
+        first_index = match.group(1) if match else ("1" if summary else "")
+        try:
+            document = Document(str(docx_path))
+            changed = False
+
+            def normalize_runs(paragraph) -> None:
+                nonlocal changed
+                for run in paragraph.runs:
+                    original = run.text
+                    if not original:
+                        continue
+                    updated = original
+                    if first_index:
+                        updated = re.sub(r"\[K\d+\]", f"[{first_index}]", updated)
+                        updated = re.sub(r"(?<!\[)K\d+(?!\])", f"[{first_index}]", updated)
+                        updated = re.sub(r"知识库依据(?!\s*\[\d+\])", f"知识库依据[{first_index}]", updated)
+                        updated = re.sub(r"结合知识库(?!依据)", f"结合知识库依据[{first_index}]", updated)
+                    updated = self.normalize_punctuation(updated)
+                    if updated != original:
+                        run.text = updated
+                        changed = True
+
+            for paragraph in document.paragraphs:
+                normalize_runs(paragraph)
+            for table in document.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        for paragraph in cell.paragraphs:
+                            normalize_runs(paragraph)
+            if changed:
+                document.save(str(docx_path))
+        except Exception as exc:
+            logger.warning("清洗报告知识引用编号失败: {}", exc)
+
+    def rebuild_toc_bookmark_links(self, docx_path: Path) -> None:
+        entries = [
+            ("1  事件信息", "dam_report_heading_1"),
+            ("2  事件复核结果", "dam_report_heading_2"),
+            ("3  研判与处置记录", "dam_report_heading_3"),
+            ("4  证据材料", "dam_report_heading_4"),
+            ("5  处置结论", "dam_report_heading_5"),
+            ("6  知识依据", "dam_report_heading_6"),
+        ]
+        normalized_entries = {
+            re.sub(r"\s+", "", title): (title, bookmark)
+            for title, bookmark in entries
+        }
+        try:
+            document = Document(str(docx_path))
+            bookmark_id = 6100
+            for paragraph in document.paragraphs:
+                normalized = re.sub(r"\s+", "", paragraph.text or "")
+                if normalized not in normalized_entries:
+                    continue
+                _, bookmark_name = normalized_entries[normalized]
+                self.ensure_paragraph_bookmark(
+                    self.bookmark_offset_target(document, paragraph) or paragraph,
+                    bookmark_name,
+                    bookmark_id,
+                )
+                bookmark_id += 1
+
+            toc_started = False
+            for paragraph in document.paragraphs:
+                if paragraph.text.strip() == "目录":
+                    toc_started = True
+                    continue
+                if not toc_started:
+                    continue
+                normalized = re.sub(r"\s+", "", (paragraph.text or "").split("\t", 1)[0])
+                normalized = re.sub(r"\d+$", "", normalized)
+                if normalized in normalized_entries:
+                    title, bookmark_name = normalized_entries[normalized]
+                    self.rewrite_toc_paragraph(paragraph, title, bookmark_name)
+                    continue
+                if paragraph.text.strip() == "":
+                    break
+
+            settings = document.settings._element
+            update_fields = settings.find(qn("w:updateFields"))
+            if update_fields is None:
+                update_fields = OxmlElement("w:updateFields")
+                settings.append(update_fields)
+            update_fields.set(qn("w:val"), "true")
+            document.save(str(docx_path))
+        except Exception as exc:
+            logger.warning("重建报告目录跳转链接失败: {}", exc)
+
+    def refresh_toc_page_number_fallbacks(self, docx_path: Path) -> None:
+        """Write actual heading page numbers into TOC field fallback text.
+
+        OnlyOffice may not refresh PAGEREF field results immediately when opening a
+        generated DOCX. The fields are still kept for jump/update support, while
+        the visible fallback text is updated from a temporary PDF rendering.
+        """
+        try:
+            page_numbers = self.detect_heading_page_numbers(docx_path)
+            if not page_numbers:
+                return
+            document_xml = "word/document.xml"
+            with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
+                temp_zip_path = Path(tmp.name)
+            try:
+                changed = False
+                with zipfile.ZipFile(docx_path, "r") as zin, zipfile.ZipFile(
+                    temp_zip_path,
+                    "w",
+                    zipfile.ZIP_DEFLATED,
+                ) as zout:
+                    for item in zin.infolist():
+                        data = zin.read(item.filename)
+                        if item.filename == document_xml:
+                            xml = data.decode("utf-8")
+                            for bookmark_name, page_number in page_numbers.items():
+                                pattern = (
+                                    r"(<w:instrText\b[^>]*>\s*PAGEREF\s+"
+                                    + re.escape(bookmark_name)
+                                    + r"\s+\\h\s*</w:instrText>\s*"
+                                    + r"<w:fldChar\b[^>]*w:fldCharType=\"separate\"[^>]*/>\s*"
+                                    + r"<w:t>)(.*?)(</w:t>)"
+                                )
+                                xml, count = re.subn(
+                                    pattern,
+                                    lambda match, number=str(page_number): f"{match.group(1)}{number}{match.group(3)}",
+                                    xml,
+                                    count=1,
+                                    flags=re.DOTALL,
+                                )
+                                changed = changed or count > 0
+                            data = xml.encode("utf-8")
+                        zout.writestr(item, data)
+                if changed:
+                    temp_zip_path.replace(docx_path)
+                else:
+                    temp_zip_path.unlink(missing_ok=True)
+            finally:
+                temp_zip_path.unlink(missing_ok=True)
+        except Exception as exc:
+            logger.warning("刷新报告目录页码失败: {}", exc)
+
+    def detect_heading_page_numbers(self, docx_path: Path) -> dict[str, int]:
+        try:
+            from pypdf import PdfReader
+        except Exception as exc:
+            logger.warning("刷新目录页码跳过：缺少 PDF 文本解析库 pypdf: {}", exc)
+            return {}
+
+        headings = {
+            "dam_report_heading_1": "1事件信息",
+            "dam_report_heading_2": "2事件复核结果",
+            "dam_report_heading_3": "3研判与处置记录",
+            "dam_report_heading_4": "4证据材料",
+            "dam_report_heading_5": "5处置结论",
+            "dam_report_heading_6": "6知识依据",
+        }
+        with tempfile.TemporaryDirectory(prefix="dam_report_toc_pages_") as temp_dir:
+            work_dir = Path(temp_dir)
+            output_dir = work_dir / "output"
+            profile_dir = work_dir / "profile"
+            runtime_dir = work_dir / "runtime"
+            for directory in (output_dir, profile_dir, runtime_dir):
+                directory.mkdir(parents=True, exist_ok=True)
+            runtime_dir.chmod(0o700)
+            environment = os.environ.copy()
+            environment["XDG_RUNTIME_DIR"] = str(runtime_dir)
+            command = [
+                "libreoffice",
+                "--headless",
+                f"-env:UserInstallation={profile_dir.as_uri()}",
+                "--convert-to",
+                "pdf",
+                "--outdir",
+                str(output_dir),
+                str(docx_path),
+            ]
+            result = subprocess.run(
+                command,
+                cwd=work_dir,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=90,
+                check=False,
+            )
+            output_files = list(output_dir.glob("*.pdf"))
+            if result.returncode != 0 or not output_files:
+                detail = (result.stderr or result.stdout or "").strip()
+                logger.warning("刷新目录页码跳过：DOCX 转 PDF 失败 {}", detail[-240:])
+                return {}
+
+            reader = PdfReader(str(output_files[0]))
+            found: dict[str, int] = {}
+            for page_index, page in enumerate(reader.pages, start=1):
+                # Cover and TOC contain the same titles; real section headings
+                # start after them in the current report template.
+                if page_index <= 2:
+                    continue
+                try:
+                    text = page.extract_text() or ""
+                except Exception:
+                    continue
+                normalized = re.sub(r"\s+", "", text)
+                for bookmark_name, heading_text in headings.items():
+                    if bookmark_name not in found and heading_text in normalized:
+                        found[bookmark_name] = page_index
+                if len(found) == len(headings):
+                    break
+            return found
+
+    @staticmethod
+    def bookmark_offset_target(document: Document, paragraph):
+        fallback = None
+        non_heading_paragraphs = 0
+        sibling = paragraph._p.getnext()
+        while sibling is not None:
+            if sibling.tag == qn("w:p"):
+                text = "".join(node.text or "" for node in sibling.iter(qn("w:t"))).strip()
+                if text:
+                    for candidate in document.paragraphs:
+                        if candidate._p is sibling:
+                            if candidate.style.name.startswith("Heading"):
+                                return fallback
+                            fallback = fallback or candidate
+                            non_heading_paragraphs += 1
+                            if non_heading_paragraphs >= 2:
+                                return candidate
+            elif sibling.tag == qn("w:tbl"):
+                for table in document.tables:
+                    if table._tbl is sibling and table.rows and table.rows[0].cells:
+                        first_cell = table.rows[0].cells[0]
+                        return first_cell.paragraphs[0] if first_cell.paragraphs else None
+            sibling = sibling.getnext()
+        return fallback
+
+    @staticmethod
+    def ensure_paragraph_bookmark(paragraph, bookmark_name: str, bookmark_id: int) -> None:
+        root = paragraph._p.getroottree().getroot()
+        for existing in list(root.iter(qn("w:bookmarkStart"))):
+            if existing.get(qn("w:name")) == bookmark_name:
+                parent = existing.getparent()
+                if parent is not None:
+                    parent.remove(existing)
+        for existing in list(root.iter(qn("w:bookmarkEnd"))):
+            if existing.get(qn("w:id")) == str(bookmark_id):
+                parent = existing.getparent()
+                if parent is not None:
+                    parent.remove(existing)
+        paragraph_element = paragraph._p
+        start = OxmlElement("w:bookmarkStart")
+        start.set(qn("w:id"), str(bookmark_id))
+        start.set(qn("w:name"), bookmark_name)
+        end = OxmlElement("w:bookmarkEnd")
+        end.set(qn("w:id"), str(bookmark_id))
+        paragraph_element.append(start)
+        paragraph_element.append(end)
+
+    def rewrite_toc_paragraph(self, paragraph, title: str, bookmark_name: str) -> None:
+        paragraph_element = paragraph._p
+        p_pr = paragraph_element.get_or_add_pPr()
+        tabs = p_pr.find(qn("w:tabs"))
+        if tabs is None:
+            tabs = OxmlElement("w:tabs")
+            p_pr.append(tabs)
+        for child in list(tabs):
+            tabs.remove(child)
+        tab = OxmlElement("w:tab")
+        tab.set(qn("w:val"), "right")
+        tab.set(qn("w:leader"), "dot")
+        tab.set(qn("w:pos"), "8787")
+        tabs.append(tab)
+        spacing = p_pr.find(qn("w:spacing"))
+        if spacing is None:
+            spacing = OxmlElement("w:spacing")
+            p_pr.append(spacing)
+        spacing.set(qn("w:before"), "0")
+        spacing.set(qn("w:after"), "160")
+        spacing.set(qn("w:line"), "520")
+        spacing.set(qn("w:lineRule"), "exact")
+
+        for child in list(paragraph_element):
+            if child.tag != qn("w:pPr"):
+                paragraph_element.remove(child)
+
+        hyperlink = OxmlElement("w:hyperlink")
+        hyperlink.set(qn("w:anchor"), bookmark_name)
+        hyperlink.set(qn("w:history"), "1")
+        run = OxmlElement("w:r")
+        run.append(self.run_properties_xml(font="FangSong_GB2312", size_half_points=30))
+        text = OxmlElement("w:t")
+        text.text = title
+        run.append(text)
+        hyperlink.append(run)
+        paragraph_element.append(hyperlink)
+
+        tab_run = OxmlElement("w:r")
+        tab_run.append(self.run_properties_xml(font="FangSong_GB2312", size_half_points=30))
+        tab_run.append(OxmlElement("w:tab"))
+        paragraph_element.append(tab_run)
+
+        field_run = OxmlElement("w:r")
+        field_run.append(self.run_properties_xml(font="FangSong_GB2312", size_half_points=30))
+        begin = OxmlElement("w:fldChar")
+        begin.set(qn("w:fldCharType"), "begin")
+        begin.set(qn("w:dirty"), "true")
+        instr = OxmlElement("w:instrText")
+        instr.set(qn("xml:space"), "preserve")
+        instr.text = f" PAGEREF {bookmark_name} \\h "
+        separate = OxmlElement("w:fldChar")
+        separate.set(qn("w:fldCharType"), "separate")
+        fallback = OxmlElement("w:t")
+        fallback.text = "1"
+        end = OxmlElement("w:fldChar")
+        end.set(qn("w:fldCharType"), "end")
+        field_run.extend([begin, instr, separate, fallback, end])
+        paragraph_element.append(field_run)
+
+    @staticmethod
+    def run_properties_xml(font: str, size_half_points: int) -> OxmlElement:
+        r_pr = OxmlElement("w:rPr")
+        r_fonts = OxmlElement("w:rFonts")
+        r_fonts.set(qn("w:ascii"), "Times New Roman")
+        r_fonts.set(qn("w:hAnsi"), "Times New Roman")
+        r_fonts.set(qn("w:eastAsia"), font)
+        color = OxmlElement("w:color")
+        color.set(qn("w:val"), "000000")
+        size = OxmlElement("w:sz")
+        size.set(qn("w:val"), str(size_half_points))
+        underline = OxmlElement("w:u")
+        underline.set(qn("w:val"), "none")
+        no_proof = OxmlElement("w:noProof")
+        r_pr.extend([r_fonts, color, size, underline, no_proof])
+        return r_pr
 
     def disable_docx_proofing(self, docx_path: Path) -> None:
         try:
@@ -1209,7 +1554,10 @@ class DamEventReportService:
             if instance.status == "FALSE_ALARM":
                 return "误报关闭"
             return "已闭环"
-        return STATUS_NAMES.get(str(instance.status or "").upper(), "处理中")
+        status = str(instance.status or "").upper()
+        if status in {"PENDING", "PROCESSING"}:
+            return "报告已生成"
+        return STATUS_NAMES.get(status, "报告已生成")
 
     def completed_at(
         self,
@@ -1288,15 +1636,15 @@ class DamEventReportService:
         qwen_summary = insight.get("qwen_summary")
         if self.looks_like_model_thinking(str(qwen_summary or "")):
             qwen_summary = ""
-        qwen4b_summary = self.compact(str(insight.get("qwen4b_conclusion") or ""), 120)
+        qwen4b_summary = self.clean_model_output_field(insight.get("qwen4b_conclusion"), allow_empty=True)
         if qwen4b_summary and qwen4b_summary != "—":
-            return self.compact(f"{camera_name}触发{event_name}，智能分析结论：{qwen4b_summary}", 170)
+            return f"{camera_name}触发{event_name}，智能分析结论：{qwen4b_summary}"
         if qwen_summary:
-            return self.compact(f"{camera_name}触发{event_name}，初筛摘要：{qwen_summary}。", 180)
+            return self.sentence_safe_limit(f"{camera_name}触发{event_name}，初筛摘要：{qwen_summary}。", 520)
         detected = insight.get("specialized_class_label")
         if detected:
             return f"{camera_name}触发{event_name}，专有模型复核结果为{detected}。"
-        return self.compact(instance.summary or event_name, 220)
+        return self.sentence_safe_limit(instance.summary or event_name, 520)
 
     def key_observation(
         self,
@@ -1670,9 +2018,28 @@ class DamEventReportService:
             result = result.replace(f"[{evidence_id}]", f"[{index}]")
             result = re.sub(rf"(?<!\[){re.escape(evidence_id)}(?!\])", f"[{index}]", result)
         first_index = min(citation_map.values()) if citation_map else 1
+        result = re.sub(r"\[K\d+\]", f"[{first_index}]", result)
+        result = re.sub(r"(?<!\[)K\d+(?!\])", f"[{first_index}]", result)
         result = re.sub(r"知识库依据(?!\s*\[\d+\])", f"知识库依据[{first_index}]", result)
         result = re.sub(r"结合知识库(?!依据)", f"结合知识库依据[{first_index}]", result)
         return result
+
+    def normalize_report_context_citations(self, context: dict[str, Any], selected: dict[str, Any]) -> None:
+        citation_map = self.knowledge_citation_index_map(selected)
+        knowledge_summary = (
+            (context.get("workflow_insight") or {}).get("knowledge_sources_summary")
+            or context.get("knowledge_sources_summary")
+            or ""
+        )
+        if not citation_map and str(knowledge_summary).strip():
+            citation_map = {"K0": 1}
+        if not citation_map:
+            return
+        for key, value in list(context.items()):
+            if key in {"workflow_insight", "evidence_image"}:
+                continue
+            if isinstance(value, str):
+                context[key] = self.apply_knowledge_citation_indexes(value, citation_map)
 
     def find_in_selected(self, selected: dict[str, Any], key: str) -> Any:
         return self.find_in_value(selected.get("raw_output"), key)
@@ -1845,7 +2212,24 @@ class DamEventReportService:
         text = re.sub(r"\s+", " ", str(text or "")).strip()
         if len(text) <= limit:
             return text or "—"
-        return text[: max(0, limit - 1)].rstrip() + "…"
+        return self.sentence_safe_limit(text, limit)
+
+    @staticmethod
+    def sentence_safe_limit(value: Any, limit: int) -> str:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        if not text:
+            return "—"
+        if len(text) <= limit:
+            return text
+        truncated = text[: max(1, limit)].rstrip()
+        cut_positions = [truncated.rfind(mark) for mark in ("。", "；", ";", "，", ",")]
+        cut = max(cut_positions)
+        if cut >= max(20, int(limit * 0.55)):
+            sentence = truncated[: cut + 1].rstrip()
+            if sentence.endswith(("，", ",", "；", ";", "：", ":")):
+                sentence = f"{sentence.rstrip('，,；;：:')}。"
+            return sentence
+        return f"{truncated.rstrip('，,；;：:。')}。"
 
     def clean_model_output_field(self, value: Any, *, allow_empty: bool = False) -> str:
         text = str(value or "").strip()
@@ -1857,9 +2241,26 @@ class DamEventReportService:
         text = re.sub(r"(?<![A-Za-z])medium(?![A-Za-z])", "中风险", text, flags=re.IGNORECASE)
         text = re.sub(r"(?<![A-Za-z])low(?![A-Za-z])", "低风险", text, flags=re.IGNORECASE)
         text = re.sub(r"\s+", " ", text).strip()
+        text = self.normalize_punctuation(text)
         if self.looks_like_model_thinking(text):
             text = ""
         return text if text else ("" if allow_empty else "—")
+
+    @staticmethod
+    def normalize_punctuation(value: Any) -> str:
+        text = str(value or "")
+        if not text:
+            return ""
+        text = re.sub(r"，{2,}", "，", text)
+        text = re.sub(r"。{2,}", "。", text)
+        text = re.sub(r"；{2,}", "；", text)
+        text = re.sub(r"、{2,}", "、", text)
+        text = re.sub(r"([。！？])\s*[，,；;、]+", r"\1", text)
+        text = re.sub(r"([，,；;、])\s*([。！？])", r"\2", text)
+        text = re.sub(r"([；;])\s*[，,、]+", "；", text)
+        text = re.sub(r"([，,、])\s*[；;]+", "；", text)
+        text = re.sub(r"：\s*[：:]+", "：", text)
+        return text.strip()
 
     def valid_report_text(self, value: Any) -> str:
         text = self.clean_model_output_field(value, allow_empty=True)
@@ -1896,6 +2297,19 @@ class DamEventReportService:
         if not value:
             return "—"
         return self.to_local_datetime(value).strftime("%Y-%m-%d %H:%M:%S")
+
+    @staticmethod
+    def format_chinese_date(value: Any) -> str:
+        if isinstance(value, dt.datetime):
+            value = value.date()
+        if isinstance(value, dt.date):
+            return f"{value.year}年{value.month}月{value.day}日"
+        text = str(value or "").strip()
+        match = re.match(r"^(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})", text)
+        if match:
+            year, month, day = (int(part) for part in match.groups())
+            return f"{year}年{month}月{day}日"
+        return text
 
     def to_local_datetime(self, value: dt.datetime) -> dt.datetime:
         """Convert DB/application timestamps to local display time.

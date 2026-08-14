@@ -32,16 +32,43 @@ from app.services.broadcast_service import (
 
 class BroadcastServiceTests(unittest.TestCase):
     def setUp(self):
+        self.audio_tmpdir = tempfile.TemporaryDirectory()
+        self.template_audio_tmpdir = tempfile.TemporaryDirectory()
+        self.audio_dir_patcher = patch.object(settings, "BROADCAST_AUDIO_DIR", self.audio_tmpdir.name)
+        self.template_audio_dir_patcher = patch.object(
+            settings,
+            "BROADCAST_TEMPLATE_AUDIO_DIR",
+            self.template_audio_tmpdir.name,
+        )
+        self.audio_dir_patcher.start()
+        self.template_audio_dir_patcher.start()
         self.engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
         self.db = self.Session()
         self.service = BroadcastService()
         self.service.ensure_defaults(self.db)
+        self.tts_patcher = patch.object(
+            self.service.tts_service,
+            "synthesize_to_file",
+            side_effect=self.fake_tts_file,
+        )
+        self.tts_patcher.start()
 
     def tearDown(self):
+        self.tts_patcher.stop()
+        self.template_audio_dir_patcher.stop()
+        self.audio_dir_patcher.stop()
         self.db.close()
         self.engine.dispose()
+        self.template_audio_tmpdir.cleanup()
+        self.audio_tmpdir.cleanup()
+
+    def fake_tts_file(self, text):
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
+            handle.write((text or "test").encode("utf-8"))
+            audio_path = handle.name
+        return BroadcastAudioFile(path=audio_path, format="audio/wav", uri=audio_path)
 
     def add_event(self, instance_no):
         event = self.db.query(EventLibrary).filter(EventLibrary.event_code == "TEST_EVENT").first()
@@ -282,6 +309,92 @@ class BroadcastServiceTests(unittest.TestCase):
             sleep_mock.assert_called_once()
         finally:
             Path(audio_path).unlink(missing_ok=True)
+
+    def test_custom_tts_audio_is_deleted_after_playback(self):
+        created_audio_paths = []
+
+        def fake_tts_file(text):
+            audio = self.fake_tts_file(text)
+            created_audio_paths.append(audio.path)
+            return audio
+
+        device = BroadcastDevice(
+            id=1,
+            name="USB speaker",
+            vendor_type="USB_AUDIO",
+            device_code="usb_template_cleanup",
+            status="ONLINE",
+            enabled=True,
+            config_json={"alsa_device": "plughw:2,0"},
+        )
+        played = subprocess.CompletedProcess([], 0, "", "")
+        self.db.add(device)
+        self.db.commit()
+
+        with patch.object(self.service.tts_service, "synthesize_to_file", side_effect=fake_tts_file), \
+            patch("app.services.broadcast_service.shutil.which", return_value="/usr/bin/aplay"), \
+            patch("app.services.broadcast_service.subprocess.run", return_value=played):
+            result = self.service.play(
+                self.db,
+                {
+                    "device_ids": [device.id],
+                    "custom_text": "测试模板广播",
+                    "trigger_type": "MANUAL",
+                },
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["result"], "SUCCESS")
+        self.assertTrue(created_audio_paths)
+        self.assertTrue(all(not Path(path).exists() for path in created_audio_paths))
+
+    def test_template_play_uses_fixed_audio_without_deleting_it(self):
+        created_audio_paths = []
+
+        def fake_tts_file(text):
+            audio = self.fake_tts_file(text)
+            created_audio_paths.append(audio.path)
+            return audio
+
+        device = BroadcastDevice(
+            id=1,
+            name="Template speaker",
+            vendor_type="MOCK",
+            device_code="mock_template_audio",
+            status="ONLINE",
+            enabled=True,
+        )
+        template = BroadcastTemplate(
+            id="tpl_fixed_audio",
+            name="固定模板",
+            scene_type="PERSON",
+            risk_level="LOW",
+            content="请立即离开危险区域",
+            enabled=True,
+        )
+        self.db.add_all([device, template])
+        self.db.commit()
+
+        with patch.object(self.service.tts_service, "synthesize_to_file", side_effect=fake_tts_file):
+            audio = self.service.refresh_template_audio(template)
+
+        self.assertTrue(created_audio_paths)
+        self.assertFalse(Path(created_audio_paths[0]).exists())
+        self.assertTrue(Path(audio.path).exists())
+
+        with patch.object(self.service.tts_service, "synthesize_to_file") as synthesize_mock:
+            result = self.service.play(
+                self.db,
+                {
+                    "device_ids": [device.id],
+                    "template_id": template.id,
+                    "trigger_type": "MANUAL",
+                },
+            )
+
+        self.assertEqual(result["result"], "SUCCESS")
+        self.assertTrue(Path(audio.path).exists())
+        synthesize_mock.assert_not_called()
 
     def test_usb_audio_serializes_concurrent_playback(self):
         adapter = UsbAudioAdapter()

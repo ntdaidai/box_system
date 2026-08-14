@@ -16,20 +16,16 @@
               :class="[metric.tone, metric.kind, { 'has-breakdown': metric.breakdown }]"
             >
               <template v-if="metric.kind === 'category'">
-                <div class="metric-main">
-                  <span class="metric-icon" aria-hidden="true">
-                    <component :is="metric.icon" />
-                  </span>
-                  <div class="metric-copy">
-                    <span class="metric-label">{{ metric.label }}</span>
-                    <strong class="metric-value">{{ metric.value }}<small>次</small></strong>
-                  </div>
-                </div>
+                <span class="metric-icon" aria-hidden="true">
+                  <component :is="metric.icon" />
+                </span>
+                <span class="metric-label">{{ metric.label }}</span>
+                <strong class="metric-value">{{ metric.value }}<small>次</small></strong>
                 <em class="metric-compare">
                   <span>较昨日</span>
                   <i :class="metric.trend.tone">
                     <small>{{ metric.trend.icon }}</small>
-                    {{ metric.trend.delta }}<small>次</small>
+                    {{ metric.trend.delta }}
                   </i>
                 </em>
               </template>
@@ -48,7 +44,7 @@
                       较昨日
                       <i :class="item.trend.tone">
                         <small>{{ item.trend.icon }}</small>
-                        {{ item.trend.delta }}<small>次</small>
+                        {{ item.trend.delta }}
                       </i>
                     </b>
                   </span>
@@ -2500,17 +2496,17 @@ onBeforeUnmount(() => {
   container: todayPanel / inline-size;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  gap: clamp(6px, .36vw, 9px);
-  padding-bottom: clamp(18px, 1.05vw, 24px);
+  gap: clamp(7px, .42vw, 10px);
+  padding-bottom: clamp(18px, 1vw, 24px);
 }
 
 .today-strip-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-rows: repeat(2, minmax(52px, .9fr)) repeat(2, minmax(58px, .98fr));
-  gap: clamp(6px, .36vw, 9px);
+  grid-template-rows: repeat(2, minmax(58px, .86fr)) repeat(2, minmax(60px, .92fr));
+  gap: clamp(7px, .42vw, 10px);
   min-height: 0;
-  padding-bottom: 0;
+  padding-bottom: clamp(4px, .26vw, 6px);
   box-sizing: border-box;
 }
 
@@ -2530,43 +2526,42 @@ onBeforeUnmount(() => {
 
 .today-card.category {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(56px, 3.8vw, 78px);
+  grid-template-columns: clamp(31px, 1.78vw, 40px) minmax(0, 1fr) max-content;
+  grid-template-rows: auto auto;
   align-items: center;
-  gap: clamp(5px, .32vw, 8px);
-  padding: clamp(6px, .36vw, 9px) clamp(8px, .5vw, 12px);
+  align-content: center;
+  column-gap: clamp(8px, .48vw, 11px);
+  row-gap: clamp(5px, .3vw, 7px);
+  padding: clamp(8px, .48vw, 11px) clamp(9px, .55vw, 13px);
 }
 
 .today-card.handling {
+  --handling-gap: clamp(8px, .5vw, 12px);
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: minmax(122px, .36fr) minmax(0, 1fr);
+  grid-template-columns: minmax(132px, .36fr) minmax(236px, .64fr);
   align-items: center;
-  gap: clamp(7px, .44vw, 12px);
-  padding: clamp(6px, .36vw, 9px) clamp(8px, .5vw, 12px);
+  gap: var(--handling-gap);
+  padding: clamp(8px, .48vw, 10px) clamp(10px, .6vw, 14px);
 }
 
 .today-card::before {
   content: "";
   position: absolute;
   left: 0;
-  top: 12px;
-  bottom: 12px;
+  top: 13px;
+  bottom: 13px;
   width: 2px;
   border-radius: 0 2px 2px 0;
   background: var(--metric-color);
   opacity: .9;
 }
 
-.metric-main,
 .handling-title {
   min-width: 0;
   display: grid;
   align-items: center;
   gap: clamp(7px, .45vw, 10px);
-}
-
-.metric-main {
-  grid-template-columns: clamp(31px, 1.78vw, 40px) minmax(0, 1fr);
 }
 
 .handling-title {
@@ -2585,39 +2580,62 @@ onBeforeUnmount(() => {
   border: 1px solid rgba(143, 200, 242, .18);
 }
 
+.today-card.category > .metric-icon {
+  grid-row: 1 / 3;
+  grid-column: 1;
+  align-self: center;
+}
+
+.today-card.category > .metric-label {
+  grid-column: 2 / 4;
+  grid-row: 1;
+  align-self: center;
+}
+
+.today-card.category > .metric-value {
+  grid-column: 2;
+  grid-row: 2;
+  align-self: center;
+  justify-self: start;
+}
+
+.today-card.category > .metric-compare {
+  grid-column: 3;
+  grid-row: 2;
+  align-self: center;
+  justify-self: end;
+  transform: translateY(clamp(2px, .16vw, 4px));
+}
+
 .metric-icon :deep(svg) {
   width: 54%;
   height: 54%;
   display: block;
 }
 
-.metric-copy {
-  min-width: 0;
-  display: grid;
-  align-content: center;
-  gap: clamp(3px, .2vw, 5px);
-}
-
 .metric-label {
   min-width: 0;
   color: #b7e5ff;
-  font-size: clamp(15px, .88vw, 19px);
+  font-size: clamp(15px, .86vw, 18px);
   font-weight: 800;
-  line-height: 1.1;
-  white-space: normal;
+  line-height: 1.22;
+  white-space: nowrap;
   overflow: visible;
   text-overflow: clip;
-  word-break: normal;
-  overflow-wrap: anywhere;
+  word-break: keep-all;
+  overflow-wrap: normal;
 }
 
 .metric-value {
   min-width: 0;
-  display: block;
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: flex-start;
   margin: 0;
   color: #fff;
-  font-size: clamp(23px, 1.32vw, 32px);
+  font-size: clamp(20px, 1.15vw, 26px);
   line-height: 1;
+  white-space: nowrap;
   letter-spacing: 0;
   font-variant-numeric: tabular-nums;
 }
@@ -2635,7 +2653,10 @@ onBeforeUnmount(() => {
   min-width: 0;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: clamp(7px, .44vw, 10px);
+  justify-self: end;
+  width: 100%;
+  max-width: clamp(250px, 17vw, 340px);
+  gap: var(--handling-gap);
 }
 
 .metric-breakdown span {
@@ -2644,9 +2665,9 @@ onBeforeUnmount(() => {
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-rows: auto auto;
   align-items: center;
-  row-gap: clamp(3px, .18vw, 5px);
+  row-gap: clamp(4px, .22vw, 6px);
   column-gap: clamp(6px, .36vw, 9px);
-  padding: clamp(6px, .36vw, 8px) clamp(7px, .44vw, 10px);
+  padding: clamp(6px, .34vw, 8px) clamp(8px, .48vw, 10px);
   border: 1px solid rgba(82, 177, 230, .16);
   border-radius: 6px;
   background: rgba(2, 15, 28, .28);
@@ -2654,7 +2675,7 @@ onBeforeUnmount(() => {
 
 .metric-breakdown em {
   color: #95cbed;
-  font-size: clamp(12px, .68vw, 15px);
+  font-size: clamp(13px, .76vw, 16px);
   font-style: normal;
   line-height: 1;
   white-space: nowrap;
@@ -2662,7 +2683,8 @@ onBeforeUnmount(() => {
 
 .metric-breakdown strong {
   color: #fff;
-  font-size: clamp(20px, 1.12vw, 27px);
+  font-size: clamp(21px, 1.18vw, 28px);
+  white-space: nowrap;
   line-height: 1;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
@@ -2671,13 +2693,13 @@ onBeforeUnmount(() => {
 .metric-breakdown b {
   grid-column: 1 / -1;
   min-width: 0;
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: space-between;
   gap: clamp(4px, .24vw, 6px);
   overflow: hidden;
   color: #9ed3f5;
-  font-size: clamp(11px, .62vw, 14px);
+  font-size: clamp(12px, .7vw, 15px);
   font-style: normal;
   font-weight: 500;
   line-height: 1;
@@ -2686,7 +2708,9 @@ onBeforeUnmount(() => {
 
 .metric-breakdown b i {
   display: inline-flex;
+  min-width: clamp(38px, 2.2vw, 50px);
   align-items: center;
+  justify-content: flex-end;
   gap: 1px;
   font-style: normal;
   font-size: clamp(14px, .8vw, 18px);
@@ -2700,17 +2724,19 @@ onBeforeUnmount(() => {
 }
 
 .metric-compare {
-  display: grid;
-  justify-items: end;
-  gap: 5px;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
   white-space: nowrap;
-  text-align: right;
+  text-align: left;
   font-style: normal;
 }
 
 .metric-compare span {
   color: #9ed3f5;
-  font-size: clamp(12px, .68vw, 15px);
+  font-size: clamp(12px, .68vw, 14px);
   line-height: 1;
   font-style: normal;
 }
@@ -2724,13 +2750,29 @@ onBeforeUnmount(() => {
   font-style: normal;
   line-height: 1;
   font-variant-numeric: tabular-nums;
-  font-size: clamp(20px, 1.15vw, 28px);
+  font-size: clamp(17px, 1vw, 22px);
   font-weight: 800;
 }
 
 .metric-compare i small {
-  margin-right: 3px;
   font-size: .72em;
+}
+
+.metric-compare i small:first-child,
+.metric-breakdown b i small:first-child {
+  margin-right: 3px;
+}
+
+.metric-compare i small:last-child,
+.metric-breakdown b i small:last-child {
+  margin-right: 0;
+  margin-left: 2px;
+  font-size: .5em;
+}
+
+.today-card em,
+.today-card i {
+  font-style: normal;
 }
 
 .today-card.danger { --metric-color: #ff6873; }
@@ -2741,32 +2783,31 @@ onBeforeUnmount(() => {
 .today-card.success { --metric-color: #38d59c; }
 
 .today-card.handling .metric-label {
-  font-size: clamp(18px, 1.04vw, 23px);
+  font-size: clamp(16px, .92vw, 20px);
   white-space: nowrap;
 }
 
 @container todayPanel (max-width: 470px) {
   .today-strip-list {
-    grid-template-rows: repeat(2, minmax(52px, .86fr)) repeat(2, minmax(60px, .98fr));
+    grid-template-rows: repeat(2, minmax(58px, .86fr)) repeat(2, minmax(62px, .92fr));
     gap: 6px;
-    padding-bottom: 8px;
+    padding-bottom: 6px;
   }
 
   .today-card.category {
-    grid-template-columns: minmax(0, 1fr) 42px;
-    gap: 5px;
-    padding: 6px 7px;
+    grid-template-columns: 30px minmax(0, 1fr) max-content;
+    grid-template-rows: auto auto;
+    align-content: center;
+    column-gap: 7px;
+    row-gap: 5px;
+    padding: 7px 8px;
   }
 
   .today-card.handling {
-    grid-template-columns: minmax(104px, .38fr) minmax(0, 1fr);
-    gap: 6px;
-    padding: 6px 7px;
-  }
-
-  .metric-main {
-    grid-template-columns: 28px minmax(0, 1fr);
-    gap: 6px;
+    --handling-gap: 6px;
+    grid-template-columns: minmax(116px, .35fr) minmax(210px, .65fr);
+    gap: var(--handling-gap);
+    padding: 7px 8px;
   }
 
   .handling-title {
@@ -2775,66 +2816,75 @@ onBeforeUnmount(() => {
   }
 
   .metric-label {
-    font-size: 12px;
-    line-height: 1.08;
+    font-size: 14px;
+    line-height: 1.2;
+    white-space: nowrap;
   }
 
   .today-card.handling .metric-label {
-    font-size: 14px;
-  }
-
-  .metric-value {
-    font-size: 19px;
-  }
-
-  .metric-compare span {
-    font-size: 10px;
-  }
-
-  .metric-compare i {
-    font-size: 17px;
-  }
-
-  .metric-breakdown {
-    gap: 5px;
-  }
-
-  .metric-breakdown span {
-    grid-template-columns: minmax(24px, .46fr) minmax(26px, .48fr) minmax(32px, .62fr);
-    gap: 3px;
-    padding: 4px 5px;
-  }
-
-  .metric-breakdown em {
-    font-size: 10px;
-  }
-
-  .metric-breakdown strong {
     font-size: 15px;
   }
 
+  .metric-value {
+    font-size: 20px;
+  }
+
+  .metric-compare span {
+    font-size: 12px;
+  }
+
+  .metric-compare i {
+    font-size: 16px;
+  }
+
+  .metric-breakdown {
+    width: 100%;
+    max-width: 250px;
+    gap: 6px;
+  }
+
+  .metric-breakdown span {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto;
+    row-gap: 3px;
+    column-gap: 5px;
+    padding: 5px 7px;
+  }
+
+  .metric-breakdown em {
+    font-size: 12px;
+  }
+
+  .metric-breakdown strong {
+    font-size: 19px;
+  }
+
   .metric-breakdown b {
-    font-size: 9px;
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    font-size: 11px;
   }
 
   .metric-breakdown b i {
-    font-size: 12px;
+    font-size: 14px;
+    min-width: 34px;
   }
 }
 
 @container todayPanel (max-width: 405px) {
   .today-card.category {
-    grid-template-columns: minmax(0, 1fr) 38px;
+    grid-template-columns: 28px minmax(0, 1fr) max-content;
+    grid-template-rows: auto auto;
     padding: 6px;
+    column-gap: 6px;
+    row-gap: 4px;
   }
 
   .today-card.handling {
-    grid-template-columns: minmax(92px, .36fr) minmax(0, 1fr);
-  }
-
-  .metric-main {
-    grid-template-columns: 26px minmax(0, 1fr);
-    gap: 5px;
+    --handling-gap: 5px;
+    grid-template-columns: minmax(104px, .35fr) minmax(188px, .65fr);
+    padding: 6px;
+    gap: var(--handling-gap);
   }
 
   .handling-title {
@@ -2843,20 +2893,69 @@ onBeforeUnmount(() => {
   }
 
   .metric-label {
-    font-size: 11px;
+    font-size: 13px;
+    line-height: 1.18;
   }
 
   .today-card.handling .metric-label {
-    font-size: 13px;
+    font-size: 14px;
   }
 
   .metric-value {
-    font-size: 17px;
+    font-size: 18px;
+  }
+
+  .metric-breakdown {
+    width: 100%;
+    max-width: 224px;
+    gap: 4px;
   }
 
   .metric-breakdown span {
-    grid-template-columns: minmax(22px, .44fr) minmax(24px, .48fr) minmax(30px, .6fr);
-    padding: 3px 4px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto;
+    padding: 4px 6px;
+  }
+
+  .metric-breakdown em {
+    font-size: 11px;
+  }
+
+  .metric-breakdown strong {
+    font-size: 18px;
+  }
+
+  .metric-breakdown b {
+    font-size: 10px;
+  }
+
+  .metric-breakdown b i {
+    font-size: 13px;
+    min-width: 32px;
+  }
+
+  .metric-compare i {
+    font-size: 16px;
+  }
+}
+
+@container todayPanel (max-width: 340px) {
+  .today-strip-list {
+    grid-template-rows: repeat(2, minmax(56px, .86fr)) repeat(2, minmax(64px, .96fr));
+  }
+
+  .today-card.handling {
+    --handling-gap: 4px;
+    grid-template-columns: minmax(96px, .35fr) minmax(176px, .65fr);
+    gap: var(--handling-gap);
+  }
+
+  .metric-breakdown {
+    max-width: 196px;
+  }
+
+  .today-card.handling .metric-label {
+    font-size: 12px;
   }
 }
 

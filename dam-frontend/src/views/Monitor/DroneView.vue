@@ -1,6 +1,98 @@
 <!-- 无人机设备页面 - 对接 DJI Cloud API -->
 <template>
   <div class="drone-page">
+    <header v-if="!showDroneDetail" class="page-header">
+      <div>
+        <h2>无人机设备</h2>
+        <p>管理无人机设备状态，点击设备进入遥测、航线任务与实时画面</p>
+      </div>
+      <el-button :icon="Refresh" :loading="deviceLoading" @click="fetchDevices">刷新</el-button>
+    </header>
+
+    <section v-if="!showDroneDetail" class="resource-control-card drone-list-control" v-loading="deviceLoading">
+      <header class="tab-header drone-list-head">
+        <div>
+          <h3>无人机列表</h3>
+          <span>共 {{ filteredDroneDevices.length }} 架</span>
+        </div>
+        <div class="tab-actions drone-list-toolbar">
+          <el-select
+            v-model="droneStatusFilter"
+            class="status-filter-select drone-status-select"
+            popper-class="drone-filter-popper"
+            placeholder="设备状态"
+          >
+            <el-option label="全部状态" value="all" />
+            <el-option label="在线" value="online" />
+            <el-option label="离线" value="offline" />
+          </el-select>
+        </div>
+      </header>
+    </section>
+
+    <section v-if="!showDroneDetail" class="resource-list-card drone-device-list-card" v-loading="deviceLoading">
+      <div class="drone-device-list" :class="{ 'is-empty': !filteredDroneDevices.length }">
+        <div v-if="filteredDroneDevices.length" class="drone-list-header-row">
+          <div class="col-drone-name">设备名称</div>
+          <div class="col-drone-desc">描述</div>
+          <div class="col-drone-status">状态</div>
+          <div class="col-drone-enabled">启用状态</div>
+          <div class="col-drone-actions">操作</div>
+        </div>
+        <article
+          v-for="row in pagedDroneDevices"
+          :key="row.device_sn"
+          class="drone-list-row"
+          :class="row.status === 'online' ? 'is-online' : 'is-offline'"
+        >
+          <div class="col-drone-name drone-name-cell">
+            <div>
+              <strong>{{ droneDisplayName(row) }}</strong>
+            </div>
+          </div>
+          <div class="col-drone-desc drone-description">
+            <span>{{ droneDescription(row) }}</span>
+          </div>
+          <div class="col-drone-status">
+            <span class="drone-status-pill" :class="row.status === 'online' ? 'is-online' : 'is-offline'">
+              {{ row.status === 'online' ? '在线' : '离线' }}
+            </span>
+          </div>
+          <div class="col-drone-enabled">
+            <el-switch :model-value="row.status === 'online'" disabled />
+          </div>
+          <div class="col-drone-actions drone-list-actions list-actions">
+            <el-button class="test-action" @click="openDroneDetail(row)">航线</el-button>
+            <el-button class="edit-action" @click="openDroneDetail(row)">详情</el-button>
+          </div>
+        </article>
+        <div v-if="!filteredDroneDevices.length" class="drone-empty-list">
+          <strong>{{ authError ? '无人机服务连接失败' : '暂无无人机设备' }}</strong>
+          <span>{{ authError || '请确认 DJI Cloud API 后端和设备绑定状态' }}</span>
+        </div>
+      </div>
+      <el-pagination
+        v-if="filteredDroneDevices.length"
+        v-model:current-page="dronePage"
+        class="list-pagination"
+        :page-size="dronePageSize"
+        :total="filteredDroneDevices.length"
+        layout="prev, pager, next"
+      />
+    </section>
+
+    <template v-else>
+    <header class="detail-nav surface-card">
+      <button type="button" class="back-to-list" @click="backToDroneList">
+        <el-icon><ArrowLeft /></el-icon>
+        <span>返回无人机列表</span>
+      </button>
+      <div>
+        <strong>{{ selectedDevice ? droneDisplayName(selectedDevice) : '无人机详情' }}</strong>
+        <span>{{ currentDeviceSn || '--' }}</span>
+      </div>
+    </header>
+
     <!-- 顶部：三列布局 -->
     <header class="top-section surface-card">
       <!-- 左：无人机图片 -->
@@ -12,12 +104,12 @@
         <div class="info-row">
           <span class="info-icon">◆</span>
           <span class="info-label">无人机型号</span>
-          <span class="info-value cyan">大疆Matrice 4E</span>
+          <span class="info-value cyan">{{ droneModelText(selectedDevice) }}</span>
         </div>
         <div class="info-row">
           <span class="info-icon">◆</span>
           <span class="info-label">机场名称</span>
-          <span class="info-value cyan">DJI RC Plus 2</span>
+          <span class="info-value cyan">{{ selectedDevice?.parent_name || selectedDevice?.gateway_name || 'DJI RC Plus 2' }}</span>
         </div>
         <div class="info-row">
           <span class="info-icon">◆</span>
@@ -438,6 +530,7 @@
       </div>
     </section>
 
+    </template>
   </div>
 </template>
 
@@ -448,7 +541,7 @@ import {
   Position, Connection, Camera, VideoCamera, Top, Warning, Lightning,
   MapLocation, Promotion, Loading, Odometer, Sunny, Aim, DataLine, Cpu, Van,
   VideoPlay, VideoPause, Close, OfficeBuilding, Clock,
-  CircleCheck, CircleClose, WarningFilled, ArrowLeft, ArrowRight,
+  CircleCheck, CircleClose, WarningFilled, ArrowLeft, ArrowRight, Refresh,
 } from '@element-plus/icons-vue'
 import {
   dijLogin, getDroneDevices, getBoundDevices, getCurrentWorkspace,
@@ -469,9 +562,25 @@ const DIJ_PASSWORD = 'adminPC'
 const deviceLoading = ref(false)
 const droneDevices = ref([])
 const currentDeviceSn = ref('')
+const showDroneDetail = ref(false)
+const droneStatusFilter = ref('all')
+const dronePage = ref(1)
+const dronePageSize = 10
 const selectedDevice = computed(() =>
   droneDevices.value.find(d => d.device_sn === currentDeviceSn.value) || null
 )
+const filteredDroneDevices = computed(() => {
+  if (droneStatusFilter.value === 'all') return droneDevices.value
+  return droneDevices.value.filter(device => device.status === droneStatusFilter.value)
+})
+const pagedDroneDevices = computed(() => {
+  const start = (dronePage.value - 1) * dronePageSize
+  return filteredDroneDevices.value.slice(start, start + dronePageSize)
+})
+
+watch(droneStatusFilter, () => {
+  dronePage.value = 1
+})
 
 // ========== WebSocket 状态 ==========
 const wsState = ref(WS_STATE.CLOSED)
@@ -1040,6 +1149,39 @@ function switchDevice(sn) {
   hmsAlerts.value = []
   // 加载该设备的 HMS 告警
   loadDeviceHms(sn)
+}
+
+function droneDisplayName(device) {
+  return device?.nickname || device?.device_name || device?.name || device?.device_sn || '无人机设备'
+}
+
+function droneModelText(device) {
+  return device?.device_model?.name || device?.device_model || device?.model || device?.product_name || device?.type_name || '大疆 Matrice 4E'
+}
+
+function droneDescription(device) {
+  const parts = [
+    droneModelText(device),
+    device?.parent_name || device?.gateway_name || 'DJI RC Plus 2',
+    device?.device_sn ? `SN ${device.device_sn}` : '',
+  ].filter(Boolean)
+  return parts.join(' / ')
+}
+
+function openDroneDetail(device) {
+  if (!device?.device_sn) {
+    ElMessage.warning('未获取到无人机设备编号')
+    return
+  }
+  switchDevice(device.device_sn)
+  showDroneDetail.value = true
+}
+
+async function backToDroneList() {
+  if (isLive.value || liveLoading.value) {
+    await handleStopLive()
+  }
+  showDroneDetail.value = false
 }
 
 /** 加载设备 HMS 告警 */
@@ -1623,12 +1765,10 @@ onBeforeUnmount(() => {
   min-height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px;
-  color: #e9f7ff;
-  background:
-    radial-gradient(circle at 15% 0%, rgba(33, 126, 190, 0.18), transparent 30%),
-    linear-gradient(145deg, #071522, #091b2d 58%, #071522);
+  gap: 0;
+  padding: 22px;
+  color: #d9e8f8;
+  background: #071422;
 }
 
 .surface-card {
@@ -1639,6 +1779,400 @@ onBeforeUnmount(() => {
 }
 
 h1, h2, h3, p { margin: 0; }
+
+.page-header,
+.tab-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.page-header {
+  min-height: 62px;
+  margin-bottom: 14px;
+  padding: 16px 20px;
+  border: 1px solid rgba(96, 151, 191, .22);
+  border-radius: 8px;
+  background: linear-gradient(90deg, rgba(14, 48, 76, .82) 0%, rgba(9, 29, 48, .72) 58%, rgba(7, 20, 34, .46) 100%);
+  box-shadow: inset 0 1px 0 rgba(147, 206, 241, .08);
+}
+
+.page-header h2,
+.tab-header h3 {
+  margin: 0;
+  color: #f3f8fd;
+  letter-spacing: 0;
+}
+
+.page-header h2 {
+  font-size: 25px;
+  line-height: 1.15;
+}
+
+.page-header p {
+  margin: 7px 0 0;
+  color: #87a5bb;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.page-header :deep(.el-button) {
+  min-width: 92px;
+  height: 36px;
+  border-color: #1b7fa5;
+  color: #dcefff;
+  background: #103954;
+  font-weight: 700;
+}
+
+.tab-header h3 {
+  font-size: 18px;
+}
+
+.tab-header span {
+  display: inline-block;
+  margin: 6px 0 0;
+  color: #79acd0;
+  font-size: 13px;
+}
+
+.tab-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: nowrap;
+}
+
+.tab-actions :deep(.el-button) {
+  min-width: 108px;
+  height: 36px;
+  margin-left: 0;
+  padding: 0 15px;
+}
+
+.resource-control-card,
+.resource-list-card,
+.detail-nav {
+  border: 1px solid rgba(96, 151, 191, .18);
+  border-radius: 8px;
+  background: #0b1d30;
+}
+
+.resource-control-card {
+  min-height: 82px;
+  display: flex;
+  align-items: center;
+  padding: 18px 20px;
+}
+
+.resource-control-card .tab-header {
+  width: 100%;
+}
+
+.resource-list-card {
+  margin-top: 16px;
+  overflow: hidden;
+}
+
+.status-filter-select {
+  width: 116px;
+  flex: 0 0 auto;
+}
+
+.status-filter-select :deep(.el-select__wrapper) {
+  min-height: 34px;
+  border-radius: 6px;
+  background: #0d2740;
+  box-shadow: 0 0 0 1px rgba(84, 148, 193, .36) inset;
+}
+
+.status-filter-select :deep(.el-select__selected-item),
+.status-filter-select :deep(.el-select__placeholder) {
+  color: #d7edf6;
+  font-weight: 700;
+}
+
+.status-filter-select :deep(.el-select__caret) {
+  color: #8fd4df;
+}
+
+.drone-device-list-card {
+  overflow-x: auto;
+  padding: 0;
+}
+
+.drone-device-list {
+  min-width: 1320px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 8px 8px 0 0;
+  background: #081b2d;
+}
+
+.drone-device-list.is-empty {
+  min-width: 0;
+}
+
+.drone-list-header-row,
+.drone-list-row {
+  display: grid;
+  align-items: center;
+  gap: 14px;
+  grid-template-columns: minmax(240px, 1.15fr) minmax(320px, 1.45fr) 124px 132px 220px;
+}
+
+.drone-list-header-row {
+  min-height: 48px;
+  padding: 0 20px;
+  color: #a9c7de;
+  font-size: 14px;
+  font-weight: 800;
+  text-align: center;
+  background: #15314d;
+}
+
+.drone-list-row {
+  min-height: 72px;
+  padding: 12px 20px;
+  border-top: 1px solid rgba(149, 190, 220, .10);
+  color: #d7e8f8;
+  background: #092034;
+  transition: background .18s ease;
+}
+
+.drone-list-row:hover {
+  background: #102940;
+}
+
+.drone-list-row > div,
+.drone-list-header-row > div {
+  min-width: 0;
+}
+
+.col-drone-desc,
+.col-drone-status,
+.col-drone-enabled,
+.col-drone-actions {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  text-align: center;
+}
+
+.drone-name-cell {
+  display: grid;
+  align-items: center;
+  justify-items: center;
+  text-align: center;
+}
+
+.drone-name-cell strong {
+  display: block;
+  overflow: hidden;
+  color: #f3f8fd;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drone-description span {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #a9c0d2;
+  font-size: 15px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.drone-status-pill {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  justify-content: center;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid rgba(235, 124, 133, .34);
+  border-radius: 4px;
+  background: rgba(142, 48, 62, .18);
+  color: #ffabb5;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.drone-status-pill.is-online {
+  border-color: rgba(92, 215, 154, .34);
+  background: rgba(48, 154, 118, .18);
+  color: #81efad;
+}
+
+.drone-list-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: nowrap;
+}
+
+.list-actions :deep(.el-button) {
+  width: auto;
+  height: 34px;
+  min-height: 34px;
+  margin: 0;
+  padding: 0 16px;
+  border-radius: 5px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.list-actions :deep(.test-action) {
+  border-color: rgba(82, 178, 143, .46);
+  color: #b9f1d8;
+  background: rgba(30, 103, 78, .38);
+}
+
+.list-actions :deep(.edit-action) {
+  border-color: rgba(66, 164, 224, .50);
+  color: #d5f0ff;
+  background: rgba(29, 91, 133, .70);
+}
+
+.list-actions :deep(.test-action:hover) {
+  border-color: rgba(82, 178, 143, .7);
+  color: #e3fff1;
+  background: rgba(36, 123, 92, .52);
+}
+
+.list-actions :deep(.edit-action:hover) {
+  border-color: rgba(66, 164, 224, .72);
+  color: #effaff;
+  background: rgba(33, 107, 156, .82);
+}
+
+.col-drone-enabled :deep(.el-switch.is-disabled) {
+  opacity: 1;
+}
+
+.col-drone-enabled :deep(.el-switch__core) {
+  border-color: rgba(120, 153, 176, .34);
+  background: rgba(96, 118, 134, .38);
+}
+
+.col-drone-enabled :deep(.el-switch.is-checked .el-switch__core) {
+  border-color: rgba(64, 158, 255, .66);
+  background: #409eff;
+}
+
+.drone-empty-list {
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #7fa7bf;
+  text-align: center;
+}
+
+.drone-empty-list strong {
+  color: #c8e9ff;
+  font-size: 18px;
+}
+
+.drone-empty-list span {
+  font-size: 14px;
+}
+
+.list-pagination {
+  min-height: 46px;
+  justify-content: center;
+  border-top: 1px solid rgba(149, 190, 220, .10);
+  background: #092034;
+}
+
+.list-pagination :deep(.btn-prev),
+.list-pagination :deep(.btn-next),
+.list-pagination :deep(.el-pager li) {
+  min-width: 34px;
+  height: 32px;
+  margin: 0 3px;
+  border: 1px solid rgba(70, 145, 190, .34);
+  border-radius: 5px;
+  color: #8fb6d1;
+  background: #0b2238;
+  font-weight: 700;
+}
+
+.list-pagination :deep(.el-pager li.is-active) {
+  border-color: #4ba7e6;
+  color: #fff;
+  background: #3f95d7;
+}
+
+.list-pagination :deep(.btn-prev:disabled),
+.list-pagination :deep(.btn-next:disabled) {
+  color: rgba(143, 182, 209, .35);
+  background: #0b2238;
+}
+
+.detail-nav {
+  min-height: 54px;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 10px 16px;
+}
+
+.top-section,
+.task-panel,
+.main-workspace {
+  margin-top: 10px;
+}
+
+.detail-nav + .top-section {
+  margin-top: 0;
+}
+
+.back-to-list {
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(70, 151, 198, 0.48);
+  border-radius: 6px;
+  background: rgba(14, 52, 82, 0.9);
+  color: #c6e8ff;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 800;
+  padding: 0 14px;
+}
+
+.back-to-list:hover {
+  border-color: rgba(72, 216, 255, 0.78);
+  color: #fff;
+}
+
+.detail-nav strong {
+  display: block;
+  color: #f2fbff;
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.detail-nav div > span {
+  color: #74a8c7;
+  font-size: 13px;
+}
 
 /* 顶部三列布局 */
 .top-section {
