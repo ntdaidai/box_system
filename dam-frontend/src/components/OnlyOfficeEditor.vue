@@ -244,6 +244,7 @@ const initEditor = async () => {
           hideRightMenu: false,
           hideRulers: false,
           macros: false,
+          spellcheck: false,
           plugins: true
         }
       },

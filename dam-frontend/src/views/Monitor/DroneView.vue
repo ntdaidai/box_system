@@ -344,6 +344,24 @@
       >
         <div class="map-transform" :style="mapTransformStyle">
           <img src="/dam-map.png" alt="大藤峡地图" class="map-image" draggable="false" />
+          <svg
+            v-if="activeRoutePoints.length"
+            class="route-layer"
+            viewBox="0 0 100 100"
+            preserveAspectRatio="none"
+            aria-hidden="true"
+          >
+            <polyline class="route-line route-line-glow" :points="activeRoutePolyline" />
+            <polyline class="route-line" :points="activeRoutePolyline" />
+            <circle
+              v-for="(point, index) in activeRoutePoints"
+              :key="`${activeRouteName}-${index}`"
+              class="route-point"
+              :cx="point.x"
+              :cy="point.y"
+              r="1.2"
+            />
+          </svg>
 
           <!-- 机场 P3 -->
           <div class="map-fixed-point" style="left: 94.9%; top: 24.9%;">
@@ -1096,6 +1114,7 @@ const ROUTES = {
 
 /** 根据航线名称获取航线数据 */
 function getRouteByFileName(fileName) {
+  if (!fileName) return null
   if (ROUTES[fileName]) return ROUTES[fileName]
   for (const key of Object.keys(ROUTES)) {
     if (fileName.includes(key) || key.includes(fileName)) {
@@ -1104,6 +1123,21 @@ function getRouteByFileName(fileName) {
   }
   return null
 }
+
+const selectedWaylineFile = computed(() =>
+  waylineFiles.value.find(file => file.id === selectedFileId.value || file.wayline_id === selectedFileId.value) || null
+)
+
+const activeRoute = computed(() => {
+  const selectedName = selectedWaylineFile.value?.file_name || selectedWaylineFile.value?.name || ''
+  return getRouteByFileName(selectedName) || ROUTES['禁渔航线']
+})
+
+const activeRouteName = computed(() => activeRoute.value?.name || '当前航线')
+const activeRoutePoints = computed(() => activeRoute.value?.waypoints || [])
+const activeRoutePolyline = computed(() =>
+  activeRoutePoints.value.map(point => `${point.x},${point.y}`).join(' ')
+)
 
 // 当前 SSE 连接
 let currentEventSource = null
@@ -1815,6 +1849,36 @@ h1, h2, h3, p { margin: 0; }
   will-change: transform;
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
+}
+.route-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+.route-line {
+  fill: none;
+  stroke: #48d8ff;
+  stroke-width: 0.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 2.2 1.2;
+  vector-effect: non-scaling-stroke;
+}
+.route-line-glow {
+  stroke: rgba(72, 216, 255, 0.28);
+  stroke-width: 2.4;
+  stroke-dasharray: none;
+}
+.route-point {
+  fill: #eafcff;
+  stroke: #48d8ff;
+  stroke-width: 0.35;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 5px rgba(72, 216, 255, 0.75));
 }
 
 /* 固定航点 */

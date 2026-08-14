@@ -634,6 +634,7 @@ async def get_editor_config(
                     "hideRightMenu": False,
                     "hideRulers": False,
                     "macros": False,
+                    "spellcheck": False,
                     "plugins": True,
                 },
             },

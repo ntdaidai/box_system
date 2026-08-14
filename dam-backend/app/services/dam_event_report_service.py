@@ -15,7 +15,9 @@ from urllib.parse import unquote, urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
 from docx import Document
-from docx.shared import Mm
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Mm, Pt
 from docxtpl import DocxTemplate, InlineImage
 from loguru import logger
 from sqlalchemy.orm import Session, load_only
@@ -270,8 +272,6 @@ class DamEventReportService:
         if local_report:
             local_report["source"] = "qwen4b"
             local_report["source_label"] = "Qwen3-VL-4B 本地场景理解"
-            if cloud_error:
-                local_report["source_label"] += "（云端增强不可用，已降级采用本地结果）"
             local_report["cloud_error"] = cloud_error
             return local_report
         return None
@@ -526,6 +526,7 @@ class DamEventReportService:
         evidence_image_path = self.download_first_image(image_items)
 
         source_label = self.source_label(instance, source, selected)
+        location_text = self.location(source, camera, visual)
         cloud_note = ""
         if selected.get("source") == "qwen4b" and selected.get("cloud_error"):
             cloud_note = "云端增强暂不可用，本报告已采用本地 4B 分析结果生成。"
@@ -547,7 +548,9 @@ class DamEventReportService:
             "emergency_level": self.emergency_level(instance),
             "confidence_label": self.confidence_label(selected),
             "source_label": source_label,
-            "location": self.location(source, camera, visual),
+            "source_trigger_label": self.source_trigger_label(instance, source),
+            "location": location_text,
+            "location_short": self.compact(location_text, 36),
             "evidence_count": len(image_items),
             "summary": self.event_summary(instance, event, source, visual, workflow_insight),
             "key_observation": self.key_observation(workflow_payload, visual, selected_text, workflow_insight),
@@ -649,6 +652,7 @@ class DamEventReportService:
                 (context.get("workflow_insight") or {}).get("knowledge_sources_summary")
                 or context.get("knowledge_sources_summary"),
             )
+            self.disable_docx_proofing(temp_path)
             return temp_path.read_bytes()
         finally:
             try:
@@ -668,20 +672,83 @@ class DamEventReportService:
         try:
             document = Document(str(docx_path))
             existing_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
-            if "06  知识依据" in existing_text or "06 知识依据" in existing_text:
+            if "6  知识依据" in existing_text or "06  知识依据" in existing_text or "06 知识依据" in existing_text:
                 return
-            document.add_paragraph("")
-            heading = document.add_paragraph("06  知识依据")
+            heading = document.add_paragraph()
+            heading.paragraph_format.space_before = Pt(12)
+            heading.paragraph_format.space_after = Pt(6)
+            run = heading.add_run("6  知识依据")
+            run.bold = True
+            run.font.size = Pt(16)
+            run.font.name = "SimHei"
+            run._element.rPr.rFonts.set(qn("w:eastAsia"), "SimHei")
+            run._element.rPr.append(OxmlElement("w:noProof"))
+
+            divider = document.add_paragraph()
+            p_pr = divider._p.get_or_add_pPr()
+            p_bdr = p_pr.find(qn("w:pBdr"))
+            if p_bdr is None:
+                p_bdr = OxmlElement("w:pBdr")
+                p_pr.append(p_bdr)
+            bottom = OxmlElement("w:bottom")
+            bottom.set(qn("w:val"), "single")
+            bottom.set(qn("w:sz"), "8")
+            bottom.set(qn("w:space"), "1")
+            bottom.set(qn("w:color"), "000000")
+            p_bdr.append(bottom)
+
             for run in heading.runs:
                 run.bold = True
             for line in text.splitlines():
                 cleaned = line.strip()
                 if not cleaned:
                     continue
-                document.add_paragraph(cleaned)
+                paragraph = document.add_paragraph()
+                paragraph.paragraph_format.space_before = Pt(3)
+                paragraph.paragraph_format.space_after = Pt(3)
+                run = paragraph.add_run(cleaned)
+                run.font.size = Pt(11)
+                run.font.name = "SimSun"
+                run._element.rPr.rFonts.set(qn("w:eastAsia"), "SimSun")
+                run._element.rPr.append(OxmlElement("w:noProof"))
             document.save(str(docx_path))
         except Exception as exc:
             logger.warning("追加报告知识依据章节失败: {}", exc)
+
+    def disable_docx_proofing(self, docx_path: Path) -> None:
+        try:
+            document = Document(str(docx_path))
+            settings = document.settings._element
+            for tag in ("w:hideSpellingErrors", "w:hideGrammaticalErrors"):
+                element = settings.find(qn(tag))
+                if element is None:
+                    element = OxmlElement(tag)
+                    settings.append(element)
+                element.set(qn("w:val"), "true")
+            proof_state = settings.find(qn("w:proofState"))
+            if proof_state is None:
+                proof_state = OxmlElement("w:proofState")
+                settings.append(proof_state)
+            proof_state.set(qn("w:spelling"), "clean")
+            proof_state.set(qn("w:grammar"), "clean")
+
+            for paragraph in document.paragraphs:
+                self.disable_paragraph_proofing(paragraph)
+            for table in document.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        for paragraph in cell.paragraphs:
+                            self.disable_paragraph_proofing(paragraph)
+            document.save(str(docx_path))
+        except Exception as exc:
+            logger.warning("关闭报告拼写检查标记失败: {}", exc)
+
+    @staticmethod
+    def disable_paragraph_proofing(paragraph) -> None:
+        for run in paragraph.runs:
+            r_pr = run._element.get_or_add_rPr()
+            if r_pr.find(qn("w:noProof")) is None:
+                r_pr.append(OxmlElement("w:noProof"))
 
     def upsert_analysis_report(
         self,
@@ -1121,9 +1188,12 @@ class DamEventReportService:
         return None, None
 
     def source_label(self, instance: SafetyEventInstance, source: Optional[DataSource], selected: dict[str, Any]) -> str:
+        return f"{self.source_trigger_label(instance, source)} · {selected['source_label']}"
+
+    @staticmethod
+    def source_trigger_label(instance: SafetyEventInstance, source: Optional[DataSource]) -> str:
         source_type = str(instance.source_type or getattr(source, "source_type", "") or "").lower()
-        base = {"camera": "摄像头触发", "sensor": "传感器触发"}.get(source_type, source_type or "事件触发")
-        return f"{base} · {selected['source_label']}"
+        return {"camera": "摄像头触发", "sensor": "传感器触发"}.get(source_type, source_type or "事件触发")
 
     def location(self, source: Optional[DataSource], camera: Optional[Camera], visual: dict[str, Any]) -> str:
         values = [
@@ -1460,12 +1530,12 @@ class DamEventReportService:
         return f"来源：{source}；风险：{risk}；置信度：{confidence_text}；摘要：{self.compact(str(report), 420)}"
 
     def evidence_inventory(self, image_items: list[dict[str, Any]], video_items: list[dict[str, Any]]) -> str:
-        rows = []
-        for index, item in enumerate(video_items[:5], 1):
-            rows.append(f"视频{index}：{item.get('caption') or '事件证据视频'}，位置：{item.get('url')}")
-        for index, item in enumerate(image_items[:8], 1):
-            rows.append(f"图像{index}：{item.get('caption') or '关键帧/截图'}，位置：{item.get('url')}")
-        return "\n".join(rows) if rows else "未归档媒体证据。"
+        parts = []
+        if video_items:
+            parts.append(f"事件证据视频 {len(video_items)} 段")
+        if image_items:
+            parts.append(f"关键帧/检测图像 {len(image_items)} 张")
+        return "，".join(parts) + "，原始文件已归档至事件证据库。" if parts else "未归档媒体证据。"
 
     def frame_evidence_summary(self, image_items: list[dict[str, Any]], video_items: list[dict[str, Any]]) -> str:
         model_frames = 0
@@ -1534,13 +1604,13 @@ class DamEventReportService:
     def follow_up_actions(self, instance: SafetyEventInstance, selected: dict[str, Any]) -> str:
         risk = str(instance.max_risk_level or instance.risk_level or "").upper()
         base = [
-            "保留本次事件视频、关键帧、模型结果和人工处置记录，形成可追溯证据链。",
-            "将事件结论同步至值班台账，复盘智能路由节点耗时和模型输出质量。",
+            "保留事件视频、关键帧、模型结果和人工处置记录。",
+            "将事件结论同步至值班台账，复盘模型输出质量。",
         ]
         if risk == "HIGH":
-            base.insert(0, "按高风险事件进行持续跟踪，闭环后仍需安排现场或远程复核。")
+            base.insert(0, "按高风险事件持续跟踪，闭环后安排现场或远程复核。")
         if selected.get("cloud_error"):
-            base.append("云端模型异常期间应复核本地 4B 结果，待云端恢复后可重新生成增强报告。")
+            base.append("云端增强恢复后，可按需重新生成增强报告。")
         return "\n".join(f"{idx}. {text}" for idx, text in enumerate(base, 1))
 
     def recommendations_text(self, selected: dict[str, Any]) -> str:
@@ -1552,14 +1622,57 @@ class DamEventReportService:
         return "1. 继续监测事件区域。\n2. 结合现场条件执行人工复核。\n3. 视风险变化升级联动处置。"
 
     def final_report_field(self, selected: dict[str, Any], key: str, fallback: Any = "") -> str:
+        citation_map = self.knowledge_citation_index_map(selected)
         value = self.find_in_selected(selected, key)
         if isinstance(value, list):
             text = "；".join(str(item) for item in value if item)
-            return self.clean_model_output_field(text)
+            return self.apply_knowledge_citation_indexes(self.clean_model_output_field(text), citation_map)
         if isinstance(value, dict):
-            return self.clean_model_output_field(self.format_structured_value(value))
+            return self.apply_knowledge_citation_indexes(
+                self.clean_model_output_field(self.format_structured_value(value)),
+                citation_map,
+            )
         text = str(value or fallback or "").strip()
-        return self.clean_model_output_field(text)
+        return self.apply_knowledge_citation_indexes(self.clean_model_output_field(text), citation_map)
+
+    def knowledge_citation_index_map(self, selected: dict[str, Any]) -> dict[str, int]:
+        sources = self.find_in_selected(selected, "knowledge_sources") or selected.get("knowledge_sources")
+        if not isinstance(sources, list):
+            return {}
+        mapping: dict[str, int] = {}
+        seen: set[tuple[str, str]] = set()
+        index = 0
+        for item in sources:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("document_title") or item.get("filename") or "").strip()
+            section = str(item.get("section_path") or item.get("section_title") or "").strip()
+            if not title:
+                continue
+            key = (title, section)
+            if key not in seen:
+                seen.add(key)
+                index += 1
+            evidence_id = item.get("evidence_id") or (f"K{item.get('chunk_id')}" if item.get("chunk_id") else "")
+            if evidence_id:
+                mapping[str(evidence_id)] = index
+            if item.get("chunk_id"):
+                mapping[f"K{item.get('chunk_id')}"] = index
+        return mapping
+
+    def apply_knowledge_citation_indexes(self, text: str, citation_map: dict[str, int]) -> str:
+        if not text or not citation_map:
+            return text
+        result = str(text)
+        for evidence_id, index in sorted(citation_map.items(), key=lambda item: len(item[0]), reverse=True):
+            if not evidence_id:
+                continue
+            result = result.replace(f"[{evidence_id}]", f"[{index}]")
+            result = re.sub(rf"(?<!\[){re.escape(evidence_id)}(?!\])", f"[{index}]", result)
+        first_index = min(citation_map.values()) if citation_map else 1
+        result = re.sub(r"知识库依据(?!\s*\[\d+\])", f"知识库依据[{first_index}]", result)
+        result = re.sub(r"结合知识库(?!依据)", f"结合知识库依据[{first_index}]", result)
+        return result
 
     def find_in_selected(self, selected: dict[str, Any], key: str) -> Any:
         return self.find_in_value(selected.get("raw_output"), key)
@@ -1594,12 +1707,17 @@ class DamEventReportService:
         workflow_insight: dict[str, Any],
         cloud_note: str,
     ) -> str:
+        citation_map = self.knowledge_citation_index_map(selected)
+        finish = lambda value: self.apply_knowledge_citation_indexes(  # noqa: E731
+            self.clean_model_output_field(value),
+            citation_map,
+        )
         event_profile = self.event_profile(workflow_insight)
         model_conclusion = self.model_report_conclusion(selected, workflow_insight, event_profile)
         if model_conclusion:
             if cloud_note:
-                return self.clean_model_output_field(f"{cloud_note}\n{model_conclusion}")
-            return model_conclusion
+                return finish(f"{cloud_note}\n{model_conclusion}")
+            return finish(model_conclusion)
 
         if workflow_insight.get("suspected"):
             event_name = event_profile["event_name"]
@@ -1624,8 +1742,8 @@ class DamEventReportService:
                     "后续应结合连续视频、现场巡查和专有模型复核结果确认最终处置等级。"
                 )
             if cloud_note:
-                return self.clean_model_output_field(f"{cloud_note}\n{conclusion}")
-            return self.clean_model_output_field(conclusion)
+                return finish(f"{cloud_note}\n{conclusion}")
+            return finish(conclusion)
 
         conclusion = self.final_report_field(selected, "conclusion", "")
         if self.looks_like_model_thinking(conclusion):
@@ -1661,8 +1779,8 @@ class DamEventReportService:
                         "后续应结合现场巡查、传感器连续监测和现场处置记录确认处置效果。"
                     )
         if cloud_note:
-            return self.clean_model_output_field(f"{cloud_note}\n{conclusion}")
-        return self.clean_model_output_field(conclusion)
+            return finish(f"{cloud_note}\n{conclusion}")
+        return finish(conclusion)
 
     def model_report_conclusion(
         self,
@@ -1852,54 +1970,25 @@ class DamEventReportService:
     def format_knowledge_sources(sources: Any, sentence_citations: Any = None) -> str:
         if not isinstance(sources, list):
             return ""
-        def compact_text(value: str, limit: int) -> str:
-            text = re.sub(r"\s+", " ", str(value or "")).strip()
-            return text if len(text) <= limit else f"{text[:limit - 1]}…"
-
         lines = []
         seen = set()
         source_count = 0
-        citation_map: dict[str, list[str]] = {}
-        if isinstance(sentence_citations, list):
-            for citation in sentence_citations:
-                if not isinstance(citation, dict):
-                    continue
-                sentence = str(citation.get("sentence") or "").strip()
-                if not sentence:
-                    continue
-                for evidence_id in citation.get("evidence_ids") or []:
-                    citation_map.setdefault(str(evidence_id), []).append(sentence)
         for item in sources:
             if not isinstance(item, dict):
                 continue
             title = item.get("document_title") or item.get("filename")
-            evidence_id = item.get("evidence_id") or (f"K{item.get('chunk_id')}" if item.get("chunk_id") else "")
-            chunk_id = item.get("chunk_id")
             if not title:
                 continue
-            key = (title, chunk_id, evidence_id)
+            section = item.get("section_path") or item.get("section_title") or ""
+            key = (str(title).strip(), str(section).strip())
             if key in seen:
                 continue
             seen.add(key)
             source_count += 1
-            section = item.get("section_path") or item.get("section_title") or ""
-            clause = item.get("clause_id") or ""
-            quote = str(item.get("quote") or item.get("content") or "").strip()
-            source_parts = [f"{source_count}. 《{title}》"]
+            line = f"[{source_count}] 《{str(title).strip()}》"
             if section:
-                source_parts.append(str(section))
-            if clause:
-                source_parts.append(f"条款 {clause}")
-            if evidence_id:
-                source_parts.append(f"引用 {evidence_id}")
-            elif chunk_id:
-                source_parts.append(f"chunk {chunk_id}")
-            lines.append("，".join(source_parts))
-            if quote:
-                lines.append(f"   原文摘录：{compact_text(quote, 160)}")
-            supported = citation_map.get(str(evidence_id), [])
-            if supported:
-                lines.append(f"   支撑报告内容：{compact_text('；'.join(supported[:2]), 180)}")
+                line += f"，{str(section).strip()}"
+            lines.append(line)
             if source_count >= 5:
                 break
         return "\n".join(lines)
@@ -1991,24 +2080,18 @@ class DamEventReportService:
         lines = [
             f"一、事件复核：系统触发{event_name}，当前风险等级为{risk_text}。{cloud_text}",
             f"二、现场证据：{suspect_note or f'摄像头初筛摘要为“{qwen_summary}”。'}本次关联事件证据视频{len(video_items)}段、关键帧/检测图像{len(image_items)}张。",
-            f"三、模型研判：专有模型复核类别为{class_label}，置信度{confidence_text}，采样帧数{sampled_frames}。边缘侧4B和云端增强节点已结合视频证据、事件类型和上下文完成复核。",
+            f"三、模型研判：专有模型复核类别为{class_label}，置信度{confidence_text}，采样帧数{sampled_frames}。边缘侧4B已结合视频证据、事件类型和上下文完成复核。",
             "四、处置建议：保持摄像头连续取证，联动相关传感器和现场巡查记录；如风险指标持续升高或现场出现人员、设施受威胁情况，应升级告警并启动现场处置。",
         ]
         return "\n".join(lines)
 
     def selected_detailed_summary(self, selected: dict[str, Any]) -> str:
-        knowledge_sources_summary = self.final_report_field(selected, "knowledge_sources_summary", "")
-        if not knowledge_sources_summary or knowledge_sources_summary == "—":
-            sources = self.find_in_selected(selected, "knowledge_sources")
-            sentence_citations = self.find_in_selected(selected, "sentence_citations")
-            knowledge_sources_summary = self.format_knowledge_sources(sources, sentence_citations)
         fields = [
             ("一、现场场景", self.final_report_field(selected, "detailed_scene_analysis", "")),
             ("二、风险研判", self.final_report_field(selected, "risk_reasoning", "")),
             ("三、影响评估", self.final_report_field(selected, "impact_assessment", "")),
             ("四、处置建议", self.final_report_field(selected, "response_plan", "")),
             ("五、持续监测", self.final_report_field(selected, "monitoring_suggestions", "")),
-            ("六、知识依据", knowledge_sources_summary),
         ]
         lines = [
             f"{label}：{text}"
@@ -2025,7 +2108,6 @@ class DamEventReportService:
             ("三、影响评估", workflow_insight.get("qwen4b_impact_assessment")),
             ("四、处置建议", workflow_insight.get("qwen4b_response_plan")),
             ("五、持续监测", workflow_insight.get("qwen4b_monitoring_suggestions")),
-            ("六、知识依据", workflow_insight.get("knowledge_sources_summary")),
         ]
         lines = [f"{label}：{str(text).strip()}" for label, text in fields if str(text or "").strip()]
         return "\n".join(lines) if len(lines) >= 2 else ""

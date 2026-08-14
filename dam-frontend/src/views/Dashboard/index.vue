@@ -15,35 +15,45 @@
               class="today-card"
               :class="[metric.tone, metric.kind, { 'has-breakdown': metric.breakdown }]"
             >
-              <div class="metric-head">
-                <span class="metric-icon" aria-hidden="true">
-                  <component :is="metric.icon" />
-                </span>
-                <div class="metric-title-block">
-                  <span class="metric-label">{{ metric.label }}</span>
-                  <div v-if="metric.breakdown" class="metric-breakdown">
-                    <span v-for="item in metric.breakdown" :key="item.key">
-                      <em>{{ item.label }}</em>
-                      <strong>{{ item.value }}</strong>
-                      <b>
-                        较昨日
-                        <i :class="item.trend.tone">
-                          <small>{{ item.trend.icon }}</small>
-                          {{ item.trend.delta }}
-                        </i>
-                      </b>
-                    </span>
+              <template v-if="metric.kind === 'category'">
+                <div class="metric-main">
+                  <span class="metric-icon" aria-hidden="true">
+                    <component :is="metric.icon" />
+                  </span>
+                  <div class="metric-copy">
+                    <span class="metric-label">{{ metric.label }}</span>
+                    <strong class="metric-value">{{ metric.value }}<small>次</small></strong>
                   </div>
-                  <strong v-else class="metric-value">{{ metric.value }}</strong>
                 </div>
-              </div>
-              <em v-if="!metric.breakdown" class="metric-compare">
-                <span>较昨日</span>
-                <i :class="metric.trend.tone">
-                  <small>{{ metric.trend.icon }}</small>
-                  {{ metric.trend.delta }}
-                </i>
-              </em>
+                <em class="metric-compare">
+                  <span>较昨日</span>
+                  <i :class="metric.trend.tone">
+                    <small>{{ metric.trend.icon }}</small>
+                    {{ metric.trend.delta }}<small>次</small>
+                  </i>
+                </em>
+              </template>
+              <template v-else>
+                <div class="handling-title">
+                  <span class="metric-icon" aria-hidden="true">
+                    <component :is="metric.icon" />
+                  </span>
+                  <span class="metric-label">{{ metric.label }}</span>
+                </div>
+                <div class="metric-breakdown">
+                  <span v-for="item in metric.breakdown" :key="item.key">
+                    <em>{{ item.label }}</em>
+                    <strong>{{ item.value }}<small>次</small></strong>
+                    <b>
+                      较昨日
+                      <i :class="item.trend.tone">
+                        <small>{{ item.trend.icon }}</small>
+                        {{ item.trend.delta }}<small>次</small>
+                      </i>
+                    </b>
+                  </span>
+                </div>
+              </template>
             </article>
           </div>
         </section>
@@ -889,13 +899,13 @@ function buildHandlingMetric(key, label, today, yesterday, tone) {
     breakdown: [
       {
         key: 'auto',
-        label: '自动处置',
+        label: '自动',
         value: formatNumber(todaySplit.auto),
         trend: compareNumber(todaySplit.auto, yesterdaySplit.auto),
       },
       {
         key: 'manual',
-        label: '人工处置',
+        label: '人工',
         value: formatNumber(todaySplit.manual),
         trend: compareNumber(todaySplit.manual, yesterdaySplit.manual),
       },
@@ -2488,26 +2498,26 @@ onBeforeUnmount(() => {
 
 .today-panel {
   container: todayPanel / inline-size;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: clamp(6px, .36vw, 9px);
+  padding-bottom: clamp(18px, 1.05vw, 24px);
 }
 
 .today-strip-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-rows: repeat(2, minmax(0, .88fr)) repeat(2, minmax(0, .94fr));
-  gap: clamp(6px, .38vw, 9px);
-  height: calc(100% - 34px);
-  margin-top: clamp(8px, .46vw, 12px);
+  grid-template-rows: repeat(2, minmax(52px, .9fr)) repeat(2, minmax(58px, .98fr));
+  gap: clamp(6px, .36vw, 9px);
+  min-height: 0;
+  padding-bottom: 0;
+  box-sizing: border-box;
 }
 
 .today-card {
   --metric-color: #43c8ff;
   min-height: 0;
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: clamp(6px, .42vw, 10px);
-  padding: clamp(7px, .45vw, 10px) clamp(8px, .58vw, 13px);
   border: 1px solid rgba(74, 163, 214, .22);
   border-radius: 8px;
   background:
@@ -2518,35 +2528,55 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
+.today-card.category {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(56px, 3.8vw, 78px);
+  align-items: center;
+  gap: clamp(5px, .32vw, 8px);
+  padding: clamp(6px, .36vw, 9px) clamp(8px, .5vw, 12px);
+}
+
 .today-card.handling {
   grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(122px, .36fr) minmax(0, 1fr);
+  align-items: center;
+  gap: clamp(7px, .44vw, 12px);
+  padding: clamp(6px, .36vw, 9px) clamp(8px, .5vw, 12px);
 }
 
 .today-card::before {
   content: "";
   position: absolute;
   left: 0;
-  top: 11px;
-  bottom: 11px;
+  top: 12px;
+  bottom: 12px;
   width: 2px;
   border-radius: 0 2px 2px 0;
   background: var(--metric-color);
   opacity: .9;
 }
 
-.metric-head {
+.metric-main,
+.handling-title {
   min-width: 0;
-  flex: 1 1 auto;
-  display: flex;
+  display: grid;
   align-items: center;
-  gap: clamp(8px, .5vw, 11px);
+  gap: clamp(7px, .45vw, 10px);
+}
+
+.metric-main {
+  grid-template-columns: clamp(31px, 1.78vw, 40px) minmax(0, 1fr);
+}
+
+.handling-title {
+  grid-template-columns: clamp(32px, 1.85vw, 42px) minmax(0, 1fr);
 }
 
 .metric-icon {
   position: relative;
-  flex: 0 0 clamp(30px, 1.65vw, 38px);
-  width: clamp(30px, 1.65vw, 38px);
-  height: clamp(30px, 1.65vw, 38px);
+  width: 100%;
+  aspect-ratio: 1;
   display: grid;
   place-items: center;
   border-radius: 9px;
@@ -2556,36 +2586,29 @@ onBeforeUnmount(() => {
 }
 
 .metric-icon :deep(svg) {
-  width: clamp(16px, .95vw, 21px);
-  height: clamp(16px, .95vw, 21px);
+  width: 54%;
+  height: 54%;
   display: block;
 }
 
-.metric-title-block {
+.metric-copy {
   min-width: 0;
-  flex: 1 1 auto;
   display: grid;
-  align-items: center;
-  grid-template-columns: minmax(0, 1fr);
-  gap: clamp(5px, .32vw, 8px);
-}
-
-.metric-label,
-.metric-compare {
-  display: block;
-  color: #a4d2ee;
-  font-size: clamp(13px, .78vw, 17px);
-  font-style: normal;
-  line-height: 1;
+  align-content: center;
+  gap: clamp(3px, .2vw, 5px);
 }
 
 .metric-label {
+  min-width: 0;
   color: #b7e5ff;
-  font-size: clamp(14px, .84vw, 18px);
+  font-size: clamp(15px, .88vw, 19px);
   font-weight: 800;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.1;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: normal;
+  overflow-wrap: anywhere;
 }
 
 .metric-value {
@@ -2593,58 +2616,69 @@ onBeforeUnmount(() => {
   display: block;
   margin: 0;
   color: #fff;
-  font-size: clamp(21px, 1.22vw, 28px);
+  font-size: clamp(23px, 1.32vw, 32px);
   line-height: 1;
   letter-spacing: 0;
   font-variant-numeric: tabular-nums;
+}
+
+.metric-value small,
+.metric-breakdown strong small,
+.metric-compare i small:last-child,
+.metric-breakdown b i small:last-child {
+  margin-left: 2px;
+  font-size: .5em;
+  font-weight: 700;
 }
 
 .metric-breakdown {
   min-width: 0;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: clamp(5px, .35vw, 7px);
+  gap: clamp(7px, .44vw, 10px);
 }
 
 .metric-breakdown span {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(44px, .75fr) minmax(28px, .45fr) minmax(54px, .8fr);
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
   align-items: center;
-  gap: clamp(3px, .22vw, 5px);
-  padding: clamp(4px, .26vw, 5px) clamp(5px, .32vw, 7px);
+  row-gap: clamp(3px, .18vw, 5px);
+  column-gap: clamp(6px, .36vw, 9px);
+  padding: clamp(6px, .36vw, 8px) clamp(7px, .44vw, 10px);
   border: 1px solid rgba(82, 177, 230, .16);
   border-radius: 6px;
   background: rgba(2, 15, 28, .28);
 }
 
 .metric-breakdown em {
-  overflow: hidden;
   color: #95cbed;
-  font-size: clamp(10px, .58vw, 12px);
+  font-size: clamp(12px, .68vw, 15px);
   font-style: normal;
   line-height: 1;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .metric-breakdown strong {
   color: #fff;
-  font-size: clamp(16px, .95vw, 22px);
+  font-size: clamp(20px, 1.12vw, 27px);
   line-height: 1;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
 }
 
 .metric-breakdown b {
+  grid-column: 1 / -1;
   min-width: 0;
   display: inline-flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 3px;
+  justify-content: flex-start;
+  gap: clamp(4px, .24vw, 6px);
   overflow: hidden;
   color: #9ed3f5;
-  font-size: clamp(9px, .55vw, 11px);
+  font-size: clamp(11px, .62vw, 14px);
+  font-style: normal;
   font-weight: 500;
   line-height: 1;
   white-space: nowrap;
@@ -2655,7 +2689,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 1px;
   font-style: normal;
-  font-size: clamp(13px, .76vw, 17px);
+  font-size: clamp(14px, .8vw, 18px);
   font-weight: 800;
   font-variant-numeric: tabular-nums;
 }
@@ -2666,19 +2700,19 @@ onBeforeUnmount(() => {
 }
 
 .metric-compare {
-  flex: 0 0 clamp(50px, 3.3vw, 72px);
   display: grid;
   justify-items: end;
-  gap: 3px;
-  padding-bottom: 0;
+  gap: 5px;
   white-space: nowrap;
   text-align: right;
+  font-style: normal;
 }
 
 .metric-compare span {
   color: #9ed3f5;
-  font-size: clamp(11px, .66vw, 14px);
+  font-size: clamp(12px, .68vw, 15px);
   line-height: 1;
+  font-style: normal;
 }
 
 .metric-compare i {
@@ -2690,15 +2724,13 @@ onBeforeUnmount(() => {
   font-style: normal;
   line-height: 1;
   font-variant-numeric: tabular-nums;
-  font-size: clamp(20px, 1.18vw, 27px);
+  font-size: clamp(20px, 1.15vw, 28px);
   font-weight: 800;
 }
 
 .metric-compare i small {
   margin-right: 3px;
   font-size: .72em;
-  font-weight: 800;
-  line-height: 1;
 }
 
 .today-card.danger { --metric-color: #ff6873; }
@@ -2708,17 +2740,124 @@ onBeforeUnmount(() => {
 .today-card.cyan { --metric-color: #43c8ff; }
 .today-card.success { --metric-color: #38d59c; }
 
-.today-card.handling .metric-title-block {
-  grid-template-columns: minmax(94px, .56fr) minmax(0, 1.44fr);
-  gap: clamp(8px, .55vw, 14px);
-}
-
 .today-card.handling .metric-label {
-  font-size: clamp(15px, .86vw, 18px);
+  font-size: clamp(18px, 1.04vw, 23px);
+  white-space: nowrap;
 }
 
-.today-card.handling .metric-breakdown {
-  max-width: none;
+@container todayPanel (max-width: 470px) {
+  .today-strip-list {
+    grid-template-rows: repeat(2, minmax(52px, .86fr)) repeat(2, minmax(60px, .98fr));
+    gap: 6px;
+    padding-bottom: 8px;
+  }
+
+  .today-card.category {
+    grid-template-columns: minmax(0, 1fr) 42px;
+    gap: 5px;
+    padding: 6px 7px;
+  }
+
+  .today-card.handling {
+    grid-template-columns: minmax(104px, .38fr) minmax(0, 1fr);
+    gap: 6px;
+    padding: 6px 7px;
+  }
+
+  .metric-main {
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .handling-title {
+    grid-template-columns: 30px minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .metric-label {
+    font-size: 12px;
+    line-height: 1.08;
+  }
+
+  .today-card.handling .metric-label {
+    font-size: 14px;
+  }
+
+  .metric-value {
+    font-size: 19px;
+  }
+
+  .metric-compare span {
+    font-size: 10px;
+  }
+
+  .metric-compare i {
+    font-size: 17px;
+  }
+
+  .metric-breakdown {
+    gap: 5px;
+  }
+
+  .metric-breakdown span {
+    grid-template-columns: minmax(24px, .46fr) minmax(26px, .48fr) minmax(32px, .62fr);
+    gap: 3px;
+    padding: 4px 5px;
+  }
+
+  .metric-breakdown em {
+    font-size: 10px;
+  }
+
+  .metric-breakdown strong {
+    font-size: 15px;
+  }
+
+  .metric-breakdown b {
+    font-size: 9px;
+  }
+
+  .metric-breakdown b i {
+    font-size: 12px;
+  }
+}
+
+@container todayPanel (max-width: 405px) {
+  .today-card.category {
+    grid-template-columns: minmax(0, 1fr) 38px;
+    padding: 6px;
+  }
+
+  .today-card.handling {
+    grid-template-columns: minmax(92px, .36fr) minmax(0, 1fr);
+  }
+
+  .metric-main {
+    grid-template-columns: 26px minmax(0, 1fr);
+    gap: 5px;
+  }
+
+  .handling-title {
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 5px;
+  }
+
+  .metric-label {
+    font-size: 11px;
+  }
+
+  .today-card.handling .metric-label {
+    font-size: 13px;
+  }
+
+  .metric-value {
+    font-size: 17px;
+  }
+
+  .metric-breakdown span {
+    grid-template-columns: minmax(22px, .44fr) minmax(24px, .48fr) minmax(30px, .6fr);
+    padding: 3px 4px;
+  }
 }
 
 .up,
@@ -4452,165 +4591,6 @@ onBeforeUnmount(() => {
 @keyframes flowLineScan {
   from { background-position: 0 -90px, 0 0; }
   to { background-position: 0 100%, 0 0; }
-}
-
-@container todayPanel (max-width: 460px) {
-  .today-strip-list {
-    gap: 6px;
-    height: calc(100% - 32px);
-    margin-top: 8px;
-  }
-
-  .today-card {
-    gap: 7px;
-    padding: 7px 8px 7px 9px;
-  }
-
-  .today-card::before {
-    top: 10px;
-    bottom: 10px;
-  }
-
-  .metric-head {
-    gap: 7px;
-    overflow: visible;
-  }
-
-  .metric-icon {
-    flex-basis: 31px;
-    width: 31px;
-    height: 31px;
-    border-radius: 9px;
-  }
-
-  .metric-icon :deep(svg) {
-    width: 16px;
-    height: 16px;
-  }
-
-  .metric-title-block {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 4px;
-  }
-
-  .today-card.handling .metric-title-block {
-    grid-template-columns: minmax(72px, .52fr) minmax(0, 1.48fr);
-    gap: 6px;
-  }
-
-  .metric-breakdown span {
-    grid-template-columns: minmax(38px, .72fr) minmax(24px, .42fr) minmax(48px, .86fr);
-    padding: 4px 5px;
-  }
-
-  .metric-label {
-    overflow: hidden;
-    font-size: 14px;
-    text-overflow: ellipsis;
-  }
-
-  .metric-value,
-  .metric-compare i {
-    font-size: 20px;
-  }
-
-  .metric-breakdown em {
-    font-size: 9px;
-  }
-
-  .metric-breakdown strong {
-    font-size: 16px;
-  }
-
-  .metric-breakdown b {
-    font-size: 9px;
-  }
-
-  .metric-breakdown b i {
-    font-size: 13px;
-  }
-
-  .metric-compare {
-    flex-basis: 46px;
-  }
-
-  .metric-compare span {
-    font-size: 11px;
-  }
-}
-
-@container todayPanel (max-width: 390px) {
-  .today-card {
-    gap: 6px;
-    padding: 6px 7px;
-  }
-
-  .metric-icon {
-    flex-basis: 28px;
-    width: 28px;
-    height: 28px;
-  }
-
-  .metric-title-block {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 3px;
-  }
-
-  .today-card.handling .metric-title-block {
-    grid-template-columns: minmax(64px, .5fr) minmax(0, 1.5fr);
-    gap: 5px;
-  }
-
-  .metric-label {
-    font-size: 13px;
-  }
-
-  .metric-breakdown {
-    gap: 4px;
-  }
-
-  .metric-breakdown span {
-    grid-template-columns: minmax(34px, .72fr) minmax(22px, .42fr) minmax(42px, .86fr);
-    padding: 4px;
-  }
-
-  .metric-value,
-  .metric-compare i {
-    font-size: 18px;
-  }
-
-  .metric-compare {
-    flex-basis: 42px;
-  }
-}
-
-@container todayPanel (max-width: 350px) {
-  .metric-icon {
-    flex-basis: 26px;
-    width: 26px;
-    height: 26px;
-  }
-
-  .metric-label {
-    font-size: 12px;
-  }
-
-  .metric-value,
-  .metric-compare i {
-    font-size: 16px;
-  }
-
-  .metric-breakdown b {
-    font-size: 8px;
-  }
-
-  .metric-breakdown b i {
-    font-size: 12px;
-  }
-
-  .metric-compare {
-    flex-basis: 38px;
-  }
 }
 
 @container progressPanel (max-width: 460px) {

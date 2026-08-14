@@ -58,6 +58,8 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+      dij-mediamtx:
+        condition: service_started
     # dai: YOLO 使用 Jetson CUDA；NVIDIA 官方要求 GPU 容器启用 nvidia runtime。
     runtime: nvidia
     healthcheck:

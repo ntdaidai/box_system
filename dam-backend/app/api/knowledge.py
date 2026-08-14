@@ -223,6 +223,7 @@ def get_document_onlyoffice_config(
                 "hideRightMenu": False,
                 "hideRulers": False,
                 "macros": False,
+                "spellcheck": False,
                 "plugins": False,
             },
         },
