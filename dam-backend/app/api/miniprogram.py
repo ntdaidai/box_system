@@ -13,13 +13,18 @@ from typing import Optional
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.cache import invalidate_cache
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.security import get_default_user
+from app.models.broadcast import BroadcastDevice, BroadcastTemplate
 from app.models.camera import Camera
+from app.models.camera_detection_zone import CameraDetectionZone
+from app.models.event_action import EventActionConfig
+from app.models.miniprogram import MiniProgramStaff
 from app.models.safety_event_task import SafetyEventTask
 from app.models.safety_integration import SafetyEventEvidence, SafetyEventInstance, SafetyEventTimelineLog
 from app.services.broadcast_service import BroadcastException, broadcast_service
@@ -116,12 +121,129 @@ class PublishRiskNotificationRequest(BaseModel):
     openid: Optional[str] = Field(None, max_length=128)
 
 
+class UpsertStaffRequest(BaseModel):
+    staff_id: Optional[int] = None
+    openid: Optional[str] = Field(None, max_length=128)
+    display_name: Optional[str] = Field(None, max_length=128)
+    nickname: Optional[str] = Field(None, max_length=128)
+    avatar_url: Optional[str] = Field(None, max_length=1024)
+
+
+class EventOperationRequest(BaseModel):
+    staff_id: Optional[int] = None
+    openid: Optional[str] = Field(None, max_length=128)
+    remark: Optional[str] = Field(None, max_length=500)
+
+
 def _timestamp(value: Optional[dt.datetime]) -> Optional[float]:
     return value.timestamp() if value else None
 
 
 def _is_resolved(event: SafetyEventInstance) -> bool:
     return event.state == STATE_RESOLVED or event.status in {"COMPLETED", "FALSE_ALARM"}
+
+
+def _optional_text(value) -> Optional[str]:
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _staff_to_dict(row: MiniProgramStaff) -> dict:
+    return {
+        "id": row.id,
+        "staff_id": row.id,
+        "staff_no": row.staff_no,
+        "openid": row.openid,
+        "username": row.username,
+        "has_password": bool(row.password_hash),
+        "display_name": row.display_name,
+        "name": row.display_name,
+        "nickname": row.nickname or "大藤峡安全巡查",
+        "avatar_url": row.avatar_url,
+        "group_id": row.group_id,
+        "group_name": row.group_name,
+        "phone": row.phone,
+        "status": row.status,
+        "last_login_at": _timestamp(row.last_login_at),
+        "create_time": _timestamp(row.create_time),
+        "update_time": _timestamp(row.update_time),
+    }
+
+
+def _staff_status_label(status: Optional[str]) -> str:
+    return {
+        "ACTIVE": "启用",
+        "INACTIVE": "停用",
+    }.get((status or "").upper(), status or "未知")
+
+
+def _default_staff(db: Session) -> MiniProgramStaff:
+    row = db.query(MiniProgramStaff).filter(MiniProgramStaff.staff_no == "MP_STAFF_001").first()
+    if row:
+        return row
+    row = MiniProgramStaff(
+        staff_no="MP_STAFF_001",
+        username="mp_staff_001",
+        display_name="现场处置员",
+        nickname="大藤峡安全巡查",
+        group_id="default",
+        group_name="默认处置组",
+        status="ACTIVE",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def _resolve_staff(
+    db: Session,
+    *,
+    staff_id: Optional[int] = None,
+    openid: Optional[str] = None,
+    create_default: bool = True,
+) -> Optional[MiniProgramStaff]:
+    staff_id = staff_id if isinstance(staff_id, int) else None
+    openid = _optional_text(openid)
+    row = None
+    if staff_id:
+        row = db.query(MiniProgramStaff).filter(MiniProgramStaff.id == staff_id).first()
+    if not row and openid:
+        row = db.query(MiniProgramStaff).filter(MiniProgramStaff.openid == openid).first()
+    if row or not create_default:
+        return row
+    return _default_staff(db)
+
+
+def _staff_operator(row: Optional[MiniProgramStaff], fallback: Optional[str] = None) -> str:
+    if row:
+        return row.display_name or row.staff_no
+    return fallback or "现场处置员"
+
+
+def _current_task(db: Session, event_id: int) -> Optional[SafetyEventTask]:
+    return safety_event_runtime_service.latest_task(db, event_id)
+
+
+def _event_task_info(db: Session, event: SafetyEventInstance) -> dict:
+    task = _current_task(db, event.id)
+    return {
+        "task_id": task.id if task else None,
+        "task_status": task.task_status if task else None,
+        "handler_name": task.assignee if task else None,
+        "assignee": task.assignee if task else None,
+        "accepted_at": _timestamp(task.accepted_at) if task else None,
+        "completed_at": _timestamp(task.completed_at) if task else None,
+        "dispatch_operator": task.dispatch_operator if task else None,
+    }
+
+
+def _business_status(event: SafetyEventInstance, task: Optional[SafetyEventTask]) -> str:
+    if _is_resolved(event):
+        return "completed"
+    task_status = (task.task_status or "").upper() if task else ""
+    if event.status == "PROCESSING" or task_status in {"ACCEPTED", "PROCESSING", "WAITING_ACCEPT", "DISPATCHED"}:
+        return "processing"
+    return "pending"
 
 
 def _mini_status(event: dict) -> str:
@@ -166,27 +288,52 @@ def _system_action_text(event: dict) -> str:
     return "系统自动处理中"
 
 
-def _mini_event(db: Session, event: SafetyEventInstance, camera: Optional[Camera] = None) -> dict:
+def _mini_event(
+    db: Session,
+    event: SafetyEventInstance,
+    camera: Optional[Camera] = None,
+    staff: Optional[MiniProgramStaff] = None,
+) -> dict:
     base = _safety_event_to_dict(safety_event_runtime_service.event_dict(db, event))
     status = _mini_status(base)
+    task = _current_task(db, event.id)
+    business_status = _business_status(event, task)
+    task_info = _event_task_info(db, event)
+    operator = _staff_operator(staff, "")
+    is_my_task = bool(operator and task and task.assignee == operator)
     camera = camera if camera and str(camera.id) == str(base.get("camera_id")) else None
     install_address = getattr(camera, "install_address", None)
     latitude = getattr(camera, "latitude", None)
     longitude = getattr(camera, "longitude", None)
     monitor_point = base.get("camera_name") or base.get("camera_id") or "监控点位"
+    completed_at = base.get("resolved_at") or task_info.get("completed_at")
     return {
         **base,
+        **task_info,
         "risk_level_label": RISK_LABELS.get(base.get("risk_level"), base.get("risk_level")),
         "mini_status": status,
         "mini_status_label": _status_text(base),
+        "business_status": business_status,
+        "business_status_label": {
+            "pending": "待处理",
+            "processing": "处理中",
+            "completed": "已完成" if event.status != "FALSE_ALARM" else "误报",
+        }.get(business_status, "待处理"),
         "system_action_text": _system_action_text(base),
         "event_type": _event_type_label(base),
+        "event_name": base.get("event_name") or _event_type_label(base),
+        "event_no": base.get("instance_no") or event.instance_no,
         "monitor_point": monitor_point,
         "install_address": install_address,
         "latitude": latitude,
         "longitude": longitude,
+        "completed_at": completed_at,
+        "completed_time": completed_at,
+        "is_my_task": is_my_task,
+        "can_accept": business_status == "pending",
+        "can_false_alarm": business_status == "pending",
         "can_start_manual": status == "WAITING_MANUAL" and base.get("risk_level") == RISK_HIGH,
-        "can_submit_result": status == "MANUAL_PROCESSING",
+        "can_submit_result": business_status == "processing" and (is_my_task or not task or not task.assignee),
     }
 
 
@@ -211,6 +358,20 @@ def _mini_camera(row: Camera, status: Optional[dict] = None) -> dict:
         "description": getattr(row, "description", None),
         "broadcast_devices": [],
         "broadcast_device_count": 0,
+        "detection_zones": [],
+    }
+
+
+def _mini_detection_zone(row: CameraDetectionZone) -> dict:
+    return {
+        "id": row.id,
+        "camera_device_id": row.camera_device_id,
+        "zone_name": row.zone_name,
+        "name": row.zone_name,
+        "zone_type": row.zone_type,
+        "type": row.zone_type,
+        "polygon_points": row.polygon_points or [],
+        "enabled": bool(row.enabled),
     }
 
 
@@ -240,6 +401,231 @@ def _build_timeline(db: Session, event_id: str) -> list[dict]:
         SafetyEventTimelineLog.event_instance_id == event.id
     ).order_by(SafetyEventTimelineLog.create_time.asc(), SafetyEventTimelineLog.id.asc()).all()
     return [_log_to_timeline(row) for row in logs]
+
+
+def _event_evidence(db: Session, event: SafetyEventInstance) -> list[dict]:
+    rows = (
+        db.query(SafetyEventEvidence)
+        .filter(SafetyEventEvidence.event_instance_id == event.id)
+        .order_by(SafetyEventEvidence.captured_at.asc(), SafetyEventEvidence.id.asc())
+        .all()
+    )
+    return [{
+        "id": row.id,
+        "timeline_log_id": row.timeline_log_id,
+        "evidence_type": row.evidence_type,
+        "source_type": row.source_type,
+        "source_id": row.source_id,
+        "file_url": row.file_url,
+        "url": row.file_url,
+        "description": row.description or "现场证据",
+        "captured_at": _timestamp(row.captured_at),
+    } for row in rows]
+
+
+def _linkage_lines(db: Session, event: SafetyEventInstance) -> list[dict]:
+    actions = (
+        db.query(EventActionConfig)
+        .filter(
+            EventActionConfig.event_id == event.current_event_id,
+            EventActionConfig.is_activate.is_(True),
+            EventActionConfig.action_type.in_(["broadcast", "drone_dispatch"]),
+        )
+        .order_by(EventActionConfig.step_order.asc(), EventActionConfig.id.asc())
+        .all()
+    )
+    device_ids = [row.broadcast_device_id for row in actions if row.broadcast_device_id]
+    template_ids = [row.template_id for row in actions if row.template_id]
+    devices = {
+        row.id: row
+        for row in db.query(BroadcastDevice).filter(BroadcastDevice.id.in_(device_ids)).all()
+    } if device_ids else {}
+    templates = {
+        row.id: row
+        for row in db.query(BroadcastTemplate).filter(BroadcastTemplate.id.in_(template_ids)).all()
+    } if template_ids else {}
+    result = []
+    for row in actions:
+        if row.action_type == "broadcast":
+            device = devices.get(row.broadcast_device_id)
+            template = templates.get(row.template_id)
+            result.append({
+                "id": row.id,
+                "type": "broadcast",
+                "type_label": "广播",
+                "step_order": row.step_order,
+                "name": row.action_name or "自动广播",
+                "target": device.name if device else "未配置广播设备",
+                "template": template.name if template else None,
+                "status": "已配置" if device and template else "配置不完整",
+            })
+        elif row.action_type == "drone_dispatch":
+            result.append({
+                "id": row.id,
+                "type": "drone_dispatch",
+                "type_label": "无人机",
+                "step_order": row.step_order,
+                "name": row.action_name or "无人机派飞",
+                "target": row.drone_id or "未配置无人机",
+                "route": row.route_id,
+                "status": "已配置" if row.drone_id and row.route_id else "配置不完整",
+            })
+    return result
+
+
+def _event_group_name(event_data: dict, camera: Optional[Camera]) -> str:
+    observation = dict(event_data.get("latest_observation") or {})
+    visual = dict(observation.get("visual") or {}) if isinstance(observation.get("visual"), dict) else {}
+    return (
+        str(visual.get("group_name") or observation.get("group_name") or "").strip()
+        or getattr(camera, "group_name", None)
+        or "默认处置组"
+    )
+
+
+def _group_visible(event_data: dict, camera: Optional[Camera], staff: Optional[MiniProgramStaff]) -> bool:
+    if not staff:
+        return True
+    staff_group = (staff.group_name or "").strip()
+    if not staff_group or staff_group == "默认处置组":
+        return True
+    event_group = _event_group_name(event_data, camera)
+    if event_group == staff_group:
+        return True
+    point_text = " ".join(
+        str(value or "")
+        for value in (
+            event_data.get("camera_name"),
+            event_data.get("monitor_point"),
+            getattr(camera, "install_address", None),
+            getattr(camera, "description", None),
+        )
+    )
+    return staff_group in point_text
+
+
+def _apply_event_filters(
+    query,
+    *,
+    business_status: str,
+    point: Optional[str],
+    date: Optional[str],
+):
+    date = _optional_text(date)
+    if business_status == "pending":
+        query = query.filter(
+            SafetyEventInstance.state != STATE_RESOLVED,
+            SafetyEventInstance.status.notin_(["PROCESSING", "COMPLETED", "FALSE_ALARM"]),
+        )
+    elif business_status == "processing":
+        query = query.filter(
+            SafetyEventInstance.state != STATE_RESOLVED,
+            SafetyEventInstance.status == "PROCESSING",
+        )
+    elif business_status == "completed":
+        query = query.filter(
+            or_(
+                SafetyEventInstance.state == STATE_RESOLVED,
+                SafetyEventInstance.status.in_(["COMPLETED", "FALSE_ALARM"]),
+            )
+        )
+    elif business_status == "ongoing":
+        query = query.filter(
+            SafetyEventInstance.state != STATE_RESOLVED,
+            SafetyEventInstance.status.notin_(["COMPLETED", "FALSE_ALARM"]),
+        )
+    elif business_status == "resolved":
+        query = query.filter(SafetyEventInstance.state == STATE_RESOLVED)
+
+    if date:
+        try:
+            day = dt.datetime.strptime(date, "%Y-%m-%d")
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="发生日期格式应为 YYYY-MM-DD") from exc
+        query = query.filter(
+            SafetyEventInstance.started_at >= day,
+            SafetyEventInstance.started_at < day + dt.timedelta(days=1),
+        )
+    return query
+
+
+def _load_event_rows(
+    db: Session,
+    *,
+    business_status: str,
+    staff: Optional[MiniProgramStaff],
+    point: Optional[str],
+    date: Optional[str],
+    only_mine: bool = False,
+) -> list[tuple[SafetyEventInstance, dict, Optional[Camera], Optional[SafetyEventTask]]]:
+    point = _optional_text(point)
+    query = _apply_event_filters(
+        db.query(SafetyEventInstance),
+        business_status=business_status,
+        point=point,
+        date=date,
+    )
+    rows = query.order_by(SafetyEventInstance.started_at.desc()).all()
+    result = []
+    camera_cache: dict[str, Optional[Camera]] = {}
+    operator = _staff_operator(staff, "")
+    for row in rows:
+        data = safety_event_runtime_service.event_dict(db, row)
+        camera_id = str(data.get("camera_id") or "")
+        if camera_id not in camera_cache:
+            camera_cache[camera_id] = (
+                db.query(Camera).filter(Camera.id == int(camera_id)).first()
+                if camera_id.isdigit()
+                else None
+            )
+        camera = camera_cache[camera_id]
+        if point:
+            point_text = " ".join(
+                str(value or "")
+                for value in (
+                    data.get("camera_name"),
+                    data.get("event_name"),
+                    data.get("event_type"),
+                    getattr(camera, "install_address", None),
+                    getattr(camera, "description", None),
+                )
+            )
+            if point.strip() not in point_text and point.strip() not in row.instance_no:
+                continue
+        if not _group_visible(data, camera, staff):
+            continue
+        task = _current_task(db, row.id)
+        if only_mine and operator:
+            if not task or task.assignee != operator:
+                continue
+        result.append((row, data, camera, task))
+    return result
+
+
+def _sort_event_rows(
+    rows: list[tuple[SafetyEventInstance, dict, Optional[Camera], Optional[SafetyEventTask]]],
+    *,
+    staff: Optional[MiniProgramStaff],
+    business_status: str,
+) -> list[tuple[SafetyEventInstance, dict, Optional[Camera], Optional[SafetyEventTask]]]:
+    operator = _staff_operator(staff, "")
+    risk_rank = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+
+    def sort_key(item):
+        row, data, _camera, task = item
+        own_rank = 0 if business_status == "processing" and task and task.assignee == operator else 1
+        return (
+            own_rank,
+            risk_rank.get(data.get("risk_level"), 3),
+            -(row.started_at.timestamp() if row.started_at else 0),
+        )
+
+    return sorted(rows, key=sort_key)
+
+
+def _paginate(items: list, page: int, page_size: int) -> list:
+    start = (page - 1) * page_size
+    return items[start:start + page_size]
 
 
 def _get_event_or_404(db: Session, event_id: str) -> SafetyEventInstance:
@@ -318,17 +704,167 @@ async def _broadcast_updates(db: Session, event: SafetyEventInstance, *timeline_
         })
 
 
+@router.get("/staff/me", response_model=MiniResponse, summary="小程序当前处置人员")
+async def current_staff(
+    staff_id: Optional[int] = Query(None, ge=1),
+    openid: Optional[str] = Query(None, max_length=128),
+):
+    db = SessionLocal()
+    try:
+        staff = _resolve_staff(db, staff_id=staff_id, openid=openid)
+        return MiniResponse(data={"staff": _staff_to_dict(staff)})
+    finally:
+        db.close()
+
+
+@router.get("/staff", response_model=MiniResponse, summary="小程序现场处置人员列表")
+async def list_staff(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+    keyword: Optional[str] = Query(None, max_length=128),
+    group: Optional[str] = Query(None, max_length=128),
+    status: str = Query("all", pattern="^(all|ACTIVE|INACTIVE|active|inactive)$"),
+):
+    db = SessionLocal()
+    try:
+        _default_staff(db)
+        query = db.query(MiniProgramStaff)
+        keyword = _optional_text(keyword)
+        group = _optional_text(group)
+        normalized_status = (status or "all").upper()
+        if keyword:
+            like = f"%{keyword}%"
+            query = query.filter(or_(
+                MiniProgramStaff.staff_no.ilike(like),
+                MiniProgramStaff.display_name.ilike(like),
+                MiniProgramStaff.nickname.ilike(like),
+                MiniProgramStaff.username.ilike(like),
+                MiniProgramStaff.openid.ilike(like),
+            ))
+        if group:
+            query = query.filter(MiniProgramStaff.group_name == group)
+        if normalized_status != "ALL":
+            query = query.filter(MiniProgramStaff.status == normalized_status)
+        total = query.count()
+        rows = (
+            query.order_by(MiniProgramStaff.group_name.asc(), MiniProgramStaff.id.asc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+        group_rows = (
+            db.query(MiniProgramStaff.group_name)
+            .filter(MiniProgramStaff.group_name.isnot(None))
+            .distinct()
+            .order_by(MiniProgramStaff.group_name.asc())
+            .all()
+        )
+        items = []
+        for row in rows:
+            item = _staff_to_dict(row)
+            item["status_label"] = _staff_status_label(row.status)
+            item["openid_bound"] = bool(row.openid)
+            items.append(item)
+        return MiniResponse(data={
+            "items": items,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "has_more": page * page_size < total,
+            "groups": [value for (value,) in group_rows if value],
+        })
+    finally:
+        db.close()
+
+
+@router.post("/staff/me", response_model=MiniResponse, summary="小程序保存当前处置人员展示信息")
+async def save_current_staff(payload: UpsertStaffRequest):
+    db = SessionLocal()
+    try:
+        staff = _resolve_staff(db, staff_id=payload.staff_id, openid=payload.openid)
+        if payload.openid and not staff.openid:
+            staff.openid = payload.openid
+        if payload.display_name:
+            staff.display_name = payload.display_name
+        if payload.nickname is not None:
+            staff.nickname = payload.nickname or None
+        if payload.avatar_url is not None:
+            staff.avatar_url = payload.avatar_url or None
+        staff.last_login_at = dt.datetime.now()
+        db.commit()
+        db.refresh(staff)
+        return MiniResponse(data={"staff": _staff_to_dict(staff)}, message="人员信息已保存")
+    finally:
+        db.close()
+
+
+@router.get("/events/summary", response_model=MiniResponse, summary="小程序风险事件计数")
+async def event_summary(
+    staff_id: Optional[int] = Query(None, ge=1),
+    openid: Optional[str] = Query(None, max_length=128),
+    point: Optional[str] = Query(None, max_length=128),
+    date: Optional[str] = Query(None, max_length=10),
+):
+    db = SessionLocal()
+    try:
+        staff = _resolve_staff(db, staff_id=staff_id, openid=openid)
+        today = dt.datetime.now().date()
+        month_start = today.replace(day=1)
+        visible_all = _load_event_rows(db, business_status="all", staff=staff, point=point, date=date)
+        today_high = sum(
+            1
+            for row, data, _camera, _task in visible_all
+            if data.get("risk_level") == "HIGH" and row.started_at and row.started_at.date() == today
+        )
+        month_high = sum(
+            1
+            for row, data, _camera, _task in visible_all
+            if data.get("risk_level") == "HIGH" and row.started_at and row.started_at.date() >= month_start
+        )
+        processing = [
+            item for item in visible_all
+            if _business_status(item[0], item[3]) == "processing"
+        ]
+        pending = [
+            item for item in visible_all
+            if _business_status(item[0], item[3]) == "pending"
+        ]
+        return MiniResponse(data={
+            "today_high": today_high,
+            "month_high": month_high,
+            "processing": len(processing),
+            "pending": len(pending),
+            "staff": _staff_to_dict(staff),
+        })
+    finally:
+        db.close()
+
+
 @router.get("/cameras", response_model=MiniResponse, summary="小程序摄像头点位列表")
 async def list_cameras():
     db = SessionLocal()
     try:
         rows = db.query(Camera).filter(Camera.enabled == True).order_by(Camera.id.asc()).all()  # noqa: E712
+        camera_ids = [row.id for row in rows]
+        zone_rows = (
+            db.query(CameraDetectionZone)
+            .filter(
+                CameraDetectionZone.camera_device_id.in_(camera_ids),
+                CameraDetectionZone.enabled == True,
+            )
+            .order_by(CameraDetectionZone.camera_device_id.asc(), CameraDetectionZone.id.asc())
+            .all()
+        ) if camera_ids else []
+        zones_by_camera: dict[int, list[dict]] = {}
+        for zone in zone_rows:
+            zones_by_camera.setdefault(int(zone.camera_device_id), []).append(_mini_detection_zone(zone))
+        devices = broadcast_service.list_devices(db)
         cameras = []
         for row in rows:
             item = _mini_camera(row, {"connected": row.enabled, "running": row.enabled})
-            devices = broadcast_service.list_devices(db)
             item["broadcast_devices"] = devices
             item["broadcast_device_count"] = len(devices)
+            item["detection_zones"] = zones_by_camera.get(int(row.id), [])
             cameras.append(item)
         return MiniResponse(data={"items": cameras, "total": len(cameras)})
     finally:
@@ -415,42 +951,49 @@ async def broadcast_camera_audio(
 
 @router.get("/events", response_model=MiniResponse, summary="小程序事件列表")
 async def list_events(
-    status: str = Query("ongoing", pattern="^(ongoing|resolved|all)$"),
+    status: str = Query("pending", pattern="^(pending|processing|completed|ongoing|resolved|all)$"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(10, ge=1, le=100),
+    point: Optional[str] = Query(None, max_length=128),
+    date: Optional[str] = Query(None, max_length=10),
+    staff_id: Optional[int] = Query(None, ge=1),
+    openid: Optional[str] = Query(None, max_length=128),
+    mine: bool = Query(False),
 ):
     db = SessionLocal()
     try:
-        query = db.query(SafetyEventInstance)
-        if status == "ongoing":
-            query = query.filter(
-                SafetyEventInstance.state != STATE_RESOLVED,
-                SafetyEventInstance.status.notin_(["COMPLETED", "FALSE_ALARM"]),
-            )
-        elif status == "resolved":
-            query = query.filter(SafetyEventInstance.state == STATE_RESOLVED)
-        rows = query.order_by(SafetyEventInstance.started_at.desc()).all()
-        event_rows = [(row, safety_event_runtime_service.event_dict(db, row)) for row in rows]
-        disposal_rank = {"WAITING_MANUAL": 0, "MANUAL_HANDLING": 1, "AUTO_HANDLING": 2, "DEVICE_HANDLING": 3}
-        risk_rank = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
-        event_rows.sort(key=lambda item: (
-            disposal_rank.get(item[1].get("disposal_status"), 4),
-            risk_rank.get(item[1].get("risk_level"), 3),
-            -(item[0].started_at.timestamp() if item[0].started_at else 0),
-        ))
+        staff = _resolve_staff(db, staff_id=staff_id, openid=openid)
+        event_rows = _load_event_rows(
+            db,
+            business_status=status,
+            staff=staff,
+            point=point,
+            date=date,
+            only_mine=mine,
+        )
+        event_rows = _sort_event_rows(event_rows, staff=staff, business_status=status)
         total = len(event_rows)
-        event_rows = event_rows[(page - 1) * page_size:page * page_size]
-        camera_ids = {data.get("camera_id") for _, data in event_rows if data.get("camera_id")}
-        numeric_ids = [int(value) for value in camera_ids if str(value).isdigit()]
-        cameras = {
-            str(row.id): row
-            for row in db.query(Camera).filter(Camera.id.in_(numeric_ids)).all()
-        } if numeric_ids else {}
+        page_rows = _paginate(event_rows, page, page_size)
+        total_rows = _load_event_rows(
+            db,
+            business_status="all",
+            staff=staff,
+            point=point,
+            date=date,
+            only_mine=mine,
+        )
+        status_totals = {
+            key: sum(1 for row, _data, _camera, task in total_rows if _business_status(row, task) == key)
+            for key in ("pending", "processing", "completed")
+        }
         return MiniResponse(data={
-            "items": [_mini_event(db, row, cameras.get(data.get("camera_id"))) for row, data in event_rows],
+            "items": [_mini_event(db, row, camera, staff) for row, _data, camera, _task in page_rows],
             "total": total,
             "page": page,
             "page_size": page_size,
+            "has_more": page * page_size < total,
+            "status_totals": status_totals,
+            "staff": _staff_to_dict(staff),
         })
     finally:
         db.close()
@@ -487,16 +1030,24 @@ async def get_event_snapshot(event_id: str):
 
 
 @router.get("/events/{event_id}", response_model=MiniResponse, summary="小程序事件详情")
-async def get_event_detail(event_id: str):
+async def get_event_detail(
+    event_id: str,
+    staff_id: Optional[int] = Query(None, ge=1),
+    openid: Optional[str] = Query(None, max_length=128),
+):
     db = SessionLocal()
     try:
+        staff = _resolve_staff(db, staff_id=staff_id, openid=openid)
         event = _get_event_or_404(db, event_id)
         event_data = safety_event_runtime_service.event_dict(db, event)
         camera_id = str(event_data.get("camera_id") or "")
         camera = db.query(Camera).filter(Camera.id == int(camera_id)).first() if camera_id.isdigit() else None
         return MiniResponse(data={
-            "event": _mini_event(db, event, camera),
+            "event": _mini_event(db, event, camera, staff),
             "timeline": _build_timeline(db, event_id),
+            "evidence": _event_evidence(db, event),
+            "linkage_lines": _linkage_lines(db, event),
+            "staff": _staff_to_dict(staff),
         })
     finally:
         db.close()
@@ -582,6 +1133,91 @@ async def start_manual_process(event_id: str, payload: StartManualRequest):
             "event": result.get("event"),
             "timeline_item": result.get("timeline_item"),
         }, message="已进入人工处理")
+    finally:
+        db.close()
+
+
+@router.post("/events/{event_id}/accept", response_model=MiniResponse, summary="小程序接受风险事件任务")
+async def accept_event_task(event_id: str, payload: EventOperationRequest):
+    db = SessionLocal()
+    try:
+        staff = _resolve_staff(db, staff_id=payload.staff_id, openid=payload.openid)
+        event = _get_event_or_404(db, event_id)
+        if _is_resolved(event):
+            raise HTTPException(status_code=409, detail="事件已结束，不能接收任务")
+        task = safety_event_runtime_service.latest_task(db, event.id)
+        operator = _staff_operator(staff)
+        now = dt.datetime.now()
+        if task and task.assignee and task.assignee != operator and task.task_status in {"ACCEPTED", "PROCESSING"}:
+            raise HTTPException(status_code=409, detail=f"事件已由{task.assignee}处理")
+        if task is None:
+            task = SafetyEventTask(
+                event_instance_id=event.id,
+                dispatch_operator="MINIPROGRAM",
+                task_status="WAITING_ACCEPT",
+                task_note="小程序接收时自动创建",
+                dispatched_at=now,
+            )
+            db.add(task)
+            db.flush()
+        task.assignee = operator
+        task.task_status = "ACCEPTED"
+        task.accepted_at = task.accepted_at or now
+        if payload.remark:
+            task.task_note = payload.remark
+        event.status = "PROCESSING"
+        event.version = (event.version or 0) + 1
+        log = safety_event_runtime_service.append_timeline(
+            db,
+            event,
+            action_key=safety_event_runtime_service.new_action_key("mini-accept"),
+            log_type="MANUAL",
+            trigger_type="MANUAL",
+            status="SUCCESS",
+            message=f"{operator}接受任务",
+            operator=operator,
+            payload={
+                "instance_no": event.instance_no,
+                "operation": "ACCEPT_TASK",
+                "task_id": task.id,
+                "staff_id": staff.id if staff else None,
+                "group_name": staff.group_name if staff else None,
+                "remark": payload.remark,
+            },
+            create_time=now,
+        )
+        db.commit()
+        timeline_item = _log_to_timeline(log)
+        await invalidate_cache("safety_event:*")
+        await _broadcast_updates(db, event, timeline_item)
+        return MiniResponse(data={
+            "event": _mini_event(db, event, staff=staff),
+            "timeline_item": timeline_item,
+        }, message="已接受任务")
+    finally:
+        db.close()
+
+
+@router.post("/events/{event_id}/false-alarm", response_model=MiniResponse, summary="小程序标记事件误报")
+async def mark_event_false_alarm(event_id: str, payload: EventOperationRequest):
+    db = SessionLocal()
+    try:
+        staff = _resolve_staff(db, staff_id=payload.staff_id, openid=payload.openid)
+        event = _get_event_or_404(db, event_id)
+        if _is_resolved(event):
+            raise HTTPException(status_code=409, detail="事件已结束，不能重复标记")
+        operator = _staff_operator(staff)
+        result = await operate_safety_event(
+            db,
+            SimpleNamespace(username=operator, role="miniprogram"),
+            event.id,
+            action="FALSE_ALARM",
+            reason=payload.remark or "小程序标记误报",
+        )
+        return MiniResponse(data={
+            "event": result.get("event"),
+            "timeline_item": result.get("timeline_item"),
+        }, message="已标记误报")
     finally:
         db.close()
 

@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
+from app.config import settings
+
 REFERENCE_PATTERN = re.compile(r"^\{\{([^{}.]+)\.([^{}]+)\}\}$")
 
 
@@ -112,11 +114,12 @@ class WorkflowExecutorService:
             try:
                 infer_service = get_infer_service()
                 if mode == "run":
+                    node_wait_timeout = self._node_wait_timeout(node, wait_timeout)
                     output = infer_service.run(
                         db,
                         model_id,
                         request_data,
-                        wait_timeout=wait_timeout,
+                        wait_timeout=node_wait_timeout,
                         validate=validate,
                         filter_output=filter_output,
                     )
@@ -355,10 +358,14 @@ class WorkflowExecutorService:
             }
             if model_category == "local_llm":
                 request_data.setdefault("enable_knowledge_retrieval", True)
+                # 云端不可用时，本地 4B 节点必须先返回本地研判结果；
+                # 媒体同步交给后续云端节点/报告兜底处理，避免阻塞 ECA 主流程。
+                request_data.setdefault("upload_media_to_cloud", False)
                 request_data.setdefault(
                     "knowledge_query",
                     self._build_knowledge_query(prompt, event_type, sensor_data, request_inputs),
                 )
+                request_data.setdefault("request_timeout", max(1, int(settings.workflow_local_llm_node_timeout or 60)))
             return request_data
         return {**request_inputs, **media_options, **metadata}
 
@@ -459,9 +466,19 @@ class WorkflowExecutorService:
                 "format": "dam_workflow",
                 "require_fields": ["report", "risk_level", "recommendations", "template_data"],
             },
+            "request_timeout": max(1, int(settings.workflow_cloud_node_timeout or 30)),
             **media_options,
             **metadata,
         }
+
+    @staticmethod
+    def _node_wait_timeout(node: Dict[str, Any], default_timeout: int) -> int:
+        model_category = str(node.get("model_category") or "").lower()
+        if model_category == "cloud_llm":
+            return max(1, int(settings.workflow_cloud_node_timeout or 30))
+        if model_category == "local_llm":
+            return max(1, int(settings.workflow_local_llm_node_timeout or 60))
+        return int(default_timeout or 600)
 
     @staticmethod
     def _find_first_list(value: Any, keys: tuple[str, ...]) -> List[Dict[str, Any]]:

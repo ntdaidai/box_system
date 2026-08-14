@@ -1,215 +1,382 @@
 <template>
   <view class="page events-page">
+    <view class="stats-grid">
+      <view class="stat-card is-today">
+        <text>今日高风险</text>
+        <text>{{ summary.today_high }}</text>
+      </view>
+      <view class="stat-card is-month">
+        <text>本月高风险</text>
+        <text>{{ summary.month_high }}</text>
+      </view>
+      <view class="stat-card is-processing">
+        <text>人工处理中</text>
+        <text>{{ summary.processing }}</text>
+      </view>
+      <view class="stat-card is-pending">
+        <text>待处理</text>
+        <text>{{ summary.pending }}</text>
+      </view>
+    </view>
+
+    <view class="filter-panel">
+      <picker mode="selector" :range="cameraOptions" :value="selectedPointIndex" @change="onPointPick">
+        <view class="filter-select">{{ pointFilterLabel }}</view>
+      </picker>
+      <picker mode="date" :value="filters.date" @change="onDateChange">
+        <view class="filter-select">{{ filters.date || '发生日期' }}</view>
+      </picker>
+      <view class="filter-actions">
+        <button class="filter-btn" @tap="applyFilters">筛选</button>
+        <button class="clear-btn" @tap="clearFilters">清空</button>
+      </view>
+    </view>
+
     <view class="tabs">
       <view
+        v-for="tab in tabs"
+        :key="tab.value"
         class="tab"
-        :class="{ active: activeTab === 'ongoing' }"
-        @tap="switchEventStatus('ongoing')"
+        :class="{ active: activeTab === tab.value }"
+        @tap="switchTab(tab.value)"
       >
-        进行中
+        {{ tab.label }}
       </view>
-      <view
-        class="tab"
-        :class="{ active: activeTab === 'resolved' }"
-        @tap="switchEventStatus('resolved')"
-      >
-        已完成
-      </view>
-    </view>
-
-    <view v-if="activeTab === 'ongoing' && !loading" class="priority-strip">
-      <view>
-        <text>高风险</text>
-        <text>{{ highCount }}</text>
-      </view>
-      <view>
-        <text>人工处理中</text>
-        <text>{{ manualCount }}</text>
-      </view>
-    </view>
-
-    <view v-if="activeTab === 'ongoing'" class="notify-panel">
-      <view>
-        <text>服务通知</text>
-        <text>订阅后，有低/中/高风险时会收到微信提醒</text>
-      </view>
-      <button
-        class="ghost-btn notify-btn"
-        :loading="subscribingAlerts"
-        :disabled="subscribingAlerts"
-        @tap="handleSubscribeRiskAlerts"
-      >
-        订阅提醒
-      </button>
     </view>
 
     <view class="section-head">
       <text>风险事件</text>
-      <text>{{ events.length }} 条</text>
+      <text>共 {{ total }} 条</text>
     </view>
 
     <view v-if="loading" class="empty compact">加载中...</view>
     <view v-else-if="loadError" class="error-panel">
       <view>事件加载失败</view>
       <text>{{ loadError }}</text>
-      <text>{{ apiBaseText }}</text>
-      <button class="ghost-btn retry-btn" @tap="loadEvents">重新加载</button>
+      <button class="ghost-btn retry-btn" @tap="reload">重新加载</button>
     </view>
-    <view v-else-if="events.length === 0" class="empty compact">
-      {{ activeTab === 'ongoing' ? '暂无进行中事件' : '暂无已完成事件' }}
-    </view>
+    <view v-else-if="events.length === 0" class="empty compact">暂无{{ currentTabLabel }}事件</view>
 
     <view v-else class="event-list">
       <view
         v-for="item in events"
         :key="item.event_id"
         class="event-card"
+        :class="{ mine: item.is_my_task }"
         @tap="openDetail(item.event_id)"
       >
-        <view class="card-top">
-          <view class="risk-pill" :class="item.riskClass">{{ item.risk_level_label }}</view>
-          <view class="status-text">{{ item.mini_status_label }}</view>
+        <view class="card-head">
+          <view class="event-title-wrap">
+            <view class="event-title">{{ item.event_name || item.event_type }}</view>
+            <text>事件编号：{{ item.event_no }}</text>
+          </view>
+          <view class="risk-wrap">
+            <view class="risk-pill" :class="item.riskClass">{{ item.risk_level_label }}</view>
+            <text>{{ item.business_status_label }}</text>
+          </view>
         </view>
-        <view class="event-type">{{ item.event_type }}</view>
-        <view v-if="item.risk_level === 'HIGH' && item.can_start_manual" class="urgent-line">
-          需要尽快现场处理
-        </view>
-        <button
-          v-if="item.risk_level === 'HIGH' && item.can_start_manual && item.latitude && item.longitude"
-          class="ghost-btn card-nav-btn"
-          @tap.stop="openMapNavigation(item)"
-        >
-          导航到点位
-        </button>
+
         <view class="meta-line">
-          <text>监控点</text>
+          <text>监测点</text>
           <text>{{ item.monitor_point }}</text>
         </view>
         <view class="meta-line">
+          <text>开始时间</text>
+          <text>{{ item.startText }}</text>
+        </view>
+        <view v-if="activeTab === 'completed'" class="meta-line">
           <text>持续时间</text>
           <text>{{ item.durationText }}</text>
         </view>
-        <view class="action-text">{{ item.system_action_text }}</view>
+        <view v-if="activeTab === 'completed'" class="meta-line">
+          <text>完成时间</text>
+          <text>{{ item.completedText }}</text>
+        </view>
+        <view v-if="activeTab !== 'pending'" class="meta-line">
+          <text>处理人</text>
+          <text>{{ item.handler_name || '--' }}</text>
+        </view>
+
+        <view v-if="activeTab === 'processing' && item.is_my_task" class="mine-tag">我的处理中</view>
+        <view v-if="activeTab === 'pending'" class="card-actions">
+          <button class="primary-btn card-btn" @tap.stop="acceptEvent(item)">接受任务</button>
+          <button class="ghost-btn card-btn" @tap.stop="markFalseAlarm(item)">标记误报</button>
+        </view>
       </view>
     </view>
+
+    <button
+      v-if="hasMore && !loading"
+      class="ghost-btn load-more"
+      @tap="loadMore"
+    >
+      加载更多
+    </button>
   </view>
 </template>
 
 <script>
 import { request } from '../../utils/request'
-import { API_BASE_URL } from '../../utils/config'
-import { formatDuration, riskClass } from '../../utils/format'
-import { subscribeRiskAlert } from '../../utils/subscribe'
+import { formatDateTime, formatDuration, riskClass } from '../../utils/format'
 import { readCache, writeCache } from '../../utils/cache'
+
+const PAGE_SIZE = 10
 
 export default {
   data() {
     return {
-      activeTab: 'ongoing',
+      tabs: [
+        { value: 'pending', label: '待处理' },
+        { value: 'processing', label: '进行中' },
+        { value: 'completed', label: '已完成' }
+      ],
+      activeTab: 'pending',
+      filters: {
+        point: '',
+        date: ''
+      },
+      cameraOptions: ['全部点位'],
+      selectedPointIndex: 0,
+      summary: {
+        today_high: 0,
+        month_high: 0,
+        processing: 0,
+        pending: 0
+      },
       events: [],
-      highCount: 0,
-      manualCount: 0,
+      staff: null,
+      page: 1,
+      total: 0,
+      hasMore: false,
       loading: false,
-      loadError: '',
-      subscribingAlerts: false
+      loadError: ''
     }
   },
 
   computed: {
-    apiBaseText() {
-      return `接口地址：${API_BASE_URL}`
+    currentTabLabel() {
+      return (this.tabs.find((item) => item.value === this.activeTab) || {}).label || ''
+    },
+
+    pointFilterLabel() {
+      return this.cameraOptions[this.selectedPointIndex] || '全部点位'
     }
   },
 
   onLoad() {
-    this.restoreCachedEvents()
-    this.loadEvents()
+    this.restoreCached()
+    this.bootstrap()
   },
 
   onPullDownRefresh() {
-    this.loadEvents().finally(() => uni.stopPullDownRefresh())
+    this.reload().finally(() => uni.stopPullDownRefresh())
   },
 
   methods: {
-    restoreCachedEvents() {
-      const cachedEvents = readCache(`events:${this.activeTab}`, [])
-      if (!cachedEvents.length) return
-      this.events = cachedEvents
-      this.updateCounters(cachedEvents)
+    restoreCached() {
+      const cached = readCache(this.cacheKey(), null)
+      if (!cached) return
+      this.events = cached.items || []
+      this.total = cached.total || 0
+      this.hasMore = Boolean(cached.hasMore)
+      this.summary = cached.summary || this.summary
+      this.staff = cached.staff || readCache('mini-staff', null)
     },
 
-    switchEventStatus(tab) {
-      if (tab === this.activeTab) return
-      this.activeTab = tab
-      this.events = readCache(`events:${tab}`, [])
-      this.updateCounters(this.events)
-      this.loadEvents()
+    cacheKey() {
+      return `events:${this.activeTab}:${this.filters.point}:${this.filters.date}`
     },
 
-    loadEvents() {
+    bootstrap() {
+      this.reload()
+      this.ensureStaff()
+        .then(() => {
+          this.loadSummary().catch(() => null)
+          this.reload()
+        })
+        .catch(() => null)
+      this.loadCameraOptions().catch(() => null)
+    },
+
+    ensureStaff() {
+      const cached = readCache('mini-staff', null)
+      const query = cached?.staff_id ? `?staff_id=${cached.staff_id}` : ''
+      return request({ url: `/staff/me${query}` })
+        .then((data) => {
+          this.staff = data.staff
+          writeCache('mini-staff', data.staff)
+        })
+    },
+
+    staffQuery() {
+      return this.staff?.staff_id ? `&staff_id=${encodeURIComponent(this.staff.staff_id)}` : ''
+    },
+
+    loadSummary() {
+      const params = [
+        this.filters.point ? `point=${encodeURIComponent(this.filters.point)}` : '',
+        this.filters.date ? `date=${encodeURIComponent(this.filters.date)}` : '',
+        this.staff?.staff_id ? `staff_id=${encodeURIComponent(this.staff.staff_id)}` : ''
+      ].filter(Boolean).join('&')
+      return request({ url: `/events/summary${params ? '?' + params : ''}` })
+        .then((data) => {
+          this.summary = {
+            today_high: Number(data.today_high || 0),
+            month_high: Number(data.month_high || 0),
+            processing: Number(data.processing || 0),
+            pending: Number(data.pending || 0)
+          }
+        })
+    },
+
+    loadCameraOptions() {
+      return request({ url: '/cameras' })
+        .then((data) => {
+          const names = (data.items || [])
+            .map((item) => item.camera_name || item.name || item.id)
+            .filter(Boolean)
+          this.cameraOptions = ['全部点位', ...names]
+          const currentIndex = this.cameraOptions.indexOf(this.filters.point)
+          this.selectedPointIndex = currentIndex > -1 ? currentIndex : 0
+        })
+        .catch(() => {
+          this.cameraOptions = ['全部点位']
+          this.selectedPointIndex = 0
+        })
+    },
+
+    reload() {
+      this.page = 1
+      return this.loadEvents(false)
+    },
+
+    loadMore() {
+      if (!this.hasMore || this.loading) return
+      this.page += 1
+      this.loadEvents(true)
+    },
+
+    loadEvents(append) {
       this.loading = true
       this.loadError = ''
-      return request({
-        url: `/events?status=${this.activeTab}&page_size=50`
-      })
+      const params = [
+        `status=${this.activeTab}`,
+        `page=${this.page}`,
+        `page_size=${PAGE_SIZE}`,
+        this.filters.point ? `point=${encodeURIComponent(this.filters.point)}` : '',
+        this.filters.date ? `date=${encodeURIComponent(this.filters.date)}` : '',
+        this.staff?.staff_id ? `staff_id=${encodeURIComponent(this.staff.staff_id)}` : ''
+      ].filter(Boolean).join('&')
+      return request({ url: `/events?${params}` })
         .then((data) => {
-          const events = (data.items || []).map(this.decorateEvent)
-          this.events = events
-          this.updateCounters(events)
-          writeCache(`events:${this.activeTab}`, events)
+          const rows = (data.items || []).map(this.decorateEvent)
+          this.events = append ? this.events.concat(rows) : rows
+          this.total = Number(data.total || 0)
+          this.hasMore = Boolean(data.has_more)
+          writeCache(this.cacheKey(), {
+            items: this.events,
+            total: this.total,
+            hasMore: this.hasMore,
+            summary: this.summary,
+            staff: this.staff
+          })
         })
         .catch((error) => {
-          const cached = readCache(`events:${this.activeTab}`, [])
-          if (cached.length) {
-            this.events = cached
-            this.updateCounters(cached)
+          const cached = readCache(this.cacheKey(), null)
+          if (cached && !append) {
+            this.events = cached.items || []
+            this.total = cached.total || 0
+            this.hasMore = Boolean(cached.hasMore)
             this.loadError = ''
-            uni.showToast({ title: error.message || '已显示缓存数据', icon: 'none' })
             return
           }
           this.loadError = error.message || '网络错误'
           uni.showToast({ title: this.loadError, icon: 'none' })
         })
-        .finally(() => {
-          this.loading = false
-        })
-    },
-
-    updateCounters(events) {
-      this.highCount = events.filter((item) => item.risk_level === 'HIGH' && item.mini_status !== 'RESOLVED').length
-      this.manualCount = events.filter((item) => item.mini_status === 'MANUAL_PROCESSING').length
+        .finally(() => { this.loading = false })
     },
 
     decorateEvent(item) {
       return {
         ...item,
         riskClass: riskClass(item.risk_level),
+        startText: formatDateTime(item.started_at),
+        completedText: formatDateTime(item.completed_at),
         durationText: formatDuration(item.duration_seconds)
       }
     },
 
-    handleSubscribeRiskAlerts() {
-      if (this.subscribingAlerts) return
-      this.subscribingAlerts = true
-      subscribeRiskAlert()
-        .then((data) => {
-          const quota = Number(data.remaining_quota || 1)
-          uni.showToast({
-            title: `已订阅${quota > 1 ? quota + '次' : ''}`,
-            icon: 'success'
-          })
-        })
-        .catch((error) => {
-          uni.showToast({ title: error.message || '订阅失败', icon: 'none' })
-        })
-        .finally(() => {
-          this.subscribingAlerts = false
-        })
+    switchTab(tab) {
+      if (tab === this.activeTab) return
+      this.activeTab = tab
+      this.events = []
+      this.total = 0
+      this.restoreCached()
+      this.reload()
     },
 
-    openMapNavigation(item) {
-      uni.navigateTo({
-        url: `/pages/map/index?camera_id=${encodeURIComponent(item.camera_id || '')}&event_id=${encodeURIComponent(item.event_id || '')}`
+    onPointPick(event) {
+      const index = Number(event.detail.value || 0)
+      this.selectedPointIndex = index
+      this.filters.point = index > 0 ? this.cameraOptions[index] : ''
+      this.applyFilters()
+    },
+
+    onDateChange(event) {
+      this.filters.date = event.detail.value
+      this.applyFilters()
+    },
+
+    applyFilters() {
+      this.loadSummary().catch(() => null)
+      this.reload()
+    },
+
+    clearFilters() {
+      this.filters.point = ''
+      this.filters.date = ''
+      this.selectedPointIndex = 0
+      this.applyFilters()
+    },
+
+    acceptEvent(item) {
+      request({
+        url: `/events/${encodeURIComponent(item.event_id)}/accept`,
+        method: 'POST',
+        data: {
+          staff_id: this.staff?.staff_id,
+          remark: '小程序接受任务'
+        }
+      })
+        .then(() => {
+          uni.showToast({ title: '已接受任务', icon: 'success' })
+          this.loadSummary().catch(() => null)
+          this.reload()
+        })
+        .catch((error) => uni.showToast({ title: error.message, icon: 'none' }))
+    },
+
+    markFalseAlarm(item) {
+      uni.showModal({
+        title: '标记误报',
+        content: '确认将该事件标记为误报？',
+        success: (res) => {
+          if (!res.confirm) return
+          request({
+            url: `/events/${encodeURIComponent(item.event_id)}/false-alarm`,
+            method: 'POST',
+            data: {
+              staff_id: this.staff?.staff_id,
+              remark: '小程序标记误报'
+            }
+          })
+            .then(() => {
+              uni.showToast({ title: '已标记误报', icon: 'success' })
+              this.loadSummary().catch(() => null)
+              this.reload()
+            })
+            .catch((error) => uni.showToast({ title: error.message, icon: 'none' }))
+        }
       })
     },
 
@@ -228,16 +395,157 @@ export default {
   padding-bottom: 48rpx;
 }
 
-.tabs {
+.stats-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12rpx;
-  margin-bottom: 20rpx;
+  margin-bottom: 18rpx;
+}
+
+.stat-card {
+  position: relative;
+  min-height: 96rpx;
+  padding: 16rpx 18rpx;
+  border-radius: 8rpx;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 6rpx 18rpx rgba(20, 45, 52, 0.07);
+  box-sizing: border-box;
+}
+
+.stat-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 8rpx;
+  height: 100%;
+  background: #0f6b7a;
+}
+
+.stat-card.is-today {
+  background: linear-gradient(135deg, #fff3f2, #ffffff);
+}
+
+.stat-card.is-today::before {
+  background: #e34d59;
+}
+
+.stat-card.is-month {
+  background: linear-gradient(135deg, #fff8e7, #ffffff);
+}
+
+.stat-card.is-month::before {
+  background: #d69b20;
+}
+
+.stat-card.is-processing {
+  background: linear-gradient(135deg, #eaf6ff, #ffffff);
+}
+
+.stat-card.is-processing::before {
+  background: #2389c9;
+}
+
+.stat-card.is-pending {
+  background: linear-gradient(135deg, #eaf8f2, #ffffff);
+}
+
+.stat-card.is-pending::before {
+  background: #15936a;
+}
+
+.stat-card text {
+  display: block;
+}
+
+.stat-card text:first-child {
+  color: #6c7a80;
+  font-size: 24rpx;
+}
+
+.stat-card text:last-child {
+  color: #172026;
+  font-size: 38rpx;
+  font-weight: 800;
+  margin-top: 4rpx;
+}
+
+.filter-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) 228rpx;
+  gap: 12rpx;
+  align-items: center;
+  padding: 18rpx;
+  border-radius: 8rpx;
+  background: #fff;
+  box-shadow: 0 6rpx 18rpx rgba(20, 45, 52, 0.07);
+  margin-bottom: 18rpx;
+}
+
+.filter-select {
+  height: 72rpx;
+  line-height: 72rpx;
+  padding: 0 20rpx;
+  border-radius: 8rpx;
+  background: #f2f6f7;
+  color: #172026;
+  font-size: 25rpx;
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filter-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10rpx;
+}
+
+.filter-btn,
+.clear-btn {
+  height: 72rpx;
+  line-height: 72rpx;
+  margin: 0;
+  padding: 0;
+  border-radius: 8rpx;
+  font-size: 23rpx;
+  font-weight: 700;
+}
+
+@media (max-width: 360px) {
+  .filter-panel {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .filter-actions {
+    grid-column: 1 / -1;
+    grid-template-columns: 1fr 1fr;
+    gap: 12rpx;
+  }
+}
+
+.filter-btn {
+  background: #0f6b7a;
+  color: #fff;
+}
+
+.clear-btn {
+  background: #e7eff1;
+  color: #0f4c5c;
+}
+
+.tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12rpx;
+  margin-bottom: 18rpx;
 }
 
 .tab {
-  height: 76rpx;
-  line-height: 76rpx;
+  height: 72rpx;
+  line-height: 72rpx;
   text-align: center;
   border-radius: 8rpx;
   background: #e7eff1;
@@ -250,82 +558,16 @@ export default {
   color: #fff;
 }
 
-.priority-strip {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12rpx;
-  margin-bottom: 20rpx;
-}
-
-.priority-strip view {
-  min-height: 88rpx;
-  padding: 14rpx 18rpx;
-  box-sizing: border-box;
-  border-radius: 8rpx;
-  background: #fff;
-  box-shadow: 0 6rpx 18rpx rgba(20, 45, 52, 0.07);
-}
-
-.priority-strip text {
-  display: block;
-}
-
-.priority-strip text:first-child {
-  color: #6c7a80;
-  font-size: 24rpx;
-}
-
-.priority-strip text:last-child {
-  color: #172026;
-  font-size: 36rpx;
-  font-weight: 800;
-}
-
-.notify-panel {
+.section-head,
+.card-head,
+.meta-line {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 18rpx;
-  padding: 18rpx 20rpx;
-  margin-bottom: 20rpx;
-  border-radius: 8rpx;
-  background: #fff;
-  box-shadow: 0 6rpx 18rpx rgba(20, 45, 52, 0.07);
-}
-
-.notify-panel view {
-  flex: 1;
-  min-width: 0;
-}
-
-.notify-panel text {
-  display: block;
-}
-
-.notify-panel text:first-child {
-  color: #172026;
-  font-weight: 800;
-  margin-bottom: 6rpx;
-}
-
-.notify-panel text:last-child {
-  color: #6c7a80;
-  font-size: 24rpx;
-  line-height: 34rpx;
-}
-
-.notify-btn {
-  width: 168rpx;
-  height: 64rpx;
-  line-height: 64rpx;
-  padding: 0;
-  font-size: 24rpx;
 }
 
 .section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
   margin: 12rpx 4rpx 14rpx;
 }
 
@@ -347,18 +589,45 @@ export default {
 }
 
 .event-card {
+  position: relative;
   border-radius: 8rpx;
   background: #fff;
   padding: 22rpx;
   box-shadow: 0 6rpx 18rpx rgba(20, 45, 52, 0.08);
 }
 
-.card-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16rpx;
+.event-card.mine {
+  border-left: 8rpx solid #0f6b7a;
+}
+
+.card-head {
+  align-items: flex-start;
   margin-bottom: 18rpx;
+}
+
+.event-title-wrap {
+  min-width: 0;
+  flex: 1;
+}
+
+.event-title {
+  color: #172026;
+  font-size: 32rpx;
+  font-weight: 800;
+  margin-bottom: 6rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.event-title-wrap text {
+  color: #6c7a80;
+  font-size: 22rpx;
+}
+
+.risk-wrap {
+  flex-shrink: 0;
+  text-align: right;
 }
 
 .risk-pill {
@@ -370,54 +639,56 @@ export default {
   font-weight: 700;
 }
 
-.status-text {
-  color: #263940;
-  font-size: 26rpx;
-  text-align: right;
-}
-
-.event-type {
-  font-size: 34rpx;
-  font-weight: 700;
-  margin-bottom: 16rpx;
-}
-
-.urgent-line {
-  margin-bottom: 14rpx;
-  padding: 12rpx 14rpx;
-  border-radius: 8rpx;
-  background: #fff0f0;
-  color: #b42323;
-  font-weight: 700;
-}
-
-.card-nav-btn {
-  height: 64rpx;
-  line-height: 64rpx;
-  margin: 0 0 14rpx;
-  font-size: 24rpx;
+.risk-wrap text {
+  display: block;
+  margin-top: 6rpx;
+  color: #52656c;
+  font-size: 23rpx;
 }
 
 .meta-line {
-  display: flex;
-  justify-content: space-between;
-  gap: 24rpx;
   color: #52656c;
   line-height: 44rpx;
+}
+
+.meta-line text:first-child {
+  flex-shrink: 0;
 }
 
 .meta-line text:last-child {
   color: #172026;
   text-align: right;
+  word-break: break-all;
 }
 
-.action-text {
-  margin-top: 16rpx;
-  padding: 16rpx;
+.mine-tag {
+  margin-top: 14rpx;
+  padding: 10rpx 14rpx;
   border-radius: 8rpx;
-  background: #f2f6f7;
-  color: #24474f;
-  line-height: 40rpx;
+  background: #e8f6f3;
+  color: #0f6b5a;
+  font-size: 24rpx;
+  font-weight: 700;
+}
+
+.card-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12rpx;
+  margin-top: 18rpx;
+}
+
+.card-btn {
+  height: 68rpx;
+  line-height: 68rpx;
+  font-size: 25rpx;
+}
+
+.load-more {
+  margin-top: 22rpx;
+  height: 72rpx;
+  line-height: 72rpx;
+  font-size: 26rpx;
 }
 
 .empty {

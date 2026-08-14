@@ -8,21 +8,42 @@
           <div class="panel-heading">
             <h2>今日态势</h2>
           </div>
-          <div class="today-grid">
-            <article v-for="metric in todayMetrics" :key="metric.key" class="today-card" :class="metric.tone">
+          <div class="today-strip-list">
+            <article
+              v-for="metric in todayMetrics"
+              :key="metric.key"
+              class="today-card"
+              :class="[metric.tone, metric.kind, { 'has-breakdown': metric.breakdown }]"
+            >
               <div class="metric-head">
                 <span class="metric-icon" aria-hidden="true">
                   <component :is="metric.icon" />
                 </span>
-                <span class="metric-label">{{ metric.label }}</span>
+                <div class="metric-title-block">
+                  <span class="metric-label">{{ metric.label }}</span>
+                  <div v-if="metric.breakdown" class="metric-breakdown">
+                    <span v-for="item in metric.breakdown" :key="item.key">
+                      <em>{{ item.label }}</em>
+                      <strong>{{ item.value }}</strong>
+                      <b>
+                        较昨日
+                        <i :class="item.trend.tone">
+                          <small>{{ item.trend.icon }}</small>
+                          {{ item.trend.delta }}
+                        </i>
+                      </b>
+                    </span>
+                  </div>
+                  <strong v-else class="metric-value">{{ metric.value }}</strong>
+                </div>
               </div>
-              <div class="metric-value-row">
-                <strong>{{ metric.value }}</strong>
-                <em class="metric-compare">
-                  <span>较昨日</span>
-                  <i :class="metric.trend.tone">{{ metric.trend.icon }} {{ metric.trend.delta }}</i>
-                </em>
-              </div>
+              <em v-if="!metric.breakdown" class="metric-compare">
+                <span>较昨日</span>
+                <i :class="metric.trend.tone">
+                  <small>{{ metric.trend.icon }}</small>
+                  {{ metric.trend.delta }}
+                </i>
+              </em>
             </article>
           </div>
         </section>
@@ -144,7 +165,6 @@
                   :class="selectedGroup.type"
                 >
                   <path class="callout-line" :d="selectedRegionCallout.linePath" />
-                  <circle class="callout-dot" :cx="selectedRegionCallout.dotX" :cy="selectedRegionCallout.dotY" r="3" />
                   <rect
                     class="callout-box"
                     :x="selectedRegionCallout.x"
@@ -440,7 +460,9 @@ const riskLevels = [
 const todayMetricIcons = {
   person: markRaw(UserFilled),
   boat: markRaw(Ship),
+  disaster: markRaw(WarningFilled),
   other: markRaw(BellFilled),
+  handled: markRaw(CircleCheckFilled),
   unhandled: markRaw(WarningFilled),
 }
 
@@ -563,23 +585,21 @@ const zoomTrackStyle = computed(() => {
 
 const todayEvents = computed(() => eventsInWindow('today'))
 const yesterdayEvents = computed(() => eventsInWindow('yesterday'))
-const unhandledCount = computed(() => Number(eventStats.value.unhandled ?? events.value.filter((event) => !isHandled(event)).length))
 
 const todayMetrics = computed(() => {
   const today = todayEvents.value
   const yesterday = yesterdayEvents.value
+  const todayHandled = today.filter(isHandled)
+  const yesterdayHandled = yesterday.filter(isHandled)
+  const todayUnhandled = today.filter(isEventUnhandled)
+  const yesterdayUnhandled = yesterday.filter(isEventUnhandled)
   return [
     buildTodayMetric('person', '人员告警', today, yesterday),
     buildTodayMetric('boat', '船只告警', today, yesterday),
+    buildTodayMetric('disaster', '自然灾害告警', today, yesterday),
     buildTodayMetric('other', '其他告警', today, yesterday),
-    {
-      key: 'unhandled',
-      label: '未处理告警',
-      icon: todayMetricIcons.unhandled,
-      value: formatNumber(unhandledCount.value),
-      tone: 'danger',
-      trend: compareNumber(unhandledCount.value, yesterday.filter((event) => !isHandled(event)).length),
-    },
+    buildHandlingMetric('handled', '已处理告警', todayHandled, yesterdayHandled, 'success'),
+    buildHandlingMetric('unhandled', '未处理告警', todayUnhandled, yesterdayUnhandled, 'danger'),
   ]
 })
 
@@ -839,7 +859,7 @@ const deviceReportText = computed(() => {
 function buildTodayMetric(key, label, today, yesterday) {
   const matchMetric = (event) => {
     const category = getOverviewCategory(event)
-    if (key === 'other') return isOtherOverviewEvent(event)
+    if (key === 'other') return category === 'other'
     return category === key
   }
   const value = today.filter(matchMetric).length
@@ -848,10 +868,66 @@ function buildTodayMetric(key, label, today, yesterday) {
     key,
     label,
     icon: todayMetricIcons[key],
+    kind: 'category',
     value: formatNumber(value),
-    tone: key === 'person' ? 'warning' : key === 'boat' ? 'boat' : 'purple',
+    tone: key === 'person' ? 'warning' : key === 'boat' ? 'boat' : key === 'disaster' ? 'danger' : 'purple',
     trend: compareNumber(value, previous),
   }
+}
+
+function buildHandlingMetric(key, label, today, yesterday, tone) {
+  const todaySplit = splitDispositionMode(today)
+  const yesterdaySplit = splitDispositionMode(yesterday)
+  const yesterdayTotal = yesterday.length
+  return {
+    key,
+    label,
+    icon: todayMetricIcons[key],
+    kind: 'handling',
+    value: formatNumber(today.length),
+    tone,
+    breakdown: [
+      {
+        key: 'auto',
+        label: '自动处置',
+        value: formatNumber(todaySplit.auto),
+        trend: compareNumber(todaySplit.auto, yesterdaySplit.auto),
+      },
+      {
+        key: 'manual',
+        label: '人工处置',
+        value: formatNumber(todaySplit.manual),
+        trend: compareNumber(todaySplit.manual, yesterdaySplit.manual),
+      },
+    ],
+    trend: compareNumber(today.length, yesterdayTotal),
+  }
+}
+
+function splitDispositionMode(rows) {
+  return rows.reduce((acc, event) => {
+    if (isManualDisposition(event)) acc.manual += 1
+    else acc.auto += 1
+    return acc
+  }, { auto: 0, manual: 0 })
+}
+
+function isManualDisposition(event) {
+  const text = [
+    event?.handling_mode,
+    event?.process_mode,
+    event?.disposal_mode,
+    event?.handler_type,
+    event?.operator,
+    event?.processor,
+    event?.assignee,
+    event?.assigned_to,
+    event?.resolved_by,
+    event?.dispatch_operator,
+  ].filter(Boolean).join(' ').toLowerCase()
+  if (/人工|手动|manual|user|admin|operator|staff|人员|人工处置/.test(text)) return true
+  if (/自动|系统|auto|system|workflow|eca|model/.test(text)) return false
+  return false
 }
 
 function eventsForCameraPoint(point) {
@@ -1425,6 +1501,10 @@ function deviceGroupKey(key, item) {
 
 function isHandled(event) {
   return event?.state === 'RESOLVED' || ['COMPLETED', 'FALSE_ALARM'].includes(event?.status)
+}
+
+function isEventUnhandled(event) {
+  return !isHandled(event)
 }
 
 function getOverviewCategory(event) {
@@ -2228,7 +2308,7 @@ onBeforeUnmount(() => {
 }
 
 .left-column {
-  grid-template-rows: minmax(0, 28fr) minmax(0, 28fr) minmax(0, 36fr);
+  grid-template-rows: minmax(0, 35.5fr) minmax(0, 24fr) minmax(0, 32.5fr);
 }
 
 .center-column {
@@ -2406,72 +2486,88 @@ onBeforeUnmount(() => {
   font-size: clamp(10px, .6vw, 13px);
 }
 
-.today-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  grid-template-rows: 1fr 1fr;
-  gap: clamp(9px, .5vw, 14px);
-  height: calc(100% - 32px);
-  margin-top: clamp(9px, .5vw, 13px);
-}
-
 .today-panel {
   container: todayPanel / inline-size;
+}
+
+.today-strip-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, .88fr)) repeat(2, minmax(0, .94fr));
+  gap: clamp(6px, .38vw, 9px);
+  height: calc(100% - 34px);
+  margin-top: clamp(8px, .46vw, 12px);
 }
 
 .today-card {
   --metric-color: #43c8ff;
   min-height: 0;
   position: relative;
-  display: grid;
-  grid-template-rows: clamp(38px, 2.16vw, 48px) 1fr;
-  gap: clamp(6px, .4vw, 9px);
-  padding: clamp(11px, .7vw, 15px) clamp(13px, .8vw, 18px) clamp(10px, .6vw, 14px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: clamp(6px, .42vw, 10px);
+  padding: clamp(7px, .45vw, 10px) clamp(8px, .58vw, 13px);
   border: 1px solid rgba(74, 163, 214, .22);
   border-radius: 8px;
   background:
-    linear-gradient(180deg, rgba(9, 40, 68, .76), rgba(4, 23, 42, .76)),
-    rgba(4, 22, 39, .8);
+    linear-gradient(90deg, color-mix(in srgb, var(--metric-color) 12%, transparent), transparent 48%),
+    linear-gradient(180deg, rgba(9, 40, 68, .68), rgba(4, 23, 42, .74)),
+    rgba(4, 22, 39, .76);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04);
   overflow: hidden;
+}
+
+.today-card.handling {
+  grid-column: 1 / -1;
 }
 
 .today-card::before {
   content: "";
   position: absolute;
   left: 0;
-  top: 14px;
-  bottom: 14px;
+  top: 11px;
+  bottom: 11px;
   width: 2px;
   border-radius: 0 2px 2px 0;
   background: var(--metric-color);
-  opacity: .86;
+  opacity: .9;
 }
 
 .metric-head {
   min-width: 0;
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: clamp(8px, .5vw, 11px);
 }
 
 .metric-icon {
   position: relative;
-  flex: 0 0 clamp(38px, 2.15vw, 48px);
-  width: clamp(38px, 2.15vw, 48px);
-  height: clamp(38px, 2.15vw, 48px);
+  flex: 0 0 clamp(30px, 1.65vw, 38px);
+  width: clamp(30px, 1.65vw, 38px);
+  height: clamp(30px, 1.65vw, 38px);
   display: grid;
   place-items: center;
-  border-radius: 10px;
+  border-radius: 9px;
   color: var(--metric-color);
   background: rgba(12, 44, 72, .72);
   border: 1px solid rgba(143, 200, 242, .18);
 }
 
 .metric-icon :deep(svg) {
-  width: clamp(20px, 1.22vw, 27px);
-  height: clamp(20px, 1.22vw, 27px);
+  width: clamp(16px, .95vw, 21px);
+  height: clamp(16px, .95vw, 21px);
   display: block;
+}
+
+.metric-title-block {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  align-items: center;
+  grid-template-columns: minmax(0, 1fr);
+  gap: clamp(5px, .32vw, 8px);
 }
 
 .metric-label,
@@ -2485,43 +2581,103 @@ onBeforeUnmount(() => {
 
 .metric-label {
   color: #b7e5ff;
-  font-size: clamp(18px, 1.16vw, 25px);
+  font-size: clamp(14px, .84vw, 18px);
   font-weight: 800;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.metric-value-row {
+.metric-value {
   min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: clamp(10px, .6vw, 14px);
-}
-
-.today-card strong {
   display: block;
   margin: 0;
   color: #fff;
-  font-size: clamp(31px, 1.82vw, 40px);
+  font-size: clamp(21px, 1.22vw, 28px);
   line-height: 1;
   letter-spacing: 0;
   font-variant-numeric: tabular-nums;
 }
 
-.metric-compare {
-  flex: 0 0 auto;
+.metric-breakdown {
+  min-width: 0;
   display: grid;
-  justify-items: start;
-  gap: 4px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(5px, .35vw, 7px);
+}
+
+.metric-breakdown span {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(44px, .75fr) minmax(28px, .45fr) minmax(54px, .8fr);
+  align-items: center;
+  gap: clamp(3px, .22vw, 5px);
+  padding: clamp(4px, .26vw, 5px) clamp(5px, .32vw, 7px);
+  border: 1px solid rgba(82, 177, 230, .16);
+  border-radius: 6px;
+  background: rgba(2, 15, 28, .28);
+}
+
+.metric-breakdown em {
+  overflow: hidden;
+  color: #95cbed;
+  font-size: clamp(10px, .58vw, 12px);
+  font-style: normal;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metric-breakdown strong {
+  color: #fff;
+  font-size: clamp(16px, .95vw, 22px);
+  line-height: 1;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-breakdown b {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  overflow: hidden;
+  color: #9ed3f5;
+  font-size: clamp(9px, .55vw, 11px);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.metric-breakdown b i {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  font-style: normal;
+  font-size: clamp(13px, .76vw, 17px);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-breakdown b small {
+  font-size: .72em;
+  line-height: 1;
+}
+
+.metric-compare {
+  flex: 0 0 clamp(50px, 3.3vw, 72px);
+  display: grid;
+  justify-items: end;
+  gap: 3px;
   padding-bottom: 0;
   white-space: nowrap;
+  text-align: right;
 }
 
 .metric-compare span {
   color: #9ed3f5;
-  font-size: clamp(14px, .84vw, 18px);
+  font-size: clamp(11px, .66vw, 14px);
   line-height: 1;
 }
 
@@ -2532,10 +2688,17 @@ onBeforeUnmount(() => {
   justify-content: flex-end;
   margin-right: 0;
   font-style: normal;
-  line-height: 1.1;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
-  font-size: clamp(14px, .84vw, 18px);
+  font-size: clamp(20px, 1.18vw, 27px);
   font-weight: 800;
+}
+
+.metric-compare i small {
+  margin-right: 3px;
+  font-size: .72em;
+  font-weight: 800;
+  line-height: 1;
 }
 
 .today-card.danger { --metric-color: #ff6873; }
@@ -2543,6 +2706,20 @@ onBeforeUnmount(() => {
 .today-card.boat { --metric-color: #41c8ff; }
 .today-card.purple { --metric-color: #9b73ff; }
 .today-card.cyan { --metric-color: #43c8ff; }
+.today-card.success { --metric-color: #38d59c; }
+
+.today-card.handling .metric-title-block {
+  grid-template-columns: minmax(94px, .56fr) minmax(0, 1.44fr);
+  gap: clamp(8px, .55vw, 14px);
+}
+
+.today-card.handling .metric-label {
+  font-size: clamp(15px, .86vw, 18px);
+}
+
+.today-card.handling .metric-breakdown {
+  max-width: none;
+}
 
 .up,
 .down,
@@ -3219,14 +3396,6 @@ onBeforeUnmount(() => {
   filter: url(#selected-region-glow);
 }
 
-.region-callout .callout-dot {
-  fill: #dffbff;
-  stroke: rgba(67, 220, 255, .74);
-  stroke-width: 2;
-  vector-effect: non-scaling-stroke;
-  filter: url(#selected-region-glow);
-}
-
 .region-callout .callout-box {
   fill: rgba(4, 25, 43, .78);
   stroke: rgba(131, 239, 255, .72);
@@ -3249,10 +3418,6 @@ onBeforeUnmount(() => {
 
 .region-callout.personForbidden .callout-line {
   stroke: rgba(93, 181, 255, .9);
-}
-
-.region-callout.personForbidden .callout-dot {
-  stroke: rgba(93, 181, 255, .82);
 }
 
 .region-callout.personForbidden .callout-box {
@@ -3311,26 +3476,13 @@ onBeforeUnmount(() => {
 .camera-point.active {
   border-color: #fff;
   background:
-    radial-gradient(circle at 50% 48%, #fff2f2 0 8%, #ff9aa0 9% 34%, #ee3f4d 35% 62%, rgba(143, 16, 25, .98) 63% 100%);
+    radial-gradient(circle at 50% 48%, #ff7a82 0 34%, #ee3f4d 35% 62%, rgba(143, 16, 25, .98) 63% 100%);
   box-shadow:
     0 0 0 6px rgba(255, 91, 104, .18),
     0 0 24px rgba(255, 91, 104, .58),
     0 6px 18px rgba(0, 0, 0, .34);
   animation: activePointGlow 1.35s ease-in-out infinite;
   z-index: 4;
-}
-
-.camera-point.active span::before {
-  content: "";
-  position: absolute;
-  inset: clamp(-7px, -.4vw, -5px);
-  border-radius: 50%;
-  border: 2px solid transparent;
-  border-top-color: rgba(255, 255, 255, .95);
-  border-right-color: rgba(255, 255, 255, .38);
-  filter: drop-shadow(0 0 7px rgba(255, 255, 255, .55));
-  animation: pointOrbit 1.15s linear infinite;
-  pointer-events: none;
 }
 
 .camera-point.active::before {
@@ -4303,99 +4455,161 @@ onBeforeUnmount(() => {
 }
 
 @container todayPanel (max-width: 460px) {
-  .today-grid {
-    gap: 8px;
-    height: calc(100% - 30px);
+  .today-strip-list {
+    gap: 6px;
+    height: calc(100% - 32px);
     margin-top: 8px;
   }
 
   .today-card {
-    grid-template-rows: 38px minmax(0, 1fr);
-    gap: 5px;
-    padding: 10px 12px 10px;
+    gap: 7px;
+    padding: 7px 8px 7px 9px;
   }
 
   .today-card::before {
-    top: 12px;
-    bottom: 12px;
+    top: 10px;
+    bottom: 10px;
   }
 
   .metric-head {
-    gap: 8px;
+    gap: 7px;
     overflow: visible;
   }
 
   .metric-icon {
-    flex-basis: 38px;
-    width: 38px;
-    height: 38px;
+    flex-basis: 31px;
+    width: 31px;
+    height: 31px;
     border-radius: 9px;
   }
 
   .metric-icon :deep(svg) {
-    width: 20px;
-    height: 20px;
+    width: 16px;
+    height: 16px;
+  }
+
+  .metric-title-block {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  .today-card.handling .metric-title-block {
+    grid-template-columns: minmax(72px, .52fr) minmax(0, 1.48fr);
+    gap: 6px;
+  }
+
+  .metric-breakdown span {
+    grid-template-columns: minmax(38px, .72fr) minmax(24px, .42fr) minmax(48px, .86fr);
+    padding: 4px 5px;
   }
 
   .metric-label {
-    overflow: visible;
-    font-size: 17px;
-    text-overflow: clip;
+    overflow: hidden;
+    font-size: 14px;
+    text-overflow: ellipsis;
   }
 
-  .metric-value-row {
-    gap: 8px;
-  }
-
-  .today-card strong {
-    font-size: 28px;
-  }
-
-  .metric-compare,
-  .metric-compare span,
+  .metric-value,
   .metric-compare i {
+    font-size: 20px;
+  }
+
+  .metric-breakdown em {
+    font-size: 9px;
+  }
+
+  .metric-breakdown strong {
+    font-size: 16px;
+  }
+
+  .metric-breakdown b {
+    font-size: 9px;
+  }
+
+  .metric-breakdown b i {
     font-size: 13px;
+  }
+
+  .metric-compare {
+    flex-basis: 46px;
+  }
+
+  .metric-compare span {
+    font-size: 11px;
   }
 }
 
 @container todayPanel (max-width: 390px) {
   .today-card {
-    grid-template-rows: 35px minmax(0, 1fr);
-    padding: 9px 10px;
+    gap: 6px;
+    padding: 6px 7px;
   }
 
   .metric-icon {
-    flex-basis: 35px;
-    width: 35px;
-    height: 35px;
+    flex-basis: 28px;
+    width: 28px;
+    height: 28px;
+  }
+
+  .metric-title-block {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+  }
+
+  .today-card.handling .metric-title-block {
+    grid-template-columns: minmax(64px, .5fr) minmax(0, 1.5fr);
+    gap: 5px;
   }
 
   .metric-label {
-    font-size: 16px;
+    font-size: 13px;
   }
 
-  .metric-value-row {
-    gap: 6px;
+  .metric-breakdown {
+    gap: 4px;
   }
 
-  .today-card strong {
-    font-size: 26px;
+  .metric-breakdown span {
+    grid-template-columns: minmax(34px, .72fr) minmax(22px, .42fr) minmax(42px, .86fr);
+    padding: 4px;
+  }
+
+  .metric-value,
+  .metric-compare i {
+    font-size: 18px;
+  }
+
+  .metric-compare {
+    flex-basis: 42px;
   }
 }
 
 @container todayPanel (max-width: 350px) {
   .metric-icon {
-    flex-basis: 33px;
-    width: 33px;
-    height: 33px;
+    flex-basis: 26px;
+    width: 26px;
+    height: 26px;
   }
 
   .metric-label {
-    font-size: 15px;
+    font-size: 12px;
   }
 
-  .today-card strong {
-    font-size: 24px;
+  .metric-value,
+  .metric-compare i {
+    font-size: 16px;
+  }
+
+  .metric-breakdown b {
+    font-size: 8px;
+  }
+
+  .metric-breakdown b i {
+    font-size: 12px;
+  }
+
+  .metric-compare {
+    flex-basis: 38px;
   }
 }
 

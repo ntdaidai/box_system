@@ -12,9 +12,11 @@
       <div class="list-heading">
         <div>
           <span>区域列表</span>
-          <b>{{ currentCameraName }} · 共 {{ zones.length }} 个区域</b>
         </div>
         <div class="header-actions">
+          <el-button class="tool-button new-zone-action" @click="startNewZone">
+            <el-icon><EditPen /></el-icon>新增区域
+          </el-button>
           <el-select
             v-model="currentCameraId"
             class="camera-select zone-config-select"
@@ -29,12 +31,6 @@
               :value="camera.id"
             />
           </el-select>
-          <el-button class="tool-button" @click="startNewZone">
-            <el-icon><EditPen /></el-icon>新增区域
-          </el-button>
-          <el-button class="save-button" :loading="saving" @click="saveZones">
-            <el-icon><Check /></el-icon>保存配置
-          </el-button>
         </div>
       </div>
     </section>
@@ -44,7 +40,7 @@
         <div class="zone-table-head">
           <span>区域名</span>
           <span>区域类型</span>
-          <span>顶点数</span>
+          <span>所属点位</span>
           <span>启用状态</span>
           <span>配置时间</span>
           <span>操作</span>
@@ -53,29 +49,22 @@
           v-for="zone in pagedZones"
           :key="zone.id"
           class="zone-table-row"
-          :class="{ selected: zone.id === selectedZoneId, disabled: !zone.enabled }"
-          @click="selectZone(zone.id)"
+          :class="{ disabled: !zone.enabled }"
         >
-          <strong>
-            <i :style="{ background: zoneColor(zone) }"></i>
-            {{ zone.zone_name || zoneTypeLabel(zone.zone_type) }}
-          </strong>
-          <span>{{ zoneTypeLabel(zone.zone_type) }}</span>
-          <span>{{ zone.polygon_points.length }} 个</span>
+          <strong>{{ zone.zone_name || zoneTypeText(zone.zone_type) }}</strong>
+          <span>{{ zoneTypeText(zone.zone_type) }}</span>
+          <span>{{ zoneCameraName(zone) }}</span>
           <span>
-            <button
-              type="button"
-              class="zone-enable-toggle"
-              :class="{ active: zone.enabled }"
-              @click.stop="zone.enabled = !zone.enabled"
-            >
-              <i></i>{{ zone.enabled ? '启用' : '未启用' }}
-            </button>
+            <el-switch
+              :model-value="zone.enabled !== false"
+              :loading="zoneEnableLoading[zone.id]"
+              @change="(value) => toggleZoneEnabled(zone, value)"
+            />
           </span>
           <span>{{ formatZoneTime(zone) }}</span>
           <div class="row-actions">
             <button type="button" class="row-edit" @click.stop="openZoneEditor(zone.id)">
-              编辑画框
+              查看
             </button>
             <button type="button" class="row-delete" @click.stop="deleteZone(zone.id)">
               删除
@@ -98,119 +87,106 @@
       v-model="drawDialogVisible"
       append-to-body
       class="zone-draw-dialog"
-      title="区域画框"
-      width="1180px"
+      :title="drawDialogTitle"
+      width="1320px"
       @closed="handleDrawDialogClosed"
     >
       <section class="config-workspace">
         <article class="video-editor">
           <div class="editor-stage">
-          <img
-            v-if="streamUrl"
-            ref="stageImageRef"
-            :src="streamUrl"
-            class="video-stream"
-            alt="摄像头实时画面"
-            @load="streamLoading = false"
-            @error="refreshStream"
-          />
-          <svg
-            class="zone-editor-overlay"
-            :viewBox="`0 0 ${overlayWidth} ${overlayHeight}`"
-            preserveAspectRatio="xMidYMid meet"
-            @click="handleOverlayClick"
-            @mousemove="dragVertex"
-            @mouseup="endDrag"
-            @mouseleave="endDrag"
-          >
-            <g
-              v-for="zone in zones"
-              :key="zone.id"
-              class="editable-zone"
-              :class="{ selected: zone.id === selectedZoneId, disabled: !zone.enabled }"
-              @click.stop="handleZoneClick(zone.id, $event)"
+            <img
+              v-if="streamUrl"
+              ref="stageImageRef"
+              :src="streamUrl"
+              class="video-stream"
+              alt="摄像头实时画面"
+              @load="streamLoading = false"
+              @error="refreshStream"
+            />
+            <svg
+              class="zone-editor-overlay"
+              :viewBox="`0 0 ${overlayWidth} ${overlayHeight}`"
+              preserveAspectRatio="xMidYMid meet"
+              @click="handleOverlayClick"
+              @mousemove="dragVertex"
+              @mouseup="endDrag"
+              @mouseleave="endDrag"
             >
-              <polygon
-                v-if="zone.polygon_points.length >= 3"
-                :points="zonePolygonPoints(zone)"
-                :stroke="zoneColor(zone)"
-                :fill="zoneFill(zone)"
-                :stroke-width="zone.id === selectedZoneId ? 4 : 2"
-              />
-              <polyline
-                v-else-if="zone.polygon_points.length"
-                class="zone-polyline"
-                :points="zonePolygonPoints(zone)"
-                :stroke="zoneColor(zone)"
-              />
-              <text
-                v-if="zone.polygon_points.length"
-                class="zone-name"
-                :x="zoneLabelPoint(zone).x"
-                :y="zoneLabelPoint(zone).y"
-                :fill="zoneColor(zone)"
-                :font-size="zoneLabelFontSize"
-              >
-                {{ zone.zone_name || zoneTypeLabel(zone.zone_type) }}
-              </text>
               <g
-                v-for="(point, index) in zone.polygon_points"
-                v-show="showZoneAnchors(zone)"
-                :key="`${zone.id}-${index}`"
-                class="vertex-marker"
-                @click.stop.prevent
+                v-for="zone in editorZones"
+                :key="zone.id"
+                class="editable-zone selected"
+                :class="{ disabled: !zone.enabled }"
+                @click.stop="handleZoneClick(zone.id, $event)"
               >
-                <circle
-                  class="vertex-anchor"
-                  :cx="point.x * overlayWidth"
-                  :cy="point.y * overlayHeight"
-                  :r="vertexAnchorRadius"
-                  @mousedown.stop.prevent="startDrag(zone.id, index, $event)"
+                <polygon
+                  v-if="zone.polygon_points.length >= 3"
+                  :points="zonePolygonPoints(zone)"
+                  :stroke="zoneColor(zone)"
+                  :fill="zoneFill(zone)"
+                  stroke-width="4"
+                />
+                <polyline
+                  v-else-if="zone.polygon_points.length"
+                  class="zone-polyline"
+                  :points="zonePolygonPoints(zone)"
+                  :stroke="zoneColor(zone)"
                 />
                 <text
-                  class="vertex-index"
-                  :x="vertexLabelPoint(point).x"
-                  :y="vertexLabelPoint(point).y"
-                  :font-size="vertexIndexFontSize"
+                  v-if="zone.polygon_points.length"
+                  class="zone-name"
+                  :x="zoneLabelPoint(zone).x"
+                  :y="zoneLabelPoint(zone).y"
+                  :fill="zoneColor(zone)"
+                  :font-size="zoneLabelFontSize"
                 >
-                  {{ index + 1 }}
+                  {{ zone.zone_name || zoneTypeText(zone.zone_type) }}
                 </text>
+                <g
+                  v-for="(point, index) in zone.polygon_points"
+                  v-show="showZoneAnchors(zone)"
+                  :key="`${zone.id}-${index}`"
+                  class="vertex-marker"
+                  @click.stop.prevent
+                >
+                  <circle
+                    class="vertex-anchor"
+                    :cx="point.x * overlayWidth"
+                    :cy="point.y * overlayHeight"
+                    :r="vertexAnchorRadius"
+                    @mousedown.stop.prevent="startDrag(zone.id, index, $event)"
+                  />
+                  <text
+                    class="vertex-index"
+                    :x="vertexLabelPoint(point).x"
+                    :y="vertexLabelPoint(point).y"
+                    :font-size="vertexIndexFontSize"
+                  >
+                    {{ index + 1 }}
+                  </text>
+                </g>
               </g>
-            </g>
-          </svg>
-          <div v-if="streamLoading" class="stage-loading">
-            <el-icon class="is-loading"><Loading /></el-icon>
-            <span>正在获取摄像头画面</span>
-          </div>
-          <div v-if="drawing" class="draw-tip">正在新增区域：点击画面添加顶点</div>
+            </svg>
+            <div v-if="streamLoading" class="stage-loading">
+              <el-icon class="is-loading"><Loading /></el-icon>
+              <span>正在获取摄像头画面</span>
+            </div>
+            <div v-if="drawing" class="draw-tip">{{ drawTipText }}</div>
           </div>
           <div class="editor-toolbar">
-            <span class="toolbar-note">点击画面新增顶点，拖拽顶点微调位置。</span>
-            <el-button class="tool-button" :class="{ active: drawing }" @click="drawing ? exitDrawing() : startNewZone()">
-              <el-icon><EditPen /></el-icon>{{ drawing ? '退出新增' : '继续新增' }}
-            </el-button>
-            <el-button class="tool-button" :disabled="!selectedZone" @click="editDialogVisible = true">
-              点位配置
-            </el-button>
-            <el-button class="save-button" :loading="saving" @click="saveZones">
-              <el-icon><Check /></el-icon>保存配置
-            </el-button>
+            <span class="toolbar-note">{{ currentCameraName }}</span>
           </div>
         </article>
-      </section>
-      <template #footer>
-        <el-button class="exit-button" @click="drawDialogVisible = false">完成</el-button>
-      </template>
-    </el-dialog>
 
-    <el-dialog
-      v-model="editDialogVisible"
-      append-to-body
-      class="zone-editor-dialog"
-      title="区域点位配置"
-      width="760px"
-    >
-      <el-form v-if="selectedZone" label-position="top" class="zone-form">
+        <aside class="zone-side-editor">
+          <div class="side-editor-title">
+            <strong>编辑点位</strong>
+            <span>{{ selectedZone ? `顶点 ${selectedZone.polygon_points.length}` : '未选择区域' }}</span>
+          </div>
+          <el-form v-if="selectedZone" label-position="top" class="zone-form">
+          <el-form-item label="区域名称">
+            <el-input v-model="selectedZone.zone_name" maxlength="80" placeholder="请输入区域名称" />
+          </el-form-item>
           <el-form-item label="区域类型">
             <el-select
               v-model="selectedZone.zone_type"
@@ -218,9 +194,9 @@
               popper-class="zone-config-select-popper"
               @change="applyTypeDefaults"
             >
-              <el-option label="低风险区" value="PERSON_LOW" />
-              <el-option label="中风险区" value="PERSON_MEDIUM" />
-              <el-option label="高风险区" value="PERSON_HIGH" />
+              <el-option label="人员低风险区" value="PERSON_LOW" />
+              <el-option label="人员中风险区" value="PERSON_MEDIUM" />
+              <el-option label="人员高风险区" value="PERSON_HIGH" />
               <el-option label="捕鱼区" value="FISHING" />
             </el-select>
           </el-form-item>
@@ -232,13 +208,6 @@
             <div class="ros-unit">
               <i></i>
               <span>坐标以视频画面左下角为原点，支持直接微调顶点坐标</span>
-            </div>
-            <div class="ros-name-field">
-              <div class="field-title">
-                <strong>区域名称</strong>
-                <span>用于保存与回显</span>
-              </div>
-              <el-input v-model="selectedZone.zone_name" maxlength="80" placeholder="请输入区域名称" />
             </div>
             <div class="point-table">
               <div class="point-head">
@@ -288,10 +257,18 @@
               <el-icon><Plus /></el-icon>新增顶点
             </button>
           </section>
-        </el-form>
-        <div v-else class="panel-empty">请选择一个区域进行编辑。</div>
+          </el-form>
+          <div v-else class="panel-empty">请选择一个区域进行编辑。</div>
+          <div class="side-editor-actions">
+            <el-button class="exit-button" @click="drawDialogVisible = false">完成</el-button>
+            <el-button class="save-button" :loading="saving" @click="saveZones({ includeDraft: true, closeOnSuccess: true })">
+              <el-icon><Check /></el-icon>保存配置
+            </el-button>
+          </div>
+        </aside>
+      </section>
       <template #footer>
-        <el-button class="exit-button" @click="editDialogVisible = false">完成</el-button>
+        <span></span>
       </template>
     </el-dialog>
   </div>
@@ -300,7 +277,7 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Check, EditPen, Loading, Plus, Refresh,
 } from '@element-plus/icons-vue'
@@ -323,17 +300,22 @@ const drawing = ref(false)
 const dragging = ref(null)
 const saving = ref(false)
 const drawDialogVisible = ref(false)
-const editDialogVisible = ref(false)
+const editorMode = ref('')
+const draftZone = ref(null)
 const zonePage = ref(1)
+const zoneEnableLoading = ref({})
 const pageSize = 10
 
 const overlayWidth = computed(() => Number(stageImageRef.value?.naturalWidth) || 1920)
 const overlayHeight = computed(() => Number(stageImageRef.value?.naturalHeight) || 1080)
-const selectedZone = computed(() => zones.value.find((zone) => zone.id === selectedZoneId.value) || null)
+const selectedZone = computed(() => draftZone.value || zones.value.find((zone) => zone.id === selectedZoneId.value) || null)
+const editorZones = computed(() => (selectedZone.value ? [selectedZone.value] : []))
 const currentCameraName = computed(() => cameras.value.find((camera) => camera.id === currentCameraId.value)?.name || '未选择摄像头')
 const zoneLabelFontSize = computed(() => Math.max(16, Math.min(64, overlayWidth.value * 0.022)))
 const vertexAnchorRadius = computed(() => Math.max(6, Math.min(28, overlayWidth.value * 0.007)))
 const vertexIndexFontSize = computed(() => Math.max(13, Math.min(42, overlayWidth.value * 0.016)))
+const drawDialogTitle = computed(() => (editorMode.value === 'create' ? '新增区域' : '区域画框'))
+const drawTipText = computed(() => (editorMode.value === 'create' ? '正在新增区域：点击画面添加顶点' : '点击画面新增顶点，拖拽顶点微调位置'))
 const pagedZones = computed(() => {
   const start = (zonePage.value - 1) * pageSize
   return zones.value.slice(start, start + pageSize)
@@ -358,6 +340,19 @@ function formatZoneTime(zone) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
+function zoneTypeText(type) {
+  return ({
+    PERSON_LOW: '人员低风险区',
+    PERSON_MEDIUM: '人员中风险区',
+    PERSON_HIGH: '人员高风险区',
+    FISHING: '捕鱼区',
+  })[type] || zoneTypeLabel(type)
+}
+
+function zoneCameraName(zone) {
+  return zone?.camera_name || zone?.cameraName || currentCameraName.value
+}
+
 async function loadCameras() {
   const response = await getCameraList()
   cameras.value = (response.data?.cameras || []).map((camera) => ({ ...camera, id: String(camera.id) }))
@@ -369,8 +364,9 @@ async function activateCamera() {
   selectedZoneId.value = ''
   zonePage.value = 1
   drawing.value = false
+  editorMode.value = ''
+  draftZone.value = null
   drawDialogVisible.value = false
-  editDialogVisible.value = false
   streamUrl.value = ''
   await loadZones()
 }
@@ -424,8 +420,7 @@ function pointerToUnitPoint(event) {
 }
 
 function handleOverlayClick(event) {
-  if (!drawing.value) return
-  if (!selectedZone.value) startNewZone()
+  if (!drawing.value || !selectedZone.value) return
   const point = pointerToUnitPoint(event)
   appendPointToSelectedZone(point)
 }
@@ -443,28 +438,23 @@ function createZone() {
   const id = `${zoneType}_${Date.now()}`
   const zone = {
     id,
-    zone_name: `低风险区 ${zones.value.length + 1}`,
-    name: `低风险区 ${zones.value.length + 1}`,
+    zone_name: `人员低风险区 ${zones.value.length + 1}`,
+    name: `人员低风险区 ${zones.value.length + 1}`,
     zone_type: zoneType,
     type: zoneType,
     polygon_points: [],
     enabled: true,
   }
-  zones.value = [...zones.value, zone]
-  selectedZoneId.value = id
   return zone
 }
 
 function startNewZone() {
+  draftZone.value = createZone()
+  selectedZoneId.value = draftZone.value.id
+  editorMode.value = 'create'
   drawDialogVisible.value = true
   if (!streamUrl.value) refreshStream()
-  createZone()
   drawing.value = true
-  editDialogVisible.value = false
-}
-
-function exitDrawing() {
-  drawing.value = false
 }
 
 function appendPointToSelectedZone(point) {
@@ -484,8 +474,12 @@ function selectZone(zoneId) {
 }
 
 function openZoneEditor(zoneId) {
-  selectZone(zoneId)
-  drawing.value = false
+  const source = zones.value.find((zone) => zone.id === zoneId)
+  if (!source) return
+  draftZone.value = cloneZone(source)
+  selectedZoneId.value = draftZone.value.id
+  editorMode.value = 'edit'
+  drawing.value = true
   drawDialogVisible.value = true
   if (!streamUrl.value) refreshStream()
 }
@@ -493,7 +487,8 @@ function openZoneEditor(zoneId) {
 function handleDrawDialogClosed() {
   drawing.value = false
   dragging.value = null
-  editDialogVisible.value = false
+  editorMode.value = ''
+  draftZone.value = null
 }
 
 function showZoneAnchors(zone) {
@@ -501,6 +496,7 @@ function showZoneAnchors(zone) {
 }
 
 function startDrag(zoneId, index) {
+  if (draftZone.value?.id !== zoneId) return
   selectedZoneId.value = zoneId
   dragging.value = { zoneId, index }
 }
@@ -508,7 +504,9 @@ function startDrag(zoneId, index) {
 function dragVertex(event) {
   if (!dragging.value) return
   const point = pointerToUnitPoint(event)
-  const zone = zones.value.find((item) => item.id === dragging.value.zoneId)
+  const zone = draftZone.value?.id === dragging.value.zoneId
+    ? draftZone.value
+    : zones.value.find((item) => item.id === dragging.value.zoneId)
   if (!zone) return
   zone.polygon_points[dragging.value.index] = point
 }
@@ -517,11 +515,23 @@ function endDrag() {
   dragging.value = null
 }
 
-function deleteZone(zoneId) {
+async function deleteZone(zoneId) {
+  const target = zones.value.find((zone) => zone.id === zoneId)
+  if (!target) return
+  try {
+    await ElMessageBox.confirm(`确认删除“${target.zone_name || zoneTypeText(target.zone_type)}”？`, '删除区域', { type: 'warning' })
+  } catch {
+    return
+  }
+  const previousZones = cloneZones(zones.value)
   zones.value = zones.value.filter((zone) => zone.id !== zoneId)
   selectedZoneId.value = zones.value[0]?.id || ''
-  if (editDialogVisible.value && !selectedZone.value) editDialogVisible.value = false
   if (!selectedZoneId.value) drawing.value = false
+  try {
+    await saveZones({ includeDraft: false, closeOnSuccess: false })
+  } catch {
+    zones.value = previousZones
+  }
 }
 
 function deletePoint(index) {
@@ -545,7 +555,7 @@ function appendVertex() {
 function applyTypeDefaults(zoneType) {
   if (!selectedZone.value) return
   selectedZone.value.type = zoneType
-  if (!selectedZone.value.zone_name) selectedZone.value.zone_name = zoneTypeLabel(zoneType)
+  if (!selectedZone.value.zone_name) selectedZone.value.zone_name = zoneTypeText(zoneType)
 }
 
 function zonePolygonPoints(zone) {
@@ -641,9 +651,15 @@ function zoneFill(zone) {
   return zone.enabled ? `${zoneColor(zone)}22` : 'rgba(120, 139, 153, 0.12)'
 }
 
-async function saveZones() {
+async function saveZones(options = {}) {
+  return persistZones(options)
+}
+
+async function persistZones(options = {}) {
+  const { includeDraft = true, closeOnSuccess = false } = options
   if (!currentCameraId.value) return false
-  const invalidZone = zones.value.find((zone) => zone.polygon_points.length < 3 || zone.polygon_points.length > 15)
+  const zonesToSave = buildZonesForSave(includeDraft)
+  const invalidZone = zonesToSave.find((zone) => zone.polygon_points.length < 3 || zone.polygon_points.length > 15)
   if (invalidZone) {
     selectedZoneId.value = invalidZone.id
     ElMessage.warning('多边形区域必须包含 3 到 15 个顶点')
@@ -651,7 +667,7 @@ async function saveZones() {
   }
   saving.value = true
   try {
-    const payload = zones.value.map((zone) => ({
+    const payload = zonesToSave.map((zone) => ({
       id: zone.id,
       zone_name: zone.zone_name,
       zone_type: zone.zone_type,
@@ -661,10 +677,67 @@ async function saveZones() {
     const response = await saveCameraZones(currentCameraId.value, payload)
     zones.value = normalizeZones(response.data)
     selectedZoneId.value = zones.value.find((zone) => zone.id === selectedZoneId.value)?.id || zones.value[0]?.id || ''
+    if (includeDraft && draftZone.value) {
+      draftZone.value = null
+      editorMode.value = ''
+      drawing.value = false
+    }
+    if (closeOnSuccess) drawDialogVisible.value = false
     ElMessage.success(response.data.message || '区域配置已保存')
     return true
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '区域配置保存失败')
+    throw error
   } finally {
     saving.value = false
+  }
+}
+
+function buildZonesForSave(includeDraft) {
+  if (!includeDraft || !draftZone.value) return cloneZones(zones.value)
+  const draft = normalizeDraftZone(draftZone.value)
+  if (editorMode.value === 'edit') {
+    const replaced = zones.value.map((zone) => (zone.id === draft.id ? draft : zone))
+    return replaced.some((zone) => zone.id === draft.id) ? replaced : [...replaced, draft]
+  }
+  return [...zones.value, draft]
+}
+
+function normalizeDraftZone(zone) {
+  return {
+    ...zone,
+    name: zone.zone_name,
+    type: zone.zone_type,
+    enabled: zone.enabled !== false,
+    polygon_points: clonePoints(zone.polygon_points),
+  }
+}
+
+function clonePoints(points = []) {
+  return points.map((point) => ({ x: Number(point.x), y: Number(point.y) }))
+}
+
+function cloneZone(zone) {
+  return {
+    ...zone,
+    polygon_points: clonePoints(zone.polygon_points),
+  }
+}
+
+function cloneZones(items) {
+  return items.map(cloneZone)
+}
+
+async function toggleZoneEnabled(zone, enabled) {
+  const previous = zone.enabled !== false
+  zoneEnableLoading.value = { ...zoneEnableLoading.value, [zone.id]: true }
+  zone.enabled = enabled
+  try {
+    await saveZones({ includeDraft: false, closeOnSuccess: false })
+  } catch {
+    zone.enabled = previous
+  } finally {
+    zoneEnableLoading.value = { ...zoneEnableLoading.value, [zone.id]: false }
   }
 }
 
@@ -751,19 +824,25 @@ onMounted(async () => {
   color: #061b23;
   border: none;
   font-weight: 800;
-  background: linear-gradient(110deg, #48d8ff, #51e6be);
+  background: linear-gradient(110deg, rgba(62, 187, 219, 0.88), rgba(67, 205, 169, 0.88));
+  box-shadow: none;
 }
 .config-workspace {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 400px;
+  gap: 14px;
+  align-items: stretch;
 }
 .video-editor,
-.config-panel,
+.zone-side-editor,
 .zone-list-section {
   border: 1px solid rgba(104, 161, 200, 0.18);
   border-radius: 8px;
   background: #0b1d30;
+}
+.video-editor {
+  min-width: 0;
+  overflow: hidden;
 }
 .editor-stage {
   position: relative;
@@ -908,35 +987,19 @@ onMounted(async () => {
   font-size: 16px;
   font-weight: 800;
 }
-.list-heading b {
-  min-height: 26px;
-  display: inline-flex;
-  align-items: center;
-  padding: 0 12px;
-  color: #aee8ff;
-  border: 1px solid rgba(72, 216, 255, 0.22);
-  border-radius: 5px;
-  background: rgba(72, 216, 255, 0.08);
-  font-size: 12px;
-  font-weight: 700;
-}
-.list-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
+.new-zone-action { min-width: 116px; }
 .zone-table {
   width: 100%;
   overflow-x: auto;
-  background: #0a1d30;
+  background: #081b2d;
 }
 .zone-table-head,
 .zone-table-row {
-  min-width: 1190px;
+  min-width: 1120px;
   display: grid;
-  grid-template-columns: 300px 160px 110px 130px minmax(190px, 1fr) 190px;
+  grid-template-columns: minmax(190px, 1fr) 170px minmax(180px, 1fr) 120px minmax(190px, 1fr) 160px;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
   text-align: center;
 }
 .zone-table-head {
@@ -954,73 +1017,35 @@ onMounted(async () => {
   color: #d8e7ff;
   border-top: 1px solid rgba(104, 161, 200, 0.1);
   background: #092034;
-  cursor: pointer;
-  transition: background 0.16s ease, box-shadow 0.16s ease;
+  transition: background 0.16s ease;
 }
-.zone-table-row:hover,
-.zone-table-row.selected {
+.zone-table-row:hover {
   background: #102940;
 }
-.zone-table-row.selected {
-  box-shadow: inset 3px 0 0 #48d8ff;
-}
-
-.zone-table-head span:first-child,
-.zone-table-row strong {
-  text-align: left;
-}
-
 .zone-table-row.disabled { opacity: 0.56; }
 .zone-table-row strong {
   min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
+  display: block;
   gap: 9px;
+  overflow: hidden;
+  color: #f3f8fd;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zone-table-row > span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.zone-table-row strong i {
-  width: 5px;
-  height: 32px;
-  flex: 0 0 auto;
-  border-radius: 3px;
+.zone-table-row :deep(.el-switch__core) {
+  border-color: rgba(120, 153, 176, 0.34);
+  background: rgba(96, 118, 134, 0.38);
 }
-.risk-cell {
-  color: #8ddcf0;
-  font-weight: 900;
-}
-.zone-enable-toggle {
-  min-width: 74px;
-  height: 26px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  border: 1px solid rgba(126, 152, 170, 0.24);
-  border-radius: 5px;
-  color: #b6c7d4;
-  background: rgba(126, 152, 170, 0.08);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-}
-.zone-enable-toggle i {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #7f9bb0;
-}
-.zone-enable-toggle.active {
-  color: #b8f3dc;
-  border-color: rgba(98, 215, 177, 0.24);
-  background: rgba(98, 215, 177, 0.08);
-}
-.zone-enable-toggle.active i {
-  background: #62d7b1;
-  box-shadow: 0 0 8px rgba(98, 215, 177, 0.38);
+.zone-table-row :deep(.el-switch.is-checked .el-switch__core) {
+  border-color: rgba(64, 158, 255, 0.66);
+  background: #409eff;
 }
 .row-actions {
   display: flex;
@@ -1091,38 +1116,45 @@ onMounted(async () => {
   color: rgba(143, 182, 209, 0.35);
   background: #0b2238;
 }
-.config-panel { min-width: 0; padding: 12px; }
-.panel-heading {
+.zone-side-editor {
+  min-width: 0;
   display: flex;
-  justify-content: space-between;
-  margin-bottom: 10px;
-  color: #8fb0c2;
+  flex-direction: column;
+  padding: 14px;
 }
-.panel-heading b { color: #48d8ff; font: 800 18px monospace; }
-.zone-list { display: flex; flex-direction: column; gap: 7px; margin-bottom: 12px; }
-.zone-row {
-  width: 100%;
-  display: grid;
-  grid-template-columns: 4px minmax(0, 1fr) auto;
+.side-editor-title {
+  min-height: 40px;
+  display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 9px;
-  color: #cfe5ee;
-  border: 1px solid rgba(85, 166, 201, 0.12);
-  border-radius: 7px;
-  background: rgba(8, 31, 47, 0.58);
-  cursor: pointer;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(80, 165, 200, 0.14);
 }
-.zone-row.selected { border-color: rgba(72, 216, 255, 0.5); }
-.zone-row.disabled { opacity: 0.5; }
-.zone-row i { width: 4px; height: 30px; border-radius: 2px; }
-.zone-row strong {
-  overflow: hidden;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.side-editor-title strong {
+  color: #e9f7ff;
+  font-size: 18px;
+  font-weight: 900;
 }
-.zone-row span { font: 800 10px monospace; }
+.side-editor-title span {
+  min-width: 68px;
+  height: 28px;
+  display: inline-grid;
+  place-items: center;
+  color: #51e6be;
+  border: 1px solid rgba(81, 230, 190, 0.42);
+  border-radius: 999px;
+  background: rgba(4, 45, 55, 0.68);
+  font-size: 12px;
+  font-weight: 900;
+}
+.zone-form {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  padding-right: 2px;
+}
 .zone-form :deep(.el-form-item__label) { color: #8fb0c2; font-size: 12px; }
 .zone-form .zone-config-select { width: 100%; }
 .ros-panel {
@@ -1171,22 +1203,6 @@ onMounted(async () => {
   background: #51e6be;
   box-shadow: 0 0 12px rgba(81, 230, 190, 0.72);
 }
-.ros-name-field {
-  margin-bottom: 14px;
-  padding: 10px;
-  border: 1px solid rgba(50, 197, 255, 0.28);
-  border-radius: 8px;
-  background: rgba(4, 25, 42, 0.64);
-}
-.field-title {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 8px;
-}
-.field-title strong { color: #51e6be; font-size: 14px; }
-.field-title span { color: #9bbbd0; font-size: 12px; }
 .point-table {
   display: flex;
   flex-direction: column;
@@ -1195,7 +1211,7 @@ onMounted(async () => {
 .point-head,
 .point-row {
   display: grid;
-  grid-template-columns: 78px minmax(0, 1fr) minmax(0, 1fr) 82px;
+  grid-template-columns: 58px minmax(0, 1fr) minmax(0, 1fr) 64px;
   align-items: center;
   gap: 8px;
 }
@@ -1269,23 +1285,11 @@ onMounted(async () => {
   opacity: 0.48;
   cursor: not-allowed;
 }
-.new-zone-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 12px;
-}
-.continue-button {
-  color: #f8fbff;
-  border: none;
-  font-weight: 900;
-  background: #2f67d8;
-}
 .exit-button {
-  color: #fff7ed;
-  border: none;
+  color: #d8e9f7;
+  border-color: rgba(104, 161, 200, 0.28);
   font-weight: 900;
-  background: #f47a16;
+  background: rgba(6, 25, 42, 0.82);
 }
 .panel-empty {
   min-height: 220px;
@@ -1293,6 +1297,13 @@ onMounted(async () => {
   place-items: center;
   color: #668397;
   text-align: center;
+}
+.side-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(80, 165, 200, 0.14);
 }
 :global(.zone-config-select-popper.el-select__popper) {
   border: 1px solid rgba(72, 216, 255, 0.28);
@@ -1316,38 +1327,39 @@ onMounted(async () => {
   color: #50e1d0;
   font-weight: 800;
 }
-:global(.zone-editor-dialog) {
+:global(.zone-draw-dialog) {
   border: 1px solid rgba(72, 216, 255, 0.24);
   border-radius: 8px;
   background: #061a28;
   box-shadow: 0 26px 70px rgba(0, 7, 18, 0.62);
 }
-:global(.zone-editor-dialog .el-dialog__header) {
+:global(.zone-draw-dialog .el-dialog__header) {
   margin: 0;
   padding: 18px 20px 12px;
   border-bottom: 1px solid rgba(80, 165, 200, 0.14);
 }
-:global(.zone-editor-dialog .el-dialog__title) {
+:global(.zone-draw-dialog .el-dialog__title) {
   color: #e9f7ff;
   font-size: 18px;
   font-weight: 900;
 }
-:global(.zone-editor-dialog .el-dialog__headerbtn .el-dialog__close) {
+:global(.zone-draw-dialog .el-dialog__headerbtn .el-dialog__close) {
   color: #8ddcf0;
 }
-:global(.zone-editor-dialog .el-dialog__body) {
-  padding: 16px 20px;
+:global(.zone-draw-dialog .el-dialog__body) {
+  padding: 14px;
   color: #d7edf6;
 }
-:global(.zone-editor-dialog .el-dialog__footer) {
-  padding: 0 20px 18px;
+:global(.zone-draw-dialog .el-dialog__footer) {
+  display: none;
 }
 @media (max-width: 1000px) {
   .config-header,
   .header-actions { align-items: stretch; flex-direction: column; }
   .camera-select { width: 100%; }
+  .config-workspace { grid-template-columns: 1fr; }
   .list-heading,
-  .list-actions { align-items: stretch; flex-direction: column; }
+  .header-actions { align-items: stretch; flex-direction: column; }
   .list-heading { align-items: stretch; }
 }
 </style>

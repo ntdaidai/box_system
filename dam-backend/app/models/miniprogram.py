@@ -30,3 +30,30 @@ class MiniProgramSubscription(Base):
         onupdate=datetime.now,
         comment="更新时间",
     )
+
+
+class MiniProgramStaff(Base):
+    """Mini program disposal staff, separate from the web admin account."""
+
+    __tablename__ = "mini_program_staff"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True, comment="处置人员ID")
+    staff_no = Column(String(64), nullable=False, unique=True, index=True, comment="人员编号")
+    openid = Column(String(128), nullable=True, unique=True, index=True, comment="微信用户OpenID")
+    username = Column(String(128), nullable=True, unique=True, index=True, comment="预留登录账号")
+    password_hash = Column(String(255), nullable=True, comment="预留登录密码哈希")
+    display_name = Column(String(128), nullable=False, comment="人员名称")
+    nickname = Column(String(128), nullable=True, comment="小程序显示名")
+    avatar_url = Column(String(1024), nullable=True, comment="头像地址")
+    group_id = Column(String(64), nullable=False, default="default", index=True, comment="所属组别ID")
+    group_name = Column(String(128), nullable=False, default="默认处置组", index=True, comment="所属组别名称")
+    phone = Column(String(32), nullable=True, comment="联系电话")
+    status = Column(String(32), nullable=False, default="ACTIVE", index=True, comment="状态")
+    last_login_at = Column(DateTime, nullable=True, comment="最近登录时间")
+    create_time = Column(DateTime, default=datetime.now, comment="创建时间")
+    update_time = Column(
+        DateTime,
+        default=datetime.now,
+        onupdate=datetime.now,
+        comment="更新时间",
+    )

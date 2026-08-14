@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.models.analysis_report import AnalysisReportKnowledgeCitation
 from app.models.event_library import EventLibrary
 from app.models.safety_integration import SafetyEventInstance
 
@@ -716,6 +717,7 @@ async def list_documents(
         })
 
     event_by_instance_no = {}
+    knowledge_indexes_by_report_id: dict[int, list[dict]] = {}
     if event_instance_nos:
         rows = db.query(SafetyEventInstance, EventLibrary).outerjoin(
             EventLibrary, EventLibrary.id == SafetyEventInstance.current_event_id
@@ -726,6 +728,46 @@ async def list_documents(
             instance.instance_no: (instance, event)
             for instance, event in rows
         }
+        report_ids = [
+            instance.analysis_report_id
+            for instance, _ in rows
+            if instance.analysis_report_id
+        ]
+        if report_ids:
+            citation_rows = (
+                db.query(AnalysisReportKnowledgeCitation)
+                .filter(AnalysisReportKnowledgeCitation.report_id.in_(report_ids))
+                .order_by(
+                    AnalysisReportKnowledgeCitation.report_id.asc(),
+                    AnalysisReportKnowledgeCitation.document_title.asc(),
+                    AnalysisReportKnowledgeCitation.clause_id.asc(),
+                    AnalysisReportKnowledgeCitation.id.asc(),
+                )
+                .all()
+            )
+            seen_keys: set[tuple] = set()
+            for citation in citation_rows:
+                key = (
+                    citation.report_id,
+                    citation.document_id,
+                    citation.document_title,
+                    citation.section_path,
+                    citation.clause_id,
+                    citation.evidence_id,
+                )
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                knowledge_indexes_by_report_id.setdefault(citation.report_id, []).append({
+                    "evidence_id": citation.evidence_id,
+                    "chunk_id": citation.chunk_id,
+                    "document_id": citation.document_id,
+                    "document_title": citation.document_title,
+                    "section_path": citation.section_path,
+                    "clause_id": citation.clause_id,
+                    "support_type": citation.support_type,
+                    "confidence": citation.confidence,
+                })
 
     for doc in docs:
         event_instance_no = event_instance_no_from_document_id(doc["document_id"])
@@ -744,6 +786,7 @@ async def list_documents(
             doc["event_summary"] = event.summary
             doc["risk_level"] = event.risk_level
             doc["risk_label"] = RISK_LABELS.get(event.risk_level, event.risk_level)
+            doc["knowledge_indexes"] = knowledge_indexes_by_report_id.get(event.analysis_report_id or 0, [])
             doc["title"] = normalize_event_report_title(
                 doc["title"],
                 f"dam_event_report_{display_instance_no}",

@@ -51,6 +51,17 @@
           @error="handleSnapshotError"
         />
         <view v-else class="video-empty">{{ videoText }}</view>
+        <view v-if="showAssistBox && selectedCamera.id" class="assist-overlay">
+          <view
+            v-for="zone in assistZones"
+            :key="zone.id || zone.zone_name"
+            class="assist-zone"
+            :style="assistZoneStyle(zone)"
+          >
+            <text>{{ zone.zone_name || zoneTypeLabel(zone.zone_type) }}</text>
+          </view>
+          <view v-if="!assistZones.length" class="assist-empty">暂无辅助区域</view>
+        </view>
       </view>
 
       <view class="video-actions">
@@ -60,7 +71,7 @@
           :disabled="videoLoading || !selectedCamera.id"
           @tap="refreshCameraSnapshot(true)"
         >
-          刷新画面
+          刷新页面
         </button>
         <button
           class="ghost-btn action-btn"
@@ -68,6 +79,13 @@
           @tap="openMapNavigation"
         >
           点位导航
+        </button>
+        <button
+          class="ghost-btn action-btn"
+          :disabled="!selectedCamera.id"
+          @tap="toggleAssistBox"
+        >
+          {{ showAssistBox ? '隐藏辅助框' : '显示辅助框' }}
         </button>
       </view>
 
@@ -77,7 +95,8 @@
         :disabled="cameraBroadcasting || !selectedCamera.id"
         @tap="handleCameraBroadcast"
       >
-        {{ recordingBroadcast ? '结束喊话' : '一键喊话' }}
+        <text class="broadcast-icon">▶</text>
+        <text>{{ recordingBroadcast ? '结束喊话' : '一键喊话' }}</text>
       </button>
       <view class="broadcast-note">
         {{ broadcastDeviceText }}
@@ -125,12 +144,15 @@ export default {
       streamUrl: '',
       snapshotUrl: '',
       liveFallback: false,
+      liveConnected: false,
       livePlayerKey: 0,
       videoText: '正在加载摄像头',
       cameraBroadcasting: false,
       recordingBroadcast: false,
       broadcastRecorder: null,
-      liveTimer: null
+      liveTimer: null,
+      liveConnectTimer: null,
+      showAssistBox: false
     }
   },
 
@@ -150,8 +172,12 @@ export default {
 
     broadcastDeviceText() {
       const count = Number(this.selectedCamera.broadcast_device_count || 0)
-      if (count > 0) return `已绑定 ${count} 个喊话设备`
-      return '当前点位未检测到绑定喊话设备'
+      if (count > 0) return `可用 ${count} 个喊话设备`
+      return '暂无可用喊话设备'
+    },
+
+    assistZones() {
+      return (this.selectedCamera.detection_zones || []).filter((zone) => zone && zone.enabled !== false)
     }
   },
 
@@ -167,11 +193,13 @@ export default {
 
   onHide() {
     this.stopLiveRefresh()
+    this.stopLiveConnectTimer()
     this.streamUrl = ''
   },
 
   onUnload() {
     this.stopLiveRefresh()
+    this.stopLiveConnectTimer()
     if (this.recordingBroadcast) this.broadcastRecorder?.stop()
   },
 
@@ -225,6 +253,7 @@ export default {
       this.streamUrl = ''
       this.snapshotUrl = ''
       this.liveFallback = false
+      this.liveConnected = false
       this.videoText = '正在切换点位'
       this.openSelectedCamera(true)
     },
@@ -249,12 +278,15 @@ export default {
           this.streamUrl = data.stream_url || ''
           this.snapshotUrl = `${absoluteUrl(data.snapshot_url)}?t=${Date.now()}`
           this.liveFallback = !this.streamUrl
+          this.liveConnected = false
           this.livePlayerKey += 1
           this.videoText = this.streamUrl ? '正在连接实时视频流' : '实时快照模式'
+          this.startLiveConnectTimer()
         })
         .catch((error) => {
           this.streamUrl = ''
           this.liveFallback = true
+          this.liveConnected = false
           this.snapshotUrl = ''
           this.videoText = error.message || '当前摄像头暂未返回实时画面'
           if (showToast) {
@@ -274,6 +306,8 @@ export default {
     handleLiveStateChange(event) {
       const code = Number(event?.detail?.code || 0)
       if (code === 2004) {
+        this.liveConnected = true
+        this.stopLiveConnectTimer()
         this.liveFallback = false
         this.videoText = '实时视频已连接'
       } else if (code === 2103) {
@@ -288,12 +322,39 @@ export default {
     },
 
     enableSnapshotFallback(message) {
+      this.stopLiveConnectTimer()
       this.liveFallback = true
+      this.liveConnected = false
       this.videoText = message
       if (this.selectedCamera.id) {
         this.snapshotUrl = `${absoluteUrl(`/api/miniprogram/v1/cameras/${encodeURIComponent(this.selectedCamera.id)}/snapshot.jpg`)}?t=${Date.now()}`
       }
       this.startLiveRefresh()
+    },
+
+    startLiveConnectTimer() {
+      this.stopLiveConnectTimer()
+      if (!this.streamUrl || this.liveFallback) return
+      this.liveConnectTimer = setTimeout(() => {
+        if (!this.liveConnected && this.streamUrl) {
+          this.enableSnapshotFallback('实时视频未连通，已切换快照预览')
+        }
+      }, 5000)
+    },
+
+    stopLiveConnectTimer() {
+      if (this.liveConnectTimer) {
+        clearTimeout(this.liveConnectTimer)
+        this.liveConnectTimer = null
+      }
+    },
+
+    toggleAssistBox() {
+      this.showAssistBox = !this.showAssistBox
+      uni.showToast({
+        title: this.showAssistBox ? '辅助框已显示' : '辅助框已隐藏',
+        icon: 'none'
+      })
     },
 
     startLiveRefresh() {
@@ -310,6 +371,66 @@ export default {
         clearInterval(this.liveTimer)
         this.liveTimer = null
       }
+    },
+
+    zoneTypeLabel(type) {
+      return {
+        PERSON_LOW: '低风险区',
+        PERSON_MEDIUM: '中风险区',
+        PERSON_HIGH: '高风险区',
+        FISHING: '垂钓区'
+      }[type] || '辅助区域'
+    },
+
+    zoneColor(type) {
+      return {
+        PERSON_LOW: '#38d9a9',
+        PERSON_MEDIUM: '#ffd166',
+        PERSON_HIGH: '#ff5c75',
+        FISHING: '#53a8ff'
+      }[type] || '#38d9a9'
+    },
+
+    zoneFill(type) {
+      return {
+        PERSON_LOW: 'rgba(56, 217, 169, 0.12)',
+        PERSON_MEDIUM: 'rgba(255, 209, 102, 0.12)',
+        PERSON_HIGH: 'rgba(255, 92, 117, 0.14)',
+        FISHING: 'rgba(83, 168, 255, 0.12)'
+      }[type] || 'rgba(56, 217, 169, 0.12)'
+    },
+
+    assistZoneStyle(zone) {
+      const points = Array.isArray(zone.polygon_points) ? zone.polygon_points : []
+      const normalized = points
+        .map((point) => {
+          if (Array.isArray(point)) return { x: Number(point[0]), y: Number(point[1]) }
+          return { x: Number(point?.x), y: Number(point?.y) }
+        })
+        .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+      const fallback = [
+        { x: 0.18, y: 0.18 },
+        { x: 0.82, y: 0.18 },
+        { x: 0.82, y: 0.66 },
+        { x: 0.18, y: 0.66 }
+      ]
+      const usable = normalized.length >= 3 ? normalized : fallback
+      const xs = usable.map((point) => Math.max(0, Math.min(1, point.x)))
+      const ys = usable.map((point) => Math.max(0, Math.min(1, point.y)))
+      const minX = Math.min(...xs)
+      const maxX = Math.max(...xs)
+      const minY = Math.min(...ys)
+      const maxY = Math.max(...ys)
+      const color = this.zoneColor(zone.zone_type)
+      return [
+        `left:${minX * 100}%`,
+        `top:${minY * 100}%`,
+        `width:${Math.max(0.08, maxX - minX) * 100}%`,
+        `height:${Math.max(0.08, maxY - minY) * 100}%`,
+        `border-color:${color}`,
+        `color:${color}`,
+        `background-color:${this.zoneFill(zone.zone_type)}`
+      ].join(';')
     },
 
     handleCameraBroadcast() {
@@ -443,8 +564,9 @@ export default {
 }
 
 .video-box {
+  position: relative;
   width: 100%;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: 16 / 11;
   margin-top: 18rpx;
   border-radius: 8rpx;
   overflow: hidden;
@@ -472,7 +594,7 @@ export default {
 
 .video-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 12rpx;
   margin-top: 18rpx;
 }
@@ -480,14 +602,95 @@ export default {
 .action-btn {
   height: 74rpx;
   line-height: 74rpx;
-  font-size: 27rpx;
+  font-size: 25rpx;
 }
 
 .broadcast-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10rpx;
   height: 84rpx;
   line-height: 84rpx;
   margin-top: 16rpx;
   font-size: 30rpx;
+}
+
+.broadcast-icon {
+  width: 38rpx;
+  height: 38rpx;
+  line-height: 38rpx;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+  font-size: 22rpx;
+  text-align: center;
+}
+
+.assist-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.assist-zone {
+  position: absolute;
+  min-width: 88rpx;
+  min-height: 62rpx;
+  border: 4rpx solid #31d6a0;
+  border-radius: 6rpx;
+  box-sizing: border-box;
+  box-shadow: 0 0 18rpx rgba(49, 214, 160, 0.35);
+}
+
+.assist-zone::before,
+.assist-zone::after {
+  content: '';
+  position: absolute;
+  width: 18rpx;
+  height: 18rpx;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 16rpx currentColor;
+}
+
+.assist-zone::before {
+  left: -11rpx;
+  top: -11rpx;
+}
+
+.assist-zone::after {
+  right: -11rpx;
+  bottom: -11rpx;
+}
+
+.assist-zone text {
+  position: absolute;
+  left: 10rpx;
+  top: 8rpx;
+  max-width: calc(100% - 20rpx);
+  padding: 4rpx 8rpx;
+  border-radius: 4rpx;
+  background: rgba(8, 24, 31, 0.78);
+  color: currentColor;
+  font-size: 20rpx;
+  line-height: 28rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assist-empty {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 10rpx 16rpx;
+  border-radius: 6rpx;
+  background: rgba(8, 24, 31, 0.72);
+  color: #d8e5e8;
+  font-size: 22rpx;
 }
 
 .broadcast-note {

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import re
 from typing import Any
 
@@ -18,9 +19,14 @@ from app.core.config import settings
 
 
 VECTOR_SIZE = 384
+_embedding_model = None
+_embedding_model_failed = False
 
 
 def embed_text(text: str) -> list[float]:
+    semantic = _semantic_embed_text(text)
+    if semantic:
+        return semantic
     vector = [0.0] * VECTOR_SIZE
     tokens = _tokens(text)
     if not tokens:
@@ -34,6 +40,44 @@ def embed_text(text: str) -> list[float]:
     if norm <= 0:
         return vector
     return [value / norm for value in vector]
+
+
+def _semantic_embed_text(text: str) -> list[float]:
+    """Use an optional local Chinese embedding model, folded to VECTOR_SIZE.
+
+    Set KNOWLEDGE_EMBEDDING_MODEL to a local sentence-transformers/BGE/text2vec
+    model path or model name. The fallback hash embedding keeps edge deployments
+    working when the model or dependency is absent.
+    """
+    global _embedding_model, _embedding_model_failed
+    model_name = os.getenv("KNOWLEDGE_EMBEDDING_MODEL", "").strip()
+    if not model_name or _embedding_model_failed:
+        return []
+    try:
+        if _embedding_model is None:
+            from sentence_transformers import SentenceTransformer
+
+            _embedding_model = SentenceTransformer(model_name)
+            logger.info(f"知识库启用语义向量模型: {model_name}")
+        raw = _embedding_model.encode([text], normalize_embeddings=True)[0]
+        values = [float(value) for value in raw]
+        if not values:
+            return []
+        if len(values) != VECTOR_SIZE:
+            values = _fold_vector(values, VECTOR_SIZE)
+        norm = math.sqrt(sum(value * value for value in values))
+        return [value / norm for value in values] if norm > 0 else values
+    except Exception as exc:
+        logger.warning(f"语义向量模型不可用，知识库回退到本地 hash embedding: {exc}")
+        _embedding_model_failed = True
+        return []
+
+
+def _fold_vector(values: list[float], size: int) -> list[float]:
+    folded = [0.0] * size
+    for index, value in enumerate(values):
+        folded[index % size] += value
+    return folded
 
 
 def _tokens(text: str) -> list[str]:

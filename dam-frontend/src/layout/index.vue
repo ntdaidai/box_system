@@ -9,7 +9,7 @@
   >
     <!-- 顶栏 -->
     <header class="headBox row">
-      <div class="logo fl">库坝应急巡查智能感知系统</div>
+      <div class="logo fl">水利工程多源感知与空地协同处置平台</div>
       <div class="flexBox fr">
         <ul class="menu flexBox">
           <li class="flexBox"
@@ -152,7 +152,7 @@ const menuMap = {
     },
   ],
   '/system': [
-    { name: '数据源管理', path: '/system/devices', icon: Setting },
+    { name: '感知源管理', path: '/system/devices', icon: Setting },
     {
       name: '规则管理',
       icon: DataAnalysis,
@@ -255,8 +255,20 @@ const handleNavClick = (item) => {
 
 .siderBox :deep(.el-menu > .el-menu-item),
 .siderBox :deep(.el-menu > .el-sub-menu > .el-sub-menu__title) {
+  height: 58px !important;
+  line-height: 58px !important;
+  margin: 0 !important;
   padding-left: 22px !important;
   padding-right: 22px !important;
+}
+
+.siderBox :deep(.el-menu > .el-menu-item),
+.siderBox :deep(.el-menu > .el-sub-menu) {
+  margin-bottom: 12px !important;
+}
+
+.siderBox :deep(.el-sub-menu .el-menu) {
+  padding-top: 8px;
 }
 
 .siderBox :deep(.el-menu > .el-menu-item > .el-icon),
@@ -271,12 +283,12 @@ const handleNavClick = (item) => {
 }
 
 .siderBox :deep(.el-sub-menu .el-menu-item) {
-  height: 48px !important;
-  line-height: 48px !important;
+  height: 52px !important;
+  line-height: 52px !important;
   padding-left: 70px !important;
   font-size: 16px;
   font-weight: 500;
-  margin: 0 0 6px;
+  margin: 0 0 8px !important;
   background: transparent !important;
 }
 

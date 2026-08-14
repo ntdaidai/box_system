@@ -78,12 +78,12 @@
           :http-request="uploadKnowledge"
           accept=".txt,.md,.pdf,.docx,.xlsx,.xls,.csv,.json,.log"
         >
-          <el-button class="batch-button" :loading="uploading">
+          <el-button class="upload-button" :loading="uploading">
             <el-icon><Upload /></el-icon>
             导入知识
           </el-button>
         </el-upload>
-        <el-button class="batch-button" :loading="loadingDocuments" @click="loadAll">
+        <el-button class="refresh-button" :loading="loadingDocuments" @click="loadAll">
           <el-icon><Refresh /></el-icon>
           刷新
         </el-button>
@@ -94,7 +94,7 @@
       <div v-if="filteredDocuments.length" class="document-list">
         <div class="document-header">
           <div class="row-index">序号</div>
-          <div class="row-name">知识文档 / 文件名</div>
+          <div class="row-name">文件名</div>
           <div class="row-type">类型</div>
           <div class="row-size">大小</div>
           <div class="row-date">更新时间</div>
@@ -114,7 +114,6 @@
             </el-icon>
             <span class="doc-title-stack" :title="doc.title">
               <strong class="doc-name">{{ doc.title }}</strong>
-              <small>{{ doc.filename }}</small>
             </span>
           </div>
           <div class="row-type">
@@ -575,12 +574,13 @@ function formatFileSize(value) {
 .base-select { width: 240px; }
 .type-select,
 .sort-select { width: 150px; }
-.search-field { flex: 1 1 260px; min-width: 260px; }
+.search-field { flex: 1 1 420px; min-width: 260px; }
 .search-input { width: 100%; }
 
 .filter-section :deep(.el-select),
 .filter-section :deep(.el-input) {
   height: 44px;
+  border: 0;
   background: transparent;
 }
 
@@ -592,19 +592,55 @@ function formatFileSize(value) {
   box-shadow: inset 0 0 0 1px rgba(60, 150, 214, .46) !important;
 }
 
+.filter-section :deep(.el-input__wrapper:hover),
+.filter-section :deep(.el-select__wrapper:hover),
+.filter-section :deep(.el-input__wrapper.is-focus),
+.filter-section :deep(.el-select__wrapper.is-focused),
+.filter-section :deep(.el-select__wrapper.is-focus),
+.filter-section :deep(.el-input__wrapper.is-focused) {
+  box-shadow: inset 0 0 0 1px rgba(87, 190, 255, .82), 0 0 0 2px rgba(72, 216, 255, .08) !important;
+}
+
 .filter-section :deep(.el-input__inner),
 .filter-section :deep(.el-select__selected-item),
-.filter-section :deep(.el-select__placeholder) {
+.filter-section :deep(.el-select__placeholder),
+.filter-section :deep(.el-range-input) {
   color: #d9e8f8;
+}
+
+.filter-section :deep(.el-input__inner::placeholder),
+.filter-section :deep(.el-range-input::placeholder) {
+  color: #7898ad;
+}
+
+.filter-section :deep(.el-input__prefix),
+.filter-section :deep(.el-input__suffix),
+.filter-section :deep(.el-select__caret) {
+  color: #7898ad;
 }
 
 .filter-actions {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 12px;
+  white-space: nowrap;
 }
 
-.batch-button {
+.upload-button {
+  height: 44px;
+  border-color: rgba(82, 181, 244, .72);
+  color: #fff;
+  background: #3d8ed8;
+}
+
+.upload-button:hover,
+.upload-button:focus {
+  border-color: #8cd5ff;
+  background: #4aa0ed;
+}
+
+.refresh-button {
   height: 44px;
   border-color: rgba(72, 216, 255, .32);
   color: #c8f0ff;
@@ -620,7 +656,21 @@ function formatFileSize(value) {
 }
 
 .document-table-panel.is-empty {
-  min-height: 360px;
+  min-height: 300px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.document-table-panel :deep(.el-loading-mask) {
+  background: rgba(8, 20, 38, 0.72);
+}
+
+.document-table-panel :deep(.el-loading-spinner .path) {
+  stroke: var(--accent-color);
+}
+
+.document-table-panel :deep(.el-loading-spinner .el-loading-text) {
+  color: var(--text-secondary);
 }
 
 .document-header,
@@ -634,10 +684,30 @@ function formatFileSize(value) {
 .document-header {
   min-height: 50px;
   padding: 0 20px;
-  color: #f3f8fd;
+  color: #9fb4c5;
   background: rgba(30, 58, 95, .58);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
+}
+
+.document-header .row-name,
+.document-header .row-type,
+.document-header .row-size,
+.document-header .row-date,
+.document-header .row-status,
+.document-header .row-index,
+.document-header .row-actions {
+  cursor: default;
+  color: #9fb4c5;
+}
+
+.document-header .row-name {
+  justify-content: center;
+  text-align: center;
+}
+
+.document-header .row-actions {
+  justify-content: center;
 }
 
 .document-row {
@@ -651,6 +721,16 @@ function formatFileSize(value) {
 
 .document-row:hover {
   background: rgba(30, 74, 112, .46);
+}
+
+.row-index,
+.row-type,
+.row-size,
+.row-date,
+.row-status {
+  display: flex;
+  justify-content: center;
+  text-align: center;
 }
 
 .row-index,
@@ -670,6 +750,7 @@ function formatFileSize(value) {
   display: flex;
   min-width: 0;
   align-items: center;
+  justify-content: center;
   gap: 12px;
   cursor: pointer;
 }
@@ -688,25 +769,17 @@ function formatFileSize(value) {
 .doc-title-stack {
   display: grid;
   min-width: 0;
+  max-width: 100%;
   gap: 4px;
 }
 
-.doc-name,
-.doc-title-stack small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .doc-name {
+  overflow: hidden;
   color: #f3f8fd;
   font-size: 15px;
   font-weight: 700;
-}
-
-.doc-title-stack small {
-  color: #8fb0c7;
-  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .row-name:hover .doc-name {
@@ -766,7 +839,7 @@ function formatFileSize(value) {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 40px 20px;
+  padding: 80px 20px;
   color: #68849a;
   text-align: center;
 }
@@ -791,6 +864,37 @@ function formatFileSize(value) {
   display: flex;
   justify-content: center;
   padding: 18px;
+  background: transparent;
+  border: 0;
+}
+
+.pagination-bar :deep(.el-pagination.is-background .btn-prev),
+.pagination-bar :deep(.el-pagination.is-background .btn-next),
+.pagination-bar :deep(.el-pagination.is-background .el-pager li) {
+  width: 48px;
+  height: 42px;
+  min-width: 48px;
+  margin: 0;
+  border: 1px solid #214766;
+  border-radius: 5px;
+  color: #7893aa;
+  background: #0a1a2c;
+}
+
+.pagination-bar :deep(.el-pager) {
+  display: flex;
+  gap: 10px;
+}
+
+.pagination-bar :deep(.el-pagination.is-background .el-pager li.is-active) {
+  color: #fff;
+  background: #3d8ed8;
+  border-color: #61b5ff;
+}
+
+.pagination-bar :deep(.el-pagination.is-background .btn-prev:disabled),
+.pagination-bar :deep(.el-pagination.is-background .btn-next:disabled) {
+  opacity: 0.45;
 }
 
 .preview-shell,
@@ -885,11 +989,13 @@ function formatFileSize(value) {
   }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1200px) {
   .stats-cards {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
 
+@media (max-width: 900px) {
   .document-header {
     display: none;
   }

@@ -2,8 +2,8 @@
   <view class="page detail-page">
     <view v-if="event" class="summary">
       <view class="summary-top">
+        <view class="status-text">{{ event.business_status_label || event.mini_status_label }}</view>
         <view class="risk-pill" :class="riskClassName">{{ event.risk_level_label }}</view>
-        <view class="status-text">{{ event.mini_status_label }}</view>
       </view>
       <view class="event-title">{{ event.event_type }}</view>
       <view class="info-grid">
@@ -55,6 +55,34 @@
     <view v-if="event" class="section">
       <view class="section-title">当前系统动作</view>
       <view class="action-panel">{{ event.system_action_text }}</view>
+    </view>
+
+    <view class="section">
+      <view class="section-title">现场证据</view>
+      <view v-if="evidence.length === 0" class="timeline-empty">暂无现场证据</view>
+      <scroll-view v-else class="evidence-row" scroll-x>
+        <view
+          v-for="item in evidence"
+          :key="item.id"
+          class="evidence-item"
+          @tap="previewEvidence(item)"
+        >
+          <image v-if="isImageEvidence(item)" :src="absoluteEvidenceUrl(item.url)" mode="aspectFill" />
+          <view v-else class="evidence-file">{{ item.evidence_type }}</view>
+          <text>{{ item.description || '现场证据' }}</text>
+        </view>
+      </scroll-view>
+    </view>
+
+    <view class="section">
+      <view class="section-title">联动执行线路</view>
+      <view v-if="linkageLines.length === 0" class="timeline-empty">暂无联动线路</view>
+      <view v-else class="linkage-list">
+        <view v-for="item in linkageLines" :key="item.id" class="linkage-item">
+          <view>{{ item.type_label }}</view>
+          <text>{{ item.target }}{{ item.route ? ' / ' + item.route : '' }}</text>
+        </view>
+      </view>
     </view>
 
     <button
@@ -137,7 +165,10 @@ export default {
     return {
       eventId: '',
       event: null,
+      staff: null,
       timeline: [],
+      evidence: [],
+      linkageLines: [],
       riskClassName: '',
       startTime: '--',
       durationText: '--',
@@ -163,6 +194,7 @@ export default {
 
   onLoad(options) {
     this.eventId = options?.event_id || ''
+    this.staff = readCache('mini-staff', null)
     this.restoreCachedDetail()
     this.loadDetail()
     this.loadVideo()
@@ -197,7 +229,11 @@ export default {
         timeText: item.timeText || formatTime(item.created_at)
       }))
       this.event = event
+      this.staff = data.staff || this.staff
+      if (this.staff) writeCache('mini-staff', this.staff)
       this.timeline = timeline
+      this.evidence = data.evidence || []
+      this.linkageLines = data.linkage_lines || []
       this.riskClassName = riskClass(event.risk_level)
       this.startTime = formatDateTime(event.started_at)
       this.durationText = formatDuration(event.duration_seconds)
@@ -235,6 +271,22 @@ export default {
 
     refreshSnapshot() {
       this.loadVideo()
+    },
+
+    absoluteEvidenceUrl(url) {
+      return absoluteUrl(url || '')
+    },
+
+    isImageEvidence(item) {
+      return String(item.evidence_type || '').toUpperCase() === 'IMAGE'
+    },
+
+    previewEvidence(item) {
+      if (!this.isImageEvidence(item) || !item.url) return
+      uni.previewImage({
+        urls: this.evidence.filter(this.isImageEvidence).map((row) => this.absoluteEvidenceUrl(row.url)),
+        current: this.absoluteEvidenceUrl(item.url)
+      })
     },
 
     handleLiveStateChange(event) {
@@ -322,10 +374,11 @@ export default {
       if (!this.eventId || this.startingManual) return
       this.startingManual = true
       request({
-        url: `/events/${encodeURIComponent(this.eventId)}/start-manual`,
+        url: `/events/${encodeURIComponent(this.eventId)}/accept`,
         method: 'POST',
         data: {
-          operator: '微信小程序工作人员'
+          staff_id: this.staff?.staff_id,
+          remark: '小程序接受任务'
         }
       })
         .then(() => {
@@ -413,7 +466,9 @@ export default {
 .status-text {
   color: #263940;
   font-weight: 600;
-  text-align: right;
+  text-align: left;
+  min-width: 0;
+  flex: 1;
 }
 
 .event-title {
@@ -517,6 +572,69 @@ export default {
 
 .broadcast-btn {
   margin-bottom: 18rpx;
+}
+
+.evidence-row {
+  width: 100%;
+  white-space: nowrap;
+}
+
+.evidence-item {
+  display: inline-block;
+  width: 220rpx;
+  margin-right: 14rpx;
+  vertical-align: top;
+}
+
+.evidence-item image,
+.evidence-file {
+  width: 220rpx;
+  height: 150rpx;
+  border-radius: 8rpx;
+  background: #eef4f5;
+}
+
+.evidence-file {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #52656c;
+  font-weight: 700;
+}
+
+.evidence-item text {
+  display: block;
+  margin-top: 8rpx;
+  color: #52656c;
+  font-size: 23rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.linkage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12rpx;
+}
+
+.linkage-item {
+  padding: 16rpx;
+  border-radius: 8rpx;
+  background: #f2f6f7;
+}
+
+.linkage-item view {
+  color: #172026;
+  font-weight: 700;
+  margin-bottom: 6rpx;
+}
+
+.linkage-item text {
+  color: #52656c;
+  font-size: 24rpx;
+  line-height: 34rpx;
+  word-break: break-all;
 }
 
 .manual-panel.high {

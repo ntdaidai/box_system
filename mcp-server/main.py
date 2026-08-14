@@ -49,6 +49,9 @@ async def search_knowledge(
     query: str,
     base_ids: Optional[list[int]] = None,
     category: str = "",
+    source_type: str = "",
+    event_type: str = "",
+    risk_level: str = "",
     top_k: int = 8,
 ) -> dict[str, Any]:
     """Search dam inspection knowledge and return source-grounded snippets."""
@@ -58,6 +61,30 @@ async def search_knowledge(
             "query": query,
             "base_ids": base_ids or [],
             "category": category,
+            "source_type": source_type,
+            "event_type": event_type,
+            "risk_level": risk_level,
+            "top_k": top_k,
+        },
+    )
+
+
+async def get_knowledge_chunk(chunk_id: int) -> dict[str, Any]:
+    """Return a complete source citation for one knowledge chunk."""
+    return await _get(f"/chunks/{chunk_id}")
+
+
+async def trace_report_claim(
+    claim: str,
+    candidate_chunk_ids: Optional[list[int]] = None,
+    top_k: int = 5,
+) -> dict[str, Any]:
+    """Trace a report sentence back to the most relevant knowledge chunks."""
+    return await _post(
+        "/mcp/trace_report_claim",
+        {
+            "claim": claim,
+            "candidate_chunk_ids": candidate_chunk_ids or [],
             "top_k": top_k,
         },
     )
@@ -85,9 +112,40 @@ TOOLS = [
                     "description": "可选知识库ID列表",
                 },
                 "category": {"type": "string", "description": "可选分类过滤"},
+                "source_type": {"type": "string", "description": "可选来源类型过滤，如 natural_disaster/person_safety/risk_rule/device_linkage/emergency_response"},
+                "event_type": {"type": "string", "description": "可选事件类型过滤，如 flood/landslide/illegal_fishing"},
+                "risk_level": {"type": "string", "description": "可选风险等级过滤，如 low/medium/high/critical"},
                 "top_k": {"type": "integer", "minimum": 1, "maximum": 20, "default": 8},
             },
             "required": ["query"],
+        },
+    ),
+    types.Tool(
+        name="get_knowledge_chunk",
+        description="根据 chunk_id 获取知识片段的完整来源、条款、章节、原文和文档链接。",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "chunk_id": {"type": "integer", "description": "知识片段ID"},
+            },
+            "required": ["chunk_id"],
+        },
+    ),
+    types.Tool(
+        name="trace_report_claim",
+        description="把报告中的一句话回溯到最可能支撑它的知识库 Word 片段。",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "claim": {"type": "string", "description": "报告中的一句话或短段落"},
+                "candidate_chunk_ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "可选候选 chunk_id 列表",
+                },
+                "top_k": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5},
+            },
+            "required": ["claim"],
         },
     ),
 ]
@@ -106,7 +164,18 @@ async def handle_call_tool(_ctx, params: types.CallToolRequestParams) -> types.C
             query=str(args.get("query") or ""),
             base_ids=args.get("base_ids") or None,
             category=str(args.get("category") or ""),
+            source_type=str(args.get("source_type") or ""),
+            event_type=str(args.get("event_type") or ""),
+            risk_level=str(args.get("risk_level") or ""),
             top_k=int(args.get("top_k") or 8),
+        )
+    elif params.name == "get_knowledge_chunk":
+        result = await get_knowledge_chunk(chunk_id=int(args.get("chunk_id") or 0))
+    elif params.name == "trace_report_claim":
+        result = await trace_report_claim(
+            claim=str(args.get("claim") or ""),
+            candidate_chunk_ids=args.get("candidate_chunk_ids") or None,
+            top_k=int(args.get("top_k") or 5),
         )
     else:
         return types.CallToolResult(

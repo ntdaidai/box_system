@@ -103,7 +103,7 @@ class Settings:
     ).rstrip("/")
     DAM_MODEL_LIBRARY_TIMEOUT: float = float(_get_env("DAM_MODEL_LIBRARY_TIMEOUT", "300"))
     DAM_MODEL_LIBRARY_WORKFLOW_TIMEOUT: float = float(
-        _get_env("DAM_MODEL_LIBRARY_WORKFLOW_TIMEOUT", "120")
+        _get_env("DAM_MODEL_LIBRARY_WORKFLOW_TIMEOUT", "300")
     )
     DAM_MODEL_LIBRARY_WORKFLOW_EXECUTE_ENABLED: bool = (
         _get_env("DAM_MODEL_LIBRARY_WORKFLOW_EXECUTE_ENABLED", "true").lower() == "true"

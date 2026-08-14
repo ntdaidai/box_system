@@ -39,7 +39,7 @@ MAX_TOKENS = int(os.getenv("MAX_TOKENS", "2048"))
 WORKFLOW_MAX_TOKENS = int(os.getenv("WORKFLOW_MAX_TOKENS", "2048"))
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.15"))
 TIMEOUT = int(os.getenv("TIMEOUT", "240"))
-UPLOAD_MEDIA_TO_CLOUD = os.getenv("UPLOAD_MEDIA_TO_CLOUD", "true").lower() == "true"
+UPLOAD_MEDIA_TO_CLOUD = os.getenv("UPLOAD_MEDIA_TO_CLOUD", "false").lower() == "true"
 STRICT_MEDIA_UPLOAD = os.getenv("STRICT_MEDIA_UPLOAD", "false").lower() == "true"
 
 EDGE_MINIO_ENDPOINT = os.getenv("EDGE_MINIO_ENDPOINT", os.getenv("MINIO_ENDPOINT", "localhost:9000"))
@@ -72,6 +72,7 @@ CLOUD_MINIO_SECRET_KEY = os.getenv("CLOUD_MINIO_SECRET_KEY", os.getenv("A100_MIN
 CLOUD_MINIO_SECURE = os.getenv("CLOUD_MINIO_SECURE", os.getenv("A100_MINIO_SECURE", "false")).lower() == "true"
 CLOUD_MINIO_BUCKET = os.getenv("CLOUD_MINIO_BUCKET", os.getenv("A100_MINIO_BUCKET", "cloud-tasks"))
 CLOUD_MEDIA_PREFIX = os.getenv("CLOUD_MEDIA_PREFIX", "workflow-media")
+CLOUD_MINIO_UPLOAD_TIMEOUT = float(os.getenv("CLOUD_MINIO_UPLOAD_TIMEOUT", "3"))
 DEFAULT_TEMPLATE_ID = os.getenv("DEFAULT_TEMPLATE_ID", "dam_patrol_daily_report")
 KNOWLEDGE_RETRIEVAL_ENABLED = os.getenv("KNOWLEDGE_RETRIEVAL_ENABLED", "true").lower() == "true"
 KNOWLEDGE_API_BASE = os.getenv("KNOWLEDGE_API_BASE", "http://localhost:8090/api/v1/knowledge").rstrip("/")
@@ -175,7 +176,7 @@ class WorkflowInferRequest(BaseModel):
     system_prompt_source: Optional[str] = Field(None, description="角色 system prompt 来源")
     minio_bucket: Optional[str] = Field(None, description="未携带 bucket 时使用的边缘 MinIO 默认桶")
     upload_media_to_cloud: bool = Field(
-        UPLOAD_MEDIA_TO_CLOUD,
+        False,
         description="是否把边缘侧媒体上传到云端 MinIO，供后续 35B 读取",
     )
     strict_media_upload: bool = Field(
@@ -827,11 +828,32 @@ def collect_media_refs(request: WorkflowInferRequest) -> List[Dict[str, Any]]:
     return deduped
 
 
-def get_minio_client(endpoint: str, access_key: str, secret_key: str, secure: bool):
+def get_minio_client(
+    endpoint: str,
+    access_key: str,
+    secret_key: str,
+    secure: bool,
+    *,
+    timeout: Optional[float] = None,
+):
     """延迟创建 MinIO 客户端，避免未配置上传时影响本地推理。"""
     from minio import Minio
 
-    return Minio(endpoint, access_key=access_key, secret_key=secret_key, secure=secure)
+    http_client = None
+    if timeout and timeout > 0:
+        import urllib3
+
+        http_client = urllib3.PoolManager(
+            timeout=urllib3.Timeout(connect=timeout, read=timeout),
+            retries=False,
+        )
+    return Minio(
+        endpoint,
+        access_key=access_key,
+        secret_key=secret_key,
+        secure=secure,
+        http_client=http_client,
+    )
 
 
 async def load_media_bytes(ref: Dict[str, Any]) -> bytes:
@@ -1080,6 +1102,7 @@ async def upload_bytes_to_cloud(data: bytes, object_name: str, content_type: str
         CLOUD_MINIO_ACCESS_KEY,
         CLOUD_MINIO_SECRET_KEY,
         CLOUD_MINIO_SECURE,
+        timeout=CLOUD_MINIO_UPLOAD_TIMEOUT,
     )
 
     def put_object():
@@ -1547,6 +1570,44 @@ def build_knowledge_query(request: WorkflowInferRequest) -> str:
     return f"{text} 库坝巡查 处置规范 风险研判 应急处置".strip()
 
 
+def infer_knowledge_event_type(request: WorkflowInferRequest) -> str:
+    inputs = request.inputs if isinstance(request.inputs, dict) else {}
+    sensor_data = request.sensor_data if isinstance(request.sensor_data, dict) else {}
+    nested_sensor_data = inputs.get("sensor_data") if isinstance(inputs.get("sensor_data"), dict) else {}
+    text = " ".join(
+        str(item)
+        for item in (
+            request.event_type,
+            inputs.get("event_type"),
+            inputs.get("event_name"),
+            inputs.get("summary"),
+            sensor_data.get("event_name"),
+            sensor_data.get("event_type"),
+            sensor_data.get("summary"),
+            nested_sensor_data.get("event_name"),
+            nested_sensor_data.get("event_type"),
+            nested_sensor_data.get("summary"),
+        )
+        if item
+    )
+    mapping = [
+        ("illegal_fishing", ("非法捕鱼", "电鱼", "捕鱼")),
+        ("person_wading", ("人员涉水", "涉水")),
+        ("person_intrusion", ("人员入侵", "入侵", "闯入")),
+        ("flood", ("洪水", "漫坝", "溢流", "水位上涨")),
+        ("landslide", ("滑坡", "边坡滑移", "塌岸")),
+        ("mudslide", ("泥石流",)),
+        ("earthquake", ("地震", "震后")),
+        ("typhoon", ("台风", "强风", "大风")),
+        ("rainstorm", ("暴雨", "强降雨", "降雨")),
+        ("boat_abnormal", ("船只", "禁航")),
+    ]
+    for event_type, keywords in mapping:
+        if any(keyword in text for keyword in keywords):
+            return event_type
+    return ""
+
+
 async def retrieve_knowledge_context(request: WorkflowInferRequest) -> Dict[str, Any]:
     """Retrieve source-grounded domain knowledge for local 4B reasoning."""
     if isinstance(request.knowledge_context, dict) and request.knowledge_context:
@@ -1562,10 +1623,15 @@ async def retrieve_knowledge_context(request: WorkflowInferRequest) -> Dict[str,
         return {"enabled": True, "query": "", "results": [], "prompt_context": "", "source": "empty_query"}
 
     try:
+        event_type = infer_knowledge_event_type(request)
         async with httpx.AsyncClient(timeout=min(TIMEOUT, 20)) as http_client:
             response = await http_client.post(
                 f"{KNOWLEDGE_API_BASE}/search",
-                json={"query": query, "top_k": max(1, min(KNOWLEDGE_TOP_K, 12))},
+                json={
+                    "query": query,
+                    "event_type": event_type,
+                    "top_k": max(1, min(KNOWLEDGE_TOP_K, 12)),
+                },
             )
             response.raise_for_status()
             payload = response.json()
@@ -1590,8 +1656,15 @@ async def retrieve_knowledge_context(request: WorkflowInferRequest) -> Dict[str,
     for index, item in enumerate(results, start=1):
         source = item.get("source") or {}
         title = source.get("document_title") or source.get("filename") or "知识文档"
-        section = source.get("section_title") or ""
-        lines.append(f"[{index}] 来源：{title}{f' / {section}' if section else ''}")
+        section = source.get("section_path") or source.get("section_title") or ""
+        evidence_id = item.get("evidence_id") or f"K{item.get('chunk_id') or index}"
+        clause = source.get("clause_id") or (item.get("metadata") or {}).get("clause_id") or ""
+        source_type = source.get("source_type") or (item.get("metadata") or {}).get("source_type") or ""
+        lines.append(f"[{evidence_id}] 文档：{title}{f' / {section}' if section else ''}")
+        if clause:
+            lines.append(f"条款编号：{clause}")
+        if source_type:
+            lines.append(f"来源类型：{source_type}")
         lines.append(str(item.get("content") or "").strip())
     prompt_context = "\n".join(line for line in lines if line)
     return {
@@ -1602,6 +1675,76 @@ async def retrieve_knowledge_context(request: WorkflowInferRequest) -> Dict[str,
         "prompt_context": prompt_context,
         "source": "knowledge_api",
     }
+
+
+def build_knowledge_source_refs(knowledge_context: Dict[str, Any]) -> List[Dict[str, Any]]:
+    refs: List[Dict[str, Any]] = []
+    for item in (knowledge_context or {}).get("results") or []:
+        source = item.get("source") or {}
+        metadata = item.get("metadata") or {}
+        chunk_id = item.get("chunk_id")
+        evidence_id = item.get("evidence_id") or (f"K{chunk_id}" if chunk_id else "")
+        refs.append({
+            "evidence_id": evidence_id,
+            "chunk_id": chunk_id,
+            "document_id": item.get("document_id"),
+            "score": item.get("score"),
+            "document_title": source.get("document_title"),
+            "filename": source.get("filename"),
+            "section_path": source.get("section_path") or source.get("section_title") or metadata.get("section_path") or "",
+            "clause_id": source.get("clause_id") or metadata.get("clause_id") or "",
+            "paragraph_id": source.get("paragraph_id") or metadata.get("paragraph_id") or "",
+            "source_type": source.get("source_type") or metadata.get("source_type") or "",
+            "quote": short_text(str(item.get("content") or ""), 180),
+            "citation_url": source.get("citation_url") or "",
+            "file_url": source.get("file_url") or "",
+        })
+    return refs
+
+
+def validate_sentence_citations(model_payload: Dict[str, Any], knowledge_sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    available = {str(item.get("evidence_id")) for item in knowledge_sources if item.get("evidence_id")}
+    raw = model_payload.get("sentence_citations")
+    valid: List[Dict[str, Any]] = []
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            evidence_ids = [
+                str(value)
+                for value in item.get("evidence_ids", [])
+                if str(value) in available
+            ] if isinstance(item.get("evidence_ids"), list) else []
+            if not evidence_ids:
+                continue
+            valid.append({
+                "field": str(item.get("field") or ""),
+                "sentence": str(item.get("sentence") or "")[:500],
+                "evidence_ids": evidence_ids,
+                "support_type": str(item.get("support_type") or "direct"),
+                "confidence": item.get("confidence"),
+            })
+    if valid or not knowledge_sources:
+        return valid
+
+    # Fallback: attach the strongest retrieved source to advice fields so the
+    # report can still show a transparent, machine-checkable citation trail.
+    first = knowledge_sources[0]
+    fallback: List[Dict[str, Any]] = []
+    for field, text in (
+        ("risk_reasoning", model_payload.get("risk_reasoning")),
+        ("response_plan", model_payload.get("response_plan")),
+        ("monitoring_suggestions", model_payload.get("monitoring_suggestions")),
+    ):
+        if str(text or "").strip():
+            fallback.append({
+                "field": field,
+                "sentence": short_text(str(text), 220),
+                "evidence_ids": [first["evidence_id"]],
+                "support_type": "inferred",
+                "confidence": 0.5,
+            })
+    return fallback
 
 
 def weather_context_required(request: WorkflowInferRequest) -> bool:
@@ -1966,8 +2109,12 @@ def build_workflow_prompt(
         "输出必须是一个合法 JSON 对象，并额外包含以下详细字段："
         "detailed_scene_analysis、risk_reasoning、impact_assessment、response_plan、monitoring_suggestions。"
         "这些字段要用于正式报告，不能只写短语；每项请写成完整中文段落。"
-        "如果使用了知识库依据，请在 evidence 或 response_plan 中体现关键依据，并在 JSON 中增加 knowledge_sources 数组，"
-        "列出引用的 document_title 和 chunk_id。"
+        "如果使用了知识库依据，请在 evidence、risk_reasoning、response_plan 或 monitoring_suggestions 中体现关键依据，"
+        "并在 JSON 中增加 knowledge_sources 和 sentence_citations。"
+        "knowledge_sources 必须列出 evidence_id、document_title、chunk_id、clause_id、section_path。"
+        "sentence_citations 必须逐句列出 field、sentence、evidence_ids、support_type、confidence；"
+        "evidence_ids 只能使用知识库依据中的 [K数字]，不能编造。"
+        "如果句子是视频/图片直接观察，请不要挂知识库 evidence_id；如果是结合知识库推断，support_type 写 inferred。"
         "如果输入中包含候选代表帧图片，请同时输出 representative_frame 对象："
         "{\"selected_index\":候选帧编号,\"reason\":\"为什么该帧最适合作为报告代表画面\"}。"
         "代表帧应选择最能体现事件证据、现场状态、风险特征且画面清晰的一帧。"
@@ -2197,7 +2344,10 @@ async def workflow_infer(request: WorkflowInferRequest):
             max_tokens=max(256, min(WORKFLOW_MAX_TOKENS, MAX_TOKENS)),
         )
         content = response.choices[0].message.content or ""
+        model_payload = parse_model_json(content)
         scene_analysis = parse_scene_analysis(content)
+        knowledge_sources = build_knowledge_source_refs(knowledge_context)
+        sentence_citations = validate_sentence_citations(model_payload, knowledge_sources)
         representative_frame = selected_representative_frame(content, media_transform)
         cloud_representative_frame = await upload_representative_frame_to_cloud(request, representative_frame)
         response_representative_frame = cloud_representative_frame or representative_frame
@@ -2251,16 +2401,13 @@ async def workflow_infer(request: WorkflowInferRequest):
             "knowledge_context": knowledge_context,
             "weather_context": weather_context,
             "external_weather_context": weather_context,
-            "knowledge_sources": [
-                {
-                    "chunk_id": item.get("chunk_id"),
-                    "document_id": item.get("document_id"),
-                    "score": item.get("score"),
-                    "document_title": (item.get("source") or {}).get("document_title"),
-                    "filename": (item.get("source") or {}).get("filename"),
-                }
-                for item in knowledge_context.get("results", [])
-            ],
+            "knowledge_sources": knowledge_sources,
+            "sentence_citations": sentence_citations,
+            "citation_validation": {
+                "available_evidence_ids": [item.get("evidence_id") for item in knowledge_sources if item.get("evidence_id")],
+                "valid_sentence_citation_count": len(sentence_citations),
+                "fallback_used": bool(sentence_citations) and not isinstance(model_payload.get("sentence_citations"), list),
+            },
             "media_objects": media_objects_for_next_node,
             "cloud_media_objects": cloud_media_objects_for_next_node,
             "uploaded_media_objects": cloud_media_objects_for_next_node,

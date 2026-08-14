@@ -2074,7 +2074,6 @@ class ECAEngine:
             if screening:
                 camera_data["qwen_summary"] = screening.get("summary")
                 camera_data["qwen_risk_level"] = screening.get("risk_level")
-                camera_data["qwen_image_urls"] = screening.get("image_urls") or details.get("image_urls") or []
                 source_video_url = screening.get("source_video_url")
                 video_urls = screening.get("video_urls") or ([source_video_url] if source_video_url else [])
                 media_objects = screening.get("media_objects") or []
@@ -2133,8 +2132,8 @@ class ECAEngine:
         ).order_by(SafetyEventInstance.id.desc()).first()
 
         risk = {1: "LOW", 2: "MEDIUM", 3: "HIGH"}.get(int(event.risk_level or 1), "LOW")
-        observation = dict(camera_data or {})
-        # 疑似命中检测：人员/船只低置信（possible_*==1 且对应确认位!=1）→ 降级 LOW 并标记待复核
+        observation = self._strip_transient_screening_frames(dict(camera_data or {}))
+        # 疑似命中检测：人员/船只低置信（possible_*==1 且对应确认位!=1）仅标记待复核。
         suspected = (
             int(observation.get("possible_person") or 0) == 1
             and int(observation.get("person_present") or 0) != 1
@@ -2143,10 +2142,9 @@ class ECAEngine:
             and int(observation.get("boat_present") or 0) != 1
         )
         if suspected:
-            risk = "LOW"
             observation["suspected"] = True
             observation["suspected_label"] = "疑似人员/船只待复核"
-            observation["screening_note"] = "4B 初筛低置信命中，已进入 4B/35B 复核，风险等级按 LOW 降级处理"
+            observation["screening_note"] = "4B 初筛低置信命中，已进入 4B/35B 复核确认"
         camera = db.query(Camera).filter(Camera.id == source.device_id).first() if source.device_id else None
         observation["visual"] = {
             **dict(observation.get("visual") or {}),
@@ -2169,7 +2167,7 @@ class ECAEngine:
                 active.status = "PROCESSING"
             db.commit()
             if should_resubmit_workflow:
-                self._dispatch_async_event_actions(event.id, active.id, camera_data)
+                self._dispatch_async_event_actions(event.id, active.id, observation)
             return active
 
         instance = SafetyEventInstance(
@@ -2212,8 +2210,26 @@ class ECAEngine:
         ))
         db.commit()
 
-        self._dispatch_async_event_actions(event.id, instance.id, camera_data)
+        self._dispatch_async_event_actions(event.id, instance.id, observation)
         return instance
+
+    @staticmethod
+    def _strip_transient_screening_frames(data: Dict[str, Any]) -> Dict[str, Any]:
+        """Initial screening frames are UI-only and must not become event evidence."""
+        cleaned = dict(data or {})
+        for key in ("qwen_image_urls", "image_urls", "model_image_urls"):
+            cleaned.pop(key, None)
+        visual = cleaned.get("visual")
+        if isinstance(visual, dict):
+            visual = dict(visual)
+            screening = visual.get("screening")
+            if isinstance(screening, dict):
+                screening = dict(screening)
+                for key in ("qwen_image_urls", "image_urls", "model_image_urls"):
+                    screening.pop(key, None)
+                visual["screening"] = screening
+            cleaned["visual"] = visual
+        return cleaned
 
     def _should_resubmit_camera_workflow(self, db: Session, instance: SafetyEventInstance) -> bool:
         if instance.analysis_report_id:

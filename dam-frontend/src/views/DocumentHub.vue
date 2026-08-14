@@ -76,7 +76,7 @@
           value-format="YYYY-MM"
           placeholder="选择月份"
           class="month-picker"
-          popper-class="document-month-popper"
+          popper-class="alarm-date-popper"
         />
       </div>
       <div class="filter-actions">
@@ -114,6 +114,7 @@
           </div>
           <div class="row-index">序号</div>
           <div class="row-name">文档</div>
+          <div class="row-knowledge-index">知识依据</div>
           <button type="button" class="row-risk sortable-header" :class="sortClass('risk')" @click="toggleSort('risk')">
             <span>风险等级</span>
             <span class="caret-wrapper"><i class="sort-caret ascending"></i><i class="sort-caret descending"></i></span>
@@ -149,6 +150,37 @@
             <span class="doc-title-stack" :title="documentTitle(doc)">
               <strong class="doc-name">{{ documentTitle(doc) }}</strong>
             </span>
+          </div>
+          <div class="row-knowledge-index" :title="knowledgeIndexTitle(doc)">
+            <template v-if="knowledgeIndexItems(doc).length">
+              <el-popover
+                placement="bottom-start"
+                trigger="click"
+                width="420"
+                popper-class="knowledge-index-popper"
+              >
+                <template #reference>
+                  <el-button class="knowledge-index-button" size="small" @click.stop>
+                    依据 {{ knowledgeIndexItems(doc).length }} 条
+                  </el-button>
+                </template>
+                <div class="knowledge-index-list">
+                  <button
+                    v-for="item in knowledgeIndexItems(doc)"
+                    :key="item.key"
+                    type="button"
+                    class="knowledge-index-item"
+                    @click.stop="previewKnowledgeIndex(item)"
+                    >
+                      <span class="knowledge-index-title">{{ item.documentTitle }}</span>
+                      <small class="knowledge-index-meta">
+                        {{ item.sectionPath || '未标章节' }}
+                      </small>
+                    </button>
+                  </div>
+                </el-popover>
+            </template>
+            <span v-else class="knowledge-index-empty">无依据</span>
           </div>
           <div class="row-risk">
             <el-tag class="document-risk-tag" :type="riskTag(doc.riskLevel)" effect="dark">
@@ -541,6 +573,64 @@ const documentTitle = (doc) => {
   return stripDocumentExtension(doc?.name || '未命名文档')
 }
 
+const knowledgeIndexItems = (doc) => {
+  const indexes = Array.isArray(doc?.knowledge_indexes) ? doc.knowledge_indexes : []
+  const seen = new Set()
+  return indexes.map((item) => {
+    const documentTitle = String(item?.document_title || '知识库文档').replace(/\.docx$/i, '').trim()
+    const sectionPath = String(item?.section_path || '').trim()
+    const key = `${documentTitle}:${sectionPath}`
+    return {
+      key,
+      documentId: item?.document_id,
+      chunkId: item?.chunk_id,
+      documentTitle,
+      sectionPath
+    }
+  }).filter((item) => {
+    if (seen.has(item.key)) return false
+    seen.add(item.key)
+    return true
+  }).slice(0, 3)
+}
+
+const knowledgeIndexTitle = (doc) => {
+  const indexes = Array.isArray(doc?.knowledge_indexes) ? doc.knowledge_indexes : []
+  if (!indexes.length) return '暂无知识依据'
+  return indexes.map((item, index) => {
+    const parts = [
+      `${index + 1}. ${item.document_title || '知识库文件'}`,
+      item.section_path || '未标章节'
+    ].filter(Boolean)
+    return parts.join(' / ')
+  }).join('\n')
+}
+
+const previewKnowledgeIndex = async (item) => {
+  if (!item?.documentId) {
+    ElMessage.warning('该知识依据缺少文档编号')
+    return
+  }
+  try {
+    previewTitle.value = item.documentTitle
+    previewConfig.value = null
+    previewDialogVisible.value = true
+    const response = await axios.get(`/api/v1/knowledge/documents/${item.documentId}/onlyoffice-config`, {
+      params: {
+        user_id: currentUser.value.id,
+        user_name: currentUser.value.name,
+        ...(item.chunkId ? { chunk_id: item.chunkId } : {})
+      }
+    })
+    const payload = response.data?.data || response.data
+    previewConfig.value = payload
+  } catch (error) {
+    console.error('打开知识库文档失败:', error)
+    previewDialogVisible.value = false
+    ElMessage.error('打开知识库文档失败')
+  }
+}
+
 const eventNumberForDocument = (doc) => {
   // 仅事件处置报告有关联的事件编号，其余文档（如每日报告）无关联编号
   if (isEventReportDocument(doc)) {
@@ -649,7 +739,8 @@ const normalizeDocument = (doc, index = 0) => {
     normalized.document_id,
     normalized.displayTitle,
     normalized.displayEventNo,
-    normalized.riskLevel
+    normalized.riskLevel,
+    knowledgeIndexTitle(normalized)
   ].filter(Boolean).join(' ').toLowerCase()
   return normalized
 }
@@ -1149,7 +1240,7 @@ onActivated(() => {
 .document-header,
 .document-row {
   display: grid;
-  grid-template-columns: 34px 58px minmax(260px, 2fr) 112px 96px 104px 150px 150px 210px;
+  grid-template-columns: 34px 58px minmax(260px, 1.45fr) minmax(220px, 1fr) 112px 96px 104px 150px 150px 210px;
   align-items: center;
   gap: 12px;
 }
@@ -1164,6 +1255,7 @@ onActivated(() => {
 }
 
 .document-header .row-name,
+.document-header .row-knowledge-index,
 .document-header .row-type,
 .document-header .row-risk,
 .document-header .row-size,
@@ -1183,6 +1275,7 @@ onActivated(() => {
 }
 
 .document-header .row-index,
+.document-header .row-knowledge-index,
 .document-header .row-risk,
 .document-header .row-size,
 .document-header .row-date {
@@ -1203,6 +1296,7 @@ onActivated(() => {
 }
 
 .row-index,
+.row-knowledge-index,
 .row-type,
 .row-risk,
 .row-size,
@@ -1225,6 +1319,87 @@ onActivated(() => {
 .row-index {
   color: #f3f8fd;
   font-weight: 700;
+}
+
+.row-knowledge-index {
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+  text-align: center;
+}
+
+.knowledge-index-button {
+  height: 30px;
+  min-width: 86px;
+  padding: 0 12px;
+  border: 1px solid rgba(72, 216, 255, .28);
+  border-radius: 6px;
+  color: #bdeeff;
+  background: rgba(72, 216, 255, .08);
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.knowledge-index-button:hover,
+.knowledge-index-button:focus {
+  border-color: rgba(72, 216, 255, .62);
+  color: #effbff;
+  background: rgba(72, 216, 255, .16);
+}
+
+.knowledge-index-empty {
+  color: #637f93;
+  font-size: 13px;
+}
+
+:global(.knowledge-index-popper.el-popper) {
+  border: 1px solid rgba(72, 216, 255, .22) !important;
+  border-radius: 8px;
+  background: #0a1e30 !important;
+  box-shadow: 0 16px 42px rgba(0, 0, 0, .38);
+}
+
+:global(.knowledge-index-popper .el-popper__arrow::before) {
+  background: #0a1e30 !important;
+  border-color: rgba(72, 216, 255, .22) !important;
+}
+
+.knowledge-index-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.knowledge-index-item {
+  width: 100%;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid rgba(104, 161, 200, .18);
+  border-radius: 6px;
+  color: #d9e8f8;
+  background: rgba(12, 34, 55, .86);
+  text-align: left;
+  cursor: pointer;
+}
+
+.knowledge-index-item:hover,
+.knowledge-index-item:focus {
+  border-color: rgba(72, 216, 255, .48);
+  background: rgba(18, 54, 82, .94);
+}
+
+.knowledge-index-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #f2f8ff;
+}
+
+.knowledge-index-meta {
+  color: #8fb1c8;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .row-name {
@@ -1643,62 +1818,6 @@ onActivated(() => {
 
 .document-table-panel :deep(.el-loading-spinner .el-loading-text) {
   color: var(--text-secondary);
-}
-
-:global(.document-month-popper.el-picker__popper),
-:global(.document-month-popper .el-picker-panel),
-:global(.document-month-popper .el-date-picker) {
-  color: var(--text-primary);
-  background: #0a1e30 !important;
-  border-color: rgba(0, 200, 255, 0.25) !important;
-}
-
-:global(.document-month-popper.el-popper.is-light),
-:global(.document-month-popper.el-popper.is-pure) {
-  background: #0a1e30 !important;
-  border: 1px solid rgba(0, 200, 255, 0.25) !important;
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
-}
-
-:global(.document-month-popper .el-popper__arrow::before) {
-  background: #0a1e30 !important;
-  border-color: rgba(0, 200, 255, 0.25) !important;
-}
-
-:global(.document-month-popper .el-picker-panel__body-wrapper),
-:global(.document-month-popper .el-picker-panel__body),
-:global(.document-month-popper .el-picker-panel__content) {
-  background: #0a1e30 !important;
-}
-
-:global(.document-month-popper .el-date-picker__header),
-:global(.document-month-popper .el-date-picker__header--bordered) {
-  border-color: rgba(103, 164, 217, 0.18) !important;
-}
-
-:global(.document-month-popper .el-date-picker__header-label),
-:global(.document-month-popper .el-picker-panel__icon-btn) {
-  color: #dce9fa !important;
-}
-
-:global(.document-month-popper .el-month-table td .cell) {
-  color: #dce9fa !important;
-}
-
-:global(.document-month-popper .el-month-table td.disabled .cell) {
-  color: var(--text-secondary) !important;
-}
-
-:global(.document-month-popper .el-month-table td.current:not(.disabled) .cell) {
-  color: #fff !important;
-  background: #3da4ff !important;
-  border-radius: 24px;
-  font-weight: 700;
-}
-
-:global(.document-month-popper .el-month-table td .cell:hover) {
-  color: #fff !important;
-  background: rgba(0, 200, 255, 0.12);
 }
 
 .preview-editor-shell {

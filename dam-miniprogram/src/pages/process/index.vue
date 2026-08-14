@@ -66,12 +66,14 @@
 <script>
 import { request, uploadFieldResult } from '../../utils/request'
 import { riskClass } from '../../utils/format'
+import { readCache } from '../../utils/cache'
 
 export default {
   data() {
     return {
       eventId: '',
       event: null,
+      staff: null,
       riskClassName: '',
       photoPath: '',
       result: 'DRIVEN_AWAY',
@@ -90,6 +92,7 @@ export default {
 
   onLoad(options) {
     this.eventId = options?.event_id || ''
+    this.staff = readCache('mini-staff', null)
     this.loadDetail()
   },
 
@@ -220,7 +223,7 @@ export default {
         filePath: this.photoPath,
         result: this.result,
         remark: this.remark,
-        operator: '微信小程序工作人员'
+        operator: this.staff?.display_name || '现场处置员'
       })
         .then(() => {
           uni.showToast({ title: '已提交', icon: 'success' })

@@ -8,10 +8,10 @@ from app.models.event_condition import EventCondition
 from app.models.event_action import EventActionConfig
 from app.models.camera_detection_zone import CameraDetectionZone
 from app.models.safety_event_task import SafetyEventTask
-from app.models.analysis_report import AnalysisReport
+from app.models.analysis_report import AnalysisReport, AnalysisReportKnowledgeCitation
 from app.models.broadcast import BroadcastDevice, BroadcastTemplate
 from app.models.camera import Camera
-from app.models.miniprogram import MiniProgramSubscription
+from app.models.miniprogram import MiniProgramStaff, MiniProgramSubscription
 from app.models.actor_library import ActorLibrary, ActorPromptStage
 from app.models.safety_integration import (
     SafetyEventEvidence,
@@ -31,9 +31,11 @@ __all__ = [
     "CameraDetectionZone",
     "SafetyEventTask",
     "AnalysisReport",
+    "AnalysisReportKnowledgeCitation",
     "BroadcastDevice",
     "BroadcastTemplate",
     "Camera",
+    "MiniProgramStaff",
     "MiniProgramSubscription",
     "ActorLibrary",
     "ActorPromptStage",

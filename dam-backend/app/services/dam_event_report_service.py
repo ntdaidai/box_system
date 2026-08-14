@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import re
 import shutil
 import subprocess
@@ -13,13 +14,14 @@ from typing import Any, Optional
 from urllib.parse import unquote, urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
+from docx import Document
 from docx.shared import Mm
 from docxtpl import DocxTemplate, InlineImage
 from loguru import logger
 from sqlalchemy.orm import Session, load_only
 
 from app.core.config import BASE_DIR, settings
-from app.models.analysis_report import AnalysisReport
+from app.models.analysis_report import AnalysisReport, AnalysisReportKnowledgeCitation
 from app.models.camera import Camera
 from app.models.data_source import DataSource
 from app.models.event_library import EventLibrary
@@ -80,6 +82,7 @@ TEMPLATE_FIELDS = {
     "evidence_inventory",
     "analysis_limitations",
     "follow_up_actions",
+    "knowledge_sources_summary",
 }
 RISK_NAMES = {"HIGH": "高风险", "MEDIUM": "中风险", "LOW": "低风险"}
 STATUS_NAMES = {
@@ -158,6 +161,12 @@ class DamEventReportService:
             file_url=document["url"],
             report_date=context["report_date"],
         )
+        self.store_knowledge_citations(
+            db,
+            report=report,
+            instance=instance,
+            workflow_insight=context.get("workflow_insight") or {},
+        )
         safety_event_runtime_service.append_timeline(
             db,
             instance,
@@ -177,6 +186,71 @@ class DamEventReportService:
             },
         )
         return report
+
+    def store_knowledge_citations(
+        self,
+        db: Session,
+        *,
+        report: AnalysisReport,
+        instance: SafetyEventInstance,
+        workflow_insight: dict[str, Any],
+    ) -> None:
+        try:
+            db.query(AnalysisReportKnowledgeCitation).filter(
+                AnalysisReportKnowledgeCitation.report_id == report.id
+            ).delete()
+            sources = workflow_insight.get("knowledge_sources")
+            citations = workflow_insight.get("sentence_citations")
+            if not isinstance(sources, list) or not isinstance(citations, list):
+                db.flush()
+                return
+            source_by_evidence = {
+                str(item.get("evidence_id") or f"K{item.get('chunk_id')}"): item
+                for item in sources
+                if isinstance(item, dict) and (item.get("evidence_id") or item.get("chunk_id"))
+            }
+            for citation in citations:
+                if not isinstance(citation, dict):
+                    continue
+                sentence = str(citation.get("sentence") or "").strip()
+                if not sentence:
+                    continue
+                for evidence_id in citation.get("evidence_ids") or []:
+                    evidence_key = str(evidence_id)
+                    source = source_by_evidence.get(evidence_key)
+                    if not source:
+                        continue
+                    db.add(AnalysisReportKnowledgeCitation(
+                        report_id=report.id,
+                        instance_no=instance.instance_no,
+                        field_name=str(citation.get("field") or ""),
+                        sentence=sentence[:2000],
+                        evidence_id=evidence_key,
+                        chunk_id=self.integer_or_none(source.get("chunk_id")),
+                        document_id=self.integer_or_none(source.get("document_id")),
+                        document_title=str(source.get("document_title") or source.get("filename") or "")[:240],
+                        section_path=str(source.get("section_path") or "")[:512],
+                        clause_id=str(source.get("clause_id") or "")[:128],
+                        support_type=str(citation.get("support_type") or "direct")[:32],
+                        confidence=str(citation.get("confidence") or "")[:32],
+                        citation_json=json.dumps(
+                            {"citation": citation, "source": source},
+                            ensure_ascii=False,
+                            default=str,
+                        ),
+                    ))
+            db.flush()
+        except Exception as exc:
+            logger.warning("报告知识引用审计保存失败: report_id={}, error={}", getattr(report, "id", None), exc)
+
+    @staticmethod
+    def integer_or_none(value: Any) -> Optional[int]:
+        try:
+            if value in (None, ""):
+                return None
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     def select_llm_report(self, workflow_payload: dict[str, Any]) -> Optional[dict[str, Any]]:
         execution = workflow_payload.get("execution_result")
@@ -454,9 +528,10 @@ class DamEventReportService:
         source_label = self.source_label(instance, source, selected)
         cloud_note = ""
         if selected.get("source") == "qwen4b" and selected.get("cloud_error"):
-            cloud_note = f"云端增强分析返回异常：{selected['cloud_error']}；本报告已采用本地 4B 分析结果生成。"
+            cloud_note = "云端增强暂不可用，本报告已采用本地 4B 分析结果生成。"
 
         context = {
+            "workflow_insight": workflow_insight,
             "report_date": report_date,
             "report_time": self.format_datetime(dt.datetime.now(LOCAL_TIMEZONE)),
             "event_name": getattr(event, "event_name", None) or instance.summary or "安全事件",
@@ -569,6 +644,11 @@ class DamEventReportService:
             temp_path = Path(tmp.name)
         try:
             template.save(str(temp_path))
+            self.append_knowledge_section(
+                temp_path,
+                (context.get("workflow_insight") or {}).get("knowledge_sources_summary")
+                or context.get("knowledge_sources_summary"),
+            )
             return temp_path.read_bytes()
         finally:
             try:
@@ -580,6 +660,28 @@ class DamEventReportService:
                     Path(image_path).unlink(missing_ok=True)
                 except OSError:
                     pass
+
+    def append_knowledge_section(self, docx_path: Path, knowledge_summary: Any) -> None:
+        text = str(knowledge_summary or "").strip()
+        if not text:
+            return
+        try:
+            document = Document(str(docx_path))
+            existing_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+            if "06  知识依据" in existing_text or "06 知识依据" in existing_text:
+                return
+            document.add_paragraph("")
+            heading = document.add_paragraph("06  知识依据")
+            for run in heading.runs:
+                run.bold = True
+            for line in text.splitlines():
+                cleaned = line.strip()
+                if not cleaned:
+                    continue
+                document.add_paragraph(cleaned)
+            document.save(str(docx_path))
+        except Exception as exc:
+            logger.warning("追加报告知识依据章节失败: {}", exc)
 
     def upsert_analysis_report(
         self,
@@ -653,18 +755,61 @@ class DamEventReportService:
         visual: dict[str, Any],
         evidence: list[SafetyEventEvidence],
     ) -> list[dict[str, Any]]:
-        items: list[dict[str, Any]] = []
+        candidates: list[dict[str, Any]] = []
         # 4B 初筛帧仅用于前端初筛过程展示；正式报告证据图以
-        # 智能路由后的模型复核帧、4B代表帧和联动取证图片为准。
-        self.extend_media_items(items, self.find_nested_values(workflow_payload, "representative_frame"))
-        self.extend_media_items(items, self.find_nested_values(workflow_payload, "representative_frames"))
-        self.extend_media_items(items, self.find_nested_values(workflow_payload, "key_frames"))
-        self.extend_media_items(items, self.find_nested_values(workflow_payload, "images"))
-        self.extend_media_items(items, self.find_nested_values(workflow_payload, "image_urls"))
+        # 智能路由后的目标检测带框帧、模型复核帧和联动取证图片为准。
+        for key in ("media_objects", "image_urls", "images", "key_frames", "representative_frames", "representative_frame"):
+            self.extend_image_media_items(candidates, self.find_nested_values(workflow_payload, key))
         for row in evidence:
             if str(row.evidence_type or "").upper() in {"IMAGE", "CAMERA_SNAPSHOT", "DRONE_IMAGE", "STAFF_IMAGE"}:
-                items.append({"url": row.file_url, "caption": row.description or "事件图像"})
-        return self.unique_media_items(items)[:8]
+                candidates.append({"url": row.file_url, "caption": row.description or "事件图像"})
+        items = self.unique_media_items(candidates)
+        items.sort(key=lambda item: self.image_media_priority(item))
+        return items[:8]
+
+    def extend_image_media_items(self, items: list[dict[str, Any]], value: Any) -> None:
+        if not value:
+            return
+        if isinstance(value, list):
+            for item in value:
+                self.extend_image_media_items(items, item)
+            return
+        if isinstance(value, dict):
+            media_type = str(value.get("type") or value.get("media_type") or "image").lower()
+            if media_type and media_type not in {"image", "photo", "snapshot", "frame"}:
+                return
+            url = (
+                value.get("url")
+                or value.get("file_url")
+                or value.get("image_url")
+                or value.get("path")
+                or value.get("annotated_ref")
+                or value.get("object_url")
+            )
+            object_name = value.get("object_name") or value.get("object_key") or value.get("annotated_object_key")
+            if not url and value.get("bucket") and object_name:
+                url = f"{value.get('bucket')}/{object_name}"
+            if url and "{{" not in str(url) and "}}" not in str(url):
+                items.append({
+                    "url": str(url),
+                    "caption": str(value.get("caption") or value.get("description") or ""),
+                    "role": value.get("role"),
+                    "source": value.get("source"),
+                })
+            return
+        if isinstance(value, str) and value and "{{" not in value and "}}" not in value:
+            items.append({"url": value, "caption": ""})
+
+    @staticmethod
+    def image_media_priority(item: dict[str, Any]) -> int:
+        text = f"{item.get('role') or ''} {item.get('source') or ''} {item.get('url') or ''}".lower()
+        if "annotated_detection_frame" in text or "workflow/yolo-detections" in text:
+            return 0
+        if "workflow-media" in text or "qwen4b-proxy-media" in text or "key_frame" in text:
+            return 1
+        if "qwen_screening" in text or "/camera/" in text:
+            return 9
+        return 5
 
     def collect_video_items(
         self,
@@ -1686,6 +1831,7 @@ class DamEventReportService:
         })
         reasoning = self.find_node_inference(workflow_payload, "action_reasoning")
         knowledge_sources = self.find_in_value(reasoning, "knowledge_sources")
+        sentence_citations = self.find_in_value(reasoning, "sentence_citations")
         result.update({
             "qwen4b_detailed_scene_analysis": self.find_in_value(reasoning, "detailed_scene_analysis"),
             "qwen4b_risk_reasoning": self.find_in_value(reasoning, "risk_reasoning"),
@@ -1693,7 +1839,8 @@ class DamEventReportService:
             "qwen4b_response_plan": self.find_in_value(reasoning, "response_plan"),
             "qwen4b_monitoring_suggestions": self.find_in_value(reasoning, "monitoring_suggestions"),
             "knowledge_sources": knowledge_sources if isinstance(knowledge_sources, list) else [],
-            "knowledge_sources_summary": self.format_knowledge_sources(knowledge_sources),
+            "sentence_citations": sentence_citations if isinstance(sentence_citations, list) else [],
+            "knowledge_sources_summary": self.format_knowledge_sources(knowledge_sources, sentence_citations),
             "qwen4b_conclusion": (
                 self.find_in_value(reasoning, "impact_assessment")
                 or self.find_in_value(reasoning, "monitoring_suggestions")
@@ -1702,25 +1849,58 @@ class DamEventReportService:
         return result
 
     @staticmethod
-    def format_knowledge_sources(sources: Any) -> str:
+    def format_knowledge_sources(sources: Any, sentence_citations: Any = None) -> str:
         if not isinstance(sources, list):
             return ""
+        def compact_text(value: str, limit: int) -> str:
+            text = re.sub(r"\s+", " ", str(value or "")).strip()
+            return text if len(text) <= limit else f"{text[:limit - 1]}…"
+
         lines = []
         seen = set()
+        source_count = 0
+        citation_map: dict[str, list[str]] = {}
+        if isinstance(sentence_citations, list):
+            for citation in sentence_citations:
+                if not isinstance(citation, dict):
+                    continue
+                sentence = str(citation.get("sentence") or "").strip()
+                if not sentence:
+                    continue
+                for evidence_id in citation.get("evidence_ids") or []:
+                    citation_map.setdefault(str(evidence_id), []).append(sentence)
         for item in sources:
             if not isinstance(item, dict):
                 continue
             title = item.get("document_title") or item.get("filename")
+            evidence_id = item.get("evidence_id") or (f"K{item.get('chunk_id')}" if item.get("chunk_id") else "")
             chunk_id = item.get("chunk_id")
             if not title:
                 continue
-            key = (title, chunk_id)
+            key = (title, chunk_id, evidence_id)
             if key in seen:
                 continue
             seen.add(key)
-            suffix = f"（{chunk_id}）" if chunk_id else ""
-            lines.append(f"{len(lines) + 1}. {title}{suffix}")
-            if len(lines) >= 5:
+            source_count += 1
+            section = item.get("section_path") or item.get("section_title") or ""
+            clause = item.get("clause_id") or ""
+            quote = str(item.get("quote") or item.get("content") or "").strip()
+            source_parts = [f"{source_count}. 《{title}》"]
+            if section:
+                source_parts.append(str(section))
+            if clause:
+                source_parts.append(f"条款 {clause}")
+            if evidence_id:
+                source_parts.append(f"引用 {evidence_id}")
+            elif chunk_id:
+                source_parts.append(f"chunk {chunk_id}")
+            lines.append("，".join(source_parts))
+            if quote:
+                lines.append(f"   原文摘录：{compact_text(quote, 160)}")
+            supported = citation_map.get(str(evidence_id), [])
+            if supported:
+                lines.append(f"   支撑报告内容：{compact_text('；'.join(supported[:2]), 180)}")
+            if source_count >= 5:
                 break
         return "\n".join(lines)
 
@@ -1803,7 +1983,7 @@ class DamEventReportService:
         sampled_frames = workflow_insight.get("sampled_frames") or len(image_items) or "—"
         cloud_text = ""
         if selected.get("cloud_error"):
-            cloud_text = f"云端增强节点返回异常（{selected.get('cloud_error')}），本报告采用本地 4B 场景理解与专有模型结果整理生成。"
+            cloud_text = "云端增强暂不可用，本报告采用本地 4B 场景理解与专有模型结果整理生成。"
         else:
             cloud_text = f"报告来源为{selected.get('source_label', '智能分析模型')}。"
 
@@ -1817,12 +1997,18 @@ class DamEventReportService:
         return "\n".join(lines)
 
     def selected_detailed_summary(self, selected: dict[str, Any]) -> str:
+        knowledge_sources_summary = self.final_report_field(selected, "knowledge_sources_summary", "")
+        if not knowledge_sources_summary or knowledge_sources_summary == "—":
+            sources = self.find_in_selected(selected, "knowledge_sources")
+            sentence_citations = self.find_in_selected(selected, "sentence_citations")
+            knowledge_sources_summary = self.format_knowledge_sources(sources, sentence_citations)
         fields = [
             ("一、现场场景", self.final_report_field(selected, "detailed_scene_analysis", "")),
             ("二、风险研判", self.final_report_field(selected, "risk_reasoning", "")),
             ("三、影响评估", self.final_report_field(selected, "impact_assessment", "")),
             ("四、处置建议", self.final_report_field(selected, "response_plan", "")),
             ("五、持续监测", self.final_report_field(selected, "monitoring_suggestions", "")),
+            ("六、知识依据", knowledge_sources_summary),
         ]
         lines = [
             f"{label}：{text}"

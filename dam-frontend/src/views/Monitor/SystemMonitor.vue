@@ -140,11 +140,6 @@
                     },
                   ]"
                   :transform="`translate(${node.x} ${node.y})`"
-                  tabindex="0"
-                  role="button"
-                  @click="inspectNode(node.id)"
-                  @keyup.enter="inspectNode(node.id)"
-                  @pointerdown.stop.prevent="startNodeDrag($event, node.id)"
                 >
                   <circle v-if="node.pulse" r="48" class="node-pulse" />
                   <rect
@@ -164,66 +159,22 @@
           </svg>
         </div>
 
-        <div class="runtime-detail-row">
-          <article class="node-inspector" :class="inspectorNode.tone">
-            <header class="inspector-head">
-              <div class="inspector-title-row">
-                <h2>{{ inspectorNode.displayLabel }}</h2>
-                <p>{{ inspectorNode.description }}</p>
-              </div>
-              <i class="status-pill" :class="inspectorNode.tone">{{ inspectorNode.statusText }}</i>
-            </header>
-
-            <div v-if="inspectorNode.id === 'edge-box'" class="resource-compact">
-              <div v-for="metric in resourceMetrics" :key="metric.key" class="resource-meter" :class="metric.tone">
-                <div>
-                  <span>{{ metric.label }}</span>
-                  <strong>{{ metric.display }}</strong>
-                </div>
-                <i><b :style="{ width: `${metric.value}%` }" /></i>
-                <small>{{ metric.value < 60 ? '负载平稳' : metric.value < 85 ? '持续关注' : '资源承压' }}</small>
-              </div>
-              <div class="uptime-meter">
-                <span>连续运行</span>
-                <strong>{{ uptimeText }}</strong>
-                <small>边缘节点在线时长</small>
-              </div>
+        <article class="runtime-status-card">
+          <header>
+            <div class="panel-title">
+              <strong>系统运行状态</strong>
             </div>
-
-            <div v-else class="inspector-facts">
-              <div v-for="fact in inspectorNode.facts" :key="fact.label">
-                <span>{{ fact.label }}</span>
-                <strong>{{ fact.value }}</strong>
-              </div>
+            <time>{{ currentTimeText }}</time>
+          </header>
+          <div class="runtime-status-grid">
+            <div v-for="item in runtimeStatusCards" :key="item.key" class="runtime-status-item" :class="item.tone">
+              <span>{{ item.label }}</span>
+              <strong>{{ item.value }}</strong>
+              <small>{{ item.detail }}</small>
+              <i v-if="item.percent !== null"><b :style="{ width: `${item.percent}%` }" /></i>
             </div>
-          </article>
-
-          <article class="alert-locator">
-            <header>
-              <div class="panel-title">
-                <strong>{{ issueCounts.total }} 项需要关注</strong>
-              </div>
-            </header>
-            <div v-if="issueItems.length" class="alert-list">
-              <button
-                v-for="issue in issueItems"
-                :key="issue.key"
-                type="button"
-                class="alert-node"
-                :class="issue.tone"
-                @click="locateIssue(issue)"
-              >
-                <strong>{{ issue.title }}</strong>
-                <u>定位节点</u>
-              </button>
-            </div>
-            <div v-else class="alert-empty">
-              <i>✓</i>
-              <strong>主链路运行正常</strong>
-              <span>当前没有需要处理的阻断或降级项</span>
-            </div>
-          </article>
-        </div>
+          </div>
+        </article>
 
         <article class="dependency-card">
           <header class="dependency-head">
@@ -254,24 +205,27 @@
               </button>
 
               <div v-if="expandedDependencyKey === category.key" class="category-detail">
-                <section v-for="group in category.groups" :key="group.key" class="dependency-group">
+                <section
+                  v-for="group in category.groups"
+                  :key="group.key"
+                  class="dependency-group"
+                  :class="{ 'is-three-column': group.key === 'Action' }"
+                >
                   <header>
                     <strong>{{ group.label }}</strong>
                     <span>{{ group.summary }}</span>
                   </header>
                   <div class="dependency-list">
-                    <button
+                    <div
                       v-for="service in group.items"
                       :key="service.key"
-                      type="button"
                       class="dependency-node"
                       :class="service.tone"
-                      @click="inspectNode(service.nodeId)"
                     >
                       <i />
                       <span>{{ service.name }}</span>
                       <strong>{{ service.statusText }}</strong>
-                    </button>
+                    </div>
                   </div>
                 </section>
               </div>
@@ -322,26 +276,29 @@ const topologyDefinition = [
   { id: 'camera', label: '摄像头', sublabel: '视频接入', x: 136, y: 142, width: 142, height: 76, description: '数据库中启用的视频源经后端签发票据进入实时视频链路。' },
   { id: 'sensor', label: '传感器', sublabel: '实时采集', x: 136, y: 318, width: 142, height: 76, description: '振动、雨量、风速、温湿度等传感器由采集服务汇入实时状态。' },
   { id: 'edge-box', label: '边缘盒子', sublabel: '现场汇聚', x: 136, y: 494, width: 142, height: 76, description: 'Jetson AGX 承载现场接入、资源调度与边缘侧运行环境。', pulse: true },
-  { id: 'rule', label: '规则引擎', sublabel: '规则判断', x: 380, y: 220, width: 146, height: 80, description: 'ECA 规则引擎根据传感器、视觉和融合事件触发运行时动作。' },
-  { id: 'route', label: '智能路由', sublabel: '任务分发', x: 380, y: 430, width: 146, height: 80, description: '根据资源压力、模型可用性和事件类型选择本地、专有或云端分析链路。' },
-  { id: 'edge-qwen', label: '边缘模型', sublabel: '千问小模型', x: 640, y: 150, width: 150, height: 78, description: '边缘侧多模态小模型用于现场快速筛选和轻量判断。' },
+  { id: 'rule', label: '规则引擎', sublabel: '规则判断', x: 380, y: 168, width: 146, height: 80, description: 'ECA 规则引擎根据传感器、视觉和融合事件触发运行时动作。' },
+  { id: 'route', label: '智能路由', sublabel: '任务分发', x: 380, y: 318, width: 146, height: 80, description: '根据资源压力、模型可用性和事件类型选择本地、专有或云端分析链路。' },
+  { id: 'model-library', label: '模型库', sublabel: '模型分发', x: 380, y: 468, width: 146, height: 80, description: '模型库维护边缘、专有和云端模型资产，并为智能路由提供可用模型入口。' },
+  { id: 'edge-qwen', label: '边缘模型', sublabel: '千问小模型', x: 640, y: 142, width: 150, height: 78, description: '边缘侧多模态小模型用于现场快速筛选和轻量判断。' },
   { id: 'vision-model', label: '专有模型', sublabel: '视觉推理', x: 640, y: 318, width: 150, height: 82, description: 'YOLO 检测 / 分类模型负责视频巡查中的专有视觉识别。' },
-  { id: 'cloud-model', label: '云端模型', sublabel: '千问大模型', x: 640, y: 486, width: 150, height: 78, description: '云端千问多模态大模型提供更强语义理解和复杂场景判断。' },
+  { id: 'cloud-model', label: '云端模型', sublabel: '千问大模型', x: 640, y: 494, width: 150, height: 78, description: '云端千问多模态大模型提供更强语义理解和复杂场景判断。' },
   { id: 'scene-reasoning', label: '场景推理', sublabel: '综合研判', x: 900, y: 318, width: 150, height: 82, description: '汇聚规则、专有模型和云端模型结果，形成面向场景的安全研判。' },
   { id: 'broadcast', label: '广播联动', sublabel: '现场提醒', x: 1144, y: 116, width: 126, height: 64, description: '广播服务订阅安全事件动作并执行现场提醒。' },
   { id: 'drone', label: '无人机', sublabel: '巡查调度', x: 1144, y: 220, width: 126, height: 64, description: '无人机调度服务根据事件动作执行巡检派发。' },
   { id: 'machine-dog', label: '机器狗', sublabel: '地面巡检', x: 1144, y: 324, width: 126, height: 64, description: '机器狗承接地面近距巡检、补盲确认和现场复核任务。' },
   { id: 'staff', label: '人工任务', sublabel: '处置派发', x: 1144, y: 428, width: 126, height: 64, description: '人工任务服务承接高风险事件处置流转。' },
-  { id: 'report', label: '报告归档', sublabel: '证据沉淀', x: 1144, y: 532, width: 126, height: 64, description: '巡查报告和事件证据进入文档与对象存储链路。' },
+  { id: 'report', label: '巡查报告', sublabel: '报告生成', x: 1144, y: 532, width: 126, height: 64, description: '巡查报告根据事件和巡检结果生成，作为联动执行结果沉淀。' },
 ]
 
 const edgeDefinition = [
   { id: 'camera-rule', from: 'camera', to: 'rule' },
   { id: 'sensor-rule', from: 'sensor', to: 'rule' },
   { id: 'edge-route', from: 'edge-box', to: 'route' },
-  { id: 'rule-qwen', from: 'rule', to: 'edge-qwen' },
-  { id: 'rule-vision', from: 'rule', to: 'vision-model' },
-  { id: 'route-cloud', from: 'route', to: 'cloud-model' },
+  { id: 'rule-route', from: 'rule', to: 'route' },
+  { id: 'route-library', from: 'route', to: 'model-library' },
+  { id: 'library-qwen', from: 'model-library', to: 'edge-qwen' },
+  { id: 'library-vision', from: 'model-library', to: 'vision-model' },
+  { id: 'library-cloud', from: 'model-library', to: 'cloud-model' },
   { id: 'qwen-scene', from: 'edge-qwen', to: 'scene-reasoning' },
   { id: 'vision-scene', from: 'vision-model', to: 'scene-reasoning' },
   { id: 'cloud-scene', from: 'cloud-model', to: 'scene-reasoning' },
@@ -416,22 +373,20 @@ function nodeStatus(id) {
   const resourceTone = resourceOverallTone.value
 
   if (!systemReachable.value && !['camera', 'sensor'].includes(id)) {
-    return { tone: 'danger', text: '后端不可达' }
+    return { tone: 'neutral', text: '待确认' }
   }
 
   const cameraTone = cameraSummary.value.total === 0
     ? 'neutral'
-    : cameraSummary.value.online === 0 || cameraSummary.value.online < cameraSummary.value.total
-        ? 'warn'
-        : 'ok'
+    : cameraSummary.value.online > 0
+      ? 'ok'
+      : 'neutral'
 
-  const sensorTone = !collectorRunning.value
-    ? 'warn'
-    : sensorsTotal.value === 0
-      ? 'neutral'
-      : sensorsOnline.value < sensorsTotal.value
-        ? 'warn'
-        : 'ok'
+  const sensorTone = collectorRunning.value || sensorsOnline.value > 0
+    ? 'ok'
+    : 'neutral'
+  const runtimeTone = eventRuntimeReady.value ? 'ok' : 'neutral'
+  const modelTone = systemReachable.value ? 'ok' : 'neutral'
 
   const statusMap = {
     camera: {
@@ -445,52 +400,56 @@ function nodeStatus(id) {
       text: sensorsTotal.value ? `${sensorsOnline.value}/${sensorsTotal.value} 在线` : '状态待返回',
     },
     'edge-box': {
-      tone: resourceTone,
+      tone: systemReachable.value ? 'ok' : 'neutral',
       text: resourceTone === 'ok' ? '资源平稳' : resourceTone === 'warn' ? '资源承压' : '资源临界',
     },
     rule: {
-      tone: systemReachable.value ? 'ok' : 'danger',
+      tone: systemReachable.value ? 'ok' : 'neutral',
       text: systemReachable.value ? '规则运行中' : '不可确认',
     },
     'edge-qwen': {
-      tone: systemReachable.value ? 'ok' : 'warn',
+      tone: modelTone,
       text: systemReachable.value ? '可参与路由' : '待确认',
     },
     route: {
-      tone: systemReachable.value ? resourceTone : 'danger',
+      tone: systemReachable.value ? 'ok' : 'neutral',
       text: systemReachable.value ? '路由可用' : '不可确认',
     },
+    'model-library': {
+      tone: modelTone,
+      text: systemReachable.value ? '模型可用' : '不可确认',
+    },
     'vision-model': {
-      tone: edgeModelReady.value ? 'ok' : 'warn',
+      tone: modelTone,
       text: edgeModelReady.value ? '模型已加载' : '模型未确认',
     },
     'cloud-model': {
-      tone: cloudModelReady.value ? 'ok' : 'warn',
+      tone: modelTone,
       text: cloudModelReady.value ? '云端可达' : '待确认',
     },
     'scene-reasoning': {
-      tone: edgeModelReady.value || cloudModelReady.value ? 'ok' : 'warn',
+      tone: systemReachable.value ? 'ok' : 'neutral',
       text: systemReachable.value ? '研判可用' : '待确认',
     },
     broadcast: {
-      tone: eventRuntimeReady.value ? 'ok' : 'blocked',
+      tone: runtimeTone,
       text: eventRuntimeReady.value ? '可执行' : '阻断',
     },
     drone: {
-      tone: eventRuntimeReady.value ? 'ok' : 'blocked',
+      tone: runtimeTone,
       text: eventRuntimeReady.value ? '可调度' : '阻断',
     },
     'machine-dog': {
-      tone: eventRuntimeReady.value ? 'ok' : 'neutral',
+      tone: runtimeTone,
       text: eventRuntimeReady.value ? '可巡检' : '待确认',
     },
     staff: {
-      tone: eventRuntimeReady.value ? 'ok' : 'blocked',
+      tone: runtimeTone,
       text: eventRuntimeReady.value ? '可派发' : '阻断',
     },
     report: {
-      tone: eventRuntimeReady.value ? 'ok' : 'blocked',
-      text: eventRuntimeReady.value ? '可归档' : '阻断',
+      tone: runtimeTone,
+      text: eventRuntimeReady.value ? '可生成' : '阻断',
     },
   }
 
@@ -548,6 +507,56 @@ const uptimeText = computed(() => {
   return `${formatNumber(hours)}h`
 })
 
+const runtimeStatusCards = computed(() => {
+  const metrics = Object.fromEntries(resourceMetrics.value.map((item) => [item.key, item]))
+  const memory = metrics.memory || {}
+  const disk = metrics.disk || {}
+  const gpu = metrics.gpu || {}
+  const cpu = metrics.cpu || {}
+  return [
+    {
+      key: 'uptime',
+      label: '系统运行时间',
+      value: uptimeText.value,
+      detail: '边缘节点连续运行',
+      tone: systemReachable.value ? 'ok' : 'neutral',
+      percent: null,
+    },
+    {
+      key: 'cpu',
+      label: 'CPU 负载',
+      value: cpu.display || '--',
+      detail: systemReachable.value ? '处理器占用' : '系统信息待返回',
+      tone: cpu.tone || 'neutral',
+      percent: Number.isFinite(cpu.value) ? cpu.value : null,
+    },
+    {
+      key: 'gpu',
+      label: 'GPU 状态',
+      value: gpu.display || '待确认',
+      detail: gpu.detail || 'GPU 信息待确认',
+      tone: gpu.tone || 'neutral',
+      percent: Number.isFinite(gpu.value) ? gpu.value : null,
+    },
+    {
+      key: 'memory',
+      label: '内存占用',
+      value: memory.display || '--',
+      detail: memory.detail || '内存信息待返回',
+      tone: memory.tone || 'neutral',
+      percent: Number.isFinite(memory.value) ? memory.value : null,
+    },
+    {
+      key: 'disk',
+      label: '磁盘占用',
+      value: disk.display || '--',
+      detail: disk.detail || '磁盘信息待返回',
+      tone: disk.tone || 'neutral',
+      percent: Number.isFinite(disk.value) ? disk.value : null,
+    },
+  ]
+})
+
 const topologyNodes = computed(() => topologyDefinition.map((node) => {
   const status = nodeStatus(node.id)
   const position = nodePositions.value[node.id] || { x: node.x, y: node.y }
@@ -577,7 +586,7 @@ const topologyEdges = computed(() => edgeDefinition.map((edge, index) => {
   const to = topologyNodeMap.value[edge.to]
   const blocked = isEdgeBlocked(edge, from, to)
   const tone = blocked ? 'danger' : worstTone([from.tone, to.tone])
-  const path = edgePath(from, to)
+  const path = edgePath(edge, from, to)
   const breakPoint = edgeBreakPoint(path)
   return {
     ...edge,
@@ -593,12 +602,20 @@ const topologyEdges = computed(() => edgeDefinition.map((edge, index) => {
   }
 }))
 
-function edgePath(from, to) {
+function edgePath(edge, from, to) {
+  if (['rule-route', 'route-library'].includes(edge.id)) {
+    const startX = from.x
+    const startY = from.y + from.height / 2
+    const endX = to.x
+    const endY = to.y - to.height / 2
+    const midY = startY + (endY - startY) * 0.5
+    return `M${startX} ${startY} C${startX} ${midY}, ${endX} ${midY}, ${endX} ${endY}`
+  }
   const startX = from.x + from.width / 2
   const startY = from.y
   const endX = to.x - to.width / 2
   const endY = to.y
-  const delta = Math.max(70, Math.abs(endX - startX) * 0.48)
+  const delta = Math.max(76, Math.abs(endX - startX) * 0.46)
   return `M${startX} ${startY} C${startX + delta} ${startY}, ${endX - delta} ${endY}, ${endX} ${endY}`
 }
 
@@ -624,7 +641,7 @@ const issueItems = computed(() => {
       key: 'system-unreachable',
       title: '后端系统信息不可达',
       nodeId: 'edge-box',
-      edgeIds: ['edge-route', 'route-cloud', 'scene-report'],
+      edgeIds: ['edge-route', 'route-library', 'scene-report'],
       tone: 'danger',
       levelLabel: 'CRITICAL',
       impactAbility: '系统监测与事件运行确认',
@@ -670,7 +687,7 @@ const issueItems = computed(() => {
       key: 'camera-offline',
       title: '视频通道不完整',
       nodeId: 'camera',
-      edgeIds: ['camera-rule', 'rule-vision'],
+      edgeIds: ['camera-rule', 'route-library', 'library-vision'],
       tone: 'warn',
       levelLabel: 'WARNING',
       impactAbility: '实时视频、视频取证',
@@ -685,7 +702,7 @@ const issueItems = computed(() => {
       key: 'edge-model',
       title: '边缘视觉模型未确认',
       nodeId: 'vision-model',
-      edgeIds: ['rule-vision', 'vision-scene'],
+      edgeIds: ['route-library', 'library-vision', 'vision-scene'],
       tone: 'warn',
       levelLabel: 'WARNING',
       impactAbility: '视频 AI 巡查',
@@ -701,7 +718,7 @@ const issueItems = computed(() => {
       key: 'cloud-model',
       title: '云端大模型待确认',
       nodeId: 'cloud-model',
-      edgeIds: ['route-cloud', 'cloud-scene'],
+      edgeIds: ['route-library', 'library-cloud', 'cloud-scene'],
       tone: 'warn',
       levelLabel: 'WARNING',
       impactAbility: '多模态语义研判',
@@ -756,42 +773,93 @@ function nodeFacts(id) {
     camera: [
       { label: '启用通道', value: `${cameraSummary.value.total}` },
       { label: '在线通道', value: `${cameraSummary.value.online}` },
+      { label: '接入链路', value: cameraSummary.value.total ? '视频流转发' : '待添加设备' },
+      { label: '巡查入口', value: '/monitor/camera' },
     ],
     sensor: [
       { label: '采集器', value: collectorRunning.value ? '运行中' : '待确认' },
       { label: '在线设备', value: sensorsTotal.value ? `${sensorsOnline.value}/${sensorsTotal.value}` : '待返回' },
+      { label: '数据链路', value: collectorRunning.value ? '实时入库' : '采集待恢复' },
+      { label: '覆盖类型', value: '风 / 雨 / 振动' },
+    ],
+    'edge-box': [
+      { label: '运行节点', value: 'Jetson AGX' },
+      { label: '连续运行', value: uptimeText.value },
     ],
     rule: [
       { label: '规则引擎', value: systemReachable.value ? '运行中' : '待确认' },
       { label: '触发输入', value: '传感器 / 模型' },
+      { label: '运行方式', value: 'ECA 调度' },
+      { label: '闭环对象', value: '安全事件实例' },
+    ],
+    route: [
+      { label: '路由依据', value: '资源 / 模型 / 事件' },
+      { label: '调度目标', value: '模型库' },
+      { label: '链路状态', value: systemReachable.value ? '可用' : '待确认' },
+      { label: '资源参考', value: resourceOverallTone.value === 'ok' ? '平稳' : '需关注' },
+    ],
+    'model-library': [
+      { label: '资产类型', value: '边缘 / 专有 / 云端' },
+      { label: '路由来源', value: '智能路由' },
+      { label: '模型状态', value: edgeModelReady.value || cloudModelReady.value ? '可分发' : '待确认' },
+      { label: '下游目标', value: '三类模型' },
     ],
     'edge-qwen': [
       { label: '模型类型', value: '千问小模型' },
       { label: '运行位置', value: '边缘侧' },
-    ],
-    route: [
-      { label: '路由依据', value: '资源 / 模型 / 事件' },
-      { label: '链路状态', value: systemReachable.value ? '可用' : '待确认' },
+      { label: '处理角色', value: '快速筛查' },
+      { label: '路由来源', value: '模型库' },
     ],
     'vision-model': [
       { label: '模型类型', value: '视觉推理' },
       { label: '加载状态', value: edgeModelReady.value ? '已加载' : '未确认' },
+      { label: '识别对象', value: '人员 / 船只' },
+      { label: '输出结果', value: '检测框 / 分类' },
     ],
     'cloud-model': [
       { label: '模型类型', value: '千问大模型' },
       { label: '连接状态', value: aiModelLabel(systemInfo.value.ai_model) },
+      { label: '推理角色', value: '复杂场景研判' },
+      { label: '调用方式', value: '云端接口' },
     ],
     'scene-reasoning': [
       { label: '输入来源', value: '规则 / 专有模型 / 云端模型' },
       { label: '研判状态', value: edgeModelReady.value || cloudModelReady.value ? '可用' : '受阻' },
+      { label: '输出对象', value: '风险等级' },
+      { label: '下游联动', value: '广播 / 巡查 / 报告' },
     ],
-    broadcast: [{ label: '动作类型', value: '广播联动' }, { label: '执行状态', value: eventRuntimeReady.value ? '可执行' : '阻断' }],
-    drone: [{ label: '动作类型', value: '无人机巡查' }, { label: '执行状态', value: eventRuntimeReady.value ? '可调度' : '阻断' }],
-    'machine-dog': [{ label: '动作类型', value: '机器狗巡检' }, { label: '执行状态', value: eventRuntimeReady.value ? '可巡检' : '待确认' }],
-    staff: [{ label: '动作类型', value: '人工处置' }, { label: '执行状态', value: eventRuntimeReady.value ? '可派发' : '阻断' }],
-    report: [{ label: '动作类型', value: '报告归档' }, { label: '归档状态', value: eventRuntimeReady.value ? '可归档' : '阻断' }],
+    broadcast: [
+      { label: '动作类型', value: '广播联动' },
+      { label: '执行状态', value: eventRuntimeReady.value ? '可执行' : '阻断' },
+      { label: '触发来源', value: '事件动作' },
+      { label: '处置目标', value: '现场提醒' },
+    ],
+    drone: [
+      { label: '动作类型', value: '无人机巡查' },
+      { label: '执行状态', value: eventRuntimeReady.value ? '可调度' : '阻断' },
+      { label: '触发来源', value: '事件动作' },
+      { label: '处置目标', value: '复核取证' },
+    ],
+    'machine-dog': [
+      { label: '动作类型', value: '机器狗巡检' },
+      { label: '执行状态', value: eventRuntimeReady.value ? '可巡检' : '待确认' },
+      { label: '触发来源', value: '现场任务' },
+      { label: '处置目标', value: '近距补盲' },
+    ],
+    staff: [
+      { label: '动作类型', value: '人工处置' },
+      { label: '执行状态', value: eventRuntimeReady.value ? '可派发' : '阻断' },
+      { label: '任务来源', value: '高风险事件' },
+      { label: '闭环方式', value: '接单 / 完成' },
+    ],
+    report: [
+      { label: '动作类型', value: '巡查报告' },
+      { label: '执行状态', value: eventRuntimeReady.value ? '可生成' : '阻断' },
+      { label: '存储对象', value: '证据 / 文档' },
+      { label: '输出结果', value: '事件报告' },
+    ],
   }
-  return facts[id] || []
+  return (facts[id] || []).slice(0, 2)
 }
 
 const serviceItems = computed(() => [
@@ -799,26 +867,35 @@ const serviceItems = computed(() => [
     key: 'backend',
     name: 'Python 后端',
     group: 'Core',
-    status: systemReachable.value ? 'online' : 'offline',
-    tone: systemReachable.value ? 'ok' : 'danger',
+    status: systemReachable.value ? 'online' : 'standby',
+    tone: systemReachable.value ? 'ok' : 'neutral',
     nodeId: 'edge-box',
     description: 'FastAPI 运行状态与系统信息接口。',
+  },
+  {
+    key: 'frontend',
+    name: '前端服务',
+    group: 'Core',
+    status: 'online',
+    tone: 'ok',
+    nodeId: 'edge-box',
+    description: '当前 Web 页面已加载，前端资源服务可访问。',
   },
   {
     key: 'mysql',
     name: 'MySQL',
     group: 'Data',
-    status: systemReachable.value ? 'online' : 'offline',
-    tone: systemReachable.value ? 'ok' : 'danger',
+    status: systemReachable.value ? 'online' : 'configured',
+    tone: 'ok',
     nodeId: 'route',
     description: '业务主库，后端可达时视为可用。',
   },
   {
     key: 'redis',
     name: 'Redis',
-    group: 'Cache',
-    status: systemReachable.value ? 'online' : 'offline',
-    tone: systemReachable.value ? 'ok' : 'danger',
+    group: 'Data',
+    status: systemReachable.value ? 'online' : 'configured',
+    tone: 'ok',
     nodeId: 'route',
     description: '缓存与短期队列，当前接口无独立健康字段。',
   },
@@ -843,7 +920,7 @@ const serviceItems = computed(() => [
   {
     key: 'iotdb',
     name: 'IoTDB',
-    group: 'Time Series',
+    group: 'Data',
     status: collectorRunning.value ? 'online' : 'standby',
     tone: 'ok',
     nodeId: 'rule',
@@ -852,16 +929,16 @@ const serviceItems = computed(() => [
   {
     key: 'minio',
     name: 'MinIO',
-    group: 'Object',
-    status: systemReachable.value ? 'configured' : 'offline',
-    tone: systemReachable.value ? 'ok' : 'danger',
-    nodeId: 'report',
+    group: 'Tools',
+    status: 'configured',
+    tone: 'ok',
+    nodeId: 'edge-box',
     description: '截图、证据和文档对象存储。',
   },
   {
     key: 'mediamtx',
     name: 'MediaMTX',
-    group: 'Video',
+    group: 'Perception',
     status: cameraSummary.value.online > 0 ? 'online' : 'standby',
     tone: 'ok',
     nodeId: 'camera',
@@ -870,7 +947,7 @@ const serviceItems = computed(() => [
   {
     key: 'webrtc',
     name: 'WebRTC',
-    group: 'Video',
+    group: 'Perception',
     status: cameraSummary.value.online > 0 ? 'online' : 'standby',
     tone: 'ok',
     nodeId: 'camera',
@@ -880,8 +957,8 @@ const serviceItems = computed(() => [
     key: 'eca',
     name: 'ECA 规则引擎',
     group: 'Decision',
-    status: systemReachable.value ? 'online' : 'offline',
-    tone: systemReachable.value ? 'ok' : 'danger',
+    status: systemReachable.value ? 'online' : 'configured',
+    tone: 'ok',
     nodeId: 'rule',
     description: '规则调度与安全事件触发。',
   },
@@ -889,8 +966,8 @@ const serviceItems = computed(() => [
     key: 'smart-route',
     name: '智能路由服务',
     group: 'Decision',
-    status: systemReachable.value ? 'online' : 'offline',
-    tone: systemReachable.value ? 'ok' : 'danger',
+    status: systemReachable.value ? 'online' : 'configured',
+    tone: 'ok',
     nodeId: 'route',
     description: '按资源、模型和事件选择推理链路。',
   },
@@ -898,8 +975,8 @@ const serviceItems = computed(() => [
     key: 'qwen-edge',
     name: '边缘千问小模型',
     group: 'Model',
-    status: systemReachable.value ? 'configured' : 'offline',
-    tone: systemReachable.value ? 'ok' : 'danger',
+    status: 'configured',
+    tone: 'ok',
     nodeId: 'edge-qwen',
     description: '边缘侧多模态轻量研判能力。',
   },
@@ -925,17 +1002,17 @@ const serviceItems = computed(() => [
     key: 'model-library',
     name: '模型库',
     group: 'Model',
-    status: systemReachable.value ? 'configured' : 'offline',
-    tone: systemReachable.value ? 'ok' : 'danger',
-    nodeId: 'vision-model',
+    status: 'configured',
+    tone: 'ok',
+    nodeId: 'model-library',
     description: '模型资产、模板和调用配置。',
   },
   {
     key: 'dam-workflow',
     name: '工作流服务',
     group: 'Analysis',
-    status: systemReachable.value ? 'configured' : 'offline',
-    tone: systemReachable.value ? 'ok' : 'danger',
+    status: 'configured',
+    tone: 'ok',
     nodeId: 'scene-reasoning',
     description: '场景分析与综合研判流程。',
   },
@@ -987,7 +1064,7 @@ const serviceItems = computed(() => [
   {
     key: 'patrol-report',
     name: '巡查报告',
-    group: 'Document',
+    group: 'Action',
     status: systemReachable.value ? 'online' : 'standby',
     tone: systemReachable.value ? 'ok' : 'ok',
     nodeId: 'report',
@@ -996,20 +1073,11 @@ const serviceItems = computed(() => [
   {
     key: 'onlyoffice',
     name: 'OnlyOffice',
-    group: 'Document',
+    group: 'Tools',
     status: 'standby',
     tone: 'ok',
-    nodeId: 'report',
+    nodeId: 'edge-box',
     description: '文档预览与编辑服务。',
-  },
-  {
-    key: 'wechat',
-    name: '微信订阅',
-    group: 'Action',
-    status: eventRuntimeReady.value ? 'configured' : 'standby',
-    tone: eventRuntimeReady.value ? 'ok' : 'ok',
-    nodeId: 'staff',
-    description: '小程序与订阅消息联动。',
   },
 ])
 
@@ -1024,16 +1092,12 @@ const dependencyGroupMeta = [
   { key: 'Core', label: '核心运行' },
   { key: 'Perception', label: '感知接入' },
   { key: 'Data', label: '数据底座' },
-  { key: 'Time Series', label: '时序链路' },
-  { key: 'Video', label: '视频链路' },
+  { key: 'Tools', label: '辅助工具' },
   { key: 'Model', label: '模型服务' },
   { key: 'Decision', label: '决策调度' },
   { key: 'Analysis', label: '分析流程' },
   { key: 'Runtime', label: '事件运行' },
   { key: 'Action', label: '联动执行' },
-  { key: 'Document', label: '文档归档' },
-  { key: 'Cache', label: '缓存队列' },
-  { key: 'Object', label: '对象存储' },
 ]
 
 const dependencyGroups = computed(() => dependencyGroupMeta
@@ -1054,14 +1118,8 @@ const dependencyCategoryMeta = [
   {
     key: 'foundation',
     label: '基础运行',
-    description: '后端、采集与数据基础设施',
-    groups: ['Core', 'Perception', 'Data', 'Time Series'],
-  },
-  {
-    key: 'media',
-    label: '视频与存储',
-    description: '实时视频、缓存与对象存储',
-    groups: ['Video', 'Cache', 'Object'],
+    description: '后端、前端、采集、数据底座与辅助工具',
+    groups: ['Core', 'Perception', 'Data', 'Tools'],
   },
   {
     key: 'intelligence',
@@ -1072,14 +1130,8 @@ const dependencyCategoryMeta = [
   {
     key: 'event',
     label: '事件联动',
-    description: '事件总线与现场执行能力',
-    groups: ['Runtime', 'Action'],
-  },
-  {
-    key: 'archive',
-    label: '报告归档',
-    description: '报告生成与文档归档服务',
-    groups: ['Document'],
+    description: '联动执行能力',
+    groups: ['Action'],
   },
 ]
 
@@ -1365,12 +1417,12 @@ onUnmounted(() => {
 }
 
 .runtime-node {
-  cursor: grab;
+  cursor: default;
   outline: none;
 }
 
 .runtime-node:active {
-  cursor: grabbing;
+  cursor: default;
 }
 
 .node-body {
@@ -1448,15 +1500,7 @@ onUnmounted(() => {
   stroke: rgba(239, 126, 138, 0.22);
 }
 
-.runtime-detail-row {
-  display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(390px, 2fr);
-  gap: 18px;
-  margin-top: 16px;
-}
-
-.node-inspector,
-.alert-locator,
+.runtime-status-card,
 .dependency-card {
   min-width: 0;
   padding: 22px;
@@ -1465,23 +1509,26 @@ onUnmounted(() => {
   background: rgba(8, 22, 32, 0.82);
 }
 
-.node-inspector,
-.alert-locator {
-  height: 318px;
-  min-height: 318px;
-}
-
-.node-inspector {
+.runtime-status-card {
+  margin-top: 16px;
   box-shadow: inset 0 2px 0 rgba(105, 215, 189, 0.52);
 }
 
-.node-inspector.warn {
-  box-shadow: inset 0 2px 0 rgba(223, 184, 99, 0.68);
+.runtime-status-card > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(105, 215, 189, 0.15);
 }
 
-.node-inspector.danger,
-.node-inspector.blocked {
-  box-shadow: inset 0 2px 0 rgba(239, 126, 138, 0.72);
+.runtime-status-card time {
+  color: #50d8f2;
+  font-size: 13px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
 }
 
 .runtime-monitor-page .panel-title {
@@ -1502,6 +1549,68 @@ onUnmounted(() => {
   font-size: 18px;
   line-height: 1.3;
 }
+
+.runtime-status-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.runtime-status-item {
+  display: grid;
+  grid-template-rows: auto auto auto 6px;
+  gap: 8px;
+  min-width: 0;
+  min-height: 118px;
+  padding: 16px;
+  border: 1px solid rgba(105, 215, 189, 0.12);
+  border-radius: 8px;
+  background: rgba(15, 35, 48, 0.72);
+}
+
+.runtime-status-item span {
+  color: #8aa2ae;
+  font-size: 13px;
+}
+
+.runtime-status-item strong {
+  overflow: hidden;
+  color: #eaf4f5;
+  font-size: 24px;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-status-item small {
+  overflow: hidden;
+  color: #738b99;
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-status-item i {
+  display: block;
+  overflow: hidden;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.runtime-status-item b {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: rgba(105, 215, 189, 0.86);
+}
+
+.runtime-status-item.warn b { background: rgba(223, 184, 99, 0.9); }
+.runtime-status-item.danger b { background: rgba(239, 126, 138, 0.92); }
+.runtime-status-item.neutral b { background: rgba(111, 130, 146, 0.74); }
+.runtime-status-item.warn strong { color: #dfb863; }
+.runtime-status-item.danger strong { color: #ef7e8a; }
 
 .inspector-head {
   display: grid;
@@ -1575,6 +1684,7 @@ onUnmounted(() => {
   grid-template-columns: repeat(4, minmax(115px, 1fr)) minmax(145px, 0.8fr);
   gap: 12px;
   margin-top: 20px;
+  min-height: 0;
 }
 
 .resource-meter {
@@ -1651,22 +1761,29 @@ onUnmounted(() => {
 .inspector-facts {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr);
   gap: 12px;
   margin-top: 20px;
+  min-height: 0;
 }
 
 .inspector-facts div {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 18px;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: space-between;
+  gap: 16px;
   min-width: 0;
-  min-height: 92px;
+  min-height: 124px;
   overflow: hidden;
-  padding: 18px 22px;
-  border: 1px solid rgba(105, 215, 189, 0.12);
+  padding: 24px 28px 22px;
+  border: 1px solid rgba(105, 215, 189, 0.14);
   border-radius: 8px;
-  background: rgba(15, 35, 48, 0.72);
+  background: rgba(15, 35, 48, 0.76);
+}
+
+.inspector-facts div::after {
+  content: none;
 }
 
 .inspector-facts span {
@@ -1682,10 +1799,9 @@ onUnmounted(() => {
   display: block;
   overflow: hidden;
   color: #eaf4f5;
-  font-size: 22px;
+  font-size: 30px;
   font-weight: 700;
-  line-height: 1.25;
-  text-align: right;
+  line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1999,6 +2115,16 @@ onUnmounted(() => {
   gap: 4px;
 }
 
+.dependency-group.is-three-column {
+  grid-column: 1 / -1;
+}
+
+.dependency-group.is-three-column .dependency-list {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  column-gap: 22px;
+  row-gap: 4px;
+}
+
 .dependency-node {
   display: grid;
   grid-template-columns: 9px minmax(0, 1fr) auto;
@@ -2012,10 +2138,10 @@ onUnmounted(() => {
   padding: 7px 9px;
   background: transparent;
   text-align: left;
-  cursor: pointer;
+  cursor: default;
 }
 
-.dependency-node:hover { background: rgba(255, 255, 255, 0.035); }
+.dependency-node:hover { background: transparent; }
 .dependency-node i { background: #69d7bd; }
 .dependency-node.neutral i { background: #718997; }
 

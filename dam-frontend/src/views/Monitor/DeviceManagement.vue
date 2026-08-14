@@ -2,8 +2,8 @@
   <div class="device-admin">
     <header class="admin-header">
       <div class="title-block">
-        <h2>数据源管理</h2>
-        <p>统一维护系统数据源设备和运行状态</p>
+        <h2>感知源管理</h2>
+        <p>统一维护系统感知源设备和运行状态</p>
       </div>
       <el-button :icon="Refresh" :loading="loading" @click="loadCurrent">刷新</el-button>
     </header>
@@ -14,14 +14,23 @@
           <h3>摄像头列表</h3>
         </div>
         <div class="panel-toolbar">
+          <button type="button" class="toolbar-map-entry" @click="openMapDialog">
+            <el-icon><Aim /></el-icon>
+            <span>查看点位图</span>
+          </button>
           <el-button type="primary" :icon="Plus" @click="openCreate()">
             {{ createButtonText }}
           </el-button>
-          <el-radio-group v-model="statusFilter" class="status-filter">
-            <el-radio-button label="all">全部</el-radio-button>
-            <el-radio-button label="online">在线</el-radio-button>
-            <el-radio-button label="offline">离线</el-radio-button>
-          </el-radio-group>
+          <el-select
+            v-model="statusFilter"
+            class="status-filter-select"
+            popper-class="camera-status-filter-popper"
+            placeholder="全部状态"
+          >
+            <el-option label="全部状态" value="all" />
+            <el-option label="在线" value="online" />
+            <el-option label="离线" value="offline" />
+          </el-select>
         </div>
       </div>
     </section>
@@ -34,7 +43,7 @@
           <div class="col-connection">连接信息</div>
           <div class="col-console">控制台</div>
           <div class="col-status">状态</div>
-          <div class="col-enabled">启用</div>
+          <div class="col-enabled">启用状态</div>
           <div class="col-actions">操作</div>
         </div>
         <article v-for="row in pagedCameras" :key="row.id" class="camera-row" :class="row.connected ? 'is-online' : 'is-offline'">
@@ -52,7 +61,6 @@
             </div>
             <div v-else class="connection-masked">
               <span>已隐藏</span>
-              <small>IP / 账号 / 密码</small>
             </div>
             <el-button
               class="connection-eye"
@@ -150,13 +158,78 @@
         <el-button type="primary" :icon="Check" :loading="saving" :disabled="!connectionVerified" @click="saveCamera">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="mapDialogVisible"
+      class="camera-map-dialog"
+      title="摄像头点位图"
+      width="95vw"
+      top="3vh"
+    >
+      <div class="expanded-map-stage">
+        <img src="/dam.png" alt="大藤峡摄像头点位总览" />
+        <svg
+          v-if="selectedMapRegionPath"
+          class="expanded-map-region-layer"
+          viewBox="0 0 2168 725"
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          <defs>
+            <filter id="camera-device-region-glow" x="-14%" y="-18%" width="128%" height="136%">
+              <feGaussianBlur stdDeviation="5" result="blur" />
+              <feColorMatrix
+                in="blur"
+                type="matrix"
+                values="0 0 0 0 0.25 0 0 0 0 0.86 0 0 0 0 1 0 0 0 .88 0"
+                result="cyanGlow"
+              />
+              <feMerge>
+                <feMergeNode in="cyanGlow" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+          <path class="expanded-region-fill" :d="selectedMapRegionPath" />
+          <path class="expanded-region-halo" :d="selectedMapRegionPath" />
+          <path class="expanded-region-line" :d="selectedMapRegionPath" />
+          <g v-if="selectedMapRegionCallout" class="expanded-region-callout">
+            <rect
+              :x="selectedMapRegionCallout.x"
+              :y="selectedMapRegionCallout.y"
+              :width="selectedMapRegionCallout.width"
+              :height="34"
+              rx="5"
+            />
+            <text
+              :x="selectedMapRegionCallout.x + selectedMapRegionCallout.width / 2"
+              :y="selectedMapRegionCallout.y + 22"
+            >
+              {{ selectedMapRegionCallout.label }}
+            </text>
+          </g>
+        </svg>
+        <button
+          v-for="point in cameraPointSlots"
+          :key="`expanded-map-point-${point.no}`"
+          type="button"
+          class="expanded-map-point"
+          :class="{ active: point.no === selectedPointNo, offline: !point.camera?.connected, empty: !point.camera }"
+          :style="cameraPointStyle(point)"
+          :title="point.camera?.name || `${point.no}号监测点暂未接入`"
+          @click="selectMapPoint(point.no)"
+        >
+          <span>{{ point.no }}</span>
+        </button>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Check, Connection, Hide, Plus, Refresh, View } from '@element-plus/icons-vue'
+import { Aim, Check, Connection, Hide, Plus, Refresh, View } from '@element-plus/icons-vue'
 import { createCameraDevice, deleteCameraDevice, getCameraDevicePassword, getCameraDevices, testCameraDeviceConnection, updateCameraDevice } from '@/api/camera'
 
 const loading = ref(false)
@@ -164,9 +237,11 @@ const saving = ref(false)
 const testing = ref(false)
 const cameras = ref([])
 const cameraDialog = ref(false)
+const mapDialogVisible = ref(false)
+const selectedPointNo = ref(9)
 const editingCamera = ref(null)
 const verifiedKey = ref('')
-const statusFilter = ref('all')
+const statusFilter = ref('')
 const cameraPage = ref(1)
 const pageSize = 10
 const connectionVisible = ref({})
@@ -191,16 +266,41 @@ const createButtonText = computed(() => '添加摄像头')
 const connectionKey = computed(() => JSON.stringify([cameraForm.ip_address, cameraForm.rtsp_port, cameraForm.username, cameraForm.password]))
 const connectionVerified = computed(() => !needsTest.value || verifiedKey.value === connectionKey.value)
 const needsTest = computed(() => !editingCamera.value || connectionKey.value !== editingCamera.value.connectionKey)
+const cameraPointDefinitions = [
+  { no: 1, x: 17.3410, y: 40.8304 },
+  { no: 2, x: 7.3988, y: 15.2249 },
+  { no: 3, x: 41.8497, y: 74.0484 },
+  { no: 4, x: 47.3988, y: 38.0623 },
+  { no: 5, x: 49.2486, y: 38.0623 },
+  { no: 6, x: 66.3584, y: 52.5952 },
+  { no: 7, x: 68.2081, y: 52.5952 },
+  { no: 8, x: 57.3410, y: 75.4325 },
+  { no: 9, x: 91.7919, y: 24.2215 },
+]
+const cameraRegionPaths = {
+  1: 'M371 317 L297 320 L259 324 L230 336 L191 363 L176 386 L179 425 L179 453 L181 487 L178 536 L200 549 L214 554 L231 554 L244 557 L262 556 L272 560 L295 557 L298 558 L327 560 L351 567 L372 570 L374 577 L383 583 L395 581 L408 578 L422 576 L436 571 L449 569 L463 561 L477 555 L489 552 L502 553 L511 546 L521 535 L524 521 L540 510 L538 492 L542 483 L539 466 L539 450 L538 433 L541 425 L542 406 L542 391 L539 380 L539 368 L537 358 L536 347 L531 340 L524 334 L514 332 L494 330 L470 339 L448 339 L427 343 L416 339 Z',
+  3: 'M847 460 L831 450 L830 424 L972 423 L1032 430 L1051 456 L1047 477 L1044 504 L1030 518 L1024 525 L927 544 L856 533 L852 523 L844 524 Z',
+  4: 'M844 255 L847 296 L831 304 L829 413 L867 415 L968 415 L1031 422 L1043 405 L1046 376 L1044 355 L1043 335 L1038 319 L1039 302 L1033 291 L1006 276 L952 262 L928 257 Z',
+  5: 'M1058 300 L1053 328 L1054 339 L1054 360 L1053 376 L1053 395 L1051 413 L1066 428 L1089 437 L1136 439 L1226 447 L1256 442 L1258 435 L1266 416 L1274 393 L1276 379 L1276 364 L1272 358 L1221 351 L1194 346 L1159 337 Z',
+  6: 'M1439 335 L1383 352 L1367 353 L1355 361 L1343 365 L1332 368 L1318 362 L1299 361 L1288 361 L1283 379 L1282 396 L1279 415 L1279 436 L1279 445 L1279 466 L1283 483 L1283 495 L1286 510 L1296 514 L1304 516 L1318 510 L1334 512 L1367 508 L1367 497 L1390 486 L1398 488 L1424 476 L1432 468 L1441 471 L1464 457 Z',
+  7: 'M1447 335 L1576 287 L1617 282 L1649 283 L1730 280 L1749 271 L1778 271 L1792 263 L1799 278 L1804 299 L1812 330 L1809 360 L1809 374 L1798 385 L1781 393 L1671 406 L1589 415 L1519 444 L1514 441 L1474 450 Z',
+  8: 'M1273 520 L1259 521 L1230 526 L1193 540 L1178 541 L1165 530 L1147 545 L1049 523 L1049 513 L1051 498 L1054 486 L1055 467 L1061 456 L1073 445 L1090 444 L1126 445 L1165 451 L1199 452 L1224 454 L1249 456 L1261 453 L1269 461 L1274 479 L1279 503 L1280 517 Z',
+  9: 'M2127 373 L2108 370 L2104 375 L2084 378 L2066 375 L2030 377 L1984 376 L1944 378 L1915 379 L1897 381 L1872 384 L1843 385 L1836 385 L1826 389 L1823 398 L1824 408 L1838 418 L1877 412 L1898 408 L1922 411 L1944 415 L1974 419 L2005 422 L2025 412 L2041 409 L2056 407 L2066 410 L2088 410 L2104 408 L2121 410 L2134 406 L2142 393 L2141 381 L2142 373 Z',
+}
 const filteredCameras = computed(() => {
   return cameras.value.filter((camera) => {
     const status = camera.connected ? 'online' : 'offline'
-    return statusFilter.value === 'all' || statusFilter.value === status
+    return !statusFilter.value || statusFilter.value === 'all' || statusFilter.value === status
   })
 })
 const pagedCameras = computed(() => {
   const start = (cameraPage.value - 1) * pageSize
   return filteredCameras.value.slice(start, start + pageSize)
 })
+const cameraPointSlots = computed(() => buildCameraPointSlots())
+const selectedPointSlot = computed(() => cameraPointSlots.value.find((point) => point.no === selectedPointNo.value) || cameraPointSlots.value[0])
+const selectedMapRegionPath = computed(() => cameraRegionPaths[selectedPointNo.value] || regionPathFromPoint(selectedPointSlot.value))
+const selectedMapRegionCallout = computed(() => regionCalloutFromPath(selectedMapRegionPath.value, selectedPointNo.value))
 
 watch(statusFilter, () => {
   cameraPage.value = 1
@@ -224,6 +324,98 @@ async function loadCurrent() {
     ElMessage.error(error.response?.data?.detail || '数据加载失败')
   } finally {
     loading.value = false
+  }
+}
+
+function openMapDialog() {
+  selectedPointNo.value = 9
+  mapDialogVisible.value = true
+}
+
+function selectMapPoint(pointNo) {
+  selectedPointNo.value = pointNo
+}
+
+function cameraPointNo(camera) {
+  const direct = Number(camera?.point_no ?? camera?.pointNo ?? camera?.monitor_point_no)
+  if (Number.isInteger(direct) && direct >= 1 && direct <= 9) return direct
+  const text = [
+    camera?.name,
+    camera?.camera_name,
+    camera?.install_address,
+    camera?.description,
+  ].filter(Boolean).join(' ')
+  const match = text.match(/([1-9])\s*号/)
+  return match ? Number(match[1]) : null
+}
+
+function buildCameraPointSlots() {
+  const assigned = new Map()
+  const unassigned = []
+  cameras.value.forEach((camera) => {
+    const no = cameraPointNo(camera)
+    if (no && !assigned.has(no)) assigned.set(no, camera)
+    else unassigned.push(camera)
+  })
+  if (!assigned.has(9) && unassigned.length) assigned.set(9, unassigned[0])
+  return cameraPointDefinitions.map((point) => ({ ...point, camera: assigned.get(point.no) || null }))
+}
+
+function cameraPointStyle(point) {
+  const camera = point.camera
+  const x = Number(camera?.map_x ?? camera?.mapX ?? camera?.point_x ?? camera?.longitude_percent ?? point.x)
+  const y = Number(camera?.map_y ?? camera?.mapY ?? camera?.point_y ?? camera?.latitude_percent ?? point.y)
+  if (Number.isFinite(x) && Number.isFinite(y)) {
+    return { left: `${Math.max(4, Math.min(96, x))}%`, top: `${Math.max(6, Math.min(94, y))}%` }
+  }
+  return { left: '50%', top: '50%' }
+}
+
+function regionPathFromPoint(point) {
+  if (!point) return ''
+  const centerX = Number(point.x) / 100 * 2168
+  const centerY = Number(point.y) / 100 * 725
+  if (!Number.isFinite(centerX) || !Number.isFinite(centerY)) return ''
+  const width = 150
+  const height = 76
+  const left = Math.max(24, Math.min(2168 - width - 24, centerX - width / 2))
+  const top = Math.max(24, Math.min(725 - height - 24, centerY - height / 2))
+  const right = left + width
+  const bottom = top + height
+  return [
+    `M${left} ${top + 18}`,
+    `L${left + 18} ${top}`,
+    `L${right - 26} ${top + 4}`,
+    `L${right} ${top + 28}`,
+    `L${right - 14} ${bottom - 8}`,
+    `L${left + 32} ${bottom}`,
+    `L${left} ${bottom - 22}`,
+    'Z',
+  ].join(' ')
+}
+
+function pointsFromRegionPath(path) {
+  const values = String(path || '').match(/-?\d+(\.\d+)?/g)?.map(Number) || []
+  const points = []
+  for (let index = 0; index < values.length; index += 2) {
+    points.push({ x: values[index], y: values[index + 1] })
+  }
+  return points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+}
+
+function regionCalloutFromPath(path, pointNo) {
+  const points = pointsFromRegionPath(path)
+  if (!points.length) return null
+  const minX = Math.min(...points.map((point) => point.x))
+  const maxX = Math.max(...points.map((point) => point.x))
+  const minY = Math.min(...points.map((point) => point.y))
+  const label = `${pointNo}号摄像头监测区域`
+  const width = Math.max(170, label.length * 14)
+  return {
+    label,
+    width,
+    x: Math.max(16, Math.min(2168 - width - 16, (minX + maxX) / 2 - width / 2)),
+    y: Math.max(18, minY - 58),
   }
 }
 
@@ -438,7 +630,7 @@ h2 {
 .panel-toolbar {
   flex: 0 0 auto;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 14px;
   flex-wrap: nowrap;
 }
 .panel-toolbar :deep(.el-button) {
@@ -469,40 +661,56 @@ h2 {
   padding: 0;
   overflow: hidden;
 }
-.status-filter {
+.toolbar-map-entry {
   flex: 0 0 auto;
+  height: 42px;
   display: inline-flex;
-  gap: 0;
-  padding: 2px;
-  border: 1px solid rgba(84, 148, 193, .28);
-  border-radius: 8px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 18px 0 12px;
+  border: 1px solid rgba(72, 216, 255, .58);
+  border-radius: 6px;
+  color: #e8faff;
+  background: linear-gradient(135deg, rgba(23, 116, 155, .88), rgba(10, 59, 88, .86));
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(213, 247, 255, .10), 0 0 18px rgba(72, 216, 255, .16);
+  transition: border-color .18s ease, background .18s ease, color .18s ease;
+}
+.toolbar-map-entry:hover {
+  border-color: rgba(126, 238, 255, .82);
+  color: #ffffff;
+  background: linear-gradient(135deg, rgba(30, 136, 181, .96), rgba(12, 72, 108, .92));
+}
+.toolbar-map-entry .el-icon {
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 5px;
+  color: #031825;
+  background: #48d8ff;
+  font-size: 18px;
+}
+.status-filter-select {
+  width: 116px;
+  flex: 0 0 auto;
+}
+.status-filter-select :deep(.el-select__wrapper) {
+  min-height: 34px;
+  border-radius: 6px;
   background: #0d2740;
-  overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(84, 148, 193, .36) inset;
 }
-.status-filter :deep(.el-radio-button) {
-  margin: 0;
+.status-filter-select :deep(.el-select__selected-item),
+.status-filter-select :deep(.el-select__placeholder) {
+  color: #d7edf6;
+  font-weight: 700;
 }
-.status-filter :deep(.el-radio-button__inner) {
-  min-width: 62px;
-  height: 32px;
-  padding: 0 12px;
-  border: 0 !important;
-  border-radius: 0;
-  color: #a7c0d3;
-  background: transparent;
-  line-height: 32px;
-  box-shadow: none !important;
-}
-.status-filter :deep(.el-radio-button:first-child .el-radio-button__inner) {
-  border-radius: 5px 0 0 5px;
-}
-.status-filter :deep(.el-radio-button:last-child .el-radio-button__inner) {
-  border-radius: 0 5px 5px 0;
-}
-.status-filter :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) {
-  color: #061827;
-  background: #8fd4df;
-  box-shadow: none !important;
+.status-filter-select :deep(.el-select__caret) {
+  color: #8fd4df;
 }
 .camera-list {
   min-width: 1240px;
@@ -559,7 +767,7 @@ h2 {
   display: -webkit-box;
   overflow: hidden;
   color: #a9c0d2;
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.45;
   text-overflow: ellipsis;
   -webkit-line-clamp: 2;
@@ -613,7 +821,6 @@ h2 {
   min-width: 0;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
   padding: 5px 9px;
   overflow: hidden;
   border: 1px solid rgba(87, 145, 181, .22);
@@ -626,14 +833,6 @@ h2 {
   flex: 0 0 auto;
   color: #d8e7f1;
   font-weight: 700;
-}
-.connection-masked small {
-  min-width: 0;
-  overflow: hidden;
-  color: #819daf;
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .connection-eye {
   width: 32px;
@@ -681,8 +880,8 @@ h2 {
   background: rgba(96, 118, 134, .38);
 }
 .col-enabled :deep(.el-switch.is-checked .el-switch__core) {
-  border-color: rgba(83, 193, 151, .52);
-  background: rgba(48, 154, 118, .72);
+  border-color: rgba(64, 158, 255, .66);
+  background: #409eff;
 }
 .action-buttons {
   display: flex;
@@ -758,6 +957,110 @@ h2 {
   color: #8fa8bf;
   text-align: center;
 }
+:global(.camera-map-dialog.el-dialog) {
+  border: 1px solid rgba(72, 216, 255, .24);
+  border-radius: 8px;
+  background: #07131a;
+  box-shadow: 0 24px 60px rgba(0, 7, 18, .46);
+}
+:global(.camera-map-dialog .el-dialog__header) {
+  margin: 0;
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(137, 174, 184, .14);
+}
+:global(.camera-map-dialog .el-dialog__title) {
+  color: #e9f7ff;
+  font-weight: 900;
+}
+:global(.camera-map-dialog .el-dialog__body) {
+  padding: 12px;
+}
+.expanded-map-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 2168 / 725;
+  max-height: 84vh;
+  overflow: hidden;
+  border: 1px solid rgba(137, 174, 184, .16);
+  border-radius: 8px;
+  background: #02080d;
+}
+.expanded-map-stage img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  filter: saturate(1.08) contrast(1.06) brightness(.76);
+}
+.expanded-map-region-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.expanded-region-fill {
+  fill: rgba(67, 220, 255, .14);
+  stroke: transparent;
+}
+.expanded-region-halo {
+  fill: none;
+  stroke: rgba(81, 229, 255, .48);
+  stroke-width: 13;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  filter: url(#camera-device-region-glow);
+}
+.expanded-region-line {
+  fill: none;
+  stroke: rgba(126, 238, 255, .96);
+  stroke-width: 2.2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  filter: url(#camera-device-region-glow);
+}
+.expanded-region-callout rect {
+  fill: rgba(7, 42, 55, .86);
+  stroke: rgba(126, 238, 255, .74);
+  stroke-width: 1.5;
+  filter: drop-shadow(0 0 8px rgba(72, 216, 255, .5));
+}
+.expanded-region-callout text {
+  fill: #e9f7ff;
+  font-size: 18px;
+  font-weight: 900;
+  text-anchor: middle;
+}
+.expanded-map-point {
+  position: absolute;
+  z-index: 3;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  margin: -14px 0 0 -14px;
+  border: 2px solid rgba(255, 255, 255, .62);
+  border-radius: 50%;
+  color: #fff;
+  background: #d93a4b;
+  box-shadow: 0 0 0 8px rgba(217, 58, 75, .18), 0 0 16px rgba(217, 58, 75, .72);
+  font: 900 14px/1 "Consolas", "Monaco", monospace;
+  cursor: pointer;
+}
+.expanded-map-point.offline {
+  background: #526977;
+  box-shadow: 0 0 0 7px rgba(82, 105, 119, .16);
+}
+.expanded-map-point.active {
+  width: 34px;
+  height: 34px;
+  margin: -17px 0 0 -17px;
+  color: #041417;
+  border-color: rgba(230, 250, 255, .92);
+  background: #48d8ff;
+  box-shadow: 0 0 0 10px rgba(72, 216, 255, .24), 0 0 24px rgba(72, 216, 255, .88);
+}
 .empty-list strong {
   color: #e9f7ff;
   font-size: 16px;
@@ -810,13 +1113,24 @@ h2 {
   background: #1d426a;
 }
 :global(.camera-config-dialog .el-dialog__header) {
+  position: relative;
+  min-height: 58px;
+  display: flex;
+  align-items: center;
   margin: 0;
-  padding: 20px 24px 12px;
+  padding: 18px 58px 10px 24px;
 }
 :global(.camera-config-dialog .el-dialog__title) {
   color: #eef7ff;
   font-size: 22px;
+  line-height: 1.2;
   font-weight: 800;
+}
+:global(.camera-config-dialog .el-dialog__headerbtn) {
+  top: 14px;
+  right: 18px;
+  width: 34px;
+  height: 34px;
 }
 :global(.camera-config-dialog .el-dialog__close) {
   color: #c8d9e7;

@@ -1,11 +1,20 @@
 import { MINI_API_BASE, withApiOrigin } from './config'
 
+function miniApiUrl(path) {
+  const rawPath = String(path || '').trim()
+  const cleanPath = rawPath.startsWith('/') ? rawPath : `/${rawPath}`
+  return `${String(MINI_API_BASE).trim().replace(/\/+$/, '')}${cleanPath}`.trim()
+}
+
 export function request({ url, method = 'GET', data, header }) {
+  const requestUrl = miniApiUrl(url)
+  console.log('[mini-request]', requestUrl)
   return new Promise((resolve, reject) => {
     uni.request({
-      url: `${MINI_API_BASE}${url}`,
+      url: requestUrl,
       method,
       data,
+      timeout: 8000,
       header: {
         'content-type': 'application/json',
         ...(header || {})
@@ -20,17 +29,22 @@ export function request({ url, method = 'GET', data, header }) {
         reject(new Error(message))
       },
       fail(err) {
-        reject(new Error(err.errMsg || '网络错误'))
+        const message = err.errMsg && String(err.errMsg).includes('invalid url')
+          ? '请求地址无效，请检查微信开发者工具是否已关闭合法域名校验，或改用 HTTPS 后端地址'
+          : (err.errMsg || '网络错误')
+        reject(new Error(`${message}：${requestUrl}`))
       }
     })
   })
 }
 
 export function uploadFieldResult({ eventId, filePath, result, remark, operator }) {
+  const requestUrl = miniApiUrl(`/events/${encodeURIComponent(eventId)}/field-result`)
   return new Promise((resolve, reject) => {
     uni.uploadFile({
-      url: `${MINI_API_BASE}/events/${encodeURIComponent(eventId)}/field-result`,
+      url: requestUrl,
       filePath,
+      timeout: 15000,
       name: 'photo',
       formData: {
         result,
@@ -52,7 +66,7 @@ export function uploadFieldResult({ eventId, filePath, result, remark, operator 
         reject(new Error(body.detail || body.message || `提交失败 ${res.statusCode}`))
       },
       fail(err) {
-        reject(new Error(err.errMsg || '上传失败'))
+        reject(new Error(`${err.errMsg || '上传失败'}：${requestUrl}`))
       }
     })
   })
@@ -62,14 +76,16 @@ export function uploadBroadcastAudio({ filePath, eventId, cameraId, operator }) 
   const path = eventId
     ? `/events/${encodeURIComponent(eventId)}/broadcast/audio`
     : `/cameras/${encodeURIComponent(cameraId)}/broadcast/audio`
+  const requestUrl = miniApiUrl(path)
   return new Promise((resolve, reject) => {
     uni.uploadFile({
-      url: `${MINI_API_BASE}${path}`,
+      url: requestUrl,
       filePath,
+      timeout: 15000,
       name: 'audio',
       formData: {
         device_ids: '[]',
-        operator: operator || '微信小程序工作人员'
+        operator: operator || '现场处置员'
       },
       success(res) {
         let body = {}
@@ -94,7 +110,7 @@ export function uploadBroadcastAudio({ filePath, eventId, cameraId, operator }) 
         reject(new Error(body.detail || body.message || `喊话失败 ${res.statusCode}`))
       },
       fail(err) {
-        reject(new Error(err.errMsg || '录音上传失败'))
+        reject(new Error(`${err.errMsg || '录音上传失败'}：${requestUrl}`))
       }
     })
   })

@@ -143,6 +143,8 @@ const videoUrl = ref('')
 const videoName = ref('')
 const submitting = ref(false)
 const triggerResult = ref(null)
+// 传感器输入完成时刻（触发提交时记录，流程节点显示固定时间，避免随轮询重算跳动）
+const sensorInputAt = ref(0)
 const detail = ref(null)
 const lastError = ref('')
 const pollTimer = ref(null)
@@ -235,7 +237,7 @@ const flowSteps = computed(() => {
       return {
         ...base,
         rawState: done ? 'done' : 'pending',
-        time: done ? formatNow() : '--',
+        time: done && sensorInputAt.value ? formatTime(sensorInputAt.value) : '--',
         message: done
           ? (videoName.value ? `已加载现场视频 ${videoName.value}` : `已提交 ${selectedPreset.value?.label || '传感器'} 数据`)
           : definition.idleText,
@@ -384,6 +386,7 @@ async function submit() {
     return
   }
   submitting.value = true
+  sensorInputAt.value = Date.now()
   lastError.value = ''
   triggerResult.value = null
   detail.value = null

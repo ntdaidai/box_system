@@ -2,30 +2,45 @@
   <view class="page profile-page">
     <view class="profile-panel">
       <view class="profile-top">
-        <view class="avatar">巡</view>
+        <image v-if="staff.avatar_url" class="avatar-img" :src="staff.avatar_url" mode="aspectFill" />
+        <view v-else class="avatar">{{ avatarText }}</view>
         <view class="profile-main">
-          <view>微信小程序工作人员</view>
-          <text>大藤峡安全巡查</text>
+          <view>{{ staff.display_name || '现场处置员' }}</view>
+          <text>{{ staff.nickname || '大藤峡安全巡查' }}</text>
         </view>
       </view>
 
-      <view class="stats-grid">
+      <view class="info-grid">
         <view>
-          <text>{{ handledEvents.length }}</text>
-          <text>我的处理</text>
+          <text>人员ID</text>
+          <text>{{ staff.staff_no || '--' }}</text>
         </view>
         <view>
-          <text>{{ resolvedCount }}</text>
-          <text>已完成</text>
+          <text>所属组别</text>
+          <text>{{ staff.group_name || '--' }}</text>
         </view>
+      </view>
+    </view>
+
+    <view class="filter-panel">
+      <picker mode="selector" :range="cameraOptions" :value="selectedPointIndex" @change="onPointPick">
+        <view class="filter-select">{{ pointFilterLabel }}</view>
+      </picker>
+      <picker mode="date" :value="filters.date" @change="onDateChange">
+        <view class="filter-select">{{ filters.date || '发生日期' }}</view>
+      </picker>
+      <view class="filter-actions">
+        <button class="filter-btn" @tap="reload">筛选</button>
+        <button class="clear-btn" @tap="clearFilters">清空</button>
       </view>
     </view>
 
     <view class="handled-panel">
       <view class="section-head">
         <text>我的处理</text>
-        <text>{{ handledEvents.length }} 条</text>
+        <text>共 {{ total }} 条</text>
       </view>
+
       <view v-if="loading" class="handled-empty">加载中...</view>
       <view v-else-if="handledEvents.length === 0" class="handled-empty">暂无人工处理记录</view>
       <view v-else class="handled-list">
@@ -35,78 +50,164 @@
           class="handled-item"
           @tap="openDetail(item.event_id)"
         >
-          <view>
-            <text>{{ item.event_type }}</text>
+          <view class="item-main">
+            <view>{{ item.event_name || item.event_type }}</view>
             <text>{{ item.monitor_point }}</text>
           </view>
-          <text>{{ item.mini_status_label }}</text>
+          <view class="item-side">
+            <text>{{ item.business_status_label }}</text>
+            <text>{{ item.completedText }}</text>
+          </view>
         </view>
       </view>
+
+      <button
+        v-if="hasMore && !loading"
+        class="ghost-btn load-more"
+        @tap="loadMore"
+      >
+        加载更多
+      </button>
     </view>
   </view>
 </template>
 
 <script>
 import { request } from '../../utils/request'
-import { formatDuration, riskClass } from '../../utils/format'
+import { formatDateTime, riskClass } from '../../utils/format'
 import { readCache, writeCache } from '../../utils/cache'
+
+const PAGE_SIZE = 10
 
 export default {
   data() {
     return {
+      staff: {},
       handledEvents: [],
+      filters: {
+        point: '',
+        date: ''
+      },
+      cameraOptions: ['全部点位'],
+      selectedPointIndex: 0,
+      page: 1,
+      total: 0,
+      hasMore: false,
       loading: false
     }
   },
 
   computed: {
-    resolvedCount() {
-      return this.handledEvents.filter((item) => item.mini_status === 'RESOLVED').length
+    avatarText() {
+      return String(this.staff.display_name || '巡').slice(0, 1)
+    },
+
+    pointFilterLabel() {
+      return this.cameraOptions[this.selectedPointIndex] || '全部点位'
     }
   },
 
   onLoad() {
-    this.restoreCachedHandledEvents()
-    this.loadHandledEvents()
+    this.staff = readCache('mini-staff', {})
+    this.handledEvents = readCache('handled-events', [])
+    this.ensureStaff().then(() => Promise.all([this.loadCameraOptions(), this.reload()]))
   },
 
   onPullDownRefresh() {
-    this.loadHandledEvents().finally(() => uni.stopPullDownRefresh())
+    this.reload().finally(() => uni.stopPullDownRefresh())
   },
 
   methods: {
-    restoreCachedHandledEvents() {
-      const cached = readCache('handled-events', [])
-      if (cached.length) this.handledEvents = cached
+    ensureStaff() {
+      const query = this.staff?.staff_id ? `?staff_id=${this.staff.staff_id}` : ''
+      return request({ url: `/staff/me${query}` })
+        .then((data) => {
+          this.staff = data.staff || {}
+          writeCache('mini-staff', this.staff)
+        })
     },
 
-    loadHandledEvents() {
-      this.loading = true
-      return request({
-        url: '/events?status=all&page_size=80'
-      })
+    queryParams() {
+      return [
+        'status=all',
+        'mine=true',
+        `page=${this.page}`,
+        `page_size=${PAGE_SIZE}`,
+        this.staff?.staff_id ? `staff_id=${encodeURIComponent(this.staff.staff_id)}` : '',
+        this.filters.point ? `point=${encodeURIComponent(this.filters.point)}` : '',
+        this.filters.date ? `date=${encodeURIComponent(this.filters.date)}` : ''
+      ].filter(Boolean).join('&')
+    },
+
+    loadCameraOptions() {
+      return request({ url: '/cameras' })
         .then((data) => {
-          this.handledEvents = (data.items || [])
-            .filter((item) => item.mini_status === 'MANUAL_PROCESSING' || item.mini_status === 'RESOLVED' || item.ack_operator || item.resolved_operator)
-            .map(this.decorateEvent)
-            .slice(0, 20)
+          const names = (data.items || [])
+            .map((item) => item.camera_name || item.name || item.id)
+            .filter(Boolean)
+          this.cameraOptions = ['全部点位', ...names]
+          const currentIndex = this.cameraOptions.indexOf(this.filters.point)
+          this.selectedPointIndex = currentIndex > -1 ? currentIndex : 0
+        })
+        .catch(() => {
+          this.cameraOptions = ['全部点位']
+          this.selectedPointIndex = 0
+        })
+    },
+
+    reload() {
+      this.page = 1
+      return this.loadHandledEvents(false)
+    },
+
+    loadMore() {
+      if (!this.hasMore || this.loading) return
+      this.page += 1
+      this.loadHandledEvents(true)
+    },
+
+    loadHandledEvents(append) {
+      this.loading = true
+      return request({ url: `/events?${this.queryParams()}` })
+        .then((data) => {
+          const rows = (data.items || []).map(this.decorateEvent)
+          this.handledEvents = append ? this.handledEvents.concat(rows) : rows
+          this.total = Number(data.total || 0)
+          this.hasMore = Boolean(data.has_more)
           writeCache('handled-events', this.handledEvents)
         })
         .catch((error) => {
-          this.handledEvents = readCache('handled-events', [])
+          if (!append) this.handledEvents = readCache('handled-events', [])
           uni.showToast({ title: error.message || '处理记录加载失败', icon: 'none' })
         })
-        .finally(() => {
-          this.loading = false
-        })
+        .finally(() => { this.loading = false })
     },
 
     decorateEvent(item) {
       return {
         ...item,
         riskClass: riskClass(item.risk_level),
-        durationText: formatDuration(item.duration_seconds)
+        completedText: item.completed_at ? formatDateTime(item.completed_at) : '--'
       }
+    },
+
+    onPointPick(event) {
+      const index = Number(event.detail.value || 0)
+      this.selectedPointIndex = index
+      this.filters.point = index > 0 ? this.cameraOptions[index] : ''
+      this.reload()
+    },
+
+    onDateChange(event) {
+      this.filters.date = event.detail.value
+      this.reload()
+    },
+
+    clearFilters() {
+      this.filters.point = ''
+      this.filters.date = ''
+      this.selectedPointIndex = 0
+      this.reload()
     },
 
     openDetail(eventId) {
@@ -125,6 +226,7 @@ export default {
 }
 
 .profile-panel,
+.filter-panel,
 .handled-panel {
   border-radius: 8rpx;
   background: #fff;
@@ -132,8 +234,17 @@ export default {
   box-shadow: 0 6rpx 18rpx rgba(20, 45, 52, 0.08);
 }
 
+.filter-panel,
 .handled-panel {
   margin-top: 20rpx;
+}
+
+.filter-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) 228rpx;
+  gap: 12rpx;
+  align-items: center;
+  padding: 18rpx;
 }
 
 .profile-top {
@@ -143,10 +254,15 @@ export default {
   margin-bottom: 22rpx;
 }
 
-.avatar {
+.avatar,
+.avatar-img {
   width: 88rpx;
   height: 88rpx;
   border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.avatar {
   background: #0f4c5c;
   color: #fff;
   display: flex;
@@ -172,13 +288,13 @@ export default {
   font-size: 24rpx;
 }
 
-.stats-grid {
+.info-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12rpx;
 }
 
-.stats-grid view {
+.info-grid view {
   min-height: 92rpx;
   padding: 14rpx 18rpx;
   border-radius: 8rpx;
@@ -186,20 +302,75 @@ export default {
   box-sizing: border-box;
 }
 
-.stats-grid text {
+.info-grid text {
   display: block;
 }
 
-.stats-grid text:first-child {
-  color: #172026;
-  font-size: 36rpx;
-  font-weight: 800;
-  margin-bottom: 4rpx;
-}
-
-.stats-grid text:last-child {
+.info-grid text:first-child {
   color: #6c7a80;
   font-size: 24rpx;
+  margin-bottom: 6rpx;
+}
+
+.info-grid text:last-child {
+  color: #172026;
+  font-size: 28rpx;
+  font-weight: 700;
+  word-break: break-all;
+}
+
+.filter-select {
+  height: 72rpx;
+  line-height: 72rpx;
+  padding: 0 20rpx;
+  border-radius: 8rpx;
+  background: #f2f6f7;
+  color: #172026;
+  font-size: 25rpx;
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filter-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10rpx;
+}
+
+.filter-btn,
+.clear-btn {
+  height: 72rpx;
+  line-height: 72rpx;
+  margin: 0;
+  padding: 0;
+  border-radius: 8rpx;
+  font-size: 23rpx;
+  font-weight: 700;
+  box-sizing: border-box;
+}
+
+@media (max-width: 360px) {
+  .filter-panel {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .filter-actions {
+    grid-column: 1 / -1;
+    grid-template-columns: 1fr 1fr;
+    gap: 12rpx;
+  }
+}
+
+.clear-btn {
+  background: #e7eff1;
+  color: #52656c;
+}
+
+.filter-btn {
+  background: #0f6b7a;
+  color: #fff;
 }
 
 .section-head {
@@ -233,7 +404,7 @@ export default {
 }
 
 .handled-item {
-  min-height: 76rpx;
+  min-height: 82rpx;
   padding: 14rpx 0;
   border-bottom: 1rpx solid #edf3f4;
   display: flex;
@@ -246,15 +417,12 @@ export default {
   border-bottom: 0;
 }
 
-.handled-item view {
+.item-main {
   min-width: 0;
+  flex: 1;
 }
 
-.handled-item view text {
-  display: block;
-}
-
-.handled-item view text:first-child {
+.item-main view {
   color: #172026;
   font-weight: 700;
   margin-bottom: 4rpx;
@@ -263,14 +431,31 @@ export default {
   white-space: nowrap;
 }
 
-.handled-item view text:last-child {
+.item-main text,
+.item-side text:last-child {
   color: #6c7a80;
   font-size: 23rpx;
 }
 
-.handled-item > text {
+.item-side {
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.item-side text {
+  display: block;
+}
+
+.item-side text:first-child {
   color: #0f6b7a;
   font-size: 24rpx;
-  flex-shrink: 0;
+  margin-bottom: 4rpx;
+}
+
+.load-more {
+  margin-top: 18rpx;
+  height: 70rpx;
+  line-height: 70rpx;
+  font-size: 26rpx;
 }
 </style>

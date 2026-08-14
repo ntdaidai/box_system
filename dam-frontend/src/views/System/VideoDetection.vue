@@ -158,6 +158,8 @@ const videoRef = ref(null)
 const videoUrl = ref('')
 const videoName = ref('')
 const videoFile = ref(null)
+// 视频输入完成时刻（选择本地视频成功时记录，流程节点显示固定时间，避免随轮询重算跳动）
+const videoUploadedAt = ref(0)
 const evidenceFrames = ref([])
 const simulationActive = ref(false)
 const screening = ref(false)
@@ -231,7 +233,7 @@ const flowSteps = computed(() => {
       return {
         ...base,
         rawState: done ? 'done' : 'pending',
-        time: done ? formatNow() : '--',
+        time: done && videoUploadedAt.value ? formatDetailTime(videoUploadedAt.value) : '--',
         message: videoName.value ? `已加载视频文件 ${videoName.value}` : definition.idleText,
         operator: '本机输入',
       }
@@ -372,6 +374,7 @@ function handleVideoFile(raw) {
   videoFile.value = raw
   videoUrl.value = URL.createObjectURL(raw)
   videoName.value = raw.name
+  videoUploadedAt.value = Date.now()
   result.value = null
   eventDetail.value = null
   lastError.value = ''
@@ -542,6 +545,21 @@ function updateWorkflowEvidenceFrames(detail) {
 }
 
 function extractWorkflowReviewFrames(detail) {
+  const reviewFrames = Array.isArray(detail?.review_frames) ? detail.review_frames : []
+  if (reviewFrames.length) {
+    return reviewFrames
+      .map((item, index) => {
+        const url = item?.file_url || item?.url || item?.path || item?.object_key || item?.object_name
+        if (!url) return null
+        return {
+          key: item?.id || item?.object_key || item?.object_name || url || index,
+          url,
+          timeLabel: item?.time_label || item?.timeLabel || frameTimeLabel(item, index),
+        }
+      })
+      .filter(Boolean)
+  }
+
   const timeline = Array.isArray(detail?.timeline) ? detail.timeline : []
   const workflowLog = [...timeline].reverse().find((row) => String(row?.log_type || '').toUpperCase() === 'DAM_WORKFLOW' && row?.payload?.execution_result)
   const nodeResults = workflowLog?.payload?.execution_result?.node_results
@@ -583,7 +601,6 @@ function mediaListFromNode(node) {
 
 function preferredReviewFrameRef(item) {
   if (!item || String(item.type || '').toLowerCase() !== 'image') return null
-  if (String(item.role || '') === 'qwen4b_selected_representative_frame') return null
 
   const source = item.source
   const sourceRef = typeof source === 'string' ? source : source?.path || source?.object_name || source?.object_key || ''
@@ -591,9 +608,10 @@ function preferredReviewFrameRef(item) {
   const ref = String(sourceRef || ownRef || '')
   const isYoloFrame = ref.includes('/workflow/yolo-detections/') || ref.includes('workflow/yolo-detections/')
   const isWorkflowFrame = String(ownRef).includes('/workflow-media/') && String(ownRef).includes('/images/')
-  if (!isYoloFrame && !isWorkflowFrame) return null
+  const isQwen4BFrame = ref.includes('/qwen4b-proxy-media/') || ref.includes('qwen4b-proxy-media/')
+  if (!isYoloFrame && !isWorkflowFrame && !isQwen4BFrame) return null
 
-  const localRef = isYoloFrame ? ref : String(ownRef)
+  const localRef = isYoloFrame ? ref : (String(ownRef) || ref)
   const normalized = localRef.startsWith('dam/') || localRef.startsWith('http')
     ? localRef
     : `dam/${localRef.replace(/^\/+/, '')}`

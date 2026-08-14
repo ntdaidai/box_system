@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+import shutil
 from typing import Any, Optional
+from pathlib import PurePosixPath, Path
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Body, File, Form, HTTPException, Query, UploadFile
+from loguru import logger
 
 from app.services.dam_model_library_client import dam_model_library_client
 
@@ -30,6 +34,192 @@ STATUS_LEVELS = {
     "stopped": "info",
     "error": "danger",
 }
+
+IMPORT_ROOT = Path("/app/data/model-imports")
+
+
+def _safe_relative_path(filename: str) -> str:
+    path = PurePosixPath(str(filename or "").replace("\\", "/"))
+    parts = [part for part in path.parts if part not in ("", ".")]
+    if not parts or any(part == ".." for part in parts):
+        raise ValueError(f"非法文件路径: {filename}")
+    return "/".join(parts)
+
+
+def _strip_root(path: str, root: str) -> str:
+    return path[len(root) + 1 :] if root and path.startswith(f"{root}/") else path
+
+
+def _format_size(value: int) -> str:
+    if value <= 0:
+        return "0 B"
+    units = ["B", "KB", "MB", "GB"]
+    size = float(value)
+    index = 0
+    while size >= 1024 and index < len(units) - 1:
+        size /= 1024
+        index += 1
+    return f"{size:.1f} {units[index]}" if index else f"{int(size)} {units[index]}"
+
+
+def _extract_compose_value(text: str, key: str) -> str:
+    matched = re.search(rf"\b{re.escape(key)}:\s*[\"']?([^\"'\n]+)", text or "", re.I)
+    return matched.group(1).strip() if matched else ""
+
+
+def _extract_compose_port(text: str) -> tuple[Optional[int], Optional[int]]:
+    matched = re.search(r"-\s*[\"']?(\d{2,5}):(\d{2,5})", text or "")
+    if not matched:
+        return None, None
+    return int(matched.group(1)), int(matched.group(2))
+
+
+def _extract_service_name(text: str) -> str:
+    matched = re.search(r"^ {2}([a-zA-Z0-9_.-]+):\s*$", text or "", re.M)
+    return matched.group(1) if matched else ""
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _default_import_image_name(folder_name: str) -> str:
+    normalized = re.sub(r"[^a-zA-Z0-9_.-]+", "-", folder_name.strip().lower()).strip("-")
+    return f"dam-import/{normalized or 'model'}:latest"
+
+
+def _infer_import_capability(folder_name: str, paths: list[str], compose_text: str, readme_text: str) -> str:
+    text = f"{folder_name} {' '.join(paths)} {compose_text} {readme_text}".lower()
+    if "vllm_base_url" in text or "qwen" in text:
+        return "视觉语言模型"
+    if "-od" in text or "detector" in text or "detect/image" in text:
+        return "目标检测"
+    if "-cls" in text or "classifier" in text or "yolo_service" in text:
+        return "图像分类"
+    return "通用服务"
+
+
+def _infer_import_architecture(folder_name: str, paths: list[str], compose_text: str) -> str:
+    text = f"{folder_name} {' '.join(paths)} {compose_text}".lower()
+    if "rtdetr" in text:
+        return "RT-DETR"
+    if "yolo" in text:
+        return "YOLO"
+    if "repvit" in text:
+        return "RepVIT"
+    if "mobilenet" in text:
+        return "MobileNetV4"
+    if "qwen" in text:
+        return "Qwen"
+    return ""
+
+
+def _infer_import_endpoint(paths: list[str], readme_text: str) -> str:
+    text = f"{' '.join(paths)} {readme_text}".lower()
+    if "/api/v1/local-inference" in text:
+        return "/api/v1/local-inference"
+    if "/detect/image" in text:
+        return "/detect/image"
+    if "/infer" in text:
+        return "/infer"
+    if "/predict" in text:
+        return "/predict"
+    return ""
+
+
+async def _read_import_manifest(files: list[UploadFile]) -> dict:
+    entries: list[dict[str, Any]] = []
+    texts: dict[str, str] = {}
+    roots: set[str] = set()
+    total_size = 0
+
+    for file in files:
+        relative = _safe_relative_path(file.filename or "")
+        content = await file.read()
+        await file.seek(0)
+        size = len(content)
+        total_size += size
+        root = relative.split("/", 1)[0]
+        roots.add(root)
+        entries.append({"path": relative, "size": size})
+        if relative.lower().endswith(("docker-compose.yml", "readme.md")):
+            texts[relative] = content.decode("utf-8", errors="ignore")
+
+    root = sorted(roots)[0] if roots else ""
+    paths = [_strip_root(item["path"], root) for item in entries]
+    compose_path = next((path for path in paths if path == "docker-compose.yml"), "")
+    readme_path = next((path for path in paths if path.lower() == "readme.md"), "")
+    compose_text = texts.get(f"{root}/{compose_path}" if root and compose_path else compose_path, "")
+    readme_text = texts.get(f"{root}/{readme_path}" if root and readme_path else readme_path, "")
+    weights = [path for path in paths if re.search(r"\.(pt|onnx|engine|safetensors|bin)$", path, re.I)]
+    host_port, container_port = _extract_compose_port(compose_text)
+    capability = _infer_import_capability(root, paths, compose_text, readme_text)
+
+    errors: list[str] = []
+    warnings: list[str] = []
+    if not files:
+        errors.append("未选择模型目录")
+    if len(roots) != 1:
+        errors.append("导入内容必须只包含一个模型根目录")
+    if "Dockerfile" not in paths:
+        errors.append("缺少 Dockerfile")
+    if not compose_text:
+        errors.append("缺少 docker-compose.yml")
+    if "app/main.py" not in paths:
+        errors.append("缺少 app/main.py 服务入口")
+    if compose_text and not _extract_service_name(compose_text):
+        errors.append("docker-compose.yml 无法解析服务名")
+    if compose_text and host_port is None:
+        errors.append("docker-compose.yml 无法解析端口映射")
+    if capability != "视觉语言模型" and not weights:
+        errors.append("视觉模型目录缺少权重文件")
+    if any(path.startswith("/") or "../" in path for path in paths):
+        errors.append("目录中包含越级或绝对路径")
+    if any("__pycache__" in path or path.startswith(".git/") or "/.git/" in path or "node_modules" in path for path in paths):
+        warnings.append("目录中包含缓存、源码管理或依赖目录，建议清理后导入")
+    if "requirements.txt" not in paths:
+        warnings.append("缺少 requirements.txt")
+    if not readme_text:
+        warnings.append("缺少 README.md")
+
+    description = ""
+    for line in readme_text.splitlines():
+        text = line.strip()
+        if text and not text.startswith("#"):
+            description = text[:512]
+            break
+
+    return {
+        "valid": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "detected": {
+            "folder_name": root,
+            "name": root or _extract_service_name(compose_text),
+            "service_name": _extract_service_name(compose_text),
+            "image_name": _extract_compose_value(compose_text, "image"),
+            "container_name": _extract_compose_value(compose_text, "container_name"),
+            "host_port": host_port,
+            "container_port": container_port,
+            "model_type": capability,
+            "capability": capability,
+            "framework": "vLLM Proxy / FastAPI" if capability == "视觉语言模型" else "PyTorch / FastAPI",
+            "architecture": _infer_import_architecture(root, paths, compose_text),
+            "weights": weights,
+            "endpoint": _infer_import_endpoint(paths, readme_text),
+            "model_size": _format_size(total_size),
+            "description": description,
+        },
+        "files": {
+            "count": len(entries),
+            "total_size": total_size,
+        },
+    }
 
 
 def _parse_jsonish(value: Any) -> Any:
@@ -173,6 +363,169 @@ async def _load_model_detail(model: dict) -> dict:
     return _normalize_model(model, detail=detail, io_schema=io_schema)
 
 
+async def _run_import_lifecycle(
+    *,
+    model_id: int,
+    target_dir: str,
+    image_name: str,
+    host_port: Optional[int],
+    container_port: int,
+    inference_path: str,
+) -> None:
+    try:
+        build = await dam_model_library_client.build_image(
+            context_path=target_dir,
+            image_name=image_name,
+        )
+        binding = await dam_model_library_client.bind_image(
+            model_id,
+            {
+                "image_name": image_name,
+                "host_port": host_port,
+                "container_port": container_port,
+                "inference_path": inference_path,
+                "health_check_url": None,
+                "remark": f"imported from {target_dir}",
+            },
+        )
+        start = await dam_model_library_client.start_model(model_id)
+        stop = await dam_model_library_client.stop_model(model_id)
+        logger.info(
+            "导入模型后台构建与启停验证完成: model_id={}, image={}, build={}, binding={}, start={}, stop={}",
+            model_id,
+            image_name,
+            build.get("short_id") or build.get("image_id"),
+            binding.get("id") or binding.get("model_id"),
+            start.get("runtime_status"),
+            stop.get("runtime_status"),
+        )
+    except Exception as exc:
+        logger.exception("导入模型后台构建或启停验证失败: model_id={}, image={}, error={}", model_id, image_name, exc)
+
+
+@router.post("/import/validate")
+async def validate_model_import(
+    files: list[UploadFile] = File(default=[]),
+    metadata: str = Form(default="{}"),
+):
+    """Validate an uploaded model service directory before registration."""
+    try:
+        result = await _read_import_manifest(files)
+        form_metadata = _parse_jsonish(metadata) or {}
+        if isinstance(form_metadata, dict):
+            detected = result["detected"]
+            for key in ("name", "capability", "framework", "architecture", "image_name", "container_name", "host_port", "endpoint"):
+                value = form_metadata.get(key)
+                if value not in (None, ""):
+                    detected[key] = value
+            if form_metadata.get("capability"):
+                detected["model_type"] = form_metadata["capability"]
+        return {"code": 200, "data": result}
+    except ValueError as exc:
+        return {
+            "code": 200,
+            "data": {
+                "valid": False,
+                "errors": [str(exc)],
+                "warnings": [],
+                "detected": {},
+            },
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"模型目录校验失败: {exc}") from exc
+
+
+@router.post("/import/register")
+async def register_model_import(
+    background_tasks: BackgroundTasks,
+    files: list[UploadFile] = File(default=[]),
+    metadata: str = Form(default="{}"),
+):
+    """Register an uploaded model service directory after validation."""
+    try:
+        validation = await _read_import_manifest(files)
+        if not validation["valid"]:
+            return {
+                "code": 200,
+                "message": "模型目录校验未通过",
+                "data": validation,
+            }
+
+        form_metadata = _parse_jsonish(metadata) or {}
+        if not isinstance(form_metadata, dict):
+            form_metadata = {}
+
+        detected = validation["detected"]
+        folder_name = str(form_metadata.get("folder_name") or detected.get("folder_name") or detected.get("name") or "").strip()
+        if not folder_name:
+            raise HTTPException(status_code=400, detail="无法识别模型目录名称")
+        if not re.match(r"^[\w.-]+$", folder_name):
+            raise HTTPException(status_code=400, detail="模型目录名称只能包含字母、数字、下划线、点和短横线")
+
+        target_dir = IMPORT_ROOT / folder_name
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        for file in files:
+            relative = _safe_relative_path(file.filename or "")
+            path = PurePosixPath(relative)
+            stripped = _strip_root(str(path), folder_name)
+            target_file = target_dir / stripped
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+            with target_file.open("wb") as output:
+                shutil.copyfileobj(file.file, output)
+
+        tags = form_metadata.get("tags") if isinstance(form_metadata.get("tags"), list) else []
+        tags.append("imported")
+        tags.append(f"folder:{folder_name}")
+
+        payload = {
+            "name": str(form_metadata.get("name") or detected.get("name") or folder_name),
+            "description": str(form_metadata.get("description") or detected.get("description") or "导入的模型服务目录")[:512],
+            "tags": tags,
+            "framework": form_metadata.get("framework") or detected.get("framework"),
+            "architecture": form_metadata.get("architecture") or detected.get("architecture"),
+            "model_type": form_metadata.get("capability") or detected.get("model_type"),
+            "model_size": detected.get("model_size"),
+        }
+        image_name = str(form_metadata.get("image_name") or detected.get("image_name") or _default_import_image_name(folder_name)).strip()
+        host_port = _coerce_int(form_metadata.get("host_port")) or _coerce_int(detected.get("host_port"))
+        container_port = _coerce_int(form_metadata.get("container_port")) or _coerce_int(detected.get("container_port")) or host_port
+        if not container_port:
+            raise HTTPException(status_code=400, detail="无法识别容器服务端口")
+        inference_path = str(form_metadata.get("endpoint") or detected.get("endpoint") or "/infer").strip()
+
+        model = await dam_model_library_client.create_model(payload)
+        model_id = int(model["id"])
+        background_tasks.add_task(
+            _run_import_lifecycle,
+            model_id=model_id,
+            target_dir=str(target_dir),
+            image_name=image_name,
+            host_port=host_port,
+            container_port=container_port,
+            inference_path=inference_path,
+        )
+        return {
+            "code": 200,
+            "message": "模型注册成功，已提交后台镜像构建和一次启停验证",
+            "data": {
+                **model,
+                "import_path": str(target_dir),
+                "image_name": image_name,
+                "runtime_status": "stopped",
+                "lifecycle": {"status": "submitted"},
+            },
+        }
+    except HTTPException:
+        raise
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"模型库服务不可达: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"模型注册失败: {exc}") from exc
+
+
 @router.get("/models")
 async def list_models(
     keyword: Optional[str] = Query(None),
@@ -233,6 +586,38 @@ async def get_model(model_id: int):
         raise HTTPException(status_code=502, detail=f"模型库服务不可达: {exc}") from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"读取模型详情失败: {exc}") from exc
+
+
+@router.put("/models/{model_id}")
+async def update_model(model_id: int, payload: dict[str, Any] = Body(default={})):
+    """Update editable model metadata."""
+    try:
+        description = str(payload.get("description") or "")[:512]
+        result = await dam_model_library_client.update_model(model_id, {"description": description})
+        return {
+            "code": 200,
+            "message": "模型说明已更新",
+            "data": _normalize_model(result),
+        }
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"模型库服务不可达: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"模型更新失败: {exc}") from exc
+
+
+@router.delete("/models/{model_id}")
+async def delete_model(model_id: int):
+    """Delete a stopped model registry record."""
+    try:
+        await dam_model_library_client.delete_model(model_id)
+        return {"code": 200, "message": "模型已删除", "data": {"id": model_id}}
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.text
+        raise HTTPException(status_code=exc.response.status_code, detail=detail) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"模型库服务不可达: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"模型删除失败: {exc}") from exc
 
 
 @router.post("/models/{model_id}/health-check")

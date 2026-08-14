@@ -72,3 +72,67 @@
 .el-select .el-select__caret {
   color: #4a7a9b !important;
 }
+
+// 告警管理同款日期/月份选择器弹层
+.alarm-date-popper.el-picker__popper,
+.alarm-date-popper .el-picker-panel,
+.alarm-date-popper .el-date-picker {
+  color: #d9e8f8 !important;
+  background: rgba(10, 30, 48, 0.98) !important;
+  border-color: rgba(93, 184, 225, 0.3) !important;
+}
+
+.alarm-date-popper.el-popper.is-light,
+.alarm-date-popper.el-popper.is-pure {
+  background: rgba(10, 30, 48, 0.98) !important;
+  border: 1px solid rgba(93, 184, 225, 0.3) !important;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45) !important;
+}
+
+.alarm-date-popper .el-popper__arrow::before {
+  background: rgba(10, 30, 48, 0.98) !important;
+  border-color: rgba(93, 184, 225, 0.3) !important;
+}
+
+.alarm-date-popper .el-picker-panel__body-wrapper,
+.alarm-date-popper .el-picker-panel__body,
+.alarm-date-popper .el-picker-panel__content {
+  background: rgba(10, 30, 48, 0.98) !important;
+}
+
+.alarm-date-popper .el-date-picker__header,
+.alarm-date-popper .el-date-picker__header--bordered,
+.alarm-date-popper .el-picker-panel__footer {
+  border-color: rgba(103, 164, 217, 0.18) !important;
+}
+
+.alarm-date-popper .el-date-picker__header-label,
+.alarm-date-popper .el-picker-panel__icon-btn,
+.alarm-date-popper .el-date-table th,
+.alarm-date-popper .el-date-table td .el-date-table-cell__text,
+.alarm-date-popper .el-month-table td .cell,
+.alarm-date-popper .el-year-table td .cell {
+  color: #d9e8f8 !important;
+}
+
+.alarm-date-popper .el-date-table td.disabled .el-date-table-cell__text,
+.alarm-date-popper .el-month-table td.disabled .cell,
+.alarm-date-popper .el-year-table td.disabled .cell {
+  color: #5e7c94 !important;
+  background: transparent !important;
+}
+
+.alarm-date-popper .el-date-table td.current:not(.disabled) .el-date-table-cell__text,
+.alarm-date-popper .el-month-table td.current:not(.disabled) .cell,
+.alarm-date-popper .el-year-table td.current:not(.disabled) .cell {
+  color: #ffffff !important;
+  background: #3d8ed8 !important;
+  font-weight: 700;
+}
+
+.alarm-date-popper .el-date-table td.available:hover .el-date-table-cell__text,
+.alarm-date-popper .el-month-table td .cell:hover,
+.alarm-date-popper .el-year-table td .cell:hover {
+  color: #ffffff !important;
+  background: rgba(72, 216, 255, 0.12) !important;
+}

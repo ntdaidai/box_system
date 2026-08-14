@@ -12,22 +12,26 @@
     </section>
 
     <section class="filters">
-      <el-select v-model="query.status" clearable placeholder="处置状态" @change="reloadFromFirstPage">
+      <el-select v-model="query.status" placeholder="全部处置状态" @change="reloadFromFirstPage">
+        <el-option label="全部处置状态" value="all" />
         <el-option label="待处理" value="PENDING" />
         <el-option label="处理中" value="PROCESSING" />
         <el-option label="已完成" value="COMPLETED" />
         <el-option label="误报" value="FALSE_ALARM" />
       </el-select>
-      <el-select v-model="query.risk_level" clearable placeholder="风险等级" @change="reloadFromFirstPage">
+      <el-select v-model="query.risk_level" placeholder="全部风险等级" @change="reloadFromFirstPage">
+        <el-option label="全部风险等级" value="all" />
         <el-option label="低风险" value="LOW" />
         <el-option label="中风险" value="MEDIUM" />
         <el-option label="高风险" value="HIGH" />
       </el-select>
-      <el-select v-model="query.source_type" clearable placeholder="事件来源" @change="reloadFromFirstPage">
+      <el-select v-model="query.source_type" placeholder="全部事件来源" @change="reloadFromFirstPage">
+        <el-option label="全部事件来源" value="all" />
         <el-option label="摄像头" value="camera" />
         <el-option label="传感器" value="sensor" />
       </el-select>
-      <el-select v-model="query.event_category" clearable filterable placeholder="事件类型" @change="reloadFromFirstPage">
+      <el-select v-model="query.event_category" placeholder="全部事件类型" @change="reloadFromFirstPage">
+        <el-option label="全部事件类型" value="all" />
         <el-option
           v-for="event in eventTypeOptions"
           :key="event.value"
@@ -41,6 +45,7 @@
         type="date"
         value-format="YYYY-MM-DD"
         placeholder="发生日期"
+        popper-class="alarm-date-popper"
         clearable
         @change="reloadFromFirstPage"
       />
@@ -160,10 +165,10 @@ const overview = ref({
   closed: 0,
 })
 const query = reactive({
-  status: '',
-  risk_level: '',
-  source_type: '',
-  event_category: '',
+  status: 'all',
+  risk_level: 'all',
+  source_type: 'all',
+  event_category: 'all',
   event_date: '',
   keyword: '',
   sort_by: 'time',
@@ -172,13 +177,18 @@ const query = reactive({
   page_size: 10,
 })
 
+const hasActiveFilters = computed(() => {
+  return ['status', 'risk_level', 'source_type', 'event_category', 'event_date', 'keyword']
+    .some((key) => Boolean(normalizedQueryValue(query[key])))
+})
+const overviewHint = computed(() => hasActiveFilters.value ? '当前筛选范围' : '全部告警累计')
 const overviewCards = computed(() => [
-  { label: '事件总数', value: total.value, hint: '当前筛选范围', icon: BellFilled, tone: 'tone-total' },
-  { label: '待确认', value: overview.value.pending, hint: '当前筛选范围', icon: Clock, tone: 'tone-pending' },
-  { label: '高风险', value: overview.value.high, hint: '当前筛选范围', icon: WarningFilled, tone: 'tone-high' },
-  { label: '中风险', value: overview.value.medium, hint: '当前筛选范围', icon: WarningFilled, tone: 'tone-medium' },
-  { label: '低风险', value: overview.value.low, hint: '当前筛选范围', icon: WarningFilled, tone: 'tone-low' },
-  { label: '已闭环', value: overview.value.closed, hint: '当前筛选范围', icon: Finished, tone: 'tone-closed' },
+  { label: '事件总数', value: total.value, hint: overviewHint.value, icon: BellFilled, tone: 'tone-total' },
+  { label: '待确认', value: overview.value.pending, hint: overviewHint.value, icon: Clock, tone: 'tone-pending' },
+  { label: '高风险', value: overview.value.high, hint: overviewHint.value, icon: WarningFilled, tone: 'tone-high' },
+  { label: '中风险', value: overview.value.medium, hint: overviewHint.value, icon: WarningFilled, tone: 'tone-medium' },
+  { label: '低风险', value: overview.value.low, hint: overviewHint.value, icon: WarningFilled, tone: 'tone-low' },
+  { label: '已闭环', value: overview.value.closed, hint: overviewHint.value, icon: Finished, tone: 'tone-closed' },
 ])
 
 async function loadEvents() {
@@ -204,8 +214,13 @@ async function loadEvents() {
 function buildEventQueryParams(overrides = {}) {
   return Object.fromEntries(
     Object.entries({ ...query, ...overrides })
+      .map(([key, value]) => [key, normalizedQueryValue(value)])
       .filter(([, value]) => value !== '' && value !== null && value !== undefined),
   )
+}
+
+function normalizedQueryValue(value) {
+  return value === 'all' ? '' : value
 }
 
 async function fetchEventCount(overrides = {}) {
@@ -215,25 +230,27 @@ async function fetchEventCount(overrides = {}) {
 }
 
 async function fetchOverviewCounts() {
-  const pendingPromise = query.status && query.status !== 'PENDING'
+  const statusFilter = normalizedQueryValue(query.status)
+  const riskFilter = normalizedQueryValue(query.risk_level)
+  const pendingPromise = statusFilter && statusFilter !== 'PENDING'
     ? Promise.resolve(0)
     : fetchEventCount({ status: 'PENDING' })
 
-  const highPromise = query.risk_level && query.risk_level !== 'HIGH'
+  const highPromise = riskFilter && riskFilter !== 'HIGH'
     ? Promise.resolve(0)
     : fetchEventCount({ risk_level: 'HIGH' })
 
-  const mediumPromise = query.risk_level && query.risk_level !== 'MEDIUM'
+  const mediumPromise = riskFilter && riskFilter !== 'MEDIUM'
     ? Promise.resolve(0)
     : fetchEventCount({ risk_level: 'MEDIUM' })
 
-  const lowPromise = query.risk_level && query.risk_level !== 'LOW'
+  const lowPromise = riskFilter && riskFilter !== 'LOW'
     ? Promise.resolve(0)
     : fetchEventCount({ risk_level: 'LOW' })
 
-  const closedPromise = query.status === 'COMPLETED' || query.status === 'FALSE_ALARM'
-    ? fetchEventCount({ status: query.status })
-    : query.status
+  const closedPromise = statusFilter === 'COMPLETED' || statusFilter === 'FALSE_ALARM'
+    ? fetchEventCount({ status: statusFilter })
+    : statusFilter
       ? Promise.resolve(0)
       : Promise.all([
         fetchEventCount({ status: 'COMPLETED' }),
@@ -461,6 +478,9 @@ loadEvents()
   line-height: 36px;
 }
 .filters {
+  display: flex;
+  align-items: center;
+  gap: 14px;
   justify-content: flex-start;
   margin-top: 18px;
   padding: 14px;
@@ -501,9 +521,19 @@ loadEvents()
 }
 .filters :deep(.el-input__inner) {
   color: #d9e8f8;
+  font-weight: 500;
+}
+.filters :deep(.el-select__selected-item),
+.filters :deep(.el-select__placeholder) {
+  color: #d9e8f8;
+  font-weight: 500;
+}
+.filters :deep(.el-select__caret),
+.filters :deep(.el-input__suffix) {
+  color: #6faed1;
 }
 .filters :deep(.el-input__inner::placeholder) {
-  color: #7898ad;
+  color: #d9e8f8;
 }
 .refresh-button {
   margin-left: auto;

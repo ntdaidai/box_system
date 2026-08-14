@@ -5,7 +5,10 @@
         <h2>模型管理</h2>
         <p>模型服务运行控制与能力归类。</p>
       </div>
-      <el-button type="primary" :icon="Refresh" :loading="loading" @click="loadModels">刷新状态</el-button>
+      <div class="page-actions">
+        <el-button :icon="FolderOpened" @click="openImportDrawer">导入模型</el-button>
+        <el-button type="primary" :icon="Refresh" :loading="loading" @click="loadModels">刷新状态</el-button>
+      </div>
     </header>
 
     <section class="summary-grid">
@@ -87,6 +90,17 @@
 
         <footer>
           <el-button :icon="View" @click="openDetail(model)">详情</el-button>
+          <el-button :icon="Edit" @click="openEditDialog(model)">编辑说明</el-button>
+          <el-button
+            type="danger"
+            plain
+            :icon="Delete"
+            :loading="isActioning(model, 'delete')"
+            :disabled="!canDelete(model) || isAnyActioning(model)"
+            @click="deleteModelRecord(model)"
+          >
+            删除
+          </el-button>
           <el-button
             type="success"
             :icon="VideoPlay"
@@ -216,6 +230,17 @@
         </section>
 
         <div class="detail-actions">
+          <el-button :icon="Edit" @click="openEditDialog(selectedModel)">编辑说明</el-button>
+          <el-button
+            type="danger"
+            plain
+            :icon="Delete"
+            :loading="isActioning(selectedModel, 'delete')"
+            :disabled="!canDelete(selectedModel) || isAnyActioning(selectedModel)"
+            @click="deleteModelRecord(selectedModel)"
+          >
+            删除
+          </el-button>
           <el-button
             type="danger"
             plain
@@ -238,16 +263,160 @@
         </div>
       </div>
     </el-drawer>
+
+    <el-dialog v-model="editVisible" title="编辑模型说明" width="520px" class="model-edit-dialog">
+      <el-form label-position="top">
+        <el-form-item label="模型说明">
+          <el-input v-model.trim="editForm.description" type="textarea" :rows="5" maxlength="512" show-word-limit />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editVisible = false">取消</el-button>
+        <el-button type="primary" :loading="savingEdit" @click="saveModelDescription">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <input
+      ref="folderInput"
+      class="folder-input"
+      type="file"
+      webkitdirectory
+      directory
+      multiple
+      @change="onFolderSelected"
+    />
+
+    <el-drawer v-model="importVisible" size="640px" custom-class="model-import-drawer" :with-header="false">
+      <div class="import-panel">
+        <header class="detail-head">
+          <div class="detail-title">
+            <div class="detail-icon is-idle">
+              <el-icon><FolderOpened /></el-icon>
+            </div>
+            <div>
+              <span>完整模型服务目录</span>
+              <h3>导入模型</h3>
+            </div>
+          </div>
+          <button class="drawer-close" type="button" @click="importVisible = false">
+            <el-icon><Close /></el-icon>
+          </button>
+        </header>
+
+        <section class="import-section folder-picker">
+          <div>
+            <h4>{{ importSummary.folderName || '选择模型文件夹' }}</h4>
+            <p>{{ selectedFolderText }}</p>
+          </div>
+          <el-button :icon="FolderOpened" @click="triggerFolderPicker">选择文件夹</el-button>
+        </section>
+
+        <section class="import-section">
+          <div class="section-title">
+            <h4>结构检查</h4>
+            <el-tag :type="localCheckPassed ? 'success' : 'danger'" effect="dark">
+              {{ localCheckPassed ? '可校验' : '需处理' }}
+            </el-tag>
+          </div>
+          <div class="check-list">
+            <div v-for="item in importChecks" :key="item.key" class="check-item" :class="`is-${item.level}`">
+              <el-icon>
+                <CircleCheck v-if="item.level === 'success'" />
+                <Warning v-else-if="item.level === 'warning'" />
+                <CircleClose v-else />
+              </el-icon>
+              <span>{{ item.label }}</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="import-section" v-if="serverValidation">
+          <div class="section-title">
+            <h4>后端校验</h4>
+            <el-tag :type="serverValidation.valid ? 'success' : 'danger'" effect="dark">
+              {{ serverValidation.valid ? '通过' : '未通过' }}
+            </el-tag>
+          </div>
+          <div class="server-result">
+            <p v-for="item in validationMessages" :key="item">{{ item }}</p>
+          </div>
+        </section>
+
+        <section class="import-section">
+          <h4>注册信息</h4>
+          <el-form label-position="top" class="import-form">
+            <el-form-item label="模型名称">
+              <el-input v-model.trim="importForm.name" placeholder="默认取目录名" />
+            </el-form-item>
+            <el-form-item label="能力类型">
+              <el-select v-model="importForm.capability" placeholder="请选择能力类型">
+                <el-option v-for="item in capabilityChoices" :key="item" :label="item" :value="item" />
+              </el-select>
+            </el-form-item>
+            <div class="form-grid">
+              <el-form-item label="运行框架">
+                <el-input v-model.trim="importForm.framework" placeholder="如 PyTorch / FastAPI" />
+              </el-form-item>
+              <el-form-item label="模型架构">
+                <el-input v-model.trim="importForm.architecture" placeholder="如 YOLO / RT-DETR" />
+              </el-form-item>
+            </div>
+            <div class="form-grid">
+              <el-form-item label="镜像名">
+                <el-input v-model.trim="importForm.image_name" placeholder="从 compose 解析" />
+              </el-form-item>
+              <el-form-item label="容器名">
+                <el-input v-model.trim="importForm.container_name" placeholder="从 compose 解析" />
+              </el-form-item>
+            </div>
+            <div class="form-grid">
+              <el-form-item label="服务端口">
+                <el-input v-model.trim="importForm.host_port" placeholder="如 8012" />
+              </el-form-item>
+              <el-form-item label="推理入口">
+                <el-input v-model.trim="importForm.endpoint" placeholder="如 /infer" />
+              </el-form-item>
+            </div>
+            <el-form-item label="业务标签">
+              <el-input v-model.trim="importForm.tags" placeholder="多个标签用逗号分隔" />
+            </el-form-item>
+            <el-form-item label="模型说明">
+              <el-input v-model.trim="importForm.description" type="textarea" :rows="3" />
+            </el-form-item>
+          </el-form>
+        </section>
+
+        <footer class="import-actions">
+          <el-button @click="resetImport">清空</el-button>
+          <el-button :loading="validatingImport" :disabled="!localCheckPassed" @click="validateImportWithServer">
+            后端校验
+          </el-button>
+          <el-button
+            type="primary"
+            :loading="registeringImport"
+            :disabled="!canRegisterImport"
+            @click="registerImport"
+          >
+            注册模型
+          </el-button>
+        </footer>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ChatLineRound,
   Close,
+  CircleCheck,
+  CircleClose,
+  Delete,
+  Edit,
   Files,
+  FolderOpened,
   Grid,
   Picture,
   Refresh,
@@ -258,16 +427,21 @@ import {
   Warning,
 } from '@element-plus/icons-vue'
 import {
+  deleteModel,
   getModelLibrary,
   getModelLibraryDetail,
+  registerImportedModel,
   startModel,
   stopModel,
+  updateModel,
+  validateModelImport,
 } from '@/api/modelLibrary'
 
 const loading = ref(false)
 const models = ref([])
 const selectedModel = ref(null)
 const detailVisible = ref(false)
+const editVisible = ref(false)
 const currentPage = ref(1)
 const pageSize = 8
 const actionState = reactive({
@@ -275,6 +449,38 @@ const actionState = reactive({
   type: '',
 })
 const loadError = ref('')
+const folderInput = ref(null)
+const importVisible = ref(false)
+const importFiles = ref([])
+const importChecks = ref([])
+const serverValidation = ref(null)
+const validatingImport = ref(false)
+const registeringImport = ref(false)
+const savingEdit = ref(false)
+const editForm = reactive({
+  id: null,
+  description: '',
+})
+
+const importSummary = reactive({
+  folderName: '',
+  fileCount: 0,
+  totalSize: 0,
+  rootCount: 0,
+})
+
+const importForm = reactive({
+  name: '',
+  capability: '',
+  framework: '',
+  architecture: '',
+  image_name: '',
+  container_name: '',
+  host_port: '',
+  endpoint: '',
+  tags: '',
+  description: '',
+})
 
 const filters = reactive({
   keyword: '',
@@ -284,6 +490,34 @@ const filters = reactive({
 
 const capabilityOptions = computed(() => {
   return [...new Set(models.value.map((item) => item.capability).filter(Boolean))].sort()
+})
+
+const capabilityChoices = ['目标检测', '图像分类', '视觉语言模型', '文本推理', '通用服务']
+
+const selectedFolderText = computed(() => {
+  if (!importSummary.fileCount) return ''
+  return `${importSummary.fileCount} 个文件，${formatBytes(importSummary.totalSize)}`
+})
+
+const localCheckPassed = computed(() => {
+  return importFiles.value.length > 0 && importChecks.value.every((item) => item.level !== 'error')
+})
+
+const validationMessages = computed(() => {
+  if (!serverValidation.value) return []
+  const errors = serverValidation.value.errors || []
+  const warnings = serverValidation.value.warnings || []
+  const messages = [...errors, ...warnings].map((item) => String(item))
+  if (!messages.length) return ['服务端校验未发现阻断问题']
+  return messages
+})
+
+const canRegisterImport = computed(() => {
+  return localCheckPassed.value
+    && !validatingImport.value
+    && !registeringImport.value
+    && Boolean(importForm.name && importForm.capability)
+    && serverValidation.value?.valid === true
 })
 
 const filteredModels = computed(() => {
@@ -433,6 +667,10 @@ function canStop(model) {
   return Boolean(model?.has_binding) && ['running', 'starting', 'error'].includes(model?.runtime_status)
 }
 
+function canDelete(model) {
+  return Boolean(model?.id) && model.runtime_status !== 'running'
+}
+
 function isActioning(model, type) {
   return actionState.id === model?.id && actionState.type === type
 }
@@ -457,6 +695,251 @@ function inputText(model) {
 
 function outputText(model) {
   return fieldTypes(model.outputs).replace('参数', '分析结果')
+}
+
+function openImportDrawer() {
+  importVisible.value = true
+}
+
+function triggerFolderPicker() {
+  folderInput.value?.click()
+}
+
+function resetImport() {
+  importFiles.value = []
+  importChecks.value = []
+  serverValidation.value = null
+  Object.assign(importSummary, {
+    folderName: '',
+    fileCount: 0,
+    totalSize: 0,
+    rootCount: 0,
+  })
+  Object.assign(importForm, {
+    name: '',
+    capability: '',
+    framework: '',
+    architecture: '',
+    image_name: '',
+    container_name: '',
+    host_port: '',
+    endpoint: '',
+    tags: '',
+    description: '',
+  })
+  if (folderInput.value) folderInput.value.value = ''
+}
+
+async function onFolderSelected(event) {
+  const files = Array.from(event.target.files || [])
+  if (!files.length) {
+    if (event.target) event.target.value = ''
+    return
+  }
+  resetImport()
+  importFiles.value = files
+  await inspectImportFolder(files)
+}
+
+function relativePath(file) {
+  return file.webkitRelativePath || file.relativePath || file.name
+}
+
+function rootFolder(path) {
+  return String(path || '').split('/').filter(Boolean)[0] || ''
+}
+
+function stripRoot(path, root) {
+  const normalized = String(path || '')
+  return normalized.startsWith(`${root}/`) ? normalized.slice(root.length + 1) : normalized
+}
+
+function formatBytes(value) {
+  if (!value) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let size = value
+  let index = 0
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024
+    index += 1
+  }
+  return `${size.toFixed(index ? 1 : 0)} ${units[index]}`
+}
+
+function addCheck(checks, key, passed, label, warning = false) {
+  checks.push({
+    key,
+    label,
+    level: passed ? 'success' : (warning ? 'warning' : 'error'),
+  })
+}
+
+function findFile(paths, name) {
+  return paths.find((path) => path === name || path.endsWith(`/${name}`))
+}
+
+function findWeightFiles(paths) {
+  return paths.filter((path) => /\.(pt|onnx|engine|safetensors|bin)$/i.test(path))
+}
+
+function inferCapability(folderName, paths, composeText) {
+  const text = `${folderName} ${paths.join(' ')} ${composeText}`.toLowerCase()
+  if (text.includes('vllm_base_url') || text.includes('qwen')) return '视觉语言模型'
+  if (text.includes('-od') || text.includes('detector') || text.includes('detect/image')) return '目标检测'
+  if (text.includes('-cls') || text.includes('classifier') || text.includes('yolo_service')) return '图像分类'
+  return '通用服务'
+}
+
+function inferArchitecture(folderName, paths, composeText) {
+  const text = `${folderName} ${paths.join(' ')} ${composeText}`.toLowerCase()
+  if (text.includes('rtdetr')) return 'RT-DETR'
+  if (text.includes('yolo')) return 'YOLO'
+  if (text.includes('repvit')) return 'RepVIT'
+  if (text.includes('mobilenet')) return 'MobileNetV4'
+  if (text.includes('qwen')) return 'Qwen'
+  return ''
+}
+
+function inferEndpoint(paths, readmeText) {
+  const text = `${paths.join(' ')} ${readmeText}`.toLowerCase()
+  if (text.includes('/api/v1/local-inference')) return '/api/v1/local-inference'
+  if (text.includes('/detect/image')) return '/detect/image'
+  if (text.includes('/infer')) return '/infer'
+  if (text.includes('/predict')) return '/predict'
+  return ''
+}
+
+function extractComposeValue(composeText, key) {
+  const pattern = new RegExp(`\\b${key}:\\s*["']?([^"'\\n]+)`, 'i')
+  const matched = composeText.match(pattern)
+  return matched?.[1]?.trim() || ''
+}
+
+function extractComposePort(composeText) {
+  const matched = composeText.match(/-\s*["']?(\d{2,5}):(\d{2,5})/i)
+  return matched?.[1] || ''
+}
+
+function extractServiceName(composeText) {
+  const matched = composeText.match(/^ {2}([a-zA-Z0-9_.-]+):\s*$/m)
+  return matched?.[1] || ''
+}
+
+async function inspectImportFolder(files) {
+  const paths = files.map(relativePath)
+  const roots = [...new Set(paths.map(rootFolder).filter(Boolean))]
+  const root = roots[0] || ''
+  const normalizedPaths = paths.map((path) => stripRoot(path, root))
+  const totalSize = files.reduce((sum, file) => sum + file.size, 0)
+  const checks = []
+  const composeFile = files.find((file) => stripRoot(relativePath(file), root) === 'docker-compose.yml')
+  const readmeFile = files.find((file) => stripRoot(relativePath(file), root).toLowerCase() === 'readme.md')
+  const composeText = composeFile ? await composeFile.text() : ''
+  const readmeText = readmeFile ? await readmeFile.text() : ''
+  const weightFiles = findWeightFiles(normalizedPaths)
+  const capability = inferCapability(root, normalizedPaths, composeText)
+
+  Object.assign(importSummary, {
+    folderName: root,
+    fileCount: files.length,
+    totalSize,
+    rootCount: roots.length,
+  })
+
+  addCheck(checks, 'single-root', roots.length === 1, '只包含一个模型根目录')
+  addCheck(checks, 'dockerfile', Boolean(findFile(normalizedPaths, 'Dockerfile')), '包含 Dockerfile')
+  addCheck(checks, 'compose', Boolean(composeFile), '包含 docker-compose.yml')
+  addCheck(checks, 'main', Boolean(findFile(normalizedPaths, 'app/main.py')), '包含 app/main.py 服务入口')
+  addCheck(checks, 'requirements', Boolean(findFile(normalizedPaths, 'requirements.txt')), '包含 requirements.txt', true)
+  addCheck(checks, 'readme', Boolean(readmeFile), '包含 README.md', true)
+  addCheck(checks, 'unsafe-path', normalizedPaths.every((path) => !path.startsWith('/') && !path.includes('../')), '路径未包含越级或绝对路径')
+  addCheck(
+    checks,
+    'cache',
+    !normalizedPaths.some((path) => path.includes('__pycache__') || path.startsWith('.git/') || path.includes('/.git/') || path.includes('node_modules')),
+    '未包含缓存或源码管理目录',
+    true,
+  )
+  addCheck(checks, 'compose-parse', Boolean(composeText && extractServiceName(composeText)), '可解析 Compose 服务名')
+  addCheck(checks, 'port', Boolean(composeText && extractComposePort(composeText)), '可解析服务端口')
+  addCheck(checks, 'weights', capability === '视觉语言模型' || weightFiles.length > 0, '视觉模型包含权重文件')
+
+  importChecks.value = checks
+  Object.assign(importForm, {
+    name: root || extractServiceName(composeText),
+    capability,
+    framework: capability === '视觉语言模型' ? 'vLLM Proxy / FastAPI' : 'PyTorch / FastAPI',
+    architecture: inferArchitecture(root, normalizedPaths, composeText),
+    image_name: extractComposeValue(composeText, 'image'),
+    container_name: extractComposeValue(composeText, 'container_name'),
+    host_port: extractComposePort(composeText),
+    endpoint: inferEndpoint(normalizedPaths, readmeText),
+    description: readmeText.split('\n').find((line) => line.trim() && !line.trim().startsWith('#'))?.trim() || '',
+  })
+}
+
+function appendImportFiles(formData) {
+  importFiles.value.forEach((file) => {
+    formData.append('files', file, relativePath(file))
+  })
+}
+
+function importMetadata() {
+  return {
+    ...importForm,
+    folder_name: importSummary.folderName,
+    file_count: importSummary.fileCount,
+    total_size: importSummary.totalSize,
+    tags: importForm.tags.split(/[,，]/).map((item) => item.trim()).filter(Boolean),
+  }
+}
+
+async function validateImportWithServer() {
+  validatingImport.value = true
+  serverValidation.value = null
+  try {
+    const formData = new FormData()
+    appendImportFiles(formData)
+    formData.append('metadata', JSON.stringify(importMetadata()))
+    const response = await validateModelImport(formData)
+    serverValidation.value = response.data || { valid: true }
+    if (serverValidation.value.detected) {
+      Object.assign(importForm, {
+        name: serverValidation.value.detected.name || importForm.name,
+        capability: serverValidation.value.detected.model_type || serverValidation.value.detected.capability || importForm.capability,
+        framework: serverValidation.value.detected.framework || importForm.framework,
+        architecture: serverValidation.value.detected.architecture || importForm.architecture,
+        image_name: serverValidation.value.detected.image_name || importForm.image_name,
+        container_name: serverValidation.value.detected.container_name || importForm.container_name,
+        host_port: serverValidation.value.detected.host_port || importForm.host_port,
+        endpoint: serverValidation.value.detected.endpoint || importForm.endpoint,
+      })
+    }
+    ElMessage.success(serverValidation.value.valid === false ? '校验完成，请处理错误项' : '模型目录校验通过')
+  } catch (error) {
+    serverValidation.value = { valid: false, errors: ['模型目录后端校验失败'] }
+    ElMessage.error('模型目录后端校验失败')
+  } finally {
+    validatingImport.value = false
+  }
+}
+
+async function registerImport() {
+  registeringImport.value = true
+  try {
+    const formData = new FormData()
+    appendImportFiles(formData)
+    formData.append('metadata', JSON.stringify(importMetadata()))
+    const response = await registerImportedModel(formData)
+    ElMessage.success(response.message || '模型注册成功')
+    importVisible.value = false
+    resetImport()
+    await loadModels()
+  } catch (error) {
+    ElMessage.error('模型注册失败')
+  } finally {
+    registeringImport.value = false
+  }
 }
 
 function normalizeStatusPayload(result = {}) {
@@ -503,6 +986,66 @@ async function openDetail(model) {
     selectedModel.value = response.data || model
   } catch (error) {
     ElMessage.warning('详情读取失败，已显示基础信息')
+  }
+}
+
+function openEditDialog(model) {
+  editForm.id = model?.id || null
+  editForm.description = model?.description && model.description !== '暂无说明' ? model.description : ''
+  editVisible.value = true
+}
+
+function patchModel(modelId, patch) {
+  models.value = models.value.map((item) => (item.id === modelId ? { ...item, ...patch } : item))
+  if (selectedModel.value?.id === modelId) {
+    selectedModel.value = { ...selectedModel.value, ...patch }
+  }
+}
+
+async function saveModelDescription() {
+  if (!editForm.id || savingEdit.value) return
+  savingEdit.value = true
+  try {
+    const response = await updateModel(editForm.id, { description: editForm.description })
+    const updated = response.data || {}
+    patchModel(editForm.id, { description: updated.description ?? editForm.description })
+    ElMessage.success(response.message || '模型说明已更新')
+    editVisible.value = false
+  } catch (error) {
+    ElMessage.error('模型说明更新失败')
+  } finally {
+    savingEdit.value = false
+  }
+}
+
+async function deleteModelRecord(model) {
+  if (!canDelete(model) || isAnyActioning(model)) return
+  try {
+    await ElMessageBox.confirm(`确认删除模型「${model.name}」？`, '删除模型', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+      confirmButtonClass: 'el-button--danger',
+    })
+  } catch (error) {
+    return
+  }
+
+  actionState.id = model.id
+  actionState.type = 'delete'
+  try {
+    const response = await deleteModel(model.id)
+    models.value = models.value.filter((item) => item.id !== model.id)
+    if (selectedModel.value?.id === model.id) {
+      selectedModel.value = null
+      detailVisible.value = false
+    }
+    ElMessage.success(response.message || '模型已删除')
+  } catch (error) {
+    ElMessage.error('模型删除失败')
+  } finally {
+    actionState.id = null
+    actionState.type = ''
   }
 }
 
@@ -565,6 +1108,17 @@ onMounted(loadModels)
   justify-content: space-between;
   gap: 18px;
   padding: 20px 22px;
+}
+
+.page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.page-actions .el-button {
+  margin-left: 0;
 }
 
 .page-head h2 {
@@ -1101,7 +1655,176 @@ onMounted(loadModels)
   padding-top: 16px;
 }
 
+.folder-input {
+  display: none;
+}
+
+.import-panel {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  color: #e9f7ff;
+}
+
+.import-section {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid rgba(21, 160, 218, 0.18);
+  border-radius: 8px;
+  background: rgba(8, 29, 43, 0.8);
+}
+
+.folder-picker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.import-section h4 {
+  margin: 0;
+  color: #d8edf8;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.import-section p {
+  margin: 6px 0 0;
+  color: #91bdd5;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.check-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.check-item {
+  min-width: 0;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(84, 175, 222, 0.14);
+  border-radius: 8px;
+  background: rgba(4, 19, 31, 0.34);
+  color: #bdd9e9;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.check-item .el-icon {
+  flex: 0 0 auto;
+  font-size: 16px;
+}
+
+.check-item span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.check-item.is-success {
+  color: #7ee8c5;
+}
+
+.check-item.is-warning {
+  color: #f0c75d;
+}
+
+.check-item.is-error {
+  color: #ff9ca7;
+}
+
+.server-result {
+  display: grid;
+  gap: 8px;
+}
+
+.server-result p {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(84, 175, 222, 0.14);
+  border-radius: 8px;
+  background: rgba(4, 19, 31, 0.34);
+}
+
+.import-form {
+  margin-top: 10px;
+}
+
+.import-form :deep(.el-form-item__label) {
+  color: #a9cfe3;
+  font-weight: 600;
+}
+
+.import-form :deep(.el-input__wrapper),
+.import-form :deep(.el-textarea__inner),
+.import-form :deep(.el-select__wrapper) {
+  border: 1px solid rgba(84, 175, 222, 0.24);
+  background: #0e2639;
+  box-shadow: none;
+}
+
+.import-form :deep(.el-input__wrapper:hover),
+.import-form :deep(.el-textarea__inner:hover),
+.import-form :deep(.el-select__wrapper:hover) {
+  border-color: rgba(72, 216, 255, 0.48);
+}
+
+.import-form :deep(.el-input__wrapper.is-focus),
+.import-form :deep(.el-textarea__inner:focus),
+.import-form :deep(.el-select__wrapper.is-focused) {
+  border-color: #48d8ff;
+  box-shadow: 0 0 0 1px rgba(72, 216, 255, 0.2);
+}
+
+.import-form :deep(.el-input__inner),
+.import-form :deep(.el-textarea__inner),
+.import-form :deep(.el-select__selected-item) {
+  color: #f3fbff;
+}
+
+.import-form :deep(.el-input__inner::placeholder),
+.import-form :deep(.el-textarea__inner::placeholder) {
+  color: #6f95aa;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.import-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.2fr;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 16px;
+}
+
+.import-actions .el-button {
+  margin-left: 0;
+}
+
 :deep(.model-detail-drawer) {
+  background: #081824;
+}
+
+:deep(.model-import-drawer) {
   background: #081824;
 }
 
@@ -1125,7 +1848,10 @@ onMounted(loadModels)
   .summary-grid,
   .toolbar,
   .model-fields,
-  .detail-actions {
+  .detail-actions,
+  .check-list,
+  .form-grid,
+  .import-actions {
     grid-template-columns: 1fr;
   }
 
@@ -1135,6 +1861,18 @@ onMounted(loadModels)
 
   .page-head {
     align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .page-actions,
+  .page-actions .el-button,
+  .folder-picker,
+  .folder-picker .el-button {
+    width: 100%;
+  }
+
+  .folder-picker {
+    align-items: stretch;
     flex-direction: column;
   }
 

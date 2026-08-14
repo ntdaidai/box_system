@@ -83,6 +83,26 @@ class DockerService:
             for c in containers
         ]
 
+    def build_image(self, context_path: str, image_name: str) -> dict:
+        """Build a Docker image from a local context path."""
+        try:
+            image, logs = self.client.images.build(
+                path=context_path,
+                tag=image_name,
+                rm=True,
+            )
+            image_id = image.id
+            short_id = image.short_id
+            logger.info(f"镜像构建完成: {image_name} ({short_id})")
+            return {
+                "image_name": image_name,
+                "image_id": image_id,
+                "short_id": short_id,
+                "log_count": sum(1 for _ in logs),
+            }
+        except APIError as e:
+            raise ValueError(f"构建镜像失败: {e}")
+
     def inspect_container(self, container_id: str) -> dict:
         """查询容器详情"""
         try:

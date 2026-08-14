@@ -16,7 +16,7 @@ app = FastAPI(
 
 CLOUD_URL = os.getenv("CLOUD_URL", "http://10.196.85.11:9458")
 INFERENCE_PATH = os.getenv("INFERENCE_PATH", "/infer")
-CLOUD_PROBE_TIMEOUT = float(os.getenv("CLOUD_PROBE_TIMEOUT", "5"))
+CLOUD_PROBE_TIMEOUT = float(os.getenv("CLOUD_PROBE_TIMEOUT", "1"))
 
 client = httpx.Client(timeout=300.0)
 
@@ -205,12 +205,20 @@ def _normalize_cloud_response(data: dict) -> dict:
 async def health():
     """健康检查。"""
     try:
-        resp = client.get(f"{CLOUD_URL}/health", timeout=5)
+        resp = client.get(f"{CLOUD_URL}/health", timeout=CLOUD_PROBE_TIMEOUT)
         if resp.status_code < 400:
             return {"status": "healthy", "cloud": "reachable"}
-    except Exception:
-        pass
-    return {"status": "healthy", "cloud": "unreachable"}
+    except Exception as exc:
+        return {
+            "status": "healthy",
+            "cloud": "unreachable",
+            "detail": f"云端增强服务不可用: {exc}",
+        }
+    return {
+        "status": "healthy",
+        "cloud": "unreachable",
+        "detail": f"云端增强服务健康检查失败: {resp.status_code}",
+    }
 
 
 @app.post("/infer")

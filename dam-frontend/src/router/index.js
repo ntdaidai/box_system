@@ -82,7 +82,7 @@ const routes = [
             path: 'camera/devices',
             name: 'CameraDeviceManagement',
             component: () => import('@/views/Monitor/DeviceManagement.vue'),
-            meta: { title: '数据源管理', hideBreadcrumbBar: true }
+            meta: { title: '感知源管理', hideBreadcrumbBar: true }
           },
           {
             path: 'camera/zones',
@@ -151,12 +151,12 @@ const routes = [
           {
             path: 'devices',
             component: () => import('@/views/Monitor/DeviceManagement.vue'),
-            meta: { title: '数据源管理', hideBreadcrumbBar: true }
+            meta: { title: '感知源管理', hideBreadcrumbBar: true }
           },
           {
             path: 'devices/cameras',
             redirect: '/system/devices',
-            meta: { title: '数据源管理' }
+            meta: { title: '感知源管理' }
           },
           {
             path: 'video-detection',

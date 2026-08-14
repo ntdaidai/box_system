@@ -226,12 +226,10 @@ def _collect_review_frames(
     *,
     limit: int = 8,
 ) -> list[dict[str, Any]]:
-    frames: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
 
     def add_frame(value: Any, description: str = "Qwen4B 复核帧", captured_at: Optional[str] = None) -> None:
-        if len(frames) >= limit:
-            return
         if isinstance(value, dict):
             frame_type = str(value.get("type") or value.get("media_type") or "image").lower()
             if frame_type and frame_type not in {"image", "photo", "snapshot"}:
@@ -241,11 +239,13 @@ def _collect_review_frames(
                 value.get("url")
                 or value.get("file_url")
                 or value.get("path")
+                or value.get("annotated_ref")
                 or value.get("object_name")
                 or value.get("object_key")
                 or (source_ref if isinstance(source_ref, str) else None)
             )
             caption = value.get("caption") or value.get("description") or description
+            role = str(value.get("role") or "")
             source = source_ref if isinstance(source_ref, dict) else {}
             timestamp = (
                 value.get("timestamp_seconds")
@@ -256,6 +256,7 @@ def _collect_review_frames(
         else:
             url = value
             caption = description
+            role = ""
             timestamp = None
         if not url:
             return
@@ -273,27 +274,18 @@ def _collect_review_frames(
         if normalized in seen:
             return
         seen.add(normalized)
-        frames.append({
-            "id": f"review-frame-{len(frames) + 1}",
+        candidates.append({
+            "id": f"review-frame-{len(candidates) + 1}",
             "evidence_type": "IMAGE",
             "source_type": "SYSTEM",
             "file_url": normalized,
             "description": caption,
             "captured_at": captured_at,
-            "time_label": f"{float(timestamp):.1f}s" if timestamp is not None else f"复核帧 {len(frames) + 1:02d}",
+            "time_label": f"{float(timestamp):.1f}s" if timestamp is not None else f"复核帧 {len(candidates) + 1:02d}",
+            "_priority": _review_frame_priority(normalized, role),
         })
 
-    visual = observation.get("visual") if isinstance(observation.get("visual"), dict) else {}
-    screening = visual.get("screening") if isinstance(visual.get("screening"), dict) else {}
-    for key in ("qwen_image_urls", "image_urls"):
-        value = observation.get(key) or screening.get(key)
-        if isinstance(value, list):
-            for item in value:
-                add_frame(item, "Qwen4B 抽取帧")
-
     def walk(value: Any) -> None:
-        if len(frames) >= limit:
-            return
         if isinstance(value, dict):
             for key in ("representative_frame", "representative_frames", "key_frames", "image_urls", "media_objects", "cloud_media_objects"):
                 nested = value.get(key)
@@ -311,16 +303,31 @@ def _collect_review_frames(
     for row in reversed(timeline):
         payload = row.payload or {}
         walk(payload)
-        if len(frames) >= limit:
-            break
 
     for row in evidence:
-        if len(frames) >= limit:
-            break
         if str(row.evidence_type or "").upper() == "IMAGE":
             add_frame(row.file_url, row.description or "现场证据", row.captured_at.isoformat() if row.captured_at else None)
 
-    return frames[:limit]
+    candidates.sort(key=lambda item: item.get("_priority", 99))
+    frames = []
+    for index, item in enumerate(candidates[:limit], 1):
+        frame = {key: value for key, value in item.items() if key != "_priority"}
+        frame["id"] = f"review-frame-{index}"
+        if not frame.get("time_label") or str(frame["time_label"]).startswith("复核帧 "):
+            frame["time_label"] = f"复核帧 {index:02d}"
+        frames.append(frame)
+    return frames
+
+
+def _review_frame_priority(url: str, role: str = "") -> int:
+    text = f"{role} {url}".lower()
+    if "annotated_detection_frame" in text or "workflow/yolo-detections" in text:
+        return 0
+    if "workflow-media" in text or "qwen4b-proxy-media" in text or "key_frame" in text:
+        return 1
+    if "qwen_screening" in text or "/camera/" in text:
+        return 9
+    return 5
 
 
 @router.get("/config", summary="获取融合业务配置")

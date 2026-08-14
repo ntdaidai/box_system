@@ -86,6 +86,31 @@ class DamModelLibraryClient:
         )
         return result.get("data") or {}
 
+    async def create_model(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        result = await self._request("POST", "/api/model-registry", json=payload, timeout=60.0)
+        return result.get("data") or {}
+
+    async def update_model(self, model_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+        result = await self._request("PUT", f"/api/model-registry/{model_id}", json=payload, timeout=60.0)
+        return result.get("data") or {}
+
+    async def delete_model(self, model_id: int) -> Dict[str, Any]:
+        result = await self._request("DELETE", f"/api/model-registry/{model_id}", timeout=60.0)
+        return result.get("data") or {}
+
+    async def bind_image(self, model_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+        result = await self._request("POST", f"/api/model-registry/{model_id}/bind-image", json=payload, timeout=60.0)
+        return result.get("data") or {}
+
+    async def build_image(self, *, context_path: str, image_name: str) -> Dict[str, Any]:
+        result = await self._request(
+            "POST",
+            "/api/docker/images/build",
+            json={"context_path": context_path, "image_name": image_name},
+            timeout=1800.0,
+        )
+        return result.get("data") or {}
+
     async def execute_workflow(
         self,
         *,

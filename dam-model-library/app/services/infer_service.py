@@ -76,11 +76,19 @@ class InferService:
         # 构建推理 URL
         inference_path = binding.inference_path or DEFAULT_INFERENCE_PATH
         inference_url = f"http://{binding.host_ip}:{binding.host_port}{inference_path}"
+        unavailable_detail = self._declared_service_unavailable(binding)
+        if unavailable_detail:
+            raise HTTPException(status_code=502, detail=unavailable_detail)
         request_data = self._prepare_request_data(binding, request_data)
 
         # 发送推理请求
         try:
-            response = self.client.post(inference_url, json=request_data)
+            request_timeout = self._pop_request_timeout(request_data)
+            response = self.client.post(
+                inference_url,
+                json=request_data,
+                timeout=request_timeout,
+            )
             response.raise_for_status()
             result = response.json()
 
@@ -141,12 +149,20 @@ class InferService:
             logger.info(f"等待推理服务就绪...")
             if not self._wait_for_ready(binding, timeout=wait_timeout):
                 raise HTTPException(status_code=504, detail="模型启动超时，推理服务未就绪")
+            unavailable_detail = self._declared_service_unavailable(binding)
+            if unavailable_detail:
+                raise HTTPException(status_code=502, detail=unavailable_detail)
 
             # 执行推理
             inference_path = binding.inference_path or DEFAULT_INFERENCE_PATH
             inference_url = f"http://{binding.host_ip}:{binding.host_port}{inference_path}"
             request_data = self._prepare_request_data(binding, request_data)
-            response = self.client.post(inference_url, json=request_data)
+            request_timeout = self._pop_request_timeout(request_data)
+            response = self.client.post(
+                inference_url,
+                json=request_data,
+                timeout=request_timeout,
+            )
             response.raise_for_status()
             inference_result = response.json()
 
@@ -224,10 +240,23 @@ class InferService:
             "max_tokens": self._chat_max_tokens(payload, messages),
             "temperature": float(payload.get("temperature") or 0.2),
         }
+        request_timeout = payload.get("_request_timeout") or payload.get("request_timeout")
+        if request_timeout:
+            result["_request_timeout"] = request_timeout
         for key in ("top_p", "stream"):
             if key in payload:
                 result[key] = payload[key]
         return result
+
+    @staticmethod
+    def _pop_request_timeout(payload: dict) -> float:
+        raw_timeout = payload.pop("_request_timeout", None)
+        if raw_timeout is None:
+            raw_timeout = payload.pop("request_timeout", None)
+        try:
+            return float(raw_timeout or 300.0)
+        except (TypeError, ValueError):
+            return 300.0
 
     def _resolve_chat_model_id(self, binding: ModelDeployBinding) -> str:
         try:
@@ -359,6 +388,31 @@ class InferService:
 
         logger.warning(f"探活超时: 容器 {container_id[:12]}")
         return False
+
+    def _declared_service_unavailable(self, binding: ModelDeployBinding) -> Optional[str]:
+        """Honor structured health responses from proxy services.
+
+        The Qwen35B proxy can be running while its upstream cloud model is
+        absent. In that case the workflow should skip the cloud node quickly
+        instead of spending the full request timeout on a doomed inference.
+        """
+        if not binding.health_check_url:
+            return None
+        health_url = f"http://{binding.host_ip}:{binding.host_port}{binding.health_check_url}"
+        try:
+            response = self.client.get(health_url, timeout=1.5)
+            if response.status_code >= 400:
+                return f"推理服务健康检查失败: {response.status_code}"
+            data = response.json()
+        except Exception:
+            return None
+        if not isinstance(data, dict):
+            return None
+        cloud_status = str(data.get("cloud") or data.get("upstream") or "").lower()
+        if cloud_status in {"unreachable", "offline", "unavailable", "missing"}:
+            detail = data.get("detail") or data.get("message") or "云端增强服务不可用"
+            return str(detail)
+        return None
 
     def _validate_and_fill_defaults(self, db: Session, model_id: int, request_data: dict) -> dict:
         """校验输入并填充默认值

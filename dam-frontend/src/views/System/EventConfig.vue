@@ -9,13 +9,6 @@
     </header>
 
     <section class="filter-bar">
-      <el-input
-        v-model.trim="keyword"
-        :prefix-icon="Search"
-        clearable
-        placeholder="搜索事件"
-        class="event-search"
-      />
       <el-select v-model="sourceFilter" class="event-filter-select" placeholder="事件类型">
         <el-option v-for="item in sourceOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
@@ -25,17 +18,34 @@
       <el-select v-model="enabledFilter" class="event-filter-select" placeholder="启用状态">
         <el-option v-for="item in enabledOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
+      <el-input
+        v-model.trim="keyword"
+        :prefix-icon="Search"
+        clearable
+        placeholder="搜索事件"
+        class="event-search"
+      />
     </section>
 
     <section class="event-list-panel" v-loading="loading">
       <div class="config-table" role="table" aria-label="事件配置列表">
         <div class="config-table-head" role="row">
           <span>事件名称</span>
-          <span>类型</span>
+          <span>事件类型</span>
+          <span>风险等级</span>
           <span>触发规则</span>
-          <span>持续</span>
-          <span>恢复</span>
-          <span>风险</span>
+          <span class="header-with-help">
+            持续时间
+            <el-tooltip content="触发规则连续满足达到该时长后，系统才会创建事件。" placement="top">
+              <el-icon><QuestionFilled /></el-icon>
+            </el-tooltip>
+          </span>
+          <span class="header-with-help">
+            恢复时间
+            <el-tooltip content="触发规则恢复正常并持续达到该时长后，事件可自动闭环。" placement="top">
+              <el-icon><QuestionFilled /></el-icon>
+            </el-tooltip>
+          </span>
           <span>状态</span>
           <span>操作</span>
         </div>
@@ -50,18 +60,14 @@
           <div class="event-name-cell">
             <strong>{{ event.name }}</strong>
           </div>
-          <div><span class="type-tag">{{ compactSourceLabel(event) }}</span></div>
+          <div><span class="source-pill" :class="`is-${event.source_type || 'unknown'}`">{{ compactSourceLabel(event) }}</span></div>
+          <div><el-tag :type="riskTagType(event.risk_level, event.risk_label)" effect="dark">{{ riskLabel(event.risk_level, event.risk_label) }}</el-tag></div>
 
           <div class="rule-cell">
             <template v-if="editingEventId === event.id">
               <div v-if="isVisualEvent(event)" class="visual-inline-editor">
-                <el-select v-model="ruleForm.zone" class="compact-select" placeholder="区域">
-                  <el-option v-for="item in visualZoneOptions" :key="item" :label="item" :value="item" />
-                </el-select>
-                <el-select v-model="ruleForm.target" class="compact-select target" placeholder="目标">
-                  <el-option v-for="item in visualTargetOptions" :key="item" :label="item" :value="item" />
-                </el-select>
-                <el-button link type="primary" :icon="View" @click="goZoneConfig">查看 / 编辑区域</el-button>
+                <span>{{ listRuleSummary(event) }}</span>
+                <el-button class="zone-entry-action" :icon="View" @click="goZoneConfig">查看/编辑区域</el-button>
               </div>
               <div v-else class="condition-editor">
                 <strong>{{ parseCondition(event.conditions?.[0]).metricLabel }}</strong>
@@ -105,10 +111,8 @@
             <span v-else>{{ recoveryText(event) }}</span>
           </div>
 
-          <div><i :class="riskClass(event.risk_level, event.risk_label)">{{ riskLabel(event.risk_level, event.risk_label) }}</i></div>
-          <div>
+          <div class="status-cell">
             <el-switch
-              size="small"
               :model-value="event.enabled"
               :loading="savingEventId === event.id"
               @change="toggleListEvent(event, $event)"
@@ -116,12 +120,12 @@
           </div>
           <div class="row-actions">
             <template v-if="editingEventId === event.id">
-              <el-button plain size="small" @click="cancelInlineRuleEdit">取消</el-button>
-              <el-button type="primary" size="small" :loading="savingRule" @click="saveInlineRule(event)">保存</el-button>
+              <el-button class="cancel-rule-action" plain size="small" @click="cancelInlineRuleEdit">取消</el-button>
+              <el-button class="save-rule-action" size="small" :loading="savingRule" @click="saveInlineRule(event)">保存</el-button>
             </template>
             <template v-else>
-              <el-button link type="primary" @click="startInlineRuleEdit(event)">编辑规则</el-button>
-              <el-button link type="primary" @click="openFlowWorkspace(event)">查看联动</el-button>
+              <el-button class="edit-rule-action" @click="startInlineRuleEdit(event)">编辑规则</el-button>
+              <el-button class="view-flow-action" @click="openFlowWorkspace(event)">查看联动</el-button>
             </template>
           </div>
         </div>
@@ -150,12 +154,11 @@
       <template #header>
         <div class="flow-dialog-header">
           <div>
-            <h3>{{ currentEvent?.name }} · {{ flowEditMode ? '编辑联动流程' : '联动流程' }}</h3>
+            <h3>{{ currentEvent?.name }}</h3>
           </div>
           <div class="flow-dialog-actions" v-if="!flowEditMode">
-            <el-button plain @click="fitFlowView">适应视图</el-button>
-            <el-button type="primary" plain :icon="EditPen" @click="enterFlowEdit">编辑流程</el-button>
-            <el-button plain @click="flowDialogVisible = false">关闭</el-button>
+            <el-button class="flow-edit-entry" :icon="EditPen" @click="enterFlowEdit">编辑流程</el-button>
+            <el-button plain @click="flowDialogVisible = false">关闭页面</el-button>
           </div>
           <div class="flow-dialog-actions" v-else>
             <el-button :icon="Plus" type="primary" plain @click="addNodeDialogVisible = true">添加动作</el-button>
@@ -216,22 +219,34 @@
                 @pointerdown.stop
                 @click.stop="completeConnection(node)"
               ></button>
-              <el-icon><component :is="node.icon" /></el-icon>
+              <el-icon class="node-main-icon"><component :is="node.icon" /></el-icon>
               <div class="node-copy">
                 <strong>{{ node.title }}</strong>
                 <span>{{ node.subtitle }}</span>
-                <em v-if="node.detail">{{ node.detail }}</em>
+                <em v-if="flowEditMode && node.detail">{{ node.detail }}</em>
               </div>
-              <button
-                v-if="node.configurable"
-                type="button"
-                class="node-config"
-                title="配置"
-                @pointerdown.stop
-                @click.stop="openNodeConfig(node)"
-              >
-                <el-icon><Setting /></el-icon>
-              </button>
+              <div v-if="node.configurable || (flowEditMode && node.kind === 'action' && !node.locked)" class="node-tools">
+                <button
+                  v-if="node.configurable"
+                  type="button"
+                  class="node-config"
+                  title="配置"
+                  @pointerdown.stop
+                  @click.stop="openNodeConfig(node)"
+                >
+                  <el-icon><Setting /></el-icon>
+                </button>
+                <button
+                  v-if="flowEditMode && node.kind === 'action' && !node.locked"
+                  type="button"
+                  class="node-delete"
+                  title="删除动作"
+                  @pointerdown.stop
+                  @click.stop="deleteFlowNode(node)"
+                >
+                  <el-icon><Delete /></el-icon>
+                </button>
+              </div>
               <button
                 v-if="flowEditMode"
                 type="button"
@@ -245,9 +260,12 @@
         </div>
 
         <aside v-if="editingNode?.action" class="action-inspector">
-          <header>
-            <span>{{ flowEditMode ? '配置动作' : '动作详情' }}</span>
-            <strong>{{ actionBusinessLabel(editingNode.action) }}</strong>
+          <header class="action-inspector-header">
+            <div class="inspector-title">
+              <span>{{ flowEditMode ? '配置动作' : '动作详情' }}</span>
+              <strong>{{ actionBusinessLabel(editingNode.action) }}</strong>
+              <small>{{ actionBusinessSummary(editingNode.action) }}</small>
+            </div>
             <button type="button" @click="editingNode = null">×</button>
           </header>
 
@@ -260,55 +278,77 @@
 
           <el-form v-else class="inspector-form" label-position="top">
             <template v-if="editingNode.action.action_type === 'broadcast'">
-              <el-form-item label="广播设备">
-                <el-select v-model="actionForm.broadcast_device_id" placeholder="请选择广播设备" clearable>
-                  <el-option v-for="item in enabledBroadcastDevices" :key="item.id" :label="item.name" :value="item.id" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="播报模板">
-                <el-select v-model="actionForm.template_id" placeholder="请选择播报模板" clearable>
-                  <el-option v-for="item in enabledBroadcastTemplates" :key="item.id" :label="item.name" :value="item.id" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="执行方式">
-                <el-radio-group v-model="actionForm.repeat_mode">
+              <section class="inspector-section">
+                <div class="section-heading">
+                  <strong>广播内容</strong>
+                  <span>选择事件触发后使用的设备与模板</span>
+                </div>
+                <el-form-item label="广播设备" required>
+                  <el-select v-model="actionForm.broadcast_device_id" placeholder="请选择广播设备" clearable>
+                    <el-option v-for="item in enabledBroadcastDevices" :key="item.id" :label="item.name" :value="item.id" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="播报模板" required>
+                  <el-select v-model="actionForm.template_id" placeholder="请选择播报模板" clearable>
+                    <el-option v-for="item in enabledBroadcastTemplates" :key="item.id" :label="item.name" :value="item.id" />
+                  </el-select>
+                </el-form-item>
+              </section>
+              <section class="inspector-section">
+                <div class="section-heading">
+                  <strong>执行方式</strong>
+                  <span>单次播报或按间隔重复播报</span>
+                </div>
+                <el-radio-group v-model="actionForm.repeat_mode" class="repeat-mode-control">
                   <el-radio-button label="once">单次</el-radio-button>
                   <el-radio-button label="repeat">周期</el-radio-button>
                 </el-radio-group>
-              </el-form-item>
-              <template v-if="actionForm.repeat_mode === 'repeat'">
-                <el-form-item label="间隔">
-                  <el-input v-model.number="actionForm.repeat_interval_seconds" type="number" min="1" max="86400">
-                    <template #append>秒</template>
-                  </el-input>
-                </el-form-item>
-                <el-form-item label="最多">
-                  <el-input v-model.number="actionForm.max_executions" type="number" min="2" max="100">
-                    <template #append>次</template>
-                  </el-input>
-                </el-form-item>
-              </template>
+                <div v-if="actionForm.repeat_mode === 'repeat'" class="repeat-grid">
+                  <el-form-item label="间隔">
+                    <el-input v-model.number="actionForm.repeat_interval_seconds" type="number" min="1" max="86400">
+                      <template #append>秒</template>
+                    </el-input>
+                  </el-form-item>
+                  <el-form-item label="最多">
+                    <el-input v-model.number="actionForm.max_executions" type="number" min="2" max="100">
+                      <template #append>次</template>
+                    </el-input>
+                  </el-form-item>
+                </div>
+              </section>
             </template>
 
             <template v-else-if="editingNode.action.action_type === 'drone_dispatch'">
-              <el-form-item label="无人机">
-                <el-select v-model="actionForm.drone_id" filterable allow-create default-first-option placeholder="选择或输入无人机">
-                  <el-option v-for="item in droneOptions" :key="item" :label="item" :value="item" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="航线">
-                <el-select v-model="actionForm.route_id" filterable allow-create default-first-option placeholder="选择或输入航线">
-                  <el-option v-for="item in routeOptions" :key="item" :label="item" :value="item" />
-                </el-select>
-              </el-form-item>
+              <section class="inspector-section">
+                <div class="section-heading">
+                  <strong>无人机任务</strong>
+                  <span>设置响应事件的设备与巡查航线</span>
+                </div>
+                <el-form-item label="无人机">
+                  <el-select v-model="actionForm.drone_id" filterable allow-create default-first-option placeholder="选择或输入无人机">
+                    <el-option v-for="item in droneOptions" :key="item" :label="item" :value="item" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="航线">
+                  <el-select v-model="actionForm.route_id" filterable allow-create default-first-option placeholder="选择或输入航线">
+                    <el-option v-for="item in routeOptions" :key="item" :label="item" :value="item" />
+                  </el-select>
+                </el-form-item>
+              </section>
             </template>
 
             <template v-else-if="editingNode.action.action_type === 'staff_task'">
-              <el-form-item label="处置工作组">
-                <el-select v-model="actionForm.staff_group" filterable allow-create default-first-option placeholder="选择或输入处置组">
-                  <el-option v-for="item in staffGroupOptions" :key="item" :label="item" :value="item" />
-                </el-select>
-              </el-form-item>
+              <section class="inspector-section">
+                <div class="section-heading">
+                  <strong>人工处置</strong>
+                  <span>设置负责接收任务的处置工作组</span>
+                </div>
+                <el-form-item label="处置工作组">
+                  <el-select v-model="actionForm.staff_group" filterable allow-create default-first-option placeholder="选择或输入处置组">
+                    <el-option v-for="item in staffGroupOptions" :key="item" :label="item" :value="item" />
+                  </el-select>
+                </el-form-item>
+              </section>
             </template>
 
             <div class="inspector-actions">
@@ -321,7 +361,7 @@
                 删除动作
               </el-button>
               <el-button plain @click="editingNode = null">取消</el-button>
-              <el-button type="primary" @click="saveNodeConfig">应用</el-button>
+              <el-button class="apply-action" @click="saveNodeConfig">应用到流程</el-button>
             </div>
           </el-form>
         </aside>
@@ -347,10 +387,12 @@ import {
   Bell,
   Camera,
   Connection,
+  Delete,
   EditPen,
   Finished,
   Plus,
   Promotion,
+  QuestionFilled,
   Refresh,
   RefreshRight,
   Search,
@@ -437,20 +479,20 @@ const flowDraft = reactive({
 })
 
 const sourceOptions = [
-  { label: '全部', value: 'all' },
+  { label: '全部事件类型', value: 'all' },
   { label: '视觉事件', value: 'camera' },
   { label: '传感器事件', value: 'sensor' },
 ]
 
 const riskOptions = [
-  { label: '全部', value: 'all' },
+  { label: '全部风险等级', value: 'all' },
   { label: '低风险', value: 'low' },
   { label: '中风险', value: 'medium' },
   { label: '高风险', value: 'high' },
 ]
 
 const enabledOptions = [
-  { label: '全部', value: 'all' },
+  { label: '全部启用状态', value: 'all' },
   { label: '已启用', value: 'enabled' },
   { label: '已停用', value: 'disabled' },
 ]
@@ -460,6 +502,12 @@ const metricMap = {
   wind_speed: { label: '风速', unit: 'm/s' },
   rainfall: { label: '降雨量', unit: 'mm' },
   rain: { label: '降雨量', unit: 'mm' },
+  hour_rain: { label: '小时雨量', unit: 'mm' },
+  today_rain: { label: '当日雨量', unit: 'mm' },
+  daily_rain: { label: '日雨量', unit: 'mm' },
+  instant_rain: { label: '瞬时雨量', unit: 'mm' },
+  rain_increment: { label: '时段雨量', unit: 'mm' },
+  total_rain: { label: '累计雨量', unit: 'mm' },
   temperature: { label: '温度', unit: '℃' },
   humidity: { label: '湿度', unit: '%' },
   vibration: { label: '振动', unit: '' },
@@ -496,9 +544,6 @@ const addActionOptions = [
   { label: '无人机任务', type: 'drone_dispatch', icon: Promotion },
   { label: '人工处置', type: 'staff_task', icon: User },
 ]
-
-const visualZoneOptions = ['禁捕区 A', '禁入区 A', '检测区域']
-const visualTargetOptions = ['船只', '人员', '目标']
 
 const events = computed(() => config.events)
 const filteredEvents = computed(() => {
@@ -750,7 +795,7 @@ function parseCondition(condition) {
   const match = expression.match(/([a-zA-Z_][\w.]*)\s*(>=|<=|==|>|<)\s*([0-9.]+)/)
   if (!match) return fallback
   const [, key, operator, value] = match
-  const metric = metricMap[key] || { label: condition?.name || key, unit: '' }
+  const metric = metricMap[key] || inferMetricMeta(key, condition?.name)
   const operatorLabel = operatorMap[operator] || operator
   const isBooleanPresence = ['person_present', 'boat_present'].includes(key) && operator === '==' && Number(value) === 1
   return {
@@ -763,6 +808,15 @@ function parseCondition(condition) {
     valueText: isBooleanPresence ? '出现' : `${value}${metric.unit ? ` ${metric.unit}` : ''}`,
     editableThreshold: !isBooleanPresence,
   }
+}
+
+function inferMetricMeta(key, name = '') {
+  const text = `${key || ''} ${name || ''}`.toLowerCase()
+  if (text.includes('rain') || text.includes('雨')) return { label: name || '降雨量', unit: 'mm' }
+  if (text.includes('wind') || text.includes('风')) return { label: name || '风速', unit: 'm/s' }
+  if (text.includes('temp') || text.includes('温')) return { label: name || '温度', unit: '℃' }
+  if (text.includes('humid') || text.includes('湿')) return { label: name || '湿度', unit: '%' }
+  return { label: name || key, unit: '' }
 }
 
 function sourceLabel(event) {
@@ -781,12 +835,12 @@ function riskLabel(level, fallback = '') {
   return ({ 1: '低风险', 2: '中风险', 3: '高风险', LOW: '低风险', MEDIUM: '中风险', HIGH: '高风险' })[level] || fallback || '未知风险'
 }
 
-function riskClass(level, fallback = '') {
+function riskTagType(level, fallback = '') {
   const label = riskLabel(level, fallback)
-  if (label.includes('高')) return 'risk-badge high'
-  if (label.includes('中')) return 'risk-badge medium'
-  if (label.includes('低')) return 'risk-badge low'
-  return 'risk-badge'
+  if (label.includes('高')) return 'danger'
+  if (label.includes('中')) return 'warning'
+  if (label.includes('低')) return 'success'
+  return 'info'
 }
 
 function riskKey(event) {
@@ -1130,6 +1184,13 @@ function deleteSelectedNode() {
   selectedNodeId.value = ''
 }
 
+function deleteFlowNode(node) {
+  if (!node || node.locked || node.kind !== 'action') return
+  selectedNodeId.value = node.id
+  deleteSelectedNode()
+  if (editingNode.value?.id === node.id) editingNode.value = null
+}
+
 function autoLayoutDraft() {
   const actions = flowDraft.nodes.filter((node) => node.kind === 'action').map((node) => node.action)
   const model = buildAutoFlowModel(actions)
@@ -1143,13 +1204,74 @@ function autoLayoutDraft() {
 function addActionNode(type) {
   const tempId = `temp-${Date.now()}`
   const action = defaultAction(type, tempId)
-  const actions = flowDraft.nodes.filter((item) => item.kind === 'action').map((item) => item.action).concat(action)
-  const model = buildAutoFlowModel(actions)
-  flowDraft.nodes = model.nodes
-  flowDraft.edges = model.edges
-  selectedNodeId.value = actionNodeId(action)
+  const base = insertionBaseNode()
+  const node = actionNodeFromAction(action, base)
+  flowDraft.nodes.push(node)
+  insertActionEdges(node, base)
+  selectedNodeId.value = node.id
   addNodeDialogVisible.value = false
   nextTick(fitFlowView)
+}
+
+function insertionBaseNode() {
+  if (selectedEdgeId.value) {
+    const selectedEdge = flowDraft.edges.find((item) => item.id === selectedEdgeId.value)
+    const fromNode = flowDraft.nodes.find((item) => item.id === selectedEdge?.from)
+    const toNode = flowDraft.nodes.find((item) => item.id === selectedEdge?.to)
+    if (fromNode && toNode) {
+      return {
+        edge: selectedEdge,
+        x: Math.round((fromNode.x + fromNode.w + toNode.x) / 2 - 103),
+        y: Math.round((fromNode.y + toNode.y) / 2 + 118),
+      }
+    }
+  }
+  const selectedNode = flowDraft.nodes.find((item) => item.id === selectedNodeId.value)
+  const fallback = flowDraft.nodes.find((item) => item.id === 'event')
+  return selectedNode || fallback || { id: 'event', x: 520, y: 228, w: 238, h: 110 }
+}
+
+function actionNodeFromAction(action, base) {
+  const actionW = 206
+  const actionH = 92
+  const preferredX = Number(base?.x ?? 0) + Number(base?.w ?? 0) + 72
+  const nextX = preferredX + actionW < FLOW_STAGE_WIDTH - FLOW_STAGE_PADDING
+    ? preferredX
+    : Math.max(FLOW_STAGE_PADDING, Number(base?.x ?? 0))
+  const nextY = preferredX + actionW < FLOW_STAGE_WIDTH - FLOW_STAGE_PADDING
+    ? Number(base?.y ?? 0)
+    : Number(base?.y ?? 0) + Number(base?.h ?? 92) + 56
+  const node = baseNode(
+    actionNodeId(action),
+    'action',
+    clampNumber(nextX, FLOW_STAGE_PADDING, FLOW_STAGE_WIDTH - actionW - FLOW_STAGE_PADDING),
+    Math.max(86, Math.round(nextY)),
+    actionW,
+    actionH,
+    actionIcon(action.action_type),
+    actionBusinessLabel(action),
+    actionBusinessSummary(action),
+    actionBusinessDetail(action),
+    false,
+  )
+  node.action = { ...action }
+  node.configurable = isConfigurableAction(action)
+  node.temp = true
+  return node
+}
+
+function insertActionEdges(node, base) {
+  if (base?.edge) {
+    flowDraft.edges = flowDraft.edges.filter((item) => item.id !== base.edge.id)
+    flowDraft.edges.push(edge(base.edge.from, node.id), edge(node.id, base.edge.to))
+    selectedEdgeId.value = ''
+    return
+  }
+  const fromId = base?.id && base.id !== 'archive' && base.id !== 'auto-close' ? base.id : 'event'
+  flowDraft.edges.push(edge(fromId, node.id))
+  if (!flowDraft.edges.some((item) => item.from === node.id)) {
+    flowDraft.edges.push(edge(node.id, 'auto-close'))
+  }
 }
 
 function defaultAction(type, tempId) {
@@ -1191,6 +1313,10 @@ function saveNodeConfig() {
   if (!editingNode.value?.action) return
   const action = editingNode.value.action
   if (action.action_type === 'broadcast') {
+    if (!actionForm.broadcast_device_id || !actionForm.template_id) {
+      ElMessage.warning('请先选择广播设备和播报模板')
+      return
+    }
     action.broadcast_device_id = actionForm.broadcast_device_id
     action.template_id = actionForm.template_id || null
     action.repeat_interval_seconds = actionForm.repeat_mode === 'repeat' ? clampNumber(actionForm.repeat_interval_seconds, 1, 86400) : 60
@@ -1216,6 +1342,7 @@ function deleteInspectorNode() {
 
 async function saveFlow() {
   if (!currentEvent.value) return
+  if (!validateFlowDraft()) return
   savingFlow.value = true
   try {
     for (const id of deletedActionIds.value) await deleteActionConfig(id)
@@ -1249,6 +1376,21 @@ async function saveFlow() {
   } finally {
     savingFlow.value = false
   }
+}
+
+function validateFlowDraft() {
+  const invalidBroadcast = flowDraft.nodes.find((node) => (
+    node.kind === 'action'
+    && node.action?.action_type === 'broadcast'
+    && (!node.action.broadcast_device_id || !node.action.template_id)
+  ))
+  if (invalidBroadcast) {
+    selectedNodeId.value = invalidBroadcast.id
+    openNodeConfig(invalidBroadcast)
+    ElMessage.warning('请完善广播动作的设备和播报模板')
+    return false
+  }
+  return true
 }
 
 function actionPayloadForSave(action, stepOrder) {
@@ -1522,9 +1664,7 @@ onBeforeUnmount(() => {
   font-weight: 700;
 }
 
-.risk-badge,
-.type-tag {
-  flex: none;
+.source-pill {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1541,33 +1681,28 @@ onBeforeUnmount(() => {
   line-height: 1;
 }
 
-.risk-badge.low {
-  border-color: rgba(98, 215, 177, .24);
-  color: #b8f3dc;
-  background: rgba(98, 215, 177, .08);
-}
-
-.risk-badge.medium {
-  border-color: rgba(240, 199, 93, .26);
-  color: #ffe4a5;
-  background: rgba(240, 199, 93, .1);
-}
-
-.risk-badge.high {
-  border-color: rgba(255, 107, 118, .3);
-  color: #ffbdc4;
-  background: rgba(255, 107, 118, .1);
-}
-
-.type-tag {
-  min-width: 62px;
+.source-pill.is-camera,
+.source-pill.is-unknown {
   border-color: rgba(72, 216, 255, .22);
   color: #aee8ff;
   background: rgba(72, 216, 255, .08);
 }
 
+.source-pill.is-sensor {
+  border-color: rgba(98, 215, 177, .24);
+  color: #b8f3dc;
+  background: rgba(98, 215, 177, .08);
+}
+
+.event-config-page :deep(.el-tag) {
+  min-width: 66px;
+  justify-content: center;
+  border-radius: 5px;
+  font-weight: 800;
+}
+
 .condition-editor :deep(.el-input) {
-  width: 180px;
+  width: 210px;
 }
 
 .condition-editor :deep(.el-input__wrapper) {
@@ -1585,6 +1720,7 @@ onBeforeUnmount(() => {
 
 .condition-editor {
   gap: 10px;
+  justify-content: center;
   min-width: 0;
 }
 
@@ -1664,6 +1800,15 @@ onBeforeUnmount(() => {
   box-shadow: 0 14px 28px rgba(0, 0, 0, .18);
 }
 
+.canvas-node::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(135deg, rgba(104, 190, 214, .08), transparent 46%);
+  pointer-events: none;
+}
+
 .canvas-node.editable {
   cursor: grab;
 }
@@ -1672,7 +1817,7 @@ onBeforeUnmount(() => {
   cursor: grabbing;
 }
 
-.canvas-node :deep(.el-icon) {
+.canvas-node .node-main-icon {
   width: 42px;
   height: 42px;
   display: inline-flex;
@@ -1688,7 +1833,7 @@ onBeforeUnmount(() => {
   border-color: rgba(78, 164, 210, .34);
 }
 
-.canvas-node.source :deep(.el-icon) {
+.canvas-node.source .node-main-icon {
   color: #bfe6ff;
   background: rgba(78, 164, 210, .14);
 }
@@ -1697,8 +1842,8 @@ onBeforeUnmount(() => {
   border-color: rgba(240, 189, 88, .28);
 }
 
-.canvas-node.rule-node :deep(.el-icon),
-.canvas-node.route-node :deep(.el-icon) {
+.canvas-node.rule-node .node-main-icon,
+.canvas-node.route-node .node-main-icon {
   color: #ffe0a0;
   background: rgba(240, 189, 88, .13);
 }
@@ -1710,16 +1855,23 @@ onBeforeUnmount(() => {
   box-shadow: 0 0 0 1px rgba(47, 214, 196, .12), 0 18px 36px rgba(0, 0, 0, .24);
 }
 
-.canvas-node.event-node :deep(.el-icon) {
+.canvas-node.event-node .node-main-icon {
   width: 48px;
   height: 48px;
   font-size: 26px;
 }
 
 .canvas-node.action {
-  grid-template-columns: 42px minmax(0, 1fr) 30px;
+  grid-template-columns: 42px minmax(0, 1fr);
+  padding-right: 48px;
   border-color: rgba(102, 186, 170, .32);
   background: rgba(10, 38, 51, .97);
+}
+
+.canvas-node.action.selected,
+.canvas-node.action:hover {
+  border-color: rgba(87, 215, 196, .52);
+  background: rgba(12, 45, 58, .98);
 }
 
 .canvas-node.close-node,
@@ -1741,15 +1893,14 @@ onBeforeUnmount(() => {
 }
 
 .node-copy strong {
-  display: -webkit-box;
+  display: block;
   overflow: hidden;
   color: #f2f8ff;
   font-size: 16px;
   font-weight: 800;
   line-height: 1.22;
-  white-space: normal;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .node-copy span,
@@ -1769,16 +1920,56 @@ onBeforeUnmount(() => {
   color: #74d8cf;
 }
 
-.node-config {
+.node-tools {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  transform: translateY(-50%);
+}
+
+.node-config,
+.node-delete {
   width: 28px;
   height: 28px;
   display: grid;
   place-items: center;
+  padding: 0;
   border: 1px solid rgba(116, 216, 207, .24);
   border-radius: 6px;
   background: rgba(6, 20, 34, .72);
   color: #74d8cf;
   cursor: pointer;
+}
+
+.node-config .el-icon,
+.node-delete .el-icon {
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: transparent;
+  font-size: 16px;
+}
+
+.node-config:hover {
+  border-color: rgba(116, 216, 207, .52);
+  color: #d7fffb;
+  background: rgba(19, 86, 82, .68);
+}
+
+.node-delete {
+  border: 1px solid rgba(255, 127, 143, .26);
+  background: rgba(80, 26, 38, .58);
+  color: #ffabb5;
+}
+
+.node-delete:hover {
+  border-color: rgba(255, 127, 143, .52);
+  color: #ffd7dd;
+  background: rgba(112, 34, 50, .76);
 }
 
 .node-handle {
@@ -1860,7 +2051,7 @@ onBeforeUnmount(() => {
 .filter-bar {
   min-height: 72px;
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) 150px 140px 140px;
+  grid-template-columns: 180px 180px 180px minmax(260px, 1fr);
   gap: 12px;
   align-items: center;
   padding: 14px;
@@ -1902,11 +2093,11 @@ onBeforeUnmount(() => {
 
 .config-table-head,
 .config-row {
-  min-width: 1410px;
+  min-width: 1460px;
   display: grid;
-  grid-template-columns: 220px 96px minmax(360px, 1fr) 86px 86px 98px 86px 240px;
+  grid-template-columns: 210px 108px 116px minmax(360px, 1fr) 116px 116px 96px 248px;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
   text-align: center;
 }
 
@@ -1938,11 +2129,21 @@ onBeforeUnmount(() => {
   box-shadow: inset 3px 0 0 #48d8ff;
 }
 
-.config-table-head span:first-child,
-.config-table-head span:nth-child(3),
-.config-row > div:first-child,
-.config-row > div:nth-child(3) {
-  text-align: left;
+.config-table-head > span,
+.config-row > div {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.header-with-help {
+  gap: 5px;
+}
+
+.header-with-help .el-icon {
+  color: #83a9c4;
+  font-size: 14px;
 }
 
 .event-name-cell strong {
@@ -1951,21 +2152,21 @@ onBeforeUnmount(() => {
   color: #f3f8fd;
   font-size: 14px;
   font-weight: 750;
-  text-align: left;
+  text-align: center;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .rule-cell {
   min-width: 0;
-  text-align: left;
+  text-align: center;
 }
 
 .rule-cell > span {
   display: block;
   overflow: hidden;
   color: #9cb6ca;
-  font-size: 13px;
+  font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1973,17 +2174,18 @@ onBeforeUnmount(() => {
 .visual-inline-editor {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
   min-width: 0;
   height: 36px;
 }
 
-.compact-select {
-  width: 112px;
-}
-
-.compact-select.target {
-  width: 86px;
+.visual-inline-editor > span {
+  overflow: hidden;
+  color: #9cb6ca;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .duration-cell {
@@ -1995,7 +2197,7 @@ onBeforeUnmount(() => {
 }
 
 .duration-cell :deep(.el-input) {
-  width: 80px;
+  width: 90px;
 }
 
 .condition-editor :deep(.el-input__wrapper),
@@ -2022,6 +2224,17 @@ onBeforeUnmount(() => {
 .duration-cell :deep(.el-input__inner) {
   color: #eaf6ff;
   font-weight: 700;
+  text-align: center;
+}
+
+.status-cell :deep(.el-switch__core) {
+  border-color: rgba(120, 153, 176, .34);
+  background: rgba(96, 118, 134, .38);
+}
+
+.status-cell :deep(.el-switch.is-checked .el-switch__core) {
+  border-color: rgba(64, 158, 255, .66);
+  background: #409eff;
 }
 
 .row-actions {
@@ -2032,31 +2245,63 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.row-actions :deep(.el-button.is-link) {
+.row-actions :deep(.el-button) {
   min-width: 86px;
-  min-height: 32px;
-  padding: 0 10px;
-  border: 1px solid rgba(66, 164, 224, .32);
-  border-radius: 5px;
-  color: #cae6fa;
-  background: rgba(20, 58, 88, .54);
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.row-actions :deep(.el-button:not(.is-link)) {
-  min-width: 72px;
   height: 32px;
   margin: 0;
+  padding: 0 10px;
   border-radius: 5px;
   font-size: 13px;
   font-weight: 800;
 }
 
-.row-actions :deep(.el-button.is-link:hover) {
-  color: #f1fbff;
-  border-color: rgba(66, 164, 224, .58);
-  background: rgba(29, 91, 133, .72);
+.row-actions :deep(.edit-rule-action),
+.zone-entry-action {
+  border-color: rgba(66, 164, 224, .42) !important;
+  color: #d5f0ff !important;
+  background: rgba(29, 91, 133, .54) !important;
+}
+
+.row-actions :deep(.view-flow-action) {
+  border-color: rgba(92, 215, 154, .34) !important;
+  color: #c5f5dd !important;
+  background: rgba(38, 110, 86, .42) !important;
+}
+
+.row-actions :deep(.cancel-rule-action) {
+  border-color: rgba(145, 171, 190, .28) !important;
+  color: #c6d7e5 !important;
+  background: rgba(82, 102, 119, .28) !important;
+}
+
+.row-actions :deep(.save-rule-action) {
+  border-color: rgba(64, 158, 255, .50) !important;
+  color: #f0f8ff !important;
+  background: rgba(64, 158, 255, .78) !important;
+}
+
+.row-actions :deep(.edit-rule-action:hover),
+.zone-entry-action:hover {
+  border-color: rgba(66, 164, 224, .66) !important;
+  color: #effaff !important;
+  background: rgba(33, 107, 156, .72) !important;
+}
+
+.row-actions :deep(.cancel-rule-action:hover) {
+  border-color: rgba(145, 171, 190, .46) !important;
+  color: #eef7ff !important;
+  background: rgba(96, 118, 136, .42) !important;
+}
+
+.row-actions :deep(.save-rule-action:hover) {
+  border-color: rgba(96, 184, 255, .74) !important;
+  background: rgba(55, 142, 226, .9) !important;
+}
+
+.row-actions :deep(.view-flow-action:hover) {
+  border-color: rgba(92, 215, 154, .58) !important;
+  color: #edfff6 !important;
+  background: rgba(44, 128, 99, .56) !important;
 }
 
 .empty-list {
@@ -2068,7 +2313,7 @@ onBeforeUnmount(() => {
 }
 
 .list-pagination {
-  min-height: 46px;
+  min-height: 58px;
   justify-content: center;
   border-top: 1px solid rgba(149, 190, 220, .10);
   background: #092034;
@@ -2077,9 +2322,9 @@ onBeforeUnmount(() => {
 .list-pagination :deep(.btn-prev),
 .list-pagination :deep(.btn-next),
 .list-pagination :deep(.el-pager li) {
-  min-width: 34px;
-  height: 32px;
-  margin: 0 3px;
+  min-width: 44px;
+  height: 38px;
+  margin: 0 4px;
   border: 1px solid rgba(70, 145, 190, .34);
   border-radius: 5px;
   color: #8fb6d1;
@@ -2145,6 +2390,19 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
+.flow-dialog-actions :deep(.el-button) {
+  min-width: 92px;
+  height: 36px;
+  border-radius: 5px;
+  font-weight: 800;
+}
+
+.flow-dialog-actions :deep(.flow-edit-entry) {
+  border-color: rgba(47, 214, 196, .46) !important;
+  color: #e5fffb !important;
+  background: rgba(28, 112, 102, .52) !important;
+}
+
 .flow-workspace-body {
   height: 100%;
   min-height: 0;
@@ -2154,7 +2412,7 @@ onBeforeUnmount(() => {
 }
 
 .flow-workspace-body.with-inspector {
-  grid-template-columns: minmax(0, 1fr) 340px;
+  grid-template-columns: minmax(0, 1fr) 380px;
 }
 
 .flow-workspace-body .flow-canvas {
@@ -2166,45 +2424,75 @@ onBeforeUnmount(() => {
 
 .action-inspector {
   min-width: 0;
-  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
   border-left: 1px solid rgba(112, 157, 190, .16);
-  background: #091a2b;
+  background: linear-gradient(180deg, #0b2136 0%, #071a2c 100%);
 }
 
-.action-inspector header {
+.action-inspector-header {
   position: relative;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 22px 22px 18px;
+  border-bottom: 1px solid rgba(112, 157, 190, .14);
+  background: rgba(18, 48, 76, .48);
+}
+
+.inspector-title {
+  min-width: 0;
   display: grid;
-  gap: 4px;
-  margin-bottom: 16px;
-  padding-right: 28px;
+  gap: 8px;
 }
 
-.action-inspector header span {
-  color: #789bb4;
+.inspector-title span {
+  color: #88a9bf;
   font-size: 12px;
+  font-weight: 800;
 }
 
-.action-inspector header strong {
+.inspector-title strong {
+  overflow: hidden;
   color: #f3f8fd;
-  font-size: 17px;
+  font-size: 22px;
+  line-height: 1.12;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.action-inspector header button {
-  position: absolute;
-  top: -3px;
-  right: 0;
-  width: 24px;
-  height: 24px;
-  border: 0;
+.inspector-title small {
+  overflow: hidden;
+  color: #91b3c8;
+  font-size: 13px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action-inspector-header button {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(123, 160, 184, .18);
   border-radius: 6px;
-  background: rgba(255, 255, 255, .05);
-  color: #9bb6c8;
+  background: rgba(7, 23, 38, .78);
+  color: #9fc1d6;
   cursor: pointer;
+  font-size: 18px;
+}
+
+.action-inspector-header button:hover {
+  border-color: rgba(104, 190, 214, .38);
+  color: #e7f8ff;
 }
 
 .action-readonly {
   display: grid;
   gap: 8px;
+  padding: 20px 22px;
 }
 
 .action-readonly span {
@@ -2223,17 +2511,153 @@ onBeforeUnmount(() => {
   width: 100%;
 }
 
+.inspector-form {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 22px 0;
+  overflow: auto;
+}
+
+.inspector-section {
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid rgba(83, 153, 197, .18);
+  border-radius: 8px;
+  background: rgba(7, 25, 42, .72);
+}
+
+.section-heading {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.section-heading strong {
+  color: #eaf6ff;
+  font-size: 15px;
+}
+
+.section-heading span {
+  color: #789bb4;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.inspector-form :deep(.el-form-item) {
+  margin-bottom: 15px;
+}
+
+.inspector-form :deep(.el-form-item:last-child) {
+  margin-bottom: 0;
+}
+
+.inspector-form :deep(.el-form-item__label) {
+  margin-bottom: 7px;
+  color: #91b3c8;
+  font-weight: 700;
+}
+
+.inspector-form :deep(.el-select__wrapper),
+.inspector-form :deep(.el-input__wrapper) {
+  min-height: 42px;
+  border-radius: 6px;
+  background: rgba(6, 25, 42, .82);
+  box-shadow: inset 0 0 0 1px rgba(60, 150, 214, .40) !important;
+}
+
+.inspector-form :deep(.el-select__wrapper:hover),
+.inspector-form :deep(.el-input__wrapper:hover),
+.inspector-form :deep(.el-select__wrapper.is-focused),
+.inspector-form :deep(.el-input__wrapper.is-focus) {
+  box-shadow: inset 0 0 0 1px rgba(87, 190, 255, .78), 0 0 0 2px rgba(72, 216, 255, .08) !important;
+}
+
+.inspector-form :deep(.el-input__inner),
+.inspector-form :deep(.el-select__selected-item),
+.inspector-form :deep(.el-select__placeholder) {
+  color: #d9e8f8;
+  font-size: 14px;
+}
+
+.repeat-mode-control {
+  width: 100%;
+  margin-bottom: 14px;
+}
+
+.repeat-mode-control :deep(.el-radio-button) {
+  flex: 1;
+}
+
+.repeat-mode-control :deep(.el-radio-button__inner) {
+  width: 100%;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-color: rgba(83, 153, 197, .34) !important;
+  background: rgba(8, 28, 46, .88) !important;
+  font-weight: 800;
+}
+
+.repeat-mode-control :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) {
+  color: #062236 !important;
+  background: #31d8f4 !important;
+  border-color: #31d8f4 !important;
+}
+
+.repeat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.repeat-grid :deep(.el-input-group__append) {
+  min-width: 42px;
+  justify-content: center;
+  padding: 0 8px;
+  color: #9ec4dd;
+  background: rgba(14, 44, 68, .92);
+  box-shadow: inset 0 0 0 1px rgba(83, 153, 197, .28);
+}
+
+.repeat-grid :deep(.el-input__inner) {
+  text-align: center;
+  font-weight: 800;
+}
+
 .inspector-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 14px;
+  margin: auto -22px 0;
+  padding: 16px 22px 18px;
+  border-top: 1px solid rgba(112, 157, 190, .14);
+  background: rgba(7, 20, 34, .96);
+}
+
+.inspector-actions :deep(.el-button) {
+  min-width: 88px;
+  height: 36px;
+  margin: 0;
+  border-radius: 5px;
+  font-weight: 800;
+}
+
+.inspector-actions :deep(.apply-action) {
+  border-color: rgba(64, 158, 255, .56) !important;
+  color: #f0f8ff !important;
+  background: rgba(64, 158, 255, .82) !important;
 }
 
 @media (max-width: 1280px) {
   .config-table-head,
   .config-row {
-    grid-template-columns: minmax(140px, 1fr) 76px minmax(230px, 1.6fr) 78px 78px 82px 70px 160px;
+    grid-template-columns: minmax(140px, 1fr) 86px 96px minmax(230px, 1.6fr) 86px 86px 74px 176px;
     gap: 8px;
   }
 }

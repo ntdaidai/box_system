@@ -30,6 +30,8 @@ class LifecycleService:
         if not model:
             raise HTTPException(status_code=404, detail="模型不存在")
 
+        self._repair_missing_container_binding(db, binding, model)
+
         # 更新状态 → starting
         model.runtime_status = "starting"
         db.commit()
@@ -101,6 +103,44 @@ class LifecycleService:
             self._log_operation(db, model_id, "start", "failed", str(e))
             logger.error(f"启动模型失败: {e}")
             raise HTTPException(status_code=500, detail=f"启动失败: {str(e)}")
+
+    def _repair_missing_container_binding(
+        self,
+        db: Session,
+        binding: ModelDeployBinding,
+        model: ModelRegistry,
+    ) -> None:
+        """Turn a stale both/image binding back into an image binding.
+
+        A deleted Docker container should fail fast or be recreated from the
+        bound image; it should not leave workflow execution waiting on a dead
+        container id.
+        """
+        if not binding.container_id:
+            return
+        try:
+            docker_service.inspect_container(binding.container_id)
+            return
+        except Exception as exc:
+            if "容器不存在" not in str(exc):
+                raise
+
+        if binding.bind_type == "both" and binding.image_name:
+            logger.warning(
+                "模型 {} 绑定容器不存在，清空旧容器并改为镜像启动: {}",
+                model.id,
+                binding.container_id,
+            )
+            binding.container_id = None
+            binding.container_name = None
+            binding.bind_type = "image"
+            model.runtime_status = "stopped"
+            db.commit()
+            return
+
+        model.runtime_status = "error"
+        db.commit()
+        raise HTTPException(status_code=404, detail=f"绑定容器不存在: {binding.container_id}")
 
     def stop_model(self, db: Session, model_id: int, timeout: int = 30) -> dict:
         """停止模型"""

@@ -123,19 +123,27 @@
               <div class="export-date-row">
                 <label class="export-date-field">
                   <span>开始日期</span>
-                  <input
+                  <el-date-picker
+                    :model-value="exportRange?.[0] || ''"
                     type="date"
-                    :value="exportRange?.[0] || ''"
-                    @input="setExportRangeDate(0, $event.target.value)"
+                    value-format="YYYY-MM-DD"
+                    placeholder="开始日期"
+                    class="event-date-picker"
+                    popper-class="alarm-date-popper"
+                    @update:model-value="setExportRangeDate(0, $event || '')"
                   />
                 </label>
                 <span class="export-date-separator">-</span>
                 <label class="export-date-field">
                   <span>结束日期</span>
-                  <input
+                  <el-date-picker
+                    :model-value="exportRange?.[1] || ''"
                     type="date"
-                    :value="exportRange?.[1] || ''"
-                    @input="setExportRangeDate(1, $event.target.value)"
+                    value-format="YYYY-MM-DD"
+                    placeholder="结束日期"
+                    class="event-date-picker"
+                    popper-class="alarm-date-popper"
+                    @update:model-value="setExportRangeDate(1, $event || '')"
                   />
                 </label>
               </div>
@@ -2420,29 +2428,43 @@ onUnmounted(() => {
   font-size: 12px;
 }
 
-.export-date-field input {
+.export-date-field :deep(.event-date-picker) {
   width: 100%;
   min-width: 0;
-  height: 34px;
-  box-sizing: border-box;
-  border: 1px solid rgba(120, 155, 211, 0.26);
-  border-radius: 8px;
-  background: rgba(31, 53, 88, 0.82);
-  color: #f4f8ff;
-  color-scheme: dark;
-  font: inherit;
-  font-size: 13px;
-  padding: 0 10px;
-  outline: none;
+  height: 44px;
+  border: 0;
+  background: transparent;
 }
 
-.export-date-field input:focus {
-  border-color: rgba(32, 215, 255, 0.7);
-  box-shadow: 0 0 0 2px rgba(32, 215, 255, 0.14);
+.export-date-field :deep(.el-input__wrapper) {
+  min-height: 44px;
+  border-radius: 6px;
+  background: rgba(6, 25, 42, .82);
+  box-shadow: inset 0 0 0 1px rgba(60, 150, 214, .46) !important;
+}
+
+.export-date-field :deep(.el-input__wrapper:hover),
+.export-date-field :deep(.el-input__wrapper.is-focused),
+.export-date-field :deep(.el-input__wrapper.is-focus) {
+  box-shadow: inset 0 0 0 1px rgba(87, 190, 255, .82), 0 0 0 2px rgba(72, 216, 255, .08) !important;
+}
+
+.export-date-field :deep(.el-input__inner) {
+  color: #d9e8f8;
+  font-weight: 500;
+}
+
+.export-date-field :deep(.el-input__inner::placeholder) {
+  color: #d9e8f8;
+}
+
+.export-date-field :deep(.el-input__prefix),
+.export-date-field :deep(.el-input__suffix) {
+  color: #6faed1;
 }
 
 .export-date-separator {
-  padding-bottom: 8px;
+  padding-bottom: 13px;
   color: #7991b4;
   font-weight: 700;
 }

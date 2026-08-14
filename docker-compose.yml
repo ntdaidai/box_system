@@ -79,6 +79,7 @@ services:
       # 挂载 YOLO 模型权重目录
       - /home/jetson/wh_test/roboflow/runs:/models/runs:ro
       - /home/jetson/sep/disaster_idf/yolo26x/models:/models/disaster-classifier:ro
+      - ./models:/app/data/model-imports
     env_file:
       - ./dam-miniprogram/wechat-keys/wechat.env
     environment:
@@ -192,6 +193,7 @@ services:
     volumes:
       - ./dam-model-library:/app
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./models:/app/data/model-imports
     environment:
       # MySQL
       DB_HOST: 127.0.0.1
@@ -199,7 +201,7 @@ services:
       DB_USER: root
       DB_PASSWORD: root
       DB_NAME: dam_system
-      RESIDENT_MODEL_IDS: "10,14"
+      RESIDENT_MODEL_IDS: "10,13,14"
     network_mode: host
 
   # ========== DAM 工作流生成服务 ==========

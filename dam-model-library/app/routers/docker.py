@@ -1,10 +1,19 @@
 """Docker 测试接口（阶段 2 验证用）"""
 
 from fastapi import APIRouter, Query
+from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 from app.services.docker_service import docker_service
 from app.schemas.common import Result
 
 router = APIRouter()
+
+
+class BuildImageRequest(BaseModel):
+    """镜像构建请求"""
+
+    context_path: str = Field(..., min_length=1, description="Docker build 上下文目录")
+    image_name: str = Field(..., min_length=1, max_length=256, description="目标镜像名")
 
 
 @router.get("/containers")
@@ -12,6 +21,16 @@ async def list_containers(all: bool = Query(False, description="是否包含已�
     """列出容器"""
     containers = docker_service.list_containers(all=all)
     return Result(code=200, data=containers)
+
+
+@router.post("/images/build")
+async def build_image(data: BuildImageRequest):
+    """从本地目录构建镜像"""
+    try:
+        result = await run_in_threadpool(docker_service.build_image, data.context_path, data.image_name)
+        return Result(code=200, message="镜像构建成功", data=result)
+    except ValueError as e:
+        return Result(code=400, message=str(e))
 
 
 @router.get("/containers/{container_id}")

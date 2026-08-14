@@ -41,3 +41,31 @@ export function stopModel(modelId) {
     silentError: true,
   })
 }
+
+export function validateModelImport(formData) {
+  return request.post('/v1/model-library/import/validate', formData, {
+    timeout: 120000,
+    localCache: false,
+  })
+}
+
+export function registerImportedModel(formData) {
+  return request.post('/v1/model-library/import/register', formData, {
+    timeout: 1800000,
+    localCache: false,
+  })
+}
+
+export function updateModel(modelId, data) {
+  return request.put(`/v1/model-library/models/${encodeURIComponent(modelId)}`, data, {
+    timeout: 30000,
+    localCache: false,
+  })
+}
+
+export function deleteModel(modelId) {
+  return request.delete(`/v1/model-library/models/${encodeURIComponent(modelId)}`, {
+    timeout: 30000,
+    localCache: false,
+  })
+}
