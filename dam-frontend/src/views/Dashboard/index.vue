@@ -24,8 +24,8 @@
                 <em class="metric-compare">
                   <span>较昨日</span>
                   <i :class="metric.trend.tone">
-                    <small>{{ metric.trend.icon }}</small>
-                    {{ metric.trend.delta }}
+                    <span class="metric-trend-arrow">{{ metric.trend.icon }}</span>
+                    <span class="metric-trend-value">{{ metric.trend.delta }}</span>
                   </i>
                 </em>
               </template>
@@ -43,8 +43,8 @@
                     <b>
                       较昨日
                       <i :class="item.trend.tone">
-                        <small>{{ item.trend.icon }}</small>
-                        {{ item.trend.delta }}
+                        <span class="metric-trend-arrow">{{ item.trend.icon }}</span>
+                        <span class="metric-trend-value">{{ item.trend.delta }}</span>
                       </i>
                     </b>
                   </span>
@@ -483,6 +483,7 @@ const trendModes = [
   { key: 'today', label: '今日' },
   { key: 'week', label: '本周' },
   { key: 'month', label: '本月' },
+  { key: 'year', label: '今年' },
 ]
 
 const riskColors = { LOW: '#38D59C', MEDIUM: '#FFB648', HIGH: '#FF5B68' }
@@ -1549,6 +1550,11 @@ function rangeStart(type) {
     start.setDate(1)
     if (type === 'lastMonth') start.setMonth(start.getMonth() - 1)
   }
+  if (type === 'year') {
+    start.setHours(0, 0, 0, 0)
+    start.setDate(1)
+    start.setMonth(0)
+  }
   return start
 }
 
@@ -1580,6 +1586,17 @@ function eventsInWindow(type) {
 
 function trendLabels(mode) {
   if (mode === 'today') return Array.from({ length: 24 }, (_, index) => `${String(index).padStart(2, '0')}:00`)
+  if (mode === 'year') {
+    const start = rangeStart('year')
+    const end = new Date()
+    const labels = []
+    const cursor = new Date(start)
+    while (cursor.getFullYear() === start.getFullYear() && cursor <= end) {
+      labels.push(`${cursor.getMonth() + 1}月`)
+      cursor.setMonth(cursor.getMonth() + 1)
+    }
+    return labels.length ? labels : ['--']
+  }
   const start = rangeStart(mode)
   const end = new Date()
   const labels = []
@@ -1600,7 +1617,9 @@ function trendBuckets(mode, category) {
     const date = new Date(eventTimestamp(event))
     const index = mode === 'today'
       ? date.getHours()
-      : Math.floor((date - start) / (24 * 60 * 60 * 1000))
+      : mode === 'year'
+        ? date.getMonth()
+        : Math.floor((date - start) / (24 * 60 * 60 * 1000))
     if (index >= 0 && index < buckets.length) buckets[index] += 1
   })
   return buckets
@@ -1622,7 +1641,9 @@ function eventTimelineBuckets(sourceEvents, mode) {
     const date = new Date(time)
     const index = mode === 'today'
       ? date.getHours()
-      : Math.floor((date - start) / (24 * 60 * 60 * 1000))
+      : mode === 'year'
+        ? date.getMonth()
+        : Math.floor((date - start) / (24 * 60 * 60 * 1000))
     if (index < 0 || index >= labels.length) return
     const level = riskLevel(event)
     total[index] += 1
@@ -2503,10 +2524,11 @@ onBeforeUnmount(() => {
 .today-strip-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-rows: repeat(2, minmax(58px, .86fr)) repeat(2, minmax(60px, .92fr));
-  gap: clamp(7px, .42vw, 10px);
+  grid-template-rows: repeat(2, minmax(64px, .86fr)) repeat(2, minmax(68px, .92fr));
+  column-gap: clamp(7px, .42vw, 10px);
+  row-gap: clamp(15px, .95vw, 21px);
   min-height: 0;
-  padding-bottom: clamp(4px, .26vw, 6px);
+  padding-bottom: clamp(10px, .6vw, 14px);
   box-sizing: border-box;
 }
 
@@ -2641,9 +2663,7 @@ onBeforeUnmount(() => {
 }
 
 .metric-value small,
-.metric-breakdown strong small,
-.metric-compare i small:last-child,
-.metric-breakdown b i small:last-child {
+.metric-breakdown strong small {
   margin-left: 2px;
   font-size: .5em;
   font-weight: 700;
@@ -2659,7 +2679,7 @@ onBeforeUnmount(() => {
   gap: var(--handling-gap);
 }
 
-.metric-breakdown span {
+.metric-breakdown > span {
   min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -2711,10 +2731,11 @@ onBeforeUnmount(() => {
   min-width: clamp(38px, 2.2vw, 50px);
   align-items: center;
   justify-content: flex-end;
-  gap: 1px;
+  gap: 5px;
   font-style: normal;
   font-size: clamp(14px, .8vw, 18px);
   font-weight: 800;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
 }
 
@@ -2724,7 +2745,8 @@ onBeforeUnmount(() => {
 }
 
 .metric-compare {
-  min-width: 0;
+  width: clamp(68px, 3.9vw, 86px);
+  min-width: clamp(68px, 3.9vw, 86px);
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -2734,7 +2756,7 @@ onBeforeUnmount(() => {
   font-style: normal;
 }
 
-.metric-compare span {
+.metric-compare > span {
   color: #9ed3f5;
   font-size: clamp(12px, .68vw, 14px);
   line-height: 1;
@@ -2743,9 +2765,10 @@ onBeforeUnmount(() => {
 
 .metric-compare i {
   display: inline-flex;
-  min-width: 0;
+  min-width: clamp(22px, 1.35vw, 30px);
   align-items: center;
   justify-content: flex-end;
+  gap: 5px;
   margin-right: 0;
   font-style: normal;
   line-height: 1;
@@ -2754,20 +2777,24 @@ onBeforeUnmount(() => {
   font-weight: 800;
 }
 
-.metric-compare i small {
-  font-size: .72em;
+.metric-trend-arrow {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  height: 1em;
+  color: currentColor;
+  font-size: .86em;
+  font-weight: inherit;
+  line-height: 1;
 }
 
-.metric-compare i small:first-child,
-.metric-breakdown b i small:first-child {
-  margin-right: 3px;
-}
-
-.metric-compare i small:last-child,
-.metric-breakdown b i small:last-child {
-  margin-right: 0;
-  margin-left: 2px;
-  font-size: .5em;
+.metric-trend-value {
+  display: inline-flex;
+  align-items: center;
+  height: 1em;
+  color: currentColor;
+  line-height: 1;
 }
 
 .today-card em,
@@ -2789,9 +2816,10 @@ onBeforeUnmount(() => {
 
 @container todayPanel (max-width: 470px) {
   .today-strip-list {
-    grid-template-rows: repeat(2, minmax(58px, .86fr)) repeat(2, minmax(62px, .92fr));
-    gap: 6px;
-    padding-bottom: 6px;
+    grid-template-rows: repeat(2, minmax(62px, .86fr)) repeat(2, minmax(66px, .92fr));
+    column-gap: 8px;
+    row-gap: 16px;
+    padding-bottom: 10px;
   }
 
   .today-card.category {
@@ -2829,7 +2857,7 @@ onBeforeUnmount(() => {
     font-size: 20px;
   }
 
-  .metric-compare span {
+  .metric-compare > span {
     font-size: 12px;
   }
 
@@ -2843,7 +2871,7 @@ onBeforeUnmount(() => {
     gap: 6px;
   }
 
-  .metric-breakdown span {
+  .metric-breakdown > span {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-rows: auto auto;
     row-gap: 3px;
@@ -2861,7 +2889,7 @@ onBeforeUnmount(() => {
 
   .metric-breakdown b {
     grid-column: 1 / -1;
-    justify-content: flex-start;
+    justify-content: space-between;
     font-size: 11px;
   }
 
@@ -2911,7 +2939,7 @@ onBeforeUnmount(() => {
     gap: 4px;
   }
 
-  .metric-breakdown span {
+  .metric-breakdown > span {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-rows: auto auto;
     padding: 4px 6px;
@@ -2942,6 +2970,9 @@ onBeforeUnmount(() => {
 @container todayPanel (max-width: 340px) {
   .today-strip-list {
     grid-template-rows: repeat(2, minmax(56px, .86fr)) repeat(2, minmax(64px, .96fr));
+    column-gap: 6px;
+    row-gap: 12px;
+    padding-bottom: 8px;
   }
 
   .today-card.handling {
@@ -3382,17 +3413,17 @@ onBeforeUnmount(() => {
 }
 
 .map-controls .zoom-button {
-  width: clamp(24px, 1.75vw, 36px);
-  height: clamp(24px, 1.75vw, 36px);
+  width: clamp(20px, 1.3vw, 27px);
+  height: clamp(20px, 1.3vw, 27px);
   display: grid;
   place-items: center;
   padding: 0;
   border: 0;
-  border-radius: clamp(5px, .45vw, 8px);
+  border-radius: clamp(4px, .32vw, 6px);
   color: #07111c;
-  background: rgba(247, 249, 252, .94);
-  box-shadow: 0 6px 14px rgba(1, 9, 18, .18);
-  font-size: clamp(17px, 1.25vw, 25px);
+  background: rgba(247, 249, 252, .55);
+  box-shadow: 0 4px 10px rgba(1, 9, 18, .14);
+  font-size: clamp(14px, .95vw, 18px);
   font-weight: 700;
   line-height: 1;
   cursor: pointer;
@@ -3400,7 +3431,7 @@ onBeforeUnmount(() => {
 }
 
 .map-controls .zoom-button:hover {
-  background: #fff;
+  background: rgba(247, 249, 252, .85);
   box-shadow: 0 10px 22px rgba(1, 9, 18, .24);
   transform: translateY(-1px);
 }
@@ -3423,22 +3454,22 @@ onBeforeUnmount(() => {
   background:
     linear-gradient(
       to top,
-      rgba(74, 145, 226, .92) 0 var(--zoom-progress),
-      rgba(246, 249, 253, .9) var(--zoom-progress) 100%
+      rgba(74, 145, 226, .55) 0 var(--zoom-progress),
+      rgba(246, 249, 253, .52) var(--zoom-progress) 100%
     );
-  box-shadow: inset 0 0 0 1px rgba(226, 235, 246, .55);
+  box-shadow: inset 0 0 0 1px rgba(226, 235, 246, .36);
 }
 
 .zoom-track-line i {
   position: absolute;
   left: 50%;
   top: var(--zoom-thumb-top);
-  width: clamp(15px, 1.05vw, 22px);
-  height: clamp(15px, 1.05vw, 22px);
+  width: clamp(13px, .9vw, 18px);
+  height: clamp(13px, .9vw, 18px);
   border-radius: 50%;
-  background: #4a91e2;
-  border: clamp(1px, .12vw, 2px) solid rgba(45, 123, 205, .86);
-  box-shadow: 0 5px 12px rgba(55, 139, 232, .38);
+  background: rgba(74, 145, 226, .8);
+  border: 1px solid rgba(45, 123, 205, .6);
+  box-shadow: 0 4px 10px rgba(55, 139, 232, .28);
   transform: translate(-50%, -50%);
   pointer-events: none;
 }

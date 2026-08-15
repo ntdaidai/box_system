@@ -14,13 +14,13 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from urllib.parse import quote, urljoin, urlparse
 
 import cv2
 import httpx
 import numpy as np
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from loguru import logger
 from sqlalchemy import or_
@@ -469,14 +469,14 @@ def _screening_event_codes(result: dict) -> set[str]:
     if int(scene.get("person_present") or 0) == 1:
         codes.update({"PERSON_INTRUSION", "PERSON_WATERFRONT"})
     if int(scene.get("possible_person") or 0) == 1:
-        codes.add("PERSON_WATERFRONT")
+        codes.update({"PERSON_INTRUSION", "PERSON_WATERFRONT"})
     if int(scene.get("boat_present") or 0) == 1:
         codes.update({"BOAT_INTRUSION", "BOAT_STAY"})
     if int(scene.get("illegal_fishing") or 0) == 1:
         codes.add("BOAT_ILLEGAL_FISHING")
     if int(scene.get("possible_boat") or 0) == 1:
         if int(scene.get("illegal_fishing") or 0) != 1:
-            codes.add("BOAT_STAY")
+            codes.update({"BOAT_INTRUSION", "BOAT_STAY"})
     return codes
 
 
@@ -1101,9 +1101,9 @@ async def simulate_camera_screening(
             if image.shape[0] * image.shape[1] > settings.MAX_IMAGE_PIXELS:
                 raise HTTPException(status_code=400, detail="模拟画面像素尺寸超过限制")
 
-            max_side = max(64, int(settings.QWEN_CAMERA_SCREENING_MAX_IMAGE_SIDE))
+            max_side = int(settings.QWEN_CAMERA_SCREENING_MAX_IMAGE_SIDE)
             height, width = image.shape[:2]
-            if max(height, width) > max_side:
+            if max_side > 0 and max(height, width) > max_side:
                 scale = max_side / max(height, width)
                 image = cv2.resize(
                     image,
@@ -1152,6 +1152,7 @@ async def simulate_camera_screening(
 async def simulate_camera_screening_video(
     camera_id: str,
     file: UploadFile = File(...),
+    supplemental_context: Optional[str] = Form(None),
     window_seconds: float = Query(10.0, ge=1.0, le=60.0),
     db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
@@ -1174,6 +1175,7 @@ async def simulate_camera_screening_video(
 
     temp_dir = Path(tempfile.mkdtemp(prefix="qwen_camera_video_"))
     temp_path = temp_dir / f"simulation{suffix}"
+    supplemental_payload = _parse_supplemental_context(supplemental_context)
     try:
         try:
             await _persist_upload_video(
@@ -1190,6 +1192,7 @@ async def simulate_camera_screening_video(
             str(temp_path),
             input_source="simulation_video",
             window_seconds=window_seconds,
+            supplemental_context=supplemental_payload,
         )
     finally:
         await file.close()
@@ -1208,6 +1211,31 @@ async def simulate_camera_screening_video(
         data={**result, "eca_dispatched": True, **(event_ref or {})},
         message="模拟视频已完成 Qwen 初筛并提交 ECA",
     )
+
+
+def _parse_supplemental_context(raw: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="特殊工况 JSON 格式不正确") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="特殊工况必须是 JSON 对象")
+    label = str(payload.get("label") or "").strip()
+    context_type = str(payload.get("context_type") or "").strip()
+    if not label and not context_type:
+        raise HTTPException(status_code=400, detail="特殊工况缺少类型或说明")
+    return {
+        "context_type": context_type or "OTHER",
+        "active": bool(payload.get("active", True)),
+        "label": label or context_type or "特殊工况",
+        "severity_hint": str(payload.get("severity_hint") or "HIGH").upper(),
+        "affected_area": str(payload.get("affected_area") or "").strip(),
+        "note": str(payload.get("note") or "").strip(),
+        "source": str(payload.get("source") or "OPERATOR").upper(),
+        "submitted_at": dt.datetime.now().isoformat(),
+    }
 
 
 # dai: Video detection returns a short-lived timeline instead of generating a

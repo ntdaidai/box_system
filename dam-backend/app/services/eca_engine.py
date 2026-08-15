@@ -384,7 +384,13 @@ class ECAEngine:
 
         return op_func(var_value, target_value)
 
-    def check_event_conditions(self, event_id: int, sensor_data: Dict[str, Any], db: Session) -> bool:
+    def check_event_conditions(
+        self,
+        event_id: int,
+        sensor_data: Dict[str, Any],
+        db: Session,
+        source_id: Optional[int] = None,
+    ) -> bool:
         """
         检查事件的所有条件是否满足
 
@@ -402,9 +408,15 @@ class ECAEngine:
             bool: 事件条件是否全部满足
         """
         # 获取事件关联的所有条件
-        relations = db.query(EventCondition).filter(
+        query = db.query(EventCondition).filter(
             EventCondition.event_id == event_id
-        ).order_by(EventCondition.group_id, EventCondition.sort_order).all()
+        )
+        if source_id is not None:
+            query = query.join(
+                ConditionLibrary,
+                ConditionLibrary.id == EventCondition.condition_id,
+            ).filter(ConditionLibrary.source_id == source_id)
+        relations = query.order_by(EventCondition.group_id, EventCondition.sort_order).all()
 
         if not relations:
             return False
@@ -2074,6 +2086,9 @@ class ECAEngine:
             if screening:
                 camera_data["qwen_summary"] = screening.get("summary")
                 camera_data["qwen_risk_level"] = screening.get("risk_level")
+                supplemental_context = screening.get("supplemental_context")
+                if isinstance(supplemental_context, dict) and supplemental_context:
+                    camera_data["supplemental_context"] = supplemental_context
                 source_video_url = screening.get("source_video_url")
                 video_urls = screening.get("video_urls") or ([source_video_url] if source_video_url else [])
                 media_objects = screening.get("media_objects") or []
@@ -2089,7 +2104,12 @@ class ECAEngine:
             triggered_events = []
             for event in events:
                 try:
-                    conditions_met = self.check_event_conditions(event.id, camera_data, db)
+                    conditions_met = self.check_event_conditions(
+                        event.id,
+                        camera_data,
+                        db,
+                        source_id=source.id,
+                    )
                     if conditions_met:
                         instance = self.trigger_camera_event(event, source, camera_data, db)
                         if instance:
@@ -2145,6 +2165,9 @@ class ECAEngine:
             observation["suspected"] = True
             observation["suspected_label"] = "疑似人员/船只待复核"
             observation["screening_note"] = "4B 初筛低置信命中，已进入 4B/35B 复核确认"
+        if self._special_context_requires_high_risk(observation):
+            risk = "HIGH"
+            observation["special_context_risk_hint"] = "特殊工况叠加人员/滩涂活动线索，按高风险进入工作流复核"
         camera = db.query(Camera).filter(Camera.id == source.device_id).first() if source.device_id else None
         observation["visual"] = {
             **dict(observation.get("visual") or {}),
@@ -2212,6 +2235,26 @@ class ECAEngine:
 
         self._dispatch_async_event_actions(event.id, instance.id, observation)
         return instance
+
+    @staticmethod
+    def _special_context_requires_high_risk(observation: Dict[str, Any]) -> bool:
+        context = observation.get("supplemental_context")
+        if not isinstance(context, dict) or not bool(context.get("active", True)):
+            return False
+        context_text = " ".join(
+            str(context.get(key) or "")
+            for key in ("context_type", "label", "affected_area", "note", "severity_hint")
+        )
+        dangerous = any(
+            keyword in context_text
+            for keyword in ("DAM_DISCHARGE", "GATE_OPEN", "DOWNSTREAM_RESTRICTED", "泄洪", "开闸", "闸门开启", "下游禁入", "水位上涨")
+        )
+        person_signal = (
+            int(observation.get("person_present") or 0) == 1
+            or int(observation.get("possible_person") or 0) == 1
+            or any(keyword in str(observation.get("qwen_summary") or "") for keyword in ("人员", "滩涂", "亲水", "涉水"))
+        )
+        return dangerous and person_signal
 
     @staticmethod
     def _strip_transient_screening_frames(data: Dict[str, Any]) -> Dict[str, Any]:

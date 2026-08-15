@@ -40,48 +40,32 @@
       <div class="staff-list" :class="{ 'is-empty': !staffRows.length }">
         <div v-if="staffRows.length" class="staff-list-header-row">
           <div class="col-name">人员名称</div>
-          <div class="col-group">所属组别</div>
-          <div class="col-wechat">小程序身份</div>
-          <div class="col-account">账号信息</div>
-          <div class="col-login">最近登录</div>
+          <div class="col-description">描述</div>
           <div class="col-status">状态</div>
+          <div class="col-enabled">启用状态</div>
           <div class="col-actions">操作</div>
         </div>
 
         <article v-for="row in staffRows" :key="row.id" class="staff-row" :class="row.status === 'ACTIVE' ? 'is-active' : 'is-inactive'">
           <div class="col-name name-cell">
-            <span class="avatar" :style="{ background: avatarColor(row) }">{{ avatarText(row) }}</span>
             <div>
               <strong>{{ row.display_name || '--' }}</strong>
-              <small>{{ row.staff_no || '--' }}</small>
             </div>
           </div>
-          <div class="col-group">
-            <strong>{{ row.group_name || '默认处置组' }}</strong>
-            <small>{{ row.group_id || 'default' }}</small>
-          </div>
-          <div class="col-wechat">
-            <span class="bind-pill" :class="row.openid_bound ? 'is-bound' : 'is-unbound'">
-              {{ row.openid_bound ? '已绑定' : '未绑定' }}
-            </span>
-            <small>{{ row.nickname || '大藤峡安全巡查' }}</small>
-          </div>
-          <div class="col-account account-cell">
-            <span><b>账号</b>{{ row.username || '未设置' }}</span>
-            <span><b>密码</b>{{ row.has_password ? '已设置' : '未设置' }}</span>
-          </div>
-          <div class="col-login">
-            <strong>{{ formatDateTime(row.last_login_at) }}</strong>
-            <small>创建：{{ formatDate(row.create_time) }}</small>
+          <div class="col-description staff-description">
+            <span>{{ staffDescription(row) }}</span>
           </div>
           <div class="col-status">
             <span class="status-pill" :class="row.status === 'ACTIVE' ? 'is-active' : 'is-inactive'">
               {{ row.status_label || statusLabel(row.status) }}
             </span>
           </div>
+          <div class="col-enabled">
+            <el-switch :model-value="row.status === 'ACTIVE'" disabled />
+          </div>
           <div class="col-actions action-buttons list-actions">
-            <el-button class="edit-action" @click="showPendingAction('编辑')">编辑</el-button>
             <el-button class="test-action" @click="showPendingAction('登录码')">登录码</el-button>
+            <el-button class="edit-action" @click="showPendingAction('编辑')">编辑</el-button>
           </div>
         </article>
 
@@ -166,6 +150,14 @@ function formatDate(value) {
 
 function statusLabel(status) {
   return status === 'ACTIVE' ? '启用' : '停用'
+}
+
+function staffDescription(row) {
+  const bindText = row.openid_bound ? '已绑定小程序' : '未绑定小程序'
+  const accountText = row.username ? `账号 ${row.username}` : '账号未设置'
+  const groupText = row.group_name || '默认处置组'
+  const staffNo = row.staff_no || '--'
+  return `${staffNo} / ${groupText} / ${bindText} / ${accountText}`
 }
 
 function avatarText(row) {
@@ -341,7 +333,7 @@ function showPendingAction(label) {
 .staff-list-header-row,
 .staff-row {
   display: grid;
-  grid-template-columns: minmax(240px, 1.15fr) minmax(170px, .8fr) minmax(170px, .78fr) minmax(220px, .95fr) minmax(190px, .85fr) 118px 190px;
+  grid-template-columns: minmax(240px, 1.15fr) minmax(320px, 1.45fr) 124px 132px 220px;
   align-items: center;
   gap: 14px;
 }
@@ -370,11 +362,9 @@ function showPendingAction(label) {
 }
 
 .col-name,
-.col-group,
-.col-wechat,
-.col-account,
-.col-login,
+.col-description,
 .col-status,
+.col-enabled,
 .col-actions {
   min-width: 0;
   display: grid;
@@ -384,19 +374,8 @@ function showPendingAction(label) {
 }
 
 .name-cell {
-  grid-template-columns: 42px minmax(0, 1fr);
-  justify-items: start;
-  text-align: left;
-}
-
-.avatar {
-  width: 42px;
-  height: 42px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  color: #f6fcff;
-  font-weight: 800;
+  justify-items: center;
+  text-align: center;
 }
 
 strong {
@@ -408,23 +387,12 @@ strong {
   white-space: nowrap;
 }
 
-small {
-  overflow: hidden;
-  max-width: 100%;
-  color: #8fa8bf;
-  font-size: 12px;
-  line-height: 1.4;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.bind-pill,
 .status-pill {
   display: inline-flex;
   align-items: center;
   width: fit-content;
-  min-width: 62px;
   height: 24px;
+  padding: 0 10px;
   justify-content: center;
   border-radius: 4px;
   font-size: 13px;
@@ -432,46 +400,41 @@ small {
   line-height: 1;
 }
 
-.bind-pill.is-bound,
 .status-pill.is-active {
-  border: 1px solid rgba(50, 210, 138, .36);
-  color: #7df2b2;
-  background: rgba(34, 161, 104, .22);
+  border: 1px solid rgba(92, 215, 154, .34);
+  color: #81efad;
+  background: rgba(48, 154, 118, .18);
 }
 
-.bind-pill.is-unbound,
 .status-pill.is-inactive {
-  border: 1px solid rgba(255, 122, 146, .34);
-  color: #ff8fa3;
-  background: rgba(177, 54, 86, .22);
+  border: 1px solid rgba(235, 124, 133, .34);
+  color: #ffabb5;
+  background: rgba(142, 48, 62, .18);
 }
 
-.account-cell {
-  display: flex;
-  justify-content: center;
-  gap: 6px;
-}
-
-.account-cell span {
-  max-width: 106px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 8px;
+.staff-description span {
+  display: -webkit-box;
   overflow: hidden;
-  border: 1px solid rgba(74, 153, 191, .20);
-  border-radius: 5px;
-  color: #d7e8f8;
-  background: rgba(7, 31, 49, .72);
-  font-size: 12px;
+  color: #a9c0d2;
+  font-size: 15px;
+  line-height: 1.45;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
-.account-cell b {
-  flex: 0 0 auto;
-  color: #7fa4bc;
-  font-weight: 700;
+.col-enabled :deep(.el-switch.is-disabled) {
+  opacity: 1;
+}
+
+.col-enabled :deep(.el-switch__core) {
+  border-color: rgba(120, 153, 176, .34);
+  background: rgba(96, 118, 134, .38);
+}
+
+.col-enabled :deep(.el-switch.is-checked .el-switch__core) {
+  border-color: rgba(64, 158, 255, .66);
+  background: #409eff;
 }
 
 .list-actions {
@@ -518,16 +481,16 @@ small {
 }
 
 .empty-list {
-  min-height: 180px;
+  min-height: 220px;
   display: grid;
-  place-items: center;
-  align-content: center;
+  place-content: center;
   gap: 8px;
   color: #8fa8bf;
+  text-align: center;
 }
 
 .empty-list strong {
-  color: #d7e8f8;
+  color: #e9f7ff;
   font-size: 16px;
 }
 

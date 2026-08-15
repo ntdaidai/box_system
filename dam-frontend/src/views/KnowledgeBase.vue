@@ -58,7 +58,7 @@
       </div>
       <div class="filter-field">
         <el-select v-model="sortBy" placeholder="排序方式" class="sort-select">
-          <el-option label="最近更新" value="updated" />
+          <el-option label="最近创建" value="created" />
           <el-option label="文件名称" value="name" />
           <el-option label="文件大小" value="size" />
         </el-select>
@@ -94,10 +94,16 @@
       <div v-if="filteredDocuments.length" class="document-list">
         <div class="document-header">
           <div class="row-index">序号</div>
-          <div class="row-name">文件名</div>
+          <div class="row-name">文档</div>
           <div class="row-type">类型</div>
           <div class="row-size">大小</div>
-          <div class="row-date">更新时间</div>
+          <div class="row-chunks">片段数</div>
+          <div class="row-sections">章节数</div>
+          <div class="row-tokens">Token 量</div>
+          <button type="button" class="row-date sortable-header" :class="sortClass('created')" @click="toggleSort('created')">
+            <span>创建时间</span>
+            <span class="caret-wrapper"><i class="sort-caret ascending"></i><i class="sort-caret descending"></i></span>
+          </button>
           <div class="row-status">状态</div>
           <div class="row-actions">操作</div>
         </div>
@@ -122,7 +128,10 @@
             </span>
           </div>
           <div class="row-size">{{ formatFileSize(doc.file_size) }}</div>
-          <div class="row-date">{{ formatTime(doc.update_time || doc.create_time) }}</div>
+          <div class="row-chunks">{{ doc.chunk_count ?? '-' }}</div>
+          <div class="row-sections">{{ doc.section_count ?? '-' }}</div>
+          <div class="row-tokens">{{ formatTokens(doc.token_count) }}</div>
+          <div class="row-date">{{ formatTime(doc.create_time) }}</div>
           <div class="row-status">
             <el-tag :type="statusType(doc.status)" size="small" effect="plain">
               {{ statusLabel(doc.status) }}
@@ -221,7 +230,8 @@ const selectedBaseId = ref(null)
 const documents = ref([])
 const keyword = ref('')
 const selectedType = ref('')
-const sortBy = ref('updated')
+const sortBy = ref('created')
+const sortOrder = ref('desc')
 const loadingDocuments = ref(false)
 const uploading = ref(false)
 const currentPage = ref(1)
@@ -262,9 +272,11 @@ const filteredDocuments = computed(() => {
     rows = rows.filter((doc) => doc.file_type === selectedType.value)
   }
   rows.sort((a, b) => {
-    if (sortBy.value === 'name') return String(a.title || '').localeCompare(String(b.title || ''))
-    if (sortBy.value === 'size') return Number(b.file_size || 0) - Number(a.file_size || 0)
-    return new Date(b.update_time || b.create_time || 0) - new Date(a.update_time || a.create_time || 0)
+    const direction = sortOrder.value === 'asc' ? 1 : -1
+    if (sortBy.value === 'name') return String(a.title || '').localeCompare(String(b.title || '')) * direction
+    if (sortBy.value === 'size') return (Number(a.file_size || 0) - Number(b.file_size || 0)) * direction
+    if (sortBy.value === 'created') return (dateValue(a.create_time) - dateValue(b.create_time)) * direction
+    return 0
   })
   return rows
 })
@@ -278,7 +290,7 @@ const indexedRate = computed(() => {
   return Math.round((indexedCount.value / documents.value.length) * 100)
 })
 
-watch([keyword, selectedType, sortBy], () => {
+watch([keyword, selectedType, sortBy, sortOrder], () => {
   currentPage.value = 1
 })
 
@@ -478,6 +490,37 @@ function formatFileSize(value) {
   if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`
   return `${size} B`
 }
+
+function formatTokens(value) {
+  const count = Number(value || 0)
+  if (count >= 1000) return `${(count / 1000).toFixed(1)}k`
+  return String(count)
+}
+
+function dateValue(value) {
+  if (!value) return 0
+  const date = new Date(String(value).replace('T', ' '))
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime()
+}
+
+function toggleSort(field) {
+  if (sortBy.value !== field) {
+    sortBy.value = field
+    sortOrder.value = 'desc'
+    return
+  }
+  if (sortOrder.value === 'desc') {
+    sortOrder.value = 'asc'
+    return
+  }
+  sortBy.value = ''
+  sortOrder.value = ''
+}
+
+function sortClass(field) {
+  if (sortBy.value !== field) return ''
+  return sortOrder.value === 'asc' ? 'ascending' : 'descending'
+}
 </script>
 
 <style scoped>
@@ -676,7 +719,7 @@ function formatFileSize(value) {
 .document-header,
 .document-row {
   display: grid;
-  grid-template-columns: 48px minmax(260px, 2.4fr) 78px 92px 138px 86px 178px;
+  grid-template-columns: 46px minmax(150px, 1.5fr) minmax(64px, .7fr) minmax(72px, .8fr) minmax(52px, .6fr) minmax(56px, .6fr) minmax(64px, .7fr) minmax(122px, 1.2fr) minmax(64px, .7fr) minmax(150px, 1.4fr);
   align-items: center;
   gap: 12px;
 }
@@ -693,6 +736,9 @@ function formatFileSize(value) {
 .document-header .row-name,
 .document-header .row-type,
 .document-header .row-size,
+.document-header .row-chunks,
+.document-header .row-sections,
+.document-header .row-tokens,
 .document-header .row-date,
 .document-header .row-status,
 .document-header .row-index,
@@ -702,8 +748,8 @@ function formatFileSize(value) {
 }
 
 .document-header .row-name {
-  justify-content: center;
-  text-align: center;
+  justify-content: flex-start;
+  text-align: left;
 }
 
 .document-header .row-actions {
@@ -726,6 +772,9 @@ function formatFileSize(value) {
 .row-index,
 .row-type,
 .row-size,
+.row-chunks,
+.row-sections,
+.row-tokens,
 .row-date,
 .row-status {
   display: flex;
@@ -735,10 +784,95 @@ function formatFileSize(value) {
 
 .row-index,
 .row-size,
+.row-chunks,
+.row-sections,
+.row-tokens,
 .row-date {
   color: #9cb6ca;
   font-size: 14px;
   font-weight: 500;
+}
+
+.row-chunks,
+.row-sections,
+.row-tokens {
+  white-space: nowrap;
+}
+
+.sortable-header {
+  width: 100%;
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.sortable-header:hover {
+  color: #d9e8f8;
+}
+
+.caret-wrapper {
+  width: 24px;
+  height: 14px;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  vertical-align: middle;
+}
+
+.sort-caret {
+  width: 0;
+  height: 0;
+  position: absolute;
+  left: 7px;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  opacity: .65;
+}
+
+.sort-caret.ascending {
+  top: -5px;
+  border-bottom-color: #7c96aa;
+}
+
+.sort-caret.descending {
+  bottom: -3px;
+  border-top-color: #7c96aa;
+}
+
+.sortable-header.ascending .sort-caret.ascending {
+  border-bottom-color: #48d8ff;
+  opacity: 1;
+}
+
+.sortable-header.descending .sort-caret.descending {
+  border-top-color: #48d8ff;
+  opacity: 1;
+}
+
+.document-row .row-size {
+  width: fit-content;
+  min-width: 58px;
+  height: 26px;
+  justify-self: center;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid rgba(72, 216, 255, .22);
+  border-radius: 5px;
+  color: #aee8ff;
+  background: rgba(72, 216, 255, .08);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .row-index {
@@ -750,7 +884,7 @@ function formatFileSize(value) {
   display: flex;
   min-width: 0;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 12px;
   cursor: pointer;
 }
@@ -770,7 +904,6 @@ function formatFileSize(value) {
   display: grid;
   min-width: 0;
   max-width: 100%;
-  gap: 4px;
 }
 
 .doc-name {
@@ -809,7 +942,7 @@ function formatFileSize(value) {
 
 .row-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: center;
   gap: 6px;
   white-space: nowrap;
 }
@@ -985,7 +1118,14 @@ function formatFileSize(value) {
 @media (max-width: 1280px) {
   .document-header,
   .document-row {
-    grid-template-columns: 48px minmax(220px, 1fr) 78px 92px 138px 86px 178px;
+    grid-template-columns: 40px minmax(120px, 1.5fr) minmax(64px, .7fr) minmax(72px, .8fr) minmax(52px, .6fr) minmax(122px, 1.2fr) minmax(64px, .7fr) minmax(130px, 1.4fr);
+  }
+
+  .document-header .row-sections,
+  .document-header .row-tokens,
+  .document-row .row-sections,
+  .document-row .row-tokens {
+    display: none;
   }
 }
 
@@ -1006,6 +1146,9 @@ function formatFileSize(value) {
 
   .row-type,
   .row-size,
+  .row-chunks,
+  .row-sections,
+  .row-tokens,
   .row-date,
   .row-status,
   .row-actions {

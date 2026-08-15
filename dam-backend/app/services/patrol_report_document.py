@@ -185,7 +185,8 @@ def _page(section):
     section.footer_distance = Mm(8)
 
 
-def _header(section, board_image, report_date):
+def _header(section, board_image, context):
+    report_date = context["report_period_label"]
     header = section.header
     header.is_linked_to_previous = False
     table = header.add_table(rows=1, cols=2, width=Mm(170))
@@ -205,19 +206,20 @@ def _header(section, board_image, report_date):
         )
     right = table.cell(0, 1).paragraphs[0]
     _paragraph(right, align=WD_ALIGN_PARAGRAPH.RIGHT, before=0, after=0, line=1)
-    _text(right, "大藤峡工程空地联动每日巡检报告", size=8, color=MUTED)
+    _text(right, context.get("report_title", "大藤峡工程空地联动每日巡检报告"), size=8, color=MUTED)
     _text(right, f"   {report_date}", size=8, color=BLUE, bold=True)
     for cell in table.rows[0].cells:
         cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.BOTTOM
         _border(cell, bottom={"val": "single", "sz": "8", "color": BLUE})
 
 
-def _footer(section, report_date, numbered=True):
+def _footer(section, context, numbered=True):
+    report_date = context["report_period_label"]
     footer = section.footer
     footer.is_linked_to_previous = False
     p = footer.paragraphs[0]
     _paragraph(p, align=WD_ALIGN_PARAGRAPH.CENTER)
-    _text(p, f"每日巡检报告 · {report_date}", size=7.5, color=MUTED)
+    _text(p, f"{context.get('period_name', '每日')}巡检报告 · {report_date}", size=7.5, color=MUTED)
     if numbered:
         _text(p, "    ·    ", size=7.5, color=RULE)
         _field(p, "PAGE")
@@ -260,7 +262,7 @@ def _cover(document, context, board_image):
         )
     title = document.add_paragraph()
     _paragraph(title, align=WD_ALIGN_PARAGRAPH.CENTER, after=8)
-    _text(title, "大藤峡工程空地联动每日巡检报告", name=SERIF, size=24, color=BLUE, bold=True)
+    _text(title, context.get("report_title", "大藤峡工程空地联动每日巡检报告"), name=SERIF, size=24, color=BLUE, bold=True)
 
     rule = document.add_paragraph()
     _paragraph(rule, align=WD_ALIGN_PARAGRAPH.CENTER, after=18)
@@ -294,17 +296,17 @@ def _cover(document, context, board_image):
     left = info.cell(0, 0).paragraphs[0]
     _paragraph(left, align=WD_ALIGN_PARAGRAPH.LEFT)
     _text(left, "报告日期\n", size=8, color=MUTED)
-    _text(left, context["report_date_cn"], name=SERIF, size=14, color=BLUE, bold=True)
+    _text(left, context["report_period_label"], name=SERIF, size=14, color=BLUE, bold=True)
     right = info.cell(0, 1).paragraphs[0]
     _paragraph(right, align=WD_ALIGN_PARAGRAPH.RIGHT)
     _text(right, "文档编号\n", size=8, color=MUTED)
-    _text(right, f"DX-XJRB-{context['report_date_compact']}", size=10, color=TEXT, bold=True)
+    _text(right, f"{context.get('document_code_prefix', 'DX-XJRB')}-{context['report_date_compact']}", size=10, color=TEXT, bold=True)
 
 
 def _contents(document, context, board_image):
     document.add_page_break()
-    _header(document.sections[0], board_image, context["report_date"])
-    _footer(document.sections[0], context["report_date"], numbered=False)
+    _header(document.sections[0], board_image, context)
+    _footer(document.sections[0], context, numbered=False)
     p = document.add_paragraph()
     _paragraph(p, after=7)
     _text(p, "目录", name=SERIF, size=20, color=BLUE, bold=True)
@@ -312,7 +314,7 @@ def _contents(document, context, board_image):
     _paragraph(intro, after=24)
     _text(intro, "CONTENTS", size=8, color=MUTED, bold=True)
     items = [
-        ("01", "当日风险统计", "1"),
+        ("01", f"{context.get('period_name', '当日')}风险统计", "1"),
         ("02", "高风险事件", "2"),
         ("03", "中风险事件", "3"),
         ("04", "低风险事件", "4"),
@@ -333,13 +335,13 @@ def _start_body(document, context, board_image):
     _page(section)
     section.different_first_page_header_footer = False
     _page_number_start(section, 1)
-    _header(section, board_image, context["report_date"])
-    _footer(section, context["report_date"])
+    _header(section, board_image, context)
+    _footer(section, context)
 
 
 def _summary(document, context):
     stats = context["stats"]
-    _section_title(document, 1, "当日风险统计")
+    _section_title(document, 1, f"{context.get('period_name', '当日')}风险统计")
     overview_title = document.add_paragraph()
     _paragraph(overview_title, before=3, after=5)
     _text(overview_title, "风险概览", name=SERIF, size=11, color=TEXT, bold=True)
@@ -408,9 +410,30 @@ def _summary(document, context):
         _text(p, f"\n{count} 起", name=SERIF, size=15, color=BLUE, bold=True)
         _text(p, f"    {rate}", size=8.5, color=MUTED)
 
+    if context.get("period_type") in {"weekly", "monthly"}:
+        period_title = document.add_paragraph()
+        _paragraph(period_title, before=13, after=5)
+        _text(period_title, "周期指标", name=SERIF, size=11, color=TEXT, bold=True)
+        period_table = document.add_table(rows=1, cols=3)
+        period_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        period_data = [
+            ("统计天数", f"{stats['period_days']} 天"),
+            ("日均事件", f"{stats['avg_daily_events']} 起"),
+            ("闭环率", stats["closed_rate"]),
+        ]
+        for index, (label, value) in enumerate(period_data):
+            cell = period_table.cell(0, index)
+            _shade(cell, "F7F9FB")
+            _margins(cell, top=150, bottom=150, start=170, end=170)
+            _border(cell, bottom={"val": "single", "sz": "8", "color": RULE})
+            p = cell.paragraphs[0]
+            _paragraph(p, align=WD_ALIGN_PARAGRAPH.LEFT)
+            _text(p, label, size=9, color=MUTED)
+            _text(p, f"\n{value}", name=SERIF, size=14, color=BLUE, bold=True)
+
     h2 = document.add_paragraph()
     _paragraph(h2, before=13, after=5)
-    _text(h2, "当日结论", name=SERIF, size=11, color=TEXT, bold=True)
+    _text(h2, f"{context.get('period_name', '当日')}结论", name=SERIF, size=11, color=TEXT, bold=True)
     box = document.add_table(rows=1, cols=1)
     cell = box.cell(0, 0)
     _shade(cell, BLUE_LIGHT)
@@ -500,7 +523,7 @@ def _risk_page(document, context, number, risk_key):
     if not events:
         p = document.add_paragraph()
         _paragraph(p, before=8)
-        _text(p, f"当日无{label}事件。", size=10, color=GREEN, bold=True)
+        _text(p, f"{context.get('period_name', '当日')}无{label}事件。", size=10, color=GREEN, bold=True)
         return
     for event in events:
         _event_block(document, event, risk_key)
@@ -514,8 +537,8 @@ def render_daily_report_docx(context: dict[str, Any], board_image: Path) -> byte
     normal.font.name = SANS
     normal._element.rPr.rFonts.set(qn("w:eastAsia"), SANS)
     normal.font.size = Pt(9)
-    document.core_properties.title = f"每日巡检报告{context['report_date']}"
-    document.core_properties.subject = "传感器事件与视觉检测事件每日汇总"
+    document.core_properties.title = f"{context.get('period_name', '每日')}巡检报告{context['report_date_compact']}"
+    document.core_properties.subject = context.get("report_subject", "传感器事件与视觉检测事件每日汇总")
     document.core_properties.author = "box_system"
 
     _cover(document, context, board_image)

@@ -17,7 +17,7 @@ from typing import Any, Optional
 from fastapi import HTTPException, UploadFile
 from loguru import logger
 from sqlalchemy.exc import OperationalError
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.core.database import Base, engine
@@ -235,8 +235,31 @@ class KnowledgeService:
             .limit(page_size)
             .all()
         )
+        doc_ids = [row.id for row in rows]
+        # 批量统计每文档的片段数、总 token 数与独立章节数
+        chunk_stats: dict[int, dict[str, Any]] = {}
+        if doc_ids:
+            chunk_rows = (
+                db.query(
+                    KnowledgeChunk.document_id,
+                    KnowledgeChunk.section_title,
+                    KnowledgeChunk.token_count,
+                )
+                .filter(KnowledgeChunk.document_id.in_(doc_ids))
+                .all()
+            )
+            for doc_id, section, tokens in chunk_rows:
+                stats = chunk_stats.setdefault(int(doc_id), {"chunk_count": 0, "token_count": 0, "sections": set()})
+                stats["chunk_count"] += 1
+                stats["token_count"] += int(tokens or 0)
+                if section and section.strip():
+                    stats["sections"].add(section.strip())
+        records = []
+        for row in rows:
+            stats = chunk_stats.get(row.id) or {}
+            records.append(self._document_dict(row, stats=stats))
         return {
-            "records": [self._document_dict(row) for row in rows],
+            "records": records,
             "total": total,
             "page": page,
             "page_size": page_size,
@@ -456,7 +479,8 @@ class KnowledgeService:
         }
 
     @staticmethod
-    def _document_dict(row: KnowledgeDocument) -> dict[str, Any]:
+    def _document_dict(row: KnowledgeDocument, stats: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        stats = stats or {}
         return {
             "id": row.id,
             "base_id": row.base_id,
@@ -469,6 +493,9 @@ class KnowledgeService:
             "minio_bucket": row.minio_bucket,
             "minio_object": row.minio_object,
             "version": row.version or 1,
+            "chunk_count": stats.get("chunk_count"),
+            "token_count": stats.get("token_count", 0),
+            "section_count": len(stats.get("sections") or ()),
             "create_time": row.create_time.isoformat() if row.create_time else None,
             "update_time": row.update_time.isoformat() if row.update_time else None,
         }

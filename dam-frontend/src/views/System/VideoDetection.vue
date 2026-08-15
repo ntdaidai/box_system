@@ -20,6 +20,14 @@
               {{ mediaStatus }}
             </div>
             <el-button
+              type="warning"
+              plain
+              :disabled="simulationActive || screening"
+              @click="openSupplementDialog"
+            >
+              {{ specialContextButtonText }}
+            </el-button>
+            <el-button
               type="primary"
               :icon="simulationActive ? VideoPause : VideoPlay"
               :disabled="!videoUrl"
@@ -63,7 +71,7 @@
             <figure v-for="(frame, index) in evidenceFrames" :key="frame.id">
               <img v-if="!frame.failed" :src="frame.url" :alt="`模型复核帧 ${index + 1}`" @error="markFrameFailed(frame)" />
               <div v-else class="frame-error">复核帧加载失败</div>
-              <span>{{ frame.timeLabel || `复核帧 ${index + 1}` }}</span>
+              <span>{{ frame.label || `复核帧 ${String(index + 1).padStart(2, '0')}` }}</span>
             </figure>
             <div v-for="slot in Math.max(0, FRAME_COUNT - evidenceFrames.length)" :key="`slot-${slot}`" class="frame-slot">
               <b>{{ String(evidenceFrames.length + slot).padStart(2, '0') }}</b>
@@ -134,6 +142,49 @@
         </div>
       </aside>
     </section>
+
+    <el-dialog
+      v-model="supplementDialogVisible"
+      title="选择特殊工况"
+      width="520px"
+      class="supplement-dialog"
+    >
+      <el-form label-position="top">
+        <el-form-item label="特殊工况">
+          <el-select v-model="supplementForm.context_type" style="width: 100%" @change="handleSpecialContextTypeChange">
+            <el-option label="库坝正在泄洪" value="DAM_DISCHARGE" />
+            <el-option label="强降雨/水位上涨" value="RAINSTORM" />
+            <el-option label="闸门开启" value="GATE_OPEN" />
+            <el-option label="下游禁入" value="DOWNSTREAM_RESTRICTED" />
+            <el-option label="其他" value="OTHER" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="状态说明">
+          <el-input v-model="supplementForm.label" maxlength="100" />
+        </el-form-item>
+        <el-form-item label="影响区域">
+          <el-input v-model="supplementForm.affected_area" maxlength="300" />
+        </el-form-item>
+        <el-form-item label="补充备注">
+          <el-input
+            v-model="supplementForm.note"
+            type="textarea"
+            :rows="3"
+            maxlength="1000"
+            show-word-limit
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="supplementDialogVisible = false">取消</el-button>
+        <el-button type="info" plain @click="clearSpecialContext">
+          本次不使用
+        </el-button>
+        <el-button type="warning" @click="applySpecialContext">
+          应用到本次模拟
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -170,6 +221,9 @@ const pollTimer = ref(null)
 const pollStartedAt = ref(0)
 const lastDetailSignature = ref('')
 const stablePollCount = ref(0)
+const supplementDialogVisible = ref(false)
+const supplementForm = ref(defaultSupplementForm())
+const selectedSupplementContext = ref(null)
 
 const selectedCameraName = computed(() => DEFAULT_CAMERA_NAME)
 const mediaStatus = computed(() => {
@@ -184,6 +238,7 @@ const frameSlotLabel = computed(() => {
 })
 const riskLabel = computed(() => labelForRisk(result.value?.risk_level))
 const riskTag = computed(() => tagForRisk(result.value?.risk_level))
+const specialContextButtonText = computed(() => selectedSupplementContext.value?.label || '特殊工况')
 const detailEvent = computed(() => eventDetail.value?.event || null)
 const eventReportId = computed(() => detailEvent.value?.analysis_report_id || result.value?.analysis_report_id || null)
 // 事件处置报告日志（shouldStopEventPolling 依赖其状态判断轮询终止）
@@ -425,7 +480,10 @@ async function submitVideoFile() {
     const response = await simulateCameraVideoScreening(
       cameraId.value,
       videoFile.value,
-      { windowSeconds: WINDOW_SECONDS },
+      {
+        windowSeconds: WINDOW_SECONDS,
+        supplementalContext: selectedSupplementContext.value,
+      },
     )
     const normalizedResult = { ...response.data }
     result.value = normalizedResult
@@ -451,6 +509,8 @@ async function refreshEventDetail(id = result.value?.event_instance_id) {
     const event = response.data?.event || {}
     result.value = {
       ...(result.value || {}),
+      risk_level: event.risk_level || result.value?.risk_level,
+      max_risk_level: event.max_risk_level || result.value?.max_risk_level,
       event_status: event.status,
       event_state: event.state,
       analysis_report_id: event.analysis_report_id,
@@ -541,6 +601,7 @@ function updateWorkflowEvidenceFrames(detail) {
     url: normalizeMediaUrl(item.url),
     failed: false,
     timeLabel: item.timeLabel || `复核帧 ${String(index + 1).padStart(2, '0')}`,
+    label: item.label || item.timeLabel || `复核帧 ${String(index + 1).padStart(2, '0')}`,
   }))
 }
 
@@ -555,6 +616,7 @@ function extractWorkflowReviewFrames(detail) {
           key: item?.id || item?.object_key || item?.object_name || url || index,
           url,
           timeLabel: item?.time_label || item?.timeLabel || frameTimeLabel(item, index),
+          label: frameDisplayLabel(item, index),
         }
       })
       .filter(Boolean)
@@ -583,6 +645,7 @@ function extractWorkflowReviewFrames(detail) {
       key,
       url: ref.url,
       timeLabel: frameTimeLabel(item, frames.length),
+      label: frameDisplayLabel(item, frames.length),
     })
     if (frames.length >= FRAME_COUNT) break
   }
@@ -592,9 +655,13 @@ function extractWorkflowReviewFrames(detail) {
 function mediaListFromNode(node) {
   const output = node?.output || {}
   const inference = output.inference_result || {}
+  const transform = inference.media_transform || {}
   return [
+    ...(Array.isArray(inference.representative_frame_candidates) ? inference.representative_frame_candidates : []),
+    ...(Array.isArray(transform.representative_frame_candidates) ? transform.representative_frame_candidates : []),
     ...(Array.isArray(inference.media_objects) ? inference.media_objects : []),
     ...(Array.isArray(inference.cloud_media_objects) ? inference.cloud_media_objects : []),
+    ...(Array.isArray(inference.key_frames) ? inference.key_frames : []),
     ...(Array.isArray(output.media_objects) ? output.media_objects : []),
   ]
 }
@@ -604,14 +671,13 @@ function preferredReviewFrameRef(item) {
 
   const source = item.source
   const sourceRef = typeof source === 'string' ? source : source?.path || source?.object_name || source?.object_key || ''
-  const ownRef = item.path || item.object_name || item.object_key || ''
-  const ref = String(sourceRef || ownRef || '')
-  const isYoloFrame = ref.includes('/workflow/yolo-detections/') || ref.includes('workflow/yolo-detections/')
+  const ownRef = item.path || item.file_url || item.url || item.object_name || item.object_key || ''
+  const text = `${item.role || ''} ${sourceRef} ${ownRef}`.toLowerCase()
   const isWorkflowFrame = String(ownRef).includes('/workflow-media/') && String(ownRef).includes('/images/')
-  const isQwen4BFrame = ref.includes('/qwen4b-proxy-media/') || ref.includes('qwen4b-proxy-media/')
-  if (!isYoloFrame && !isWorkflowFrame && !isQwen4BFrame) return null
+  const isQwen4BFrame = text.includes('/qwen4b-proxy-media/') || text.includes('qwen4b-proxy-media/')
+  if (!isWorkflowFrame && !isQwen4BFrame) return null
 
-  const localRef = isYoloFrame ? ref : (String(ownRef) || ref)
+  const localRef = String(ownRef || sourceRef || '')
   const normalized = localRef.startsWith('dam/') || localRef.startsWith('http')
     ? localRef
     : `dam/${localRef.replace(/^\/+/, '')}`
@@ -628,6 +694,27 @@ function frameTimeLabel(item, index) {
   return `复核帧 ${String(index + 1).padStart(2, '0')}`
 }
 
+function frameDisplayLabel(item, index) {
+  const sourceLabel = item?.source_label || item?.sourceLabel || inferFrameSourceLabel(item)
+  const seconds = item?.timestamp_seconds ?? item?.source?.timestamp_seconds ?? item?.frame_time_sec ?? item?.source?.frame_time_sec
+  if (seconds !== undefined && seconds !== null && seconds !== '') {
+    return `${sourceLabel} ${Number(seconds).toFixed(1)}s`
+  }
+  return `${sourceLabel} ${String(index + 1).padStart(2, '0')}`
+}
+
+function inferFrameSourceLabel(item) {
+  const source = item?.source
+  const sourceRef = typeof source === 'string' ? source : source?.path || source?.object_name || source?.object_key || ''
+  const ownRef = item?.path || item?.object_name || item?.object_key || item?.file_url || item?.url || ''
+  const text = `${item?.role || ''} ${sourceRef} ${ownRef}`.toLowerCase()
+  if (text.includes('qwen4b_review_frame_candidate') || text.includes('qwen4b_selected_representative_frame') || text.includes('qwen4b-proxy-media')) {
+    return 'Qwen复核帧'
+  }
+  if (text.includes('qwen_screening') || text.includes('/camera/')) return '初筛帧'
+  return '复核帧'
+}
+
 function markFrameFailed(frame) {
   frame.failed = true
 }
@@ -635,6 +722,76 @@ function markFrameFailed(frame) {
 function openEventDetail(id) {
   if (!id) return
   router.push({ name: 'AlarmSafetyEventDetail', params: { id } })
+}
+
+function defaultSupplementForm() {
+  return specialContextDefaults('DAM_DISCHARGE')
+}
+
+function specialContextDefaults(type) {
+  const presets = {
+    DAM_DISCHARGE: {
+      label: '库坝正在泄洪',
+      affected_area: '滩涂、消落带、下游河道、近水岸线',
+      note: '泄洪期间禁止人员进入滩涂边活动',
+    },
+    RAINSTORM: {
+      label: '强降雨或水位上涨',
+      affected_area: '库区岸线、下游河道、低洼滩涂、边坡区域',
+      note: '强降雨或水位上涨期间，需提高人员亲水、洪水漫滩和边坡异常风险关注等级',
+    },
+    GATE_OPEN: {
+      label: '闸门开启',
+      affected_area: '闸门下游、泄流通道、近水岸线、桥下河道',
+      note: '闸门开启期间，人员或船只进入下游影响区需结合知识库规则提高风险研判等级',
+    },
+    DOWNSTREAM_RESTRICTED: {
+      label: '下游禁入管控',
+      affected_area: '下游河道、滩涂、消落带、警戒范围',
+      note: '下游禁入管控生效期间，发现人员活动需按警戒区异常进入复核处置',
+    },
+    OTHER: {
+      label: '其他特殊情况',
+      affected_area: '事件影响区域',
+      note: '请补充当前特殊情况及其对风险等级的影响',
+    },
+  }
+  const preset = presets[type] || presets.DAM_DISCHARGE
+  return {
+    context_type: type || 'DAM_DISCHARGE',
+    active: true,
+    label: preset.label,
+    severity_hint: 'HIGH',
+    affected_area: preset.affected_area,
+    note: preset.note,
+    source: 'OPERATOR',
+  }
+}
+
+function handleSpecialContextTypeChange(type) {
+  supplementForm.value = {
+    ...supplementForm.value,
+    ...specialContextDefaults(type),
+  }
+}
+
+function openSupplementDialog() {
+  supplementForm.value = selectedSupplementContext.value
+    ? { ...selectedSupplementContext.value }
+    : defaultSupplementForm()
+  supplementDialogVisible.value = true
+}
+
+function applySpecialContext() {
+  selectedSupplementContext.value = { ...supplementForm.value }
+  supplementDialogVisible.value = false
+  ElMessage.success('特殊工况已应用到本次模拟')
+}
+
+function clearSpecialContext() {
+  selectedSupplementContext.value = null
+  supplementDialogVisible.value = false
+  ElMessage.info('本次模拟不使用特殊工况')
 }
 
 function logTypeLabel(value) {

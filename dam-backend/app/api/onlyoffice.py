@@ -7,6 +7,7 @@ downloads and saves documents through these FastAPI endpoints.
 
 import hashlib
 import io
+import json
 import os
 import re
 import subprocess
@@ -30,6 +31,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.models.analysis_report import AnalysisReportKnowledgeCitation
 from app.models.event_library import EventLibrary
+from app.models.knowledge import KnowledgeChunk, KnowledgeDocument
 from app.models.safety_integration import SafetyEventInstance
 
 router = APIRouter(prefix="/api/onlyoffice", tags=["OnlyOffice 文档编辑"])
@@ -144,6 +146,121 @@ def normalize_event_report_title(title: str, document_id: str, fallback_date: st
     base = re.sub(r"_?(?:EVT_)?20\d{6}_[0-9a-fA-F-]+$", "", stem).strip("_") or "事件处置报告"
     instance_no = normalize_event_instance_no(instance_source, fallback_date, fallback_sequence)
     return f"{base}_{instance_no}{suffix}" if instance_no else raw_title
+
+
+def parse_metadata_json(value: str | None) -> dict:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def find_knowledge_ref(
+    db: Session,
+    *,
+    title: str,
+    clause_id: str,
+    section_path: str,
+) -> dict:
+    query = db.query(KnowledgeChunk, KnowledgeDocument).join(
+        KnowledgeDocument, KnowledgeDocument.id == KnowledgeChunk.document_id
+    )
+    clean_title = str(title or "").replace(".docx", "").strip()
+    if clean_title:
+        query = query.filter(or_(
+            KnowledgeDocument.title == clean_title,
+            KnowledgeDocument.title.like(f"%{clean_title}%"),
+            KnowledgeDocument.filename.like(f"%{clean_title}%"),
+        ))
+    if clause_id:
+        query = query.filter(KnowledgeChunk.metadata_json.like(f"%{clause_id}%"))
+    rows = query.order_by(KnowledgeChunk.id.asc()).limit(20).all()
+    if not rows:
+        return {}
+    section_text = str(section_path or "").strip()
+    selected_chunk, selected_doc = rows[0]
+    for chunk, document in rows:
+        metadata = parse_metadata_json(chunk.metadata_json)
+        if clause_id and str(metadata.get("clause_id") or "").strip() == clause_id:
+            selected_chunk, selected_doc = chunk, document
+            if not section_text or section_text in str(metadata.get("section_path") or chunk.section_title or ""):
+                break
+    metadata = parse_metadata_json(selected_chunk.metadata_json)
+    return {
+        "evidence_id": f"K{selected_chunk.id}",
+        "chunk_id": selected_chunk.id,
+        "document_id": selected_doc.id,
+        "document_title": selected_doc.title or clean_title,
+        "section_path": metadata.get("section_path") or selected_chunk.section_title or section_path,
+        "clause_id": metadata.get("clause_id") or clause_id,
+    }
+
+
+def parse_docx_knowledge_indexes(content: bytes, db: Session) -> list[dict]:
+    try:
+        from docx import Document
+    except Exception:
+        return []
+    try:
+        document = Document(io.BytesIO(content))
+    except Exception:
+        return []
+
+    items: list[dict] = []
+    in_knowledge_section = False
+    for paragraph in document.paragraphs:
+        text = re.sub(r"\s+", " ", paragraph.text or "").strip()
+        normalized = re.sub(r"\s+", "", text)
+        if normalized in {"6知识依据", "06知识依据"}:
+            in_knowledge_section = True
+            continue
+        if in_knowledge_section and paragraph.style and str(paragraph.style.name or "").startswith("Heading") and normalized:
+            break
+        if not in_knowledge_section:
+            continue
+        matched = re.match(r"^\[(\d+)\]\s*《([^》]+)》\s*[，,]?\s*(.*)$", text)
+        if not matched:
+            continue
+        display_index = int(matched.group(1))
+        title = matched.group(2).strip()
+        rest = matched.group(3).strip()
+        clause_match = re.search(r"(?:^|[，,]\s*)条款\s+([A-Za-z0-9_-]+)", rest)
+        clause_id = clause_match.group(1).strip() if clause_match else ""
+        section_path = rest[:clause_match.start()].strip(" ，,") if clause_match else rest
+        ref = find_knowledge_ref(db, title=title, clause_id=clause_id, section_path=section_path)
+        items.append({
+            "display_index": display_index,
+            "evidence_id": ref.get("evidence_id") or "",
+            "chunk_id": ref.get("chunk_id"),
+            "document_id": ref.get("document_id"),
+            "document_title": ref.get("document_title") or title,
+            "section_path": ref.get("section_path") or section_path,
+            "clause_id": ref.get("clause_id") or clause_id,
+            "support_type": "report_section",
+            "confidence": "",
+        })
+    return items
+
+
+def merge_knowledge_indexes(existing: list[dict], parsed: list[dict]) -> list[dict]:
+    source = parsed if parsed else existing
+    merged: list[dict] = []
+    seen: set[tuple] = set()
+    for item in source or []:
+        key = (
+            item.get("document_id") or item.get("document_title"),
+            item.get("clause_id") or item.get("evidence_id") or item.get("chunk_id"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        current = dict(item)
+        current["display_index"] = len(merged) + 1
+        merged.append(current)
+    return merged
 
 
 def get_file_extension(filename: str) -> str:
@@ -715,6 +832,7 @@ async def list_documents(
             "document_type": get_document_type(ext),
             "created_at": created_at,
             "updated_at": updated_at,
+            "_object_name": obj.object_name,
         })
 
     event_by_instance_no = {}
@@ -740,8 +858,6 @@ async def list_documents(
                 .filter(AnalysisReportKnowledgeCitation.report_id.in_(report_ids))
                 .order_by(
                     AnalysisReportKnowledgeCitation.report_id.asc(),
-                    AnalysisReportKnowledgeCitation.document_title.asc(),
-                    AnalysisReportKnowledgeCitation.clause_id.asc(),
                     AnalysisReportKnowledgeCitation.id.asc(),
                 )
                 .all()
@@ -759,7 +875,9 @@ async def list_documents(
                 if key in seen_keys:
                     continue
                 seen_keys.add(key)
-                knowledge_indexes_by_report_id.setdefault(citation.report_id, []).append({
+                items = knowledge_indexes_by_report_id.setdefault(citation.report_id, [])
+                items.append({
+                    "display_index": len(items) + 1,
                     "evidence_id": citation.evidence_id,
                     "chunk_id": citation.chunk_id,
                     "document_id": citation.document_id,
@@ -787,7 +905,19 @@ async def list_documents(
             doc["event_summary"] = event.summary
             doc["risk_level"] = event.risk_level
             doc["risk_label"] = RISK_LABELS.get(event.risk_level, event.risk_level)
-            doc["knowledge_indexes"] = knowledge_indexes_by_report_id.get(event.analysis_report_id or 0, [])
+            citation_indexes = knowledge_indexes_by_report_id.get(event.analysis_report_id or 0, [])
+            docx_indexes = []
+            if citation_indexes and str(doc.get("file_type") or "").lower() == "docx":
+                try:
+                    response = client.get_object(BUCKET_NAME, str(doc.get("_object_name") or ""))
+                    try:
+                        docx_indexes = parse_docx_knowledge_indexes(response.read(), db)
+                    finally:
+                        response.close()
+                        response.release_conn()
+                except Exception:
+                    docx_indexes = []
+            doc["knowledge_indexes"] = merge_knowledge_indexes(citation_indexes, docx_indexes)
             doc["title"] = normalize_event_report_title(
                 doc["title"],
                 f"dam_event_report_{display_instance_no}",
@@ -806,6 +936,7 @@ async def list_documents(
                 doc.get("created_at") or doc.get("updated_at") or "",
                 1,
             )
+        doc.pop("_object_name", None)
 
     docs.sort(key=lambda item: item["updated_at"], reverse=True)
     total = len(docs)

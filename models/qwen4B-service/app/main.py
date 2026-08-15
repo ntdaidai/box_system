@@ -56,7 +56,9 @@ WORKFLOW_VIDEO_PROXY_WIDTH = int(os.getenv("WORKFLOW_VIDEO_PROXY_WIDTH", "448"))
 WORKFLOW_VIDEO_PROXY_CRF = int(os.getenv("WORKFLOW_VIDEO_PROXY_CRF", "35"))
 EDGE_PROXY_MEDIA_PREFIX = os.getenv("EDGE_PROXY_MEDIA_PREFIX", "qwen4b-proxy-media")
 REPRESENTATIVE_FRAME_ENABLED = os.getenv("REPRESENTATIVE_FRAME_ENABLED", "true").lower() == "true"
-REPRESENTATIVE_FRAME_CANDIDATE_COUNT = int(os.getenv("REPRESENTATIVE_FRAME_CANDIDATE_COUNT", "4"))
+REPRESENTATIVE_FRAME_CANDIDATE_COUNT = int(os.getenv("REPRESENTATIVE_FRAME_CANDIDATE_COUNT", "8"))
+WORKFLOW_PROMPT_CHAR_BUDGET = int(os.getenv("WORKFLOW_PROMPT_CHAR_BUDGET", "2200"))
+KNOWLEDGE_PROMPT_CHAR_BUDGET = int(os.getenv("KNOWLEDGE_PROMPT_CHAR_BUDGET", "600"))
 WEATHER_CONTEXT_ENABLED = os.getenv("WEATHER_CONTEXT_ENABLED", "true").lower() == "true"
 WEATHER_CONTEXT_MODE = os.getenv("WEATHER_CONTEXT_MODE", "mock").strip().lower()
 WEATHER_API_BASE = os.getenv("WEATHER_API_BASE", "https://api.open-meteo.com/v1/forecast").rstrip("/")
@@ -694,7 +696,7 @@ def media_ref_url(ref: Dict[str, Any]) -> Optional[str]:
 
 
 async def build_workflow_media_content(request: WorkflowInferRequest) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """构建传给 Qwen4B 的多模态内容，视频理解优先。"""
+    """构建传给 Qwen4B 的多模态内容；视频节点统一转成 8 张复核帧输入。"""
     refs = collect_media_refs(request)
     media_mode = str(request.media_mode or "video").lower()
     videos = [ref for ref in refs if ref.get("type") == "video"]
@@ -729,13 +731,17 @@ async def build_workflow_media_content(request: WorkflowInferRequest) -> tuple[L
                     message = f"生成 4B 代理视频失败，回退原始视频: {e}"
                     transform["errors"].append(message)
                     logger.warning(message)
-            url = media_ref_url(selected_ref)
-            if url:
-                content.append({"type": "video_url", "video_url": {"url": url}})
+            frame_content: List[Dict[str, Any]] = []
             for candidate in selected_ref.get("representative_frame_candidates") or []:
                 candidate_url = media_ref_url(candidate)
                 if candidate_url:
-                    content.append({"type": "image_url", "image_url": {"url": candidate_url}})
+                    frame_content.append({"type": "image_url", "image_url": {"url": candidate_url}})
+            if frame_content:
+                content.extend(frame_content[: max(1, min(int(request.max_frames or 8), 8))])
+            else:
+                url = media_ref_url(selected_ref)
+                if url:
+                    content.append({"type": "video_url", "video_url": {"url": url}})
         if content:
             return content, transform
 
@@ -1022,9 +1028,15 @@ async def extract_representative_frame_candidates(
                 "-frames:v",
                 "1",
                 "-vf",
-                "scale='if(gte(iw,ih),min(iw,1280),-2)':'if(gte(iw,ih),-2,min(ih,720))'",
+                f"scale={WORKFLOW_VIDEO_PROXY_WIDTH}:-2,format=yuvj420p",
+                "-pix_fmt",
+                "yuvj420p",
                 "-q:v",
                 "4",
+                "-threads",
+                "1",
+                "-strict",
+                "unofficial",
                 str(output_path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -1065,8 +1077,8 @@ async def create_video_proxy_ref(request: WorkflowInferRequest, ref: Dict[str, A
     """生成并上传 4B 使用的轻量代理视频，返回可签名的边缘 MinIO 引用。"""
     data = await load_media_bytes(ref)
     source_name = Path(str(ref.get("object_name") or "evidence.mp4")).name or "evidence.mp4"
+    representative_candidates = await extract_representative_frame_candidates(data, request, source_name)
     proxy_data = await transcode_video_proxy(data, source_name)
-    representative_candidates = await extract_representative_frame_candidates(proxy_data, request, source_name)
     task_key = task_key_from_request(request)
     stem = Path(source_name).stem or "evidence"
     object_name = (
@@ -1214,11 +1226,12 @@ async def upload_representative_frame_to_cloud(
 def promoted_media_objects(
     *,
     representative_frame: Optional[Dict[str, Any]],
+    representative_frame_candidates: Optional[List[Dict[str, Any]]] = None,
     cloud_representative_frame: Optional[Dict[str, Any]],
     cloud_media_objects: List[Dict[str, Any]],
     fallback_media_objects: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """下游媒体证据排序：4B代表帧优先，其次云端媒体，最后原始输入媒体。"""
+    """下游媒体证据排序：4B代表帧/候选帧优先，其次云端媒体，最后原始输入媒体。"""
     result: List[Dict[str, Any]] = []
     if cloud_representative_frame:
         result.append(cloud_representative_frame)
@@ -1226,6 +1239,13 @@ def promoted_media_objects(
         local_frame = dict(representative_frame)
         local_frame.setdefault("role", "qwen4b_selected_representative_frame")
         result.append(local_frame)
+
+    for candidate in representative_frame_candidates or []:
+        if not isinstance(candidate, dict):
+            continue
+        frame = dict(candidate)
+        frame.setdefault("role", "qwen4b_review_frame_candidate")
+        result.append(frame)
 
     result.extend(item for item in cloud_media_objects if isinstance(item, dict))
     if not cloud_media_objects:
@@ -1536,6 +1556,14 @@ def compact_json(value: Any, limit: int = 1200) -> str:
     return text[:limit]
 
 
+def truncate_prompt_text(value: Any, limit: int, suffix: str = "\n...[已压缩，保留关键上下文]") -> str:
+    text = str(value or "")
+    if limit <= 0 or len(text) <= limit:
+        return text
+    suffix = suffix if len(suffix) < limit else ""
+    return text[: max(0, limit - len(suffix))] + suffix
+
+
 def build_knowledge_query(request: WorkflowInferRequest) -> str:
     """Build a concise retrieval query from DAM workflow context."""
     explicit = (request.knowledge_query or "").strip()
@@ -1560,6 +1588,8 @@ def build_knowledge_query(request: WorkflowInferRequest) -> str:
         nested_sensor_data.get("camera_name"),
         sensor_data.get("source_name"),
         nested_sensor_data.get("source_name"),
+        compact_json(sensor_data.get("supplemental_context") or nested_sensor_data.get("supplemental_context") or {}, limit=500),
+        compact_json(sensor_data.get("risk_escalation") or nested_sensor_data.get("risk_escalation") or {}, limit=500),
         inputs.get("event_name"),
         inputs.get("summary"),
         request.prompt,
@@ -1584,6 +1614,8 @@ def infer_knowledge_event_type(request: WorkflowInferRequest) -> str:
             sensor_data.get("event_name"),
             sensor_data.get("event_type"),
             sensor_data.get("summary"),
+            compact_json(sensor_data.get("supplemental_context") or nested_sensor_data.get("supplemental_context") or {}, limit=500),
+            compact_json(sensor_data.get("risk_escalation") or nested_sensor_data.get("risk_escalation") or {}, limit=500),
             nested_sensor_data.get("event_name"),
             nested_sensor_data.get("event_type"),
             nested_sensor_data.get("summary"),
@@ -1592,7 +1624,7 @@ def infer_knowledge_event_type(request: WorkflowInferRequest) -> str:
     )
     mapping = [
         ("illegal_fishing", ("非法捕鱼", "电鱼", "捕鱼")),
-        ("person_wading", ("人员涉水", "涉水")),
+        ("person_wading", ("人员涉水", "涉水", "亲水", "滩涂", "消落带")),
         ("person_intrusion", ("人员入侵", "入侵", "闯入")),
         ("flood", ("洪水", "漫坝", "溢流", "水位上涨")),
         ("landslide", ("滑坡", "边坡滑移", "塌岸")),
@@ -2097,14 +2129,18 @@ def build_workflow_prompt(
         )
     knowledge_text = ""
     if knowledge_context and knowledge_context.get("prompt_context"):
+        knowledge_prompt_context = truncate_prompt_text(
+            knowledge_context["prompt_context"],
+            KNOWLEDGE_PROMPT_CHAR_BUDGET,
+        )
         knowledge_text = (
             "\n\n## 知识库依据\n"
             "以下内容来自库坝巡查知识库。请优先依据这些规范生成处置建议；"
             "不要编造知识库中没有的制度条款。\n"
-            f"{knowledge_context['prompt_context']}\n"
+            f"{knowledge_prompt_context}\n"
         )
     weather_text = build_weather_prompt_context(weather_context)
-    return (
+    prompt = (
         f"{base_prompt}{knowledge_text}{weather_text}\n\n"
         "输出必须是一个合法 JSON 对象，并额外包含以下详细字段："
         "detailed_scene_analysis、risk_reasoning、impact_assessment、response_plan、monitoring_suggestions。"
@@ -2119,6 +2155,7 @@ def build_workflow_prompt(
         "{\"selected_index\":候选帧编号,\"reason\":\"为什么该帧最适合作为报告代表画面\"}。"
         "代表帧应选择最能体现事件证据、现场状态、风险特征且画面清晰的一帧。"
     )
+    return truncate_prompt_text(prompt, WORKFLOW_PROMPT_CHAR_BUDGET)
 
 
 def workflow_system_prompt(request: WorkflowInferRequest) -> str:
@@ -2316,7 +2353,7 @@ async def workflow_infer(request: WorkflowInferRequest):
         if request.upload_media_to_cloud:
             media_upload = await upload_workflow_media_to_cloud(request)
 
-        system_prompt = workflow_system_prompt(request)
+        system_prompt = truncate_prompt_text(workflow_system_prompt(request), 1800)
         media_content, media_transform = await build_workflow_media_content(request)
         frame_candidates = media_transform.get("representative_frame_candidates") or []
         if frame_candidates:
@@ -2331,6 +2368,7 @@ async def workflow_infer(request: WorkflowInferRequest):
                 ],
                 ensure_ascii=False,
             )
+        prompt = truncate_prompt_text(prompt, WORKFLOW_PROMPT_CHAR_BUDGET)
         user_content: Any = prompt
         if media_content:
             user_content = media_content + [{"type": "text", "text": prompt}]
@@ -2354,12 +2392,14 @@ async def workflow_infer(request: WorkflowInferRequest):
         cloud_media_objects = media_upload.get("objects") or []
         cloud_media_objects_for_next_node = promoted_media_objects(
             representative_frame=representative_frame,
+            representative_frame_candidates=frame_candidates,
             cloud_representative_frame=cloud_representative_frame,
             cloud_media_objects=cloud_media_objects,
             fallback_media_objects=[],
         )
         media_objects_for_next_node = promoted_media_objects(
             representative_frame=representative_frame,
+            representative_frame_candidates=frame_candidates,
             cloud_representative_frame=cloud_representative_frame,
             cloud_media_objects=cloud_media_objects,
             fallback_media_objects=request.media_objects,
@@ -2389,7 +2429,12 @@ async def workflow_infer(request: WorkflowInferRequest):
             "template_tables": template_tables,
             "docx_context": template_data,
             "representative_frame": response_representative_frame,
-            "key_frames": [response_representative_frame] if response_representative_frame else [],
+            "representative_frame_candidates": frame_candidates,
+            "key_frames": [response_representative_frame] + [
+                item for item in frame_candidates
+                if response_representative_frame
+                and item.get("path") != response_representative_frame.get("path")
+            ] if response_representative_frame else frame_candidates,
             "image_urls": [response_representative_frame["path"]] if response_representative_frame else [],
             "result_source": "local_qwen4b",
             "actor_name": workflow_actor_name(request),

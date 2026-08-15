@@ -389,6 +389,12 @@ class WorkflowExecutorService:
             nested_sensor.get("event_category"),
             sensor_data.get("summary"),
             nested_sensor.get("summary"),
+            WorkflowExecutorService._compact_for_prompt(
+                sensor_data.get("supplemental_context") or nested_sensor.get("supplemental_context") or {}
+            ),
+            WorkflowExecutorService._compact_for_prompt(
+                sensor_data.get("risk_escalation") or nested_sensor.get("risk_escalation") or {}
+            ),
             prompt,
         ]
         text = " ".join(str(item).strip() for item in parts if str(item or "").strip())
@@ -546,6 +552,8 @@ class WorkflowExecutorService:
             "boat_confidence",
             "possible_person",
             "possible_boat",
+            "supplemental_context",
+            "risk_escalation",
         )
         return {key: sensor_data[key] for key in keep if key in sensor_data}
 

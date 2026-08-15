@@ -75,8 +75,7 @@
               >
                 <el-image :src="normalizeMediaUrl(item.file_url)" fit="cover" />
                 <footer>
-                  <span>{{ item.time_label || `复核帧 ${String(index + 1).padStart(2, '0')}` }}</span>
-                  <time>{{ item.description || 'Qwen4B 抽取帧' }}</time>
+                  <span>复核帧 {{ String(index + 1).padStart(2, '0') }}</span>
                 </footer>
               </button>
               <div v-for="slot in Math.max(0, 8 - reviewFrames.length)" :key="`review-slot-${slot}`" class="review-frame-slot">

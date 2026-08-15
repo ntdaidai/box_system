@@ -34,6 +34,7 @@ from minio.error import S3Error
 from app.services.minio_service import minio_service
 from app.services.safety_event_operation_service import operate_safety_event as apply_safety_event_operation
 from app.services.safety_event_ws import safety_event_ws_manager
+from app.services.supplemental_context_service import supplemental_context_service
 
 
 router = APIRouter()
@@ -103,6 +104,17 @@ class SafetyEventOperation(BaseModel):
     assignee: Optional[str] = Field(None, max_length=128)
     version: Optional[int] = Field(None, ge=0)
     evidence_url: Optional[str] = Field(None, max_length=1024)
+
+
+class SupplementalContextPayload(BaseModel):
+    context_type: Literal["DAM_DISCHARGE", "RAINSTORM", "GATE_OPEN", "DOWNSTREAM_RESTRICTED", "OTHER"] = "DAM_DISCHARGE"
+    active: bool = True
+    label: str = Field("库坝正在泄洪", max_length=100)
+    severity_hint: Optional[Literal["LOW", "MEDIUM", "HIGH"]] = "HIGH"
+    occurred_at: Optional[str] = Field(None, max_length=64)
+    affected_area: str = Field("滩涂、消落带、下游河道、近水岸线", max_length=300)
+    note: str = Field("", max_length=1000)
+    source: str = Field("OPERATOR", max_length=64)
 
 
 def _report_document_id(row: SafetyEventInstance) -> Optional[str]:
@@ -266,6 +278,8 @@ def _collect_review_frames(
         # 过滤模板占位符与描述性文本等非媒体对象引用（如 {{start_0.media_objects}}、DAG 节点描述）
         if not _looks_like_object_ref(normalized):
             return
+        if _is_yolo_detection_frame(normalized, role):
+            return
         if not (normalized.startswith("http") or normalized.startswith("/") or normalized.startswith("dam/")):
             normalized = f"dam/{normalized.lstrip('/')}"
         # 过滤本机 MinIO 中不存在的对象（跨机 A100 引用、已清理对象）
@@ -274,20 +288,30 @@ def _collect_review_frames(
         if normalized in seen:
             return
         seen.add(normalized)
+        priority = _review_frame_priority(normalized, role)
         candidates.append({
             "id": f"review-frame-{len(candidates) + 1}",
             "evidence_type": "IMAGE",
             "source_type": "SYSTEM",
             "file_url": normalized,
             "description": caption,
+            "source_label": _review_frame_source_label(normalized, role),
             "captured_at": captured_at,
             "time_label": f"{float(timestamp):.1f}s" if timestamp is not None else f"复核帧 {len(candidates) + 1:02d}",
-            "_priority": _review_frame_priority(normalized, role),
+            "_priority": priority,
         })
 
     def walk(value: Any) -> None:
         if isinstance(value, dict):
-            for key in ("representative_frame", "representative_frames", "key_frames", "image_urls", "media_objects", "cloud_media_objects"):
+            for key in (
+                "representative_frame",
+                "representative_frames",
+                "representative_frame_candidates",
+                "key_frames",
+                "image_urls",
+                "media_objects",
+                "cloud_media_objects",
+            ):
                 nested = value.get(key)
                 if isinstance(nested, list):
                     for item in nested:
@@ -309,6 +333,9 @@ def _collect_review_frames(
             add_frame(row.file_url, row.description or "现场证据", row.captured_at.isoformat() if row.captured_at else None)
 
     candidates.sort(key=lambda item: item.get("_priority", 99))
+    qwen_frames = [item for item in candidates if item.get("_priority") == 0]
+    if qwen_frames:
+        candidates = qwen_frames
     frames = []
     for index, item in enumerate(candidates[:limit], 1):
         frame = {key: value for key, value in item.items() if key != "_priority"}
@@ -321,13 +348,29 @@ def _collect_review_frames(
 
 def _review_frame_priority(url: str, role: str = "") -> int:
     text = f"{role} {url}".lower()
-    if "annotated_detection_frame" in text or "workflow/yolo-detections" in text:
+    if "qwen4b_review_frame_candidate" in text or "qwen4b_selected_representative_frame" in text or "qwen4b-proxy-media" in text:
         return 0
-    if "workflow-media" in text or "qwen4b-proxy-media" in text or "key_frame" in text:
+    if "workflow-media" in text or "key_frame" in text:
         return 1
     if "qwen_screening" in text or "/camera/" in text:
         return 9
     return 5
+
+
+def _review_frame_source_label(url: str, role: str = "") -> str:
+    text = f"{role} {url}".lower()
+    if "qwen4b_review_frame_candidate" in text or "qwen4b_selected_representative_frame" in text or "qwen4b-proxy-media" in text:
+        return "Qwen复核帧"
+    if "qwen_screening" in text or "/camera/" in text:
+        return "初筛帧"
+    return "复核帧"
+
+
+def _is_yolo_detection_frame(url: str, role: str = "") -> bool:
+    text = f"{role} {url}".lower()
+    if "qwen4b-proxy-media" in text:
+        return False
+    return "annotated_detection_frame" in text or "workflow/yolo-detections" in text
 
 
 @router.get("/config", summary="获取融合业务配置")
@@ -754,12 +797,34 @@ def get_safety_event_detail(
             "captured_at": row.captured_at.isoformat() if row.captured_at else None,
         } for row in evidence],
         "review_frames": _collect_review_frames(observation, timeline, evidence),
+        "supplemental_context": observation.get("supplemental_context"),
+        "risk_escalation": observation.get("risk_escalation"),
         "tasks": [{
             "id": row.id, "assignee": row.assignee, "dispatch_operator": row.dispatch_operator,
             "status": row.task_status, "note": row.task_note, "result_type": row.result_type,
             "result_remark": row.result_remark,
         } for row in tasks],
     }}
+
+
+@router.post("/safety-events/{instance_id}/supplemental-context", summary="补充运行状态并结合知识库复核风险")
+def add_supplemental_context(
+    instance_id: int,
+    payload: SupplementalContextPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_auth),
+):
+    instance = db.query(SafetyEventInstance).filter(SafetyEventInstance.id == instance_id).first()
+    if not instance:
+        raise HTTPException(status_code=404, detail="安全事件不存在")
+    operator = getattr(user, "real_name", None) or getattr(user, "username", None) or "SYSTEM"
+    result = supplemental_context_service.apply(
+        db,
+        instance,
+        context=payload.model_dump(),
+        operator=str(operator),
+    )
+    return {"code": 200, "message": result["reason"], "data": result}
 
 
 @router.post("/safety-events/{instance_id}/operation", summary="人工处置统一安全事件")

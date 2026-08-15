@@ -181,7 +181,6 @@ def _upload_detection_artifacts(raw: dict, *, bucket: str, object_key: str) -> d
     prefix = _artifact_prefix(object_key)
     media_objects: list[dict] = []
     videos: list[str] = []
-    images: list[str] = []
 
     annotated_video_path = raw.get("annotated_video_path")
     if annotated_video_path and Path(annotated_video_path).exists():
@@ -210,41 +209,12 @@ def _upload_detection_artifacts(raw: dict, *, bucket: str, object_key: str) -> d
         raw["annotated_video"] = ref
         raw["annotated_video_object"] = annotated_object_key
 
-    for index, frame in enumerate(raw.get("frames") or [], start=1):
-        annotated_path = frame.get("annotated_path")
-        if not annotated_path or not Path(annotated_path).exists():
-            continue
-        frame_object_key = f"{prefix}/frames/frame_{index:02d}_{frame.get('frame_id')}.jpg"
-        ref = minio_client.upload_file(
-            target_bucket,
-            frame_object_key,
-            Path(annotated_path),
-            content_type="image/jpeg",
-        )
-        images.append(ref)
-        frame["annotated_ref"] = ref
-        frame["annotated_object_key"] = frame_object_key
-        media_objects.append(
-            {
-                "type": "image",
-                "bucket": target_bucket,
-                "object_key": frame_object_key,
-                "object_name": frame_object_key,
-                "path": ref,
-                "source": "yolo_detection",
-                "role": "annotated_detection_frame",
-                "content_type": "image/jpeg",
-                "frame_id": frame.get("frame_id"),
-                "frame_time_sec": frame.get("frame_time_sec"),
-            }
-        )
-
     return {
         "media_objects": media_objects,
         "videos": videos,
         "video_urls": videos,
-        "images": images,
-        "image_urls": images,
+        "images": [],
+        "image_urls": [],
         "artifact_bucket": target_bucket,
         "artifact_prefix": prefix,
     }
@@ -326,21 +296,39 @@ def _target_summary(detections: list[dict]) -> str:
     return "检测到 " + "，".join(parts)
 
 
+def _public_detection_payload(raw: dict) -> dict:
+    payload = dict(raw)
+    payload.pop("annotated_path", None)
+    payload.pop("annotated_video_path", None)
+    frames = []
+    for frame in payload.get("frames") or []:
+        if not isinstance(frame, dict):
+            continue
+        public_frame = dict(frame)
+        public_frame.pop("annotated_path", None)
+        public_frame.pop("annotated_ref", None)
+        public_frame.pop("annotated_object_key", None)
+        frames.append(public_frame)
+    payload["frames"] = frames
+    return payload
+
+
 def _standard_output(raw: dict, *, media_type: str, media_ref: str) -> dict:
-    detections = raw.get("detections") or []
+    public_raw = _public_detection_payload(raw)
+    detections = public_raw.get("detections") or []
     class_counts = _class_counts(detections)
     risk_signals = _risk_signals(detections)
     target_summary = _target_summary(detections)
     return {
-        **raw,
+        **public_raw,
         "status": "success",
         "media_type": media_type,
         "media": media_ref,
-        "detection_results": raw,
+        "detection_results": public_raw,
         "detection_count": len(detections),
         "class_counts": class_counts,
         "max_confidence_by_class": _max_confidence_by_class(detections),
-        "frames_with_detections": _frames_with_detections(raw),
+        "frames_with_detections": _frames_with_detections(public_raw),
         "risk_signals": risk_signals,
         "target_summary": target_summary,
         "report": f"{media_type}检测完成，{target_summary}，共 {len(detections)} 个目标",

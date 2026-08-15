@@ -172,9 +172,9 @@
                     class="knowledge-index-item"
                     @click.stop="previewKnowledgeIndex(item)"
                     >
-                      <span class="knowledge-index-title">{{ item.documentTitle }}</span>
+                      <span class="knowledge-index-title">{{ item.displayText }}</span>
                       <small class="knowledge-index-meta">
-                        {{ item.sectionPath || '未标章节' }}
+                        {{ item.metaText }}
                       </small>
                     </button>
                   </div>
@@ -576,34 +576,47 @@ const documentTitle = (doc) => {
 const knowledgeIndexItems = (doc) => {
   const indexes = Array.isArray(doc?.knowledge_indexes) ? doc.knowledge_indexes : []
   const seen = new Set()
-  return indexes.map((item) => {
+  return indexes.map((item, index) => {
     const documentTitle = String(item?.document_title || '知识库文档').replace(/\.docx$/i, '').trim()
     const sectionPath = String(item?.section_path || '').trim()
-    const key = `${documentTitle}:${sectionPath}`
+    const clauseId = String(item?.clause_id || '').trim()
+    const evidenceId = String(item?.evidence_id || '').trim()
+    const displayIndex = Number(item?.display_index || 0) || index + 1
+    const key = [
+      item?.document_id || documentTitle,
+      item?.chunk_id || '',
+      sectionPath,
+      clauseId,
+      evidenceId
+    ].join(':')
+    const displayText = `[${displayIndex}] 《${documentTitle}》`
+    const metaText = [
+      sectionPath,
+      clauseId ? `条款 ${clauseId}` : ''
+    ].filter(Boolean).join('，') || '未标章节'
     return {
       key,
+      displayIndex,
       documentId: item?.document_id,
       chunkId: item?.chunk_id,
       documentTitle,
-      sectionPath
+      sectionPath,
+      clauseId,
+      evidenceId,
+      displayText,
+      metaText
     }
   }).filter((item) => {
     if (seen.has(item.key)) return false
     seen.add(item.key)
     return true
-  }).slice(0, 3)
+  })
 }
 
 const knowledgeIndexTitle = (doc) => {
-  const indexes = Array.isArray(doc?.knowledge_indexes) ? doc.knowledge_indexes : []
-  if (!indexes.length) return '暂无知识依据'
-  return indexes.map((item, index) => {
-    const parts = [
-      `${index + 1}. ${item.document_title || '知识库文件'}`,
-      item.section_path || '未标章节'
-    ].filter(Boolean)
-    return parts.join(' / ')
-  }).join('\n')
+  const items = knowledgeIndexItems(doc)
+  if (!items.length) return '暂无知识依据'
+  return items.map((item) => `${item.displayText}，${item.metaText}`).join('\n')
 }
 
 const previewKnowledgeIndex = async (item) => {

@@ -58,14 +58,51 @@ OBSERVATION_FIELDS = {
 }
 
 
-def build_daily_report_context(
+PERIOD_NAMES = {
+    "daily": "每日",
+    "weekly": "每周",
+    "monthly": "每月",
+}
+
+
+def period_window(period_type: str, report_date: dt.date) -> tuple[dt.date, dt.date]:
+    period = str(period_type or "daily").lower()
+    if period == "weekly":
+        start = report_date - dt.timedelta(days=report_date.weekday())
+        return start, start + dt.timedelta(days=7)
+    if period == "monthly":
+        start = report_date.replace(day=1)
+        next_month = (start.replace(day=28) + dt.timedelta(days=4)).replace(day=1)
+        return start, next_month
+    return report_date, report_date + dt.timedelta(days=1)
+
+
+def period_label(period_type: str, start_date: dt.date, end_date: dt.date) -> str:
+    if period_type == "weekly":
+        week_no = start_date.isocalendar().week
+        return f"{start_date.year}年第{week_no:02d}周（{date_cn(start_date)}至{date_cn(end_date - dt.timedelta(days=1))}）"
+    if period_type == "monthly":
+        return f"{start_date.year}年{start_date.month}月"
+    return date_cn(start_date)
+
+
+def date_cn(value: dt.date) -> str:
+    return f"{value.year}年{value.month}月{value.day}日"
+
+
+def build_period_report_context(
     db: Session,
     *,
     report_date: dt.date,
+    period_type: str = "daily",
     include_evidence_content: bool = False,
 ) -> dict[str, Any]:
-    since = dt.datetime.combine(report_date, dt.time.min)
-    until = since + dt.timedelta(days=1)
+    period_type = str(period_type or "daily").lower()
+    if period_type not in PERIOD_NAMES:
+        raise HTTPException(status_code=400, detail=f"不支持的报告周期: {period_type}")
+    start_date, end_date = period_window(period_type, report_date)
+    since = dt.datetime.combine(start_date, dt.time.min)
+    until = dt.datetime.combine(end_date, dt.time.min)
     instances = (
         db.query(SafetyEventInstance)
         .filter(
@@ -167,19 +204,46 @@ def build_daily_report_context(
         "camera_count": camera_count,
         "sensor_rate": format_rate(sensor_count, total),
         "camera_rate": format_rate(camera_count, total),
+        "closed_rate": format_rate(closed_count, total),
+        "period_days": max((end_date - start_date).days, 1),
+        "avg_daily_events": f"{total / max((end_date - start_date).days, 1):.1f}",
     }
+    period_name = PERIOD_NAMES[period_type]
+    period_text = period_label(period_type, start_date, end_date)
     return {
         "available": True,
         "status": "READY",
+        "period_type": period_type,
+        "period_name": period_name,
+        "report_title": f"大藤峡工程空地联动{period_name}巡检报告",
+        "report_subject": f"传感器事件与视觉检测事件{period_name}汇总",
         "report_date": report_date.isoformat(),
-        "report_date_cn": f"{report_date.year} 年 {report_date.month:02d} 月 {report_date.day:02d} 日",
-        "report_date_compact": report_date.strftime("%Y%m%d"),
+        "report_date_cn": period_text,
+        "report_period_label": period_text,
+        "report_start_date": start_date.isoformat(),
+        "report_end_date": (end_date - dt.timedelta(days=1)).isoformat(),
+        "report_date_compact": start_date.strftime("%Y%m%d") if period_type == "daily" else f"{start_date.strftime('%Y%m%d')}_{(end_date - dt.timedelta(days=1)).strftime('%Y%m%d')}",
+        "document_code_prefix": {"daily": "DX-XJRB", "weekly": "DX-XJZB", "monthly": "DX-XJYB"}[period_type],
         "generated_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "stats": stats,
         "events": events,
         "events_by_risk": events_by_risk,
-        "conclusion": build_conclusion(events_by_risk),
+        "conclusion": build_conclusion(events_by_risk, period_name=period_name),
     }
+
+
+def build_daily_report_context(
+    db: Session,
+    *,
+    report_date: dt.date,
+    include_evidence_content: bool = False,
+) -> dict[str, Any]:
+    return build_period_report_context(
+        db,
+        report_date=report_date,
+        period_type="daily",
+        include_evidence_content=include_evidence_content,
+    )
 
 
 def generate_daily_patrol_report(
@@ -189,27 +253,49 @@ def generate_daily_patrol_report(
     user_id: str = "user_001",
     user_name: str = "管理员",
 ) -> dict[str, Any]:
-    context = build_daily_report_context(
+    return generate_period_patrol_report(
         db,
         report_date=report_date,
+        period_type="daily",
+        user_id=user_id,
+        user_name=user_name,
+    )
+
+
+def generate_period_patrol_report(
+    db: Session,
+    *,
+    report_date: dt.date,
+    period_type: str,
+    user_id: str = "user_001",
+    user_name: str = "管理员",
+) -> dict[str, Any]:
+    context = build_period_report_context(
+        db,
+        report_date=report_date,
+        period_type=period_type,
         include_evidence_content=True,
     )
     docx_bytes = render_daily_report_docx(context, REPORT_BOARD_PATH)
-    filename = f"每日巡检报告{report_date.isoformat()}.docx"
-    document_id = f"daily_patrol_{report_date.strftime('%Y%m%d')}"
+    period_name = context["period_name"]
+    filename = f"{period_name}巡检报告{context['report_date_compact']}.docx"
+    document_id = f"{context['period_type']}_patrol_{context['report_date_compact']}"
     document = store_generated_document(
         user_id=user_id,
         user_name=user_name,
         document_id=document_id,
         filename=filename,
         content=docx_bytes,
-        report_date=report_date,
+        report_date=dt.date.fromisoformat(context["report_start_date"]),
+        source=f"patrol-{context['period_type']}-report",
     )
     return {
         "success": True,
-        "message": "每日巡检报告生成成功",
+        "message": f"{period_name}巡检报告生成成功",
         "data": {
+            "period_type": context["period_type"],
             "report_date": report_date.isoformat(),
+            "report_period_label": context["report_period_label"],
             "generated_at": context["generated_at"],
             "stats": context["stats"],
             "document": document,
@@ -225,6 +311,7 @@ def store_generated_document(
     filename: str,
     content: bytes,
     report_date: dt.date,
+    source: str = "patrol-daily-report",
 ) -> dict[str, Any]:
     ext = "docx"
     object_name = build_object_name(user_id, document_id, ext)
@@ -245,7 +332,7 @@ def store_generated_document(
         "original-name": encode_metadata_value(filename),
         "owner-id": encode_metadata_value(user_id),
         "owner-name": encode_metadata_value(user_name),
-        "source": "patrol-daily-report",
+        "source": source,
         "report-date": report_date.isoformat(),
         "created-at": encode_metadata_value(created_at),
     }
@@ -277,8 +364,10 @@ def store_generated_document(
     }
 
 
-def generated_report_exists(*, user_id: str, report_date: dt.date) -> bool:
-    document_id = f"daily_patrol_{report_date.strftime('%Y%m%d')}"
+def generated_report_exists(*, user_id: str, report_date: dt.date, period_type: str = "daily") -> bool:
+    start, end = period_window(period_type, report_date)
+    compact = start.strftime("%Y%m%d") if period_type == "daily" else f"{start.strftime('%Y%m%d')}_{(end - dt.timedelta(days=1)).strftime('%Y%m%d')}"
+    document_id = f"{period_type}_patrol_{compact}"
     object_name = build_object_name(user_id, document_id, "docx")
     try:
         get_minio_client().stat_object(BUCKET_NAME, object_name)
@@ -364,7 +453,7 @@ def key_observation(
 def result_label(instance: SafetyEventInstance, cutoff: dt.datetime) -> str:
     if not instance.resolved_at or instance.resolved_at >= cutoff:
         status = str(instance.status or "").upper()
-        return "处理中" if status in {"PROCESSING", "COMPLETED"} else "待处理"
+        return "持续处置中" if status in {"PROCESSING", "COMPLETED"} else "待处理"
     status = str(instance.status or "").upper()
     if status == "FALSE_ALARM":
         return "误报"
@@ -460,16 +549,16 @@ def read_evidence_content(file_url: str) -> Optional[bytes]:
     return None
 
 
-def build_conclusion(events_by_risk: dict[str, list[dict[str, Any]]]) -> str:
+def build_conclusion(events_by_risk: dict[str, list[dict[str, Any]]], *, period_name: str = "当日") -> str:
     high_names = list(dict.fromkeys(row["event_name"] for row in events_by_risk["HIGH"]))
     if high_names:
         if any(not row["closed_at_cutoff"] for row in events_by_risk["HIGH"]):
-            return f"当日重点事件：{'、'.join(high_names[:3])}。存在未闭环高风险事件，需持续跟进。"
-        return f"当日重点事件：{'、'.join(high_names[:3])}。相关事件均已完成处置，详见图像佐证。"
+            return f"{period_name}重点事件：{'、'.join(high_names[:3])}。存在未闭环高风险事件，需持续跟进。"
+        return f"{period_name}重点事件：{'、'.join(high_names[:3])}。相关事件均已完成处置，详见图像佐证。"
     if events_by_risk["MEDIUM"]:
         names = list(dict.fromkeys(row["event_name"] for row in events_by_risk["MEDIUM"]))
-        return f"当日未记录高风险事件；需关注{'、'.join(names[:3])}。"
-    return "当日未记录中、高风险事件。"
+        return f"{period_name}未记录高风险事件；需关注{'、'.join(names[:3])}。"
+    return f"{period_name}未记录中、高风险事件。"
 
 
 def format_rate(value: int, total: int) -> str:

@@ -47,3 +47,10 @@ export function getUnifiedSafetyEventDetail(id) {
 export function operateUnifiedSafetyEvent(id, data) {
   return request.post(`/v1/integration/safety-events/${id}/operation`, data)
 }
+
+export function submitSafetyEventSupplementalContext(id, data) {
+  return request.post(`/v1/integration/safety-events/${id}/supplemental-context`, data, {
+    timeout: 60000,
+    silentError: true,
+  })
+}

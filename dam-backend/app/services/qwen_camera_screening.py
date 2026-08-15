@@ -33,6 +33,7 @@ SYSTEM_PROMPT = """你是库坝、河道、库区摄像头的本地 qwen4B 初�
 1. 你不是最终裁判，不要给处置结论；你只做低延迟初筛和疑似线索保留。
 2. 输入是同一段视频抽取的多张连续全景帧，请把它们当作一个短时间窗口分析，关注“是否有连续变化/移动/水流/活动目标”。
 3. 只输出一个 JSON 对象，不要 Markdown，不要解释文字，不要代码块。
+4. 你会收到多张原始全景帧，不要只看单帧；请比较目标在多帧中的位置变化。远处很小的活动点、夜间水面细长暗斑，只要跨帧连续出现，就应进入 suspect 档待复核。
 
 输出 schema 必须完整，字段名不能改：
 {
@@ -82,6 +83,7 @@ SYSTEM_PROMPT = """你是库坝、河道、库区摄像头的本地 qwen4B 初�
 - 只有在没有明显自然灾害，且画面包含水域/岸线/滩涂/坝体等有效环境时，才评估人员。
 - confirmed 人员：清晰看到人形目标进入滩涂、河滩、消落带、水边危险区、堤坡或亲水区域活动，person_present=1，person_confidence>=0.65，risk_level 至少 MEDIUM。
 - suspect 人员：连续帧中在滩涂/河滩/水边出现远距离小人形、移动小黑点、活动点、疑似站立/行走轮廓，但目标小、模糊或被遮挡，person_present=0，person_confidence=0.35~0.60，summary 写“疑似人员亲水/滩涂活动待复核”。
+- 滩涂游玩测试重点：宽幅河道画面中，远岸滩涂/消落带上的黑色小点、浅色小点、竖向小轮廓，如果在连续帧中有轻微位移或成组分布，不要按噪声忽略；即使不能确认人，也要按 suspect 人员输出 person_confidence=0.35~0.60，并写明“远距离尺度小，待复核”。
 - 不能作为人员疑似的内容：墙面纹理、反光、树影、浪花、设备边缘、栏杆、污点、静止石块、纯噪声。
 
 船只/电鱼捕鱼判定：
@@ -93,6 +95,7 @@ SYSTEM_PROMPT = """你是库坝、河道、库区摄像头的本地 qwen4B 初�
   3. 夜间或昏暗水面靠近水线的异常强光、探照灯、手电光、反复移动光斑；
   4. 水边人员伴随长杆、网具、灯光或靠水作业迹象；
   5. 凌晨/夜间河面有非固定小目标活动，即使船体不清晰。
+- 电鱼捕鱼测试重点：夜间红外河面中，远处细长黑影、缓慢移动的小暗斑、贴近水面的微弱亮点、局部水纹扰动，只要跨帧持续存在或位置变化，就按 suspect 船只/捕鱼保留；不要因为看不清船体而输出 boat_confidence=0。
 - 如果只是普通水面、远岸、滩涂纹理、固定灯光倒影、静止石块、桥梁阴影，boat_confidence=0。
 
 风险等级：
@@ -231,6 +234,7 @@ class QwenCameraScreeningService:
         input_source: str = "simulation",
         window_seconds: Optional[float] = None,
         evidence_video_path: Optional[str] = None,
+        supplemental_context: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Screen an explicit frame window and dispatch the result to camera ECA."""
         if not frames:
@@ -277,6 +281,8 @@ class QwenCameraScreeningService:
         result["system_prompt_source"] = prompt_config.get("source")
         result["prompt_version"] = prompt_config.get("prompt_version")
         result["image_urls"] = image_urls
+        if supplemental_context:
+            result["supplemental_context"] = supplemental_context
         if video_url:
             result["source_video_url"] = video_url
             result["video_urls"] = [video_url]
@@ -304,6 +310,7 @@ class QwenCameraScreeningService:
         *,
         input_source: str = "simulation_video",
         window_seconds: Optional[float] = None,
+        supplemental_context: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Screen a local video file by sampling frames server-side."""
         frames, duration_seconds = await asyncio.to_thread(
@@ -319,6 +326,7 @@ class QwenCameraScreeningService:
             input_source=input_source,
             window_seconds=duration_seconds or window_seconds,
             evidence_video_path=video_path,
+            supplemental_context=supplemental_context,
         )
 
     def _augment_screening_frames(self, frames: List[tuple[float, bytes]]) -> List[tuple[float, bytes]]:
@@ -340,7 +348,7 @@ class QwenCameraScreeningService:
             if not (0.1 <= fps <= 240):
                 fps = 25.0
             duration = total_frames / fps if total_frames > 0 else float(window_seconds or 0)
-            frame_count = max(1, min(int(settings.QWEN_CAMERA_SCREENING_FRAME_COUNT), 4))
+            frame_count = max(1, int(settings.QWEN_CAMERA_SCREENING_FRAME_COUNT))
             if total_frames > 0:
                 if frame_count == 1:
                     indices = [max(0, total_frames // 2)]
@@ -377,9 +385,9 @@ class QwenCameraScreeningService:
             cap.release()
 
     def _normalize_frame_to_jpeg(self, image: np.ndarray) -> bytes:
-        max_side = max(64, int(settings.QWEN_CAMERA_SCREENING_MAX_IMAGE_SIDE))
+        max_side = int(settings.QWEN_CAMERA_SCREENING_MAX_IMAGE_SIDE)
         height, width = image.shape[:2]
-        if max(height, width) > max_side:
+        if max_side > 0 and max(height, width) > max_side:
             scale = max_side / max(height, width)
             image = cv2.resize(
                 image,
@@ -654,9 +662,11 @@ class QwenCameraScreeningService:
                         "type": "text",
                         "text": (
                             f"{len(frames)}张连续全景采样帧，覆盖视频起止过程。"
-                            "重点做疑似初筛：只有画面明确包含水域/岸线/滩涂/坝体环境时，远处小人形/连续活动点才作为疑似人员线索；"
+                            "重点做疑似初筛：逐帧比较同一位置附近的变化，远处小人形、滩涂连续活动点、水面小暗斑或细长移动目标都要保留为疑似；"
+                            "只有画面明确包含水域/岸线/滩涂/坝体环境时，远处小人形/连续活动点才作为疑似人员线索；"
                             "室内、墙面、设备近景、遮挡或无水域岸线画面必须全0；"
                             "夜间水面只有出现细长移动目标、尾迹、扰动水纹、靠近水面的异常强光时才作为疑似船只/捕鱼线索。"
+                            "若目标太小或模糊但跨帧连续出现，输出 detected=0 且对应 confidence=0.35~0.60，summary 写疑似待复核。"
                             "只输出JSON。"
                         ),
                     }

@@ -207,40 +207,71 @@ class DamEventReportService:
             ).delete()
             sources = workflow_insight.get("knowledge_sources")
             citations = workflow_insight.get("sentence_citations")
-            if not isinstance(sources, list) or not isinstance(citations, list):
-                db.flush()
-                return
-            source_by_evidence = {
-                str(item.get("evidence_id") or f"K{item.get('chunk_id')}"): item
-                for item in sources
-                if isinstance(item, dict) and (item.get("evidence_id") or item.get("chunk_id"))
-            }
-            for citation in citations:
-                if not isinstance(citation, dict):
-                    continue
-                sentence = str(citation.get("sentence") or "").strip()
-                if not sentence:
-                    continue
-                for evidence_id in citation.get("evidence_ids") or []:
-                    evidence_key = str(evidence_id)
-                    source = source_by_evidence.get(evidence_key)
-                    if not source:
+            if isinstance(sources, list) and isinstance(citations, list):
+                source_by_evidence = {
+                    str(item.get("evidence_id") or f"K{item.get('chunk_id')}"): item
+                    for item in sources
+                    if isinstance(item, dict) and (item.get("evidence_id") or item.get("chunk_id"))
+                }
+                for citation in citations:
+                    if not isinstance(citation, dict):
+                        continue
+                    sentence = str(citation.get("sentence") or "").strip()
+                    if not sentence:
+                        continue
+                    for evidence_id in citation.get("evidence_ids") or []:
+                        evidence_key = str(evidence_id)
+                        source = source_by_evidence.get(evidence_key)
+                        if not source:
+                            continue
+                        db.add(AnalysisReportKnowledgeCitation(
+                            report_id=report.id,
+                            instance_no=instance.instance_no,
+                            field_name=str(citation.get("field") or ""),
+                            sentence=sentence[:2000],
+                            evidence_id=evidence_key,
+                            chunk_id=self.integer_or_none(source.get("chunk_id")),
+                            document_id=self.integer_or_none(source.get("document_id")),
+                            document_title=str(source.get("document_title") or source.get("filename") or "")[:240],
+                            section_path=str(source.get("section_path") or "")[:512],
+                            clause_id=str(source.get("clause_id") or "")[:128],
+                            support_type=str(citation.get("support_type") or "direct")[:32],
+                            confidence=str(citation.get("confidence") or "")[:32],
+                            citation_json=json.dumps(
+                                {"citation": citation, "source": source},
+                                ensure_ascii=False,
+                                default=str,
+                            ),
+                        ))
+            risk_escalation = workflow_insight.get("risk_escalation")
+            risk_hits = risk_escalation.get("knowledge_hits") if isinstance(risk_escalation, dict) else []
+            risk_sentence = (
+                str(risk_escalation.get("reason") or "").strip()
+                if isinstance(risk_escalation, dict)
+                else ""
+            )
+            if isinstance(risk_hits, list) and risk_sentence:
+                for hit in risk_hits:
+                    if not isinstance(hit, dict):
+                        continue
+                    evidence_id = str(hit.get("evidence_id") or f"K{hit.get('chunk_id')}" or "").strip()
+                    if not evidence_id:
                         continue
                     db.add(AnalysisReportKnowledgeCitation(
                         report_id=report.id,
                         instance_no=instance.instance_no,
-                        field_name=str(citation.get("field") or ""),
-                        sentence=sentence[:2000],
-                        evidence_id=evidence_key,
-                        chunk_id=self.integer_or_none(source.get("chunk_id")),
-                        document_id=self.integer_or_none(source.get("document_id")),
-                        document_title=str(source.get("document_title") or source.get("filename") or "")[:240],
-                        section_path=str(source.get("section_path") or "")[:512],
-                        clause_id=str(source.get("clause_id") or "")[:128],
-                        support_type=str(citation.get("support_type") or "direct")[:32],
-                        confidence=str(citation.get("confidence") or "")[:32],
+                        field_name="risk_escalation",
+                        sentence=risk_sentence[:2000],
+                        evidence_id=evidence_id,
+                        chunk_id=self.integer_or_none(hit.get("chunk_id")),
+                        document_id=self.integer_or_none(hit.get("document_id")),
+                        document_title=str(hit.get("document_title") or "")[:240],
+                        section_path=str(hit.get("section_path") or "")[:512],
+                        clause_id=str(hit.get("clause_id") or "")[:128],
+                        support_type="direct",
+                        confidence="high",
                         citation_json=json.dumps(
-                            {"citation": citation, "source": source},
+                            {"citation": {"field": "risk_escalation", "sentence": risk_sentence}, "source": hit},
                             ensure_ascii=False,
                             default=str,
                         ),
@@ -517,6 +548,16 @@ class DamEventReportService:
         video_items = self.collect_video_items(workflow_payload, visual, evidence)
         selected_text = self.clean_report_text(selected["text"])
         workflow_insight = self.workflow_insight(workflow_payload, visual, selected_text)
+        observation = dict(instance.latest_observation or {})
+        risk_escalation = observation.get("risk_escalation") if isinstance(observation.get("risk_escalation"), dict) else {}
+        supplemental_context = observation.get("supplemental_context") if isinstance(observation.get("supplemental_context"), dict) else {}
+        if risk_escalation:
+            workflow_insight["risk_escalation"] = risk_escalation
+            workflow_insight["risk_escalation_summary"] = self.risk_escalation_summary(risk_escalation, supplemental_context)
+            workflow_insight["knowledge_sources_summary"] = self.merge_knowledge_summaries(
+                workflow_insight.get("knowledge_sources_summary"),
+                self.risk_escalation_knowledge_summary(risk_escalation),
+            )
         workflow_insight["event_name"] = getattr(event, "event_name", None) or instance.summary or "安全事件"
         workflow_insight["event_code"] = getattr(event, "event_code", None)
         if not image_items and video_items:
@@ -527,13 +568,18 @@ class DamEventReportService:
                 workflow_insight=workflow_insight,
             )
         timeline_summary = self.timeline_summary(timeline)
-        evidence_image_path = self.download_first_image(image_items)
+        evidence_image_path = self.select_evidence_image(image_items, video_items)
 
         source_label = self.source_label(instance, source, selected)
         location_text = self.location(source, camera, visual)
         cloud_note = ""
         if selected.get("source") == "qwen4b" and selected.get("cloud_error"):
             cloud_note = "云端增强暂不可用，本报告已采用本地 4B 分析结果生成。"
+        risk_escalation_summary = str(workflow_insight.get("risk_escalation_summary") or "").strip()
+        risk_assessment_detail = (
+            risk_escalation_summary
+            or self.final_report_field(selected, "risk_reasoning", workflow_insight.get("raw_excerpt"))
+        )
 
         context = {
             "workflow_insight": workflow_insight,
@@ -574,7 +620,7 @@ class DamEventReportService:
             "local_analysis_summary": self.node_analysis_summary(workflow_payload, "action_reasoning"),
             "cloud_analysis_summary": self.node_analysis_summary(workflow_payload, "action_report"),
             "scene_detail": self.final_report_field(selected, "detailed_scene_analysis", selected_text),
-            "risk_assessment_detail": self.final_report_field(selected, "risk_reasoning", workflow_insight.get("raw_excerpt")),
+            "risk_assessment_detail": risk_assessment_detail,
             "impact_assessment": self.final_report_field(selected, "impact_assessment", "需结合现场巡查、水位雨量和坝体状态持续确认影响范围。"),
             "response_plan": self.final_report_field(selected, "response_plan", "维持事件取证和现场复核，按风险等级启动相应联动处置。"),
             "monitoring_suggestions": self.final_report_field(selected, "monitoring_suggestions", "持续跟踪摄像头画面、水位、雨量、风速和坝体安全监测数据。"),
@@ -623,6 +669,9 @@ class DamEventReportService:
         context["timeline_summary"] = timeline_summary
         context["evidence_caption"] = self.evidence_caption(image_items, video_items)
         context["evidence_image"] = evidence_image_path
+        if risk_escalation_summary:
+            context["risk_assessment_detail"] = risk_assessment_detail
+            context.update(self.risk_escalation_report_overrides(risk_escalation_summary, supplemental_context))
         if selected.get("source") == "qwen4b":
             if not context.get("handling_summary"):
                 context["handling_summary"] = self.handling_summary(
@@ -635,9 +684,11 @@ class DamEventReportService:
                     image_items=image_items,
                     video_items=video_items,
                 )
-            context["conclusion"] = self.build_conclusion(selected, workflow_insight, cloud_note)
+            if not risk_escalation_summary:
+                context["conclusion"] = self.build_conclusion(selected, workflow_insight, cloud_note)
         else:
-            context["conclusion"] = self.build_conclusion(selected, workflow_insight, cloud_note)
+            if not risk_escalation_summary:
+                context["conclusion"] = self.build_conclusion(selected, workflow_insight, cloud_note)
         self.normalize_report_context_citations(context, selected)
         return context
 
@@ -667,6 +718,8 @@ class DamEventReportService:
             )
             self.rebuild_toc_bookmark_links(temp_path)
             self.disable_docx_proofing(temp_path)
+            self.normalize_docx_fonts(temp_path)
+            self.normalize_first_page_date_footer(temp_path)
             self.refresh_toc_page_number_fallbacks(temp_path)
             return temp_path.read_bytes()
         finally:
@@ -717,8 +770,8 @@ class DamEventReportService:
                 paragraph.paragraph_format.space_after = Pt(3)
                 run = paragraph.add_run(cleaned)
                 run.font.size = Pt(11)
-                run.font.name = "FangSong_GB2312"
-                run._element.rPr.rFonts.set(qn("w:eastAsia"), "FangSong_GB2312")
+                run.font.name = "经典宋体简"
+                run._element.rPr.rFonts.set(qn("w:eastAsia"), "经典宋体简")
                 run._element.rPr.append(OxmlElement("w:noProof"))
             document.save(str(docx_path))
         except Exception as exc:
@@ -728,6 +781,7 @@ class DamEventReportService:
         summary = str(knowledge_summary or "").strip()
         match = re.search(r"\[(\d+)\]", summary)
         first_index = match.group(1) if match else ("1" if summary else "")
+        clause_index_map = self.knowledge_summary_clause_index_map(summary)
         try:
             document = Document(str(docx_path))
             changed = False
@@ -744,12 +798,27 @@ class DamEventReportService:
                         updated = re.sub(r"(?<!\[)K\d+(?!\])", f"[{first_index}]", updated)
                         updated = re.sub(r"知识库依据(?!\s*\[\d+\])", f"知识库依据[{first_index}]", updated)
                         updated = re.sub(r"结合知识库(?!依据)", f"结合知识库依据[{first_index}]", updated)
+                    for clause_id, index in clause_index_map.items():
+                        updated = updated.replace(f"[{clause_id}]", f"[{index}]")
+                        updated = re.sub(
+                            rf"(?<![A-Za-z0-9_\[]){re.escape(clause_id)}(?![A-Za-z0-9_\]])",
+                            f"[{index}]",
+                            updated,
+                        )
                     updated = self.normalize_punctuation(updated)
                     if updated != original:
                         run.text = updated
                         changed = True
 
+            in_knowledge_section = False
             for paragraph in document.paragraphs:
+                normalized_heading = re.sub(r"\s+", "", paragraph.text or "")
+                style_name = paragraph.style.name if paragraph.style is not None else ""
+                if style_name.startswith("Heading") and normalized_heading in {"6知识依据", "06知识依据"}:
+                    in_knowledge_section = True
+                    continue
+                if in_knowledge_section:
+                    continue
                 normalize_runs(paragraph)
             for table in document.tables:
                 for row in table.rows:
@@ -760,6 +829,20 @@ class DamEventReportService:
                 document.save(str(docx_path))
         except Exception as exc:
             logger.warning("清洗报告知识引用编号失败: {}", exc)
+
+    @staticmethod
+    def knowledge_summary_clause_index_map(summary: str) -> dict[str, str]:
+        mapping: dict[str, str] = {}
+        for line in str(summary or "").splitlines():
+            index_match = re.search(r"\[(\d+)\]", line)
+            if not index_match:
+                continue
+            index = index_match.group(1)
+            for clause in re.findall(r"\b[A-Z][A-Z0-9_-]*-\d+\b", line):
+                mapping.setdefault(clause, index)
+            for evidence in re.findall(r"\bK\d+\b", line):
+                mapping.setdefault(evidence, index)
+        return mapping
 
     def rebuild_toc_bookmark_links(self, docx_path: Path) -> None:
         entries = [
@@ -1014,7 +1097,7 @@ class DamEventReportService:
         hyperlink.set(qn("w:anchor"), bookmark_name)
         hyperlink.set(qn("w:history"), "1")
         run = OxmlElement("w:r")
-        run.append(self.run_properties_xml(font="FangSong_GB2312", size_half_points=30))
+        run.append(self.run_properties_xml(font="经典宋体简", size_half_points=30))
         text = OxmlElement("w:t")
         text.text = title
         run.append(text)
@@ -1022,12 +1105,12 @@ class DamEventReportService:
         paragraph_element.append(hyperlink)
 
         tab_run = OxmlElement("w:r")
-        tab_run.append(self.run_properties_xml(font="FangSong_GB2312", size_half_points=30))
+        tab_run.append(self.run_properties_xml(font="经典宋体简", size_half_points=30))
         tab_run.append(OxmlElement("w:tab"))
         paragraph_element.append(tab_run)
 
         field_run = OxmlElement("w:r")
-        field_run.append(self.run_properties_xml(font="FangSong_GB2312", size_half_points=30))
+        field_run.append(self.run_properties_xml(font="经典宋体简", size_half_points=30))
         begin = OxmlElement("w:fldChar")
         begin.set(qn("w:fldCharType"), "begin")
         begin.set(qn("w:dirty"), "true")
@@ -1094,6 +1177,119 @@ class DamEventReportService:
             r_pr = run._element.get_or_add_rPr()
             if r_pr.find(qn("w:noProof")) is None:
                 r_pr.append(OxmlElement("w:noProof"))
+
+    def normalize_docx_fonts(self, docx_path: Path) -> None:
+        try:
+            document = Document(str(docx_path))
+            self.set_style_font(document.styles["Normal"], "经典宋体简", size=Pt(11))
+            self.set_style_font(document.styles["Heading 1"], "黑体", size=Pt(15), bold=True)
+
+            for index, paragraph in enumerate(document.paragraphs):
+                self.normalize_paragraph_font(paragraph, paragraph_index=index)
+            for table in document.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        for paragraph in cell.paragraphs:
+                            self.normalize_paragraph_font(paragraph, in_table=True)
+            for section in document.sections:
+                for part in (
+                    section.header,
+                    section.first_page_header,
+                    section.footer,
+                    section.first_page_footer,
+                ):
+                    for paragraph in part.paragraphs:
+                        self.normalize_paragraph_font(paragraph)
+                    for table in part.tables:
+                        for row in table.rows:
+                            for cell in row.cells:
+                                for paragraph in cell.paragraphs:
+                                    self.normalize_paragraph_font(paragraph, in_table=True)
+            document.save(str(docx_path))
+        except Exception as exc:
+            logger.warning("统一报告字体失败: {}", exc)
+
+    def normalize_first_page_date_footer(self, docx_path: Path) -> None:
+        try:
+            document = Document(str(docx_path))
+            for section in document.sections:
+                for paragraph in section.first_page_footer.paragraphs:
+                    if not re.search(r"\d{4}年\d{1,2}月\d{1,2}日", paragraph.text or ""):
+                        continue
+                    for run in paragraph.runs:
+                        self.set_run_font(run, "黑体", size_pt=22, bold=True)
+                        run.font.name = "黑体"
+                        run.font.color.rgb = RGBColor(0, 0, 0)
+                        r_pr = run._element.get_or_add_rPr()
+                        r_fonts = r_pr.find(qn("w:rFonts"))
+                        if r_fonts is None:
+                            r_fonts = OxmlElement("w:rFonts")
+                            r_pr.append(r_fonts)
+                        for key in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
+                            r_fonts.set(qn(key), "黑体")
+            document.save(str(docx_path))
+        except Exception as exc:
+            logger.warning("统一报告首页日期字体失败: {}", exc)
+
+    @staticmethod
+    def set_style_font(style, font_name: str, *, size: Optional[Pt] = None, bold: Optional[bool] = None) -> None:
+        style.font.name = font_name
+        if size is not None:
+            style.font.size = size
+        if bold is not None:
+            style.font.bold = bold
+        r_pr = style._element.get_or_add_rPr()
+        r_fonts = r_pr.find(qn("w:rFonts"))
+        if r_fonts is None:
+            r_fonts = OxmlElement("w:rFonts")
+            r_pr.append(r_fonts)
+        for key in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
+            r_fonts.set(qn(key), "Times New Roman" if key in {"w:ascii", "w:hAnsi"} else font_name)
+
+    def normalize_paragraph_font(self, paragraph, *, in_table: bool = False, paragraph_index: Optional[int] = None) -> None:
+        style_name = paragraph.style.name if paragraph.style is not None else ""
+        if paragraph_index == 7:
+            for run in paragraph.runs:
+                self.set_run_font(run, "黑体", size_pt=36, bold=True)
+            return
+        if paragraph_index == 8:
+            for run in paragraph.runs:
+                self.set_run_font(run, "经典宋体简", size_pt=20, bold=False)
+            return
+        if style_name.startswith("Heading"):
+            for run in paragraph.runs:
+                self.set_run_font(run, "黑体", size_pt=15, bold=True)
+            return
+        for run in paragraph.runs:
+            if not run.text:
+                continue
+            bold = bool(run.bold)
+            text = run.text.strip()
+            is_label = bold or text.endswith("：") or text in {
+                "事件来源", "证据数量", "发生位置", "事件类型", "发生时间", "完成时间",
+                "风险等级", "处置状态", "模型链路", "处置耗时", "初筛结论", "联动记录",
+                "代表性证据图像",
+            }
+            font_name = "黑体" if is_label else "经典宋体简"
+            size_pt = 10.5 if in_table else (15 if "\t" in run.text else 11)
+            self.set_run_font(run, font_name, size_pt=size_pt, bold=is_label)
+
+    @staticmethod
+    def set_run_font(run, font_name: str, *, size_pt: float, bold: bool) -> None:
+        run.font.name = font_name
+        run.font.size = Pt(size_pt)
+        run.bold = bold
+        r_pr = run._element.get_or_add_rPr()
+        r_fonts = r_pr.find(qn("w:rFonts"))
+        if r_fonts is None:
+            r_fonts = OxmlElement("w:rFonts")
+            r_pr.append(r_fonts)
+        r_fonts.set(qn("w:ascii"), "Times New Roman")
+        r_fonts.set(qn("w:hAnsi"), "Times New Roman")
+        r_fonts.set(qn("w:eastAsia"), font_name)
+        r_fonts.set(qn("w:cs"), font_name)
+        if r_pr.find(qn("w:noProof")) is None:
+            r_pr.append(OxmlElement("w:noProof"))
 
     def upsert_analysis_report(
         self,
@@ -1168,14 +1364,25 @@ class DamEventReportService:
         evidence: list[SafetyEventEvidence],
     ) -> list[dict[str, Any]]:
         candidates: list[dict[str, Any]] = []
-        # 4B 初筛帧仅用于前端初筛过程展示；正式报告证据图以
-        # 智能路由后的目标检测带框帧、模型复核帧和联动取证图片为准。
-        for key in ("media_objects", "image_urls", "images", "key_frames", "representative_frames", "representative_frame"):
+        # 正式报告证据图只使用 4B 从均匀抽取复核帧中选出的代表帧。
+        for key in (
+            "representative_frame",
+            "representative_frame_candidates",
+            "key_frames",
+            "representative_frames",
+            "media_objects",
+            "image_urls",
+            "images",
+        ):
             self.extend_image_media_items(candidates, self.find_nested_values(workflow_payload, key))
         for row in evidence:
             if str(row.evidence_type or "").upper() in {"IMAGE", "CAMERA_SNAPSHOT", "DRONE_IMAGE", "STAFF_IMAGE"}:
                 candidates.append({"url": row.file_url, "caption": row.description or "事件图像"})
-        items = self.unique_media_items(candidates)
+        items = [
+            item
+            for item in self.unique_media_items(candidates)
+            if not self.is_yolo_detection_image(item, item.get("url"))
+        ]
         items.sort(key=lambda item: self.image_media_priority(item))
         return items[:8]
 
@@ -1201,27 +1408,48 @@ class DamEventReportService:
             object_name = value.get("object_name") or value.get("object_key") or value.get("annotated_object_key")
             if not url and value.get("bucket") and object_name:
                 url = f"{value.get('bucket')}/{object_name}"
+            if self.is_yolo_detection_image(value, url):
+                return
             if url and "{{" not in str(url) and "}}" not in str(url):
                 items.append({
                     "url": str(url),
                     "caption": str(value.get("caption") or value.get("description") or ""),
                     "role": value.get("role"),
                     "source": value.get("source"),
+                    "selected_by": value.get("selected_by"),
+                    "timestamp_seconds": value.get("timestamp_seconds") or value.get("frame_time_sec"),
                 })
             return
         if isinstance(value, str) and value and "{{" not in value and "}}" not in value:
+            if self.is_yolo_detection_image({}, value):
+                return
             items.append({"url": value, "caption": ""})
 
     @staticmethod
     def image_media_priority(item: dict[str, Any]) -> int:
-        text = f"{item.get('role') or ''} {item.get('source') or ''} {item.get('url') or ''}".lower()
-        if "annotated_detection_frame" in text or "workflow/yolo-detections" in text:
+        text = (
+            f"{item.get('role') or ''} {item.get('source') or ''} "
+            f"{item.get('selected_by') or ''} {item.get('caption') or ''} {item.get('url') or ''}"
+        ).lower()
+        if "qwen4b_selected_representative_frame" in text or "qwen4b_action_reasoning" in text:
             return 0
-        if "workflow-media" in text or "qwen4b-proxy-media" in text or "key_frame" in text:
+        if "qwen4b-proxy-media" in text or "qwen4b_review_frame_candidate" in text or "qwen4b_representative_frame_candidate" in text:
             return 1
+        if "workflow-media" in text or "key_frame" in text:
+            return 2
         if "qwen_screening" in text or "/camera/" in text:
             return 9
         return 5
+
+    @staticmethod
+    def is_yolo_detection_image(value: dict[str, Any], url: Any = None) -> bool:
+        text = (
+            f"{value.get('role') or ''} {value.get('source') or ''} "
+            f"{value.get('object_name') or ''} {value.get('object_key') or ''} {url or ''}"
+        ).lower()
+        if "qwen4b-proxy-media" in text:
+            return False
+        return "annotated_detection_frame" in text or "workflow/yolo-detections" in text
 
     def collect_video_items(
         self,
@@ -1237,10 +1465,45 @@ class DamEventReportService:
         self.extend_media_items(items, screening.get("videos"))
         self.extend_media_items(items, self.find_nested_values(workflow_payload, "videos"))
         self.extend_media_items(items, self.find_nested_values(workflow_payload, "video_urls"))
+        self.extend_video_media_objects(items, self.find_nested_values(workflow_payload, "media_objects"))
+        self.extend_video_media_objects(items, self.find_nested_values(workflow_payload, "cloud_media_objects"))
         for row in evidence:
             if str(row.evidence_type or "").upper() == "VIDEO":
                 items.append({"url": row.file_url, "caption": row.description or "事件证据视频"})
         return self.unique_media_items(items)
+
+    def extend_video_media_objects(self, items: list[dict[str, Any]], value: Any) -> None:
+        if not value:
+            return
+        if isinstance(value, list):
+            for item in value:
+                self.extend_video_media_objects(items, item)
+            return
+        if not isinstance(value, dict):
+            return
+        media_type = str(value.get("type") or value.get("media_type") or "").lower()
+        url = (
+            value.get("url")
+            or value.get("file_url")
+            or value.get("video_url")
+            or value.get("path")
+            or value.get("object_url")
+        )
+        object_name = value.get("object_name") or value.get("object_key")
+        if not url and value.get("bucket") and object_name:
+            url = f"{value.get('bucket')}/{object_name}"
+        text = f"{media_type} {url or ''} {object_name or ''}".lower()
+        if "video" not in media_type and not text.endswith((".mp4", ".mov", ".m4v", ".webm")):
+            return
+        if not url or "{{" in str(url) or "}}" in str(url):
+            return
+        items.append({
+            "url": str(url),
+            "caption": str(value.get("caption") or value.get("description") or ""),
+            "role": value.get("role"),
+            "source": value.get("source"),
+            "content_type": value.get("content_type"),
+        })
 
     def extend_media_items(self, items: list[dict[str, Any]], value: Any) -> None:
         if not value:
@@ -1264,7 +1527,13 @@ class DamEventReportService:
             if url:
                 if "{{" in str(url) or "}}" in str(url):
                     return
-                items.append({"url": str(url), "caption": str(value.get("caption") or value.get("description") or "")})
+                items.append({
+                    "url": str(url),
+                    "caption": str(value.get("caption") or value.get("description") or ""),
+                    "role": value.get("role"),
+                    "source": value.get("source"),
+                    "content_type": value.get("content_type"),
+                })
             return
         if isinstance(value, list):
             for item in value:
@@ -1310,6 +1579,14 @@ class DamEventReportService:
                 tmp.write(content)
                 return Path(tmp.name)
         return None
+
+    def select_evidence_image(
+        self,
+        image_items: list[dict[str, Any]],
+        video_items: list[dict[str, Any]],
+    ) -> Optional[Path]:
+        qwen_items = [item for item in image_items if self.image_media_priority(item) in {0, 1}]
+        return self.download_first_image(qwen_items)
 
     def extract_frame_items_from_videos(
         self,
@@ -1542,12 +1819,27 @@ class DamEventReportService:
 
     def location(self, source: Optional[DataSource], camera: Optional[Camera], visual: dict[str, Any]) -> str:
         values = [
-            visual.get("camera_name"),
             getattr(camera, "install_address", None),
             visual.get("zone_name"),
+            visual.get("camera_name"),
             getattr(source, "source_name", None),
         ]
-        return " · ".join(str(value) for value in values if value) or "—"
+        return self.unique_location_text(values)
+
+    @staticmethod
+    def unique_location_text(values: list[Any]) -> str:
+        cleaned: list[str] = []
+        for value in values:
+            text = re.sub(r"\s+", "", str(value or "").strip())
+            if not text or text == "—":
+                continue
+            if any(text == existing or text in existing or existing in text for existing in cleaned):
+                if any(existing in text and existing != text for existing in cleaned):
+                    cleaned = [existing for existing in cleaned if existing not in text]
+                    cleaned.append(text)
+                continue
+            cleaned.append(text)
+        return " · ".join(cleaned) or "—"
 
     def result_label(self, instance: SafetyEventInstance) -> str:
         if instance.state == "RESOLVED":
@@ -1968,6 +2260,75 @@ class DamEventReportService:
         if isinstance(value, str) and value.strip():
             return value.strip()
         return "1. 继续监测事件区域。\n2. 结合现场条件执行人工复核。\n3. 视风险变化升级联动处置。"
+
+    @staticmethod
+    def risk_escalation_summary(risk_escalation: dict[str, Any], supplemental_context: dict[str, Any]) -> str:
+        reason = str(risk_escalation.get("reason") or "").strip()
+        label = str(supplemental_context.get("label") or "").strip()
+        if reason:
+            return reason
+        if label:
+            return f"补充运行状态显示{label}，知识库风险复核提示需按更高风险等级处置。"
+        return "补充运行状态和知识库检索结果提示本事件风险等级已调整。"
+
+    @staticmethod
+    def risk_escalation_knowledge_summary(risk_escalation: dict[str, Any]) -> str:
+        hits = risk_escalation.get("knowledge_hits")
+        if not isinstance(hits, list) or not hits:
+            return ""
+        lines = []
+        for index, item in enumerate(hits[:3], start=1):
+            if not isinstance(item, dict):
+                continue
+            title = item.get("document_title") or "知识库文档"
+            clause = item.get("clause_id") or item.get("evidence_id") or ""
+            lines.append(f"[{index}] 《{title}》" + (f"，条款 {clause}" if clause else ""))
+        return "\n".join(lines)
+
+    @staticmethod
+    def risk_escalation_report_overrides(summary: str, supplemental_context: dict[str, Any]) -> dict[str, str]:
+        label = str(supplemental_context.get("label") or "特殊工况").strip()
+        condition = f"{label}条件下" if label else "特殊工况条件下"
+        impact = (
+            f"{condition}，滩涂及近水区域人员活动可能受到泄洪水流、水位上涨、岸坡湿滑和退避通道受限等因素影响，"
+            "存在被困、冲刷、滑跌和溺水风险；即使单帧画面未显示直接遇险，也应按高风险事件纳入闭环处置。"
+        )
+        response = (
+            "立即通过广播、云台跟踪和现场巡查联动开展劝离，通知值班人员核实人员位置和撤离通道；"
+            "在人员撤离并经复核确认前，维持高风险等级和事件取证，必要时联动安保或属地应急力量到场处置。"
+        )
+        monitoring = (
+            "持续跟踪人员是否仍停留在滩涂、近水边坡、泄洪影响区或下游管控区，重点复核水位变化、闸门状态、"
+            "泄洪流量和退避路线；人员清离后保留带框检测帧、视频片段和处置记录作为闭环依据。"
+        )
+        conclusion = (
+            f"{summary} 系统已按高风险事件生成报告并进入闭环处置；最终处置以人员撤离、现场复核和证据归档完成为准。"
+        )
+        return {
+            "impact_assessment": impact,
+            "response_plan": response,
+            "monitoring_suggestions": monitoring,
+            "conclusion": conclusion,
+        }
+
+    @staticmethod
+    def merge_knowledge_summaries(*summaries: Any) -> str:
+        lines: list[str] = []
+        seen: set[str] = set()
+        for summary in summaries:
+            for raw in str(summary or "").splitlines():
+                line = raw.strip()
+                if not line:
+                    continue
+                content_key = re.sub(r"^\[\d+\]\s*", "", line)
+                if content_key in seen:
+                    continue
+                seen.add(content_key)
+                lines.append(line)
+        return "\n".join(
+            re.sub(r"^\[\d+\]", f"[{index}]", line)
+            for index, line in enumerate(lines, start=1)
+        )
 
     def final_report_field(self, selected: dict[str, Any], key: str, fallback: Any = "") -> str:
         citation_map = self.knowledge_citation_index_map(selected)
@@ -2394,7 +2755,8 @@ class DamEventReportService:
             if not title:
                 continue
             section = item.get("section_path") or item.get("section_title") or ""
-            key = (str(title).strip(), str(section).strip())
+            clause = item.get("clause_id") or item.get("evidence_id") or ""
+            key = (str(title).strip(), str(section).strip(), str(clause).strip())
             if key in seen:
                 continue
             seen.add(key)
@@ -2402,6 +2764,8 @@ class DamEventReportService:
             line = f"[{source_count}] 《{str(title).strip()}》"
             if section:
                 line += f"，{str(section).strip()}"
+            if clause:
+                line += f"，条款 {str(clause).strip()}"
             lines.append(line)
             if source_count >= 5:
                 break
