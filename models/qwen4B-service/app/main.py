@@ -914,7 +914,18 @@ async def upload_bytes_to_edge(data: bytes, object_name: str, content_type: str)
             content_type=content_type,
         )
 
-    await asyncio.to_thread(put_object)
+    # MinIO's synchronous client runs in a worker thread. wait_for is needed
+    # because cancelling the coroutine alone does not stop a blocked socket;
+    # the 4B result must still return when the cloud is offline.
+    try:
+        await asyncio.wait_for(
+            asyncio.to_thread(put_object),
+            timeout=max(0.5, CLOUD_MINIO_UPLOAD_TIMEOUT),
+        )
+    except asyncio.TimeoutError as exc:
+        raise TimeoutError(
+            f"云端 MinIO 上传超时（>{CLOUD_MINIO_UPLOAD_TIMEOUT:.1f}s）"
+        ) from exc
 
 
 async def transcode_video_proxy(data: bytes, source_name: str) -> bytes:
@@ -1128,12 +1139,27 @@ async def upload_bytes_to_cloud(data: bytes, object_name: str, content_type: str
             content_type=content_type,
         )
 
-    await asyncio.to_thread(put_object)
+    # MinIO SDK is synchronous; bound both connect/read and the worker wait so
+    # an unavailable cloud cannot hold up the local 4B result indefinitely.
+    await asyncio.wait_for(
+        asyncio.to_thread(put_object),
+        timeout=max(0.5, CLOUD_MINIO_UPLOAD_TIMEOUT),
+    )
 
 
 async def upload_workflow_media_to_cloud(request: WorkflowInferRequest) -> Dict[str, Any]:
     """上传本次工作流媒体到云端 MinIO，并返回给 35B 可读取的引用。"""
     refs = collect_media_refs(request)
+    # The cloud reviewer consumes the source video.  Do not upload the local
+    # 4B review frames as a second, competing media set; they are evidence for
+    # the edge result and can include stale/local-only references.
+    video_refs = [ref for ref in refs if ref.get("type") == "video"]
+    if video_refs:
+        annotated = [
+            ref for ref in video_refs
+            if "annotated" in str(ref.get("object_name") or ref.get("source") or "").lower()
+        ]
+        refs = annotated[:1] or video_refs[:1]
     uploaded: List[Dict[str, Any]] = []
     errors: List[str] = []
     task_key = task_key_from_request(request)
@@ -1158,11 +1184,11 @@ async def upload_workflow_media_to_cloud(request: WorkflowInferRequest) -> Dict[
                 "bytes": len(data),
                 "content_type": content_type,
             })
-            logger.info("媒体已上传到云端 MinIO: %s/%s", CLOUD_MINIO_BUCKET, object_name)
+            logger.info("媒体已上传到云端 MinIO: {}/{}", CLOUD_MINIO_BUCKET, object_name)
         except Exception as e:
             message = f"{ref.get('source') or ref.get('bucket', '') + '/' + ref.get('object_name', '')}: {e}"
             errors.append(message)
-            logger.warning("媒体上传到云端 MinIO 失败: %s", message)
+            logger.opt(exception=True).warning("媒体上传到云端 MinIO 失败: {}", message)
 
     if errors and request.strict_media_upload:
         raise HTTPException(status_code=502, detail={"message": "媒体上传云端 MinIO 失败", "errors": errors})
@@ -1216,7 +1242,7 @@ async def upload_representative_frame_to_cloud(
             "bytes": len(data),
             "content_type": content_type,
         }
-        logger.info("4B代表帧已上传到云端 MinIO: %s/%s", CLOUD_MINIO_BUCKET, object_name)
+        logger.info("4B代表帧已上传到云端 MinIO: {}/{}", CLOUD_MINIO_BUCKET, object_name)
         return uploaded
     except Exception as exc:
         logger.warning("4B代表帧上传到云端 MinIO 失败: {}", exc)
@@ -1467,6 +1493,7 @@ def build_local_final_report(scene_analysis: SceneAnalysis) -> Dict[str, Any]:
         ),
         "response_plan": first_text(scene_analysis.response_plan, "建议保留证据并提交云端增强分析。"),
         "monitoring_suggestions": first_text(scene_analysis.monitoring_suggestions, "建议持续关注相关传感器与视频画面变化。"),
+        "uncertainties": scene_analysis.uncertainties,
         "recommendations": recommendations,
         "result_source": "local_qwen4b",
     }
@@ -1502,7 +1529,7 @@ def build_local_template_data(request: WorkflowInferRequest, scene_analysis: Sce
         "avg_response_time": first_text(request.sensor_data.get("avg_response_time"), default="—"),
         "avg_disposal_time": first_text(request.sensor_data.get("avg_disposal_time"), default="—"),
     }
-    return {
+    template_data = {
         "report_date": date_text(
             request.sensor_data.get("report_date")
             or request.inputs.get("report_date")
@@ -1533,6 +1560,43 @@ def build_local_template_data(request: WorkflowInferRequest, scene_analysis: Sce
             f"本地初判为{scene_analysis.suspected_event}，风险等级{risk_label(scene_analysis.risk_level)}，建议继续复核。",
         ),
     }
+    # Keep the local fallback compatible with the event-handling report. The
+    # daily-patrol fields above remain available for legacy templates.
+    template_data.update({
+        "event_name": first_text(request.sensor_data.get("event_name"), scene_analysis.suspected_event, "安全事件"),
+        "instance_no": first_text(
+            request.sensor_data.get("event_instance_no"),
+            request.sensor_data.get("instance_no"),
+            request.inputs.get("task_id"),
+            "—",
+        ),
+        "risk_label": risk_label(scene_analysis.risk_level),
+        "result_label": "已生成本地初步分析报告",
+        "occur_time": first_text(
+            request.sensor_data.get("occur_time"),
+            request.sensor_data.get("started_at"),
+            "—",
+        ),
+        "completed_at": "—",
+        "source_label": "摄像头/传感器触发 · Qwen-VL-4B 本地分析",
+        "location": first_text(
+            request.sensor_data.get("camera_name"),
+            request.sensor_data.get("location"),
+            request.inputs.get("location"),
+            "—",
+        ),
+        "evidence_count": len(scene_analysis.evidence),
+        "timeline_count": safe_int(request.sensor_data.get("timeline_count"), 0),
+        "timeline_summary": "本地4B已完成初步复核，等待后续处置节点。",
+        "evidence_caption": "本地4B复核帧/事件证据",
+        "detailed_scene_analysis": first_text(scene_analysis.detailed_scene_analysis, local_report_text(scene_analysis)),
+        "risk_reasoning": first_text(scene_analysis.risk_reasoning, "本地模型结合视频证据完成初步风险判断。"),
+        "impact_assessment": first_text(scene_analysis.impact_assessment, "影响范围需结合云端模型或人工复核确认。"),
+        "response_plan": first_text(scene_analysis.response_plan, "建议保留证据并安排现场复核。"),
+        "monitoring_suggestions": first_text(scene_analysis.monitoring_suggestions, "建议持续关注视频画面和相关传感器变化。"),
+        "recommendations_text": "；".join(build_local_final_report(scene_analysis)["recommendations"]),
+    })
+    return template_data
 
 
 def flatten_template_fields(template_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -1543,6 +1607,13 @@ def flatten_template_fields(template_data: Dict[str, Any]) -> Dict[str, Any]:
     }
     stats = template_data.get("stats") if isinstance(template_data.get("stats"), dict) else {}
     fields.update({f"stats.{key}": value for key, value in stats.items()})
+    # Expose scalar event-report fields as well as legacy daily-report stats.
+    # This keeps the 4B fallback usable by the same document filler as 35B.
+    for key, value in template_data.items():
+        if key == "stats" or key in {"event_rows", "high_event_rows"}:
+            continue
+        if not isinstance(value, (dict, list, tuple)):
+            fields.setdefault(key, value)
     return fields
 
 
@@ -2419,7 +2490,10 @@ async def workflow_infer(request: WorkflowInferRequest):
             "preliminary_report": report,
             "analysis_report": report,
             "final_report": final_report,
-            "scene_analysis": scene_analysis.model_dump(),
+            # Match the cloud contract: scene_analysis is the report text.
+            # Preserve the structured 4B object under an explicit detail key.
+            "scene_analysis": final_report["scene_analysis"],
+            "scene_analysis_detail": scene_analysis.model_dump(),
             "risk_level": final_report["risk_level"],
             "confidence": scene_analysis.confidence,
             "recommendations": final_report["recommendations"],

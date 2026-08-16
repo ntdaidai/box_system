@@ -59,6 +59,7 @@ curl -s -X POST "${MODEL_REGISTRY_URL}/api/model-registry/${MODEL_ID}/bind-image
       "CLOUD_MINIO_SECURE": "false",
       "CLOUD_MINIO_BUCKET": "cloud-tasks",
       "CLOUD_MEDIA_PREFIX": "workflow-media",
+      "CLOUD_MINIO_UPLOAD_TIMEOUT": "15",
       "KNOWLEDGE_RETRIEVAL_ENABLED": "true",
       "KNOWLEDGE_API_BASE": "http://localhost:8090/api/v1/knowledge",
       "KNOWLEDGE_TOP_K": "4",

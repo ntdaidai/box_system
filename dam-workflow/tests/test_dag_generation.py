@@ -3,7 +3,7 @@
 
 测试场景：
 1. 自然灾害模板 → 灾害分类模型 + qwen4B + qwen35B
-2. 人员行为模板 → 目标检测 + 跟踪 + qwen4B + qwen35B
+2. 人员行为模板 → 目标检测 + qwen4B + qwen35B
 3. 极端天气模板 → qwen4B + qwen35B
 """
 import sys
@@ -129,7 +129,7 @@ def test_person_behavior_template_path():
     print("=" * 60)
     print("测试 3：人员行为模板路径（非法捕鱼事件）")
     print("=" * 60)
-    print("预期：0 次 LLM 调用，包含 detection 和 tracking 节点")
+    print("预期：0 次 LLM 调用，包含 detection，不包含 tracking 节点")
     print()
 
     state = {
@@ -157,8 +157,11 @@ def test_person_behavior_template_path():
         assert dag.get("workflow_family") == "person_behavior"
         tasks = {n.get("model_task") for n in dag["nodes"]}
         assert "detection" in tasks, "缺少 detection 节点"
-        assert "tracking" in tasks, "缺少 tracking 节点"
+        assert "tracking" not in tasks, "不应包含 tracking 节点"
         assert "behavior_understanding" in tasks, "缺少 behavior_understanding 节点"
+        assert [n["node_id"] for n in dag["nodes"]] == [
+            "start_0", "action_detect", "action_reasoning", "action_report", "end_0"
+        ]
         return True, 0, "无"
     except Exception as e:
         print(f"❌ 失败: {e}")

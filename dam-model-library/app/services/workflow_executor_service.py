@@ -95,9 +95,12 @@ class WorkflowExecutorService:
             )
             model_id = self._node_model_id(node)
             if not model_id:
+                node_text = f"{node_id} {node.get('node_type') or ''}".lower()
+                pass_through = "track" in node_text or "跟踪" in node_text
                 output = {
                     "skipped": True,
                     "reason": "节点未配置 model_id，无法由模型库执行",
+                    "pass_through": pass_through,
                     "inputs": inputs,
                     # Pass-through nodes, such as a temporarily unconfigured
                     # tracker, must not break visual evidence propagation.
@@ -210,6 +213,18 @@ class WorkflowExecutorService:
                         inputs["videos"] = propagated_videos
                     if propagated_images:
                         inputs["images"] = propagated_images
+                # Preserve edge-node knowledge retrieval results even when a
+                # generated DAG only maps final_report to the cloud node.
+                source_output = context[source]
+                for key in (
+                    "knowledge_context",
+                    "knowledge_sources",
+                    "knowledge_sources_summary",
+                    "knowledge_query",
+                ):
+                    value = self._find_first_value(source_output, (key,))
+                    if value not in (None, "", [], {}):
+                        inputs.setdefault(key, value)
         inputs.setdefault("images", images)
         inputs.setdefault("videos", videos)
         inputs.setdefault("media_objects", media_objects)
@@ -358,9 +373,11 @@ class WorkflowExecutorService:
             }
             if model_category == "local_llm":
                 request_data.setdefault("enable_knowledge_retrieval", True)
-                # 云端不可用时，本地 4B 节点必须先返回本地研判结果；
-                # 媒体同步交给后续云端节点/报告兜底处理，避免阻塞 ECA 主流程。
-                request_data.setdefault("upload_media_to_cloud", False)
+                # The cloud reviewer reads the original event video from the
+                # cloud MinIO. Keep the 4B result local, but upload its source
+                # media so the downstream 35B node does not receive only edge
+                # review frames.
+                request_data.setdefault("upload_media_to_cloud", True)
                 request_data.setdefault(
                     "knowledge_query",
                     self._build_knowledge_query(prompt, event_type, sensor_data, request_inputs),
@@ -433,11 +450,48 @@ class WorkflowExecutorService:
         if not cloud_media:
             cloud_media = cls._extract_media_objects(inputs)
 
+        # The cloud service should perform video understanding from one
+        # authoritative object. Sending the annotated YOLO video together
+        # with the raw video and eight edge frames can overload the remote
+        # multimodal request and makes the service disconnect. Prefer the
+        # annotated downstream video, then fall back to the first video.
+        video_objects = [
+            item for item in cloud_media
+            if isinstance(item, dict)
+            and str(item.get("type") or item.get("media_type") or "").lower() == "video"
+        ]
+        if video_objects:
+            annotated = [
+                item for item in video_objects
+                if "annotated" in str(item.get("source") or "").lower()
+                or "annotated" in str(item.get("object_name") or "").lower()
+                or str(item.get("role") or "").lower() == "annotated_detection_video"
+            ]
+            cloud_media = [annotated[0] if annotated else video_objects[0]]
+
         edge_analysis = (
             inputs.get("edge_analysis")
             or inputs.get("final_report")
             or inputs.get("report")
             or {}
+        )
+        # Keep the knowledge retrieved by the 4B edge node in the cloud
+        # request. The final reviewer must use the same evidence basis.
+        knowledge_context = cls._find_first_value(
+            (inputs, edge_analysis, sensor_data),
+            ("knowledge_context",),
+        )
+        knowledge_sources = cls._find_first_value(
+            (inputs, edge_analysis, sensor_data),
+            ("knowledge_sources",),
+        )
+        knowledge_summary = cls._find_first_value(
+            (inputs, edge_analysis, sensor_data),
+            ("knowledge_sources_summary",),
+        )
+        knowledge_query = cls._find_first_value(
+            (inputs, edge_analysis, sensor_data),
+            ("knowledge_query",),
         )
         preliminary_report = (
             inputs.get("preliminary_report")
@@ -451,14 +505,54 @@ class WorkflowExecutorService:
             "edge_analysis": cls._compact_for_prompt(edge_analysis),
             "cloud_media_objects": cloud_media,
         }
+        if knowledge_context:
+            slim_inputs["knowledge_context"] = cls._compact_for_prompt(knowledge_context)
+        if knowledge_sources:
+            slim_inputs["knowledge_sources"] = cls._compact_for_prompt(knowledge_sources)
+        if knowledge_summary:
+            slim_inputs["knowledge_sources_summary"] = cls._short_text(knowledge_summary, 2400)
+        if knowledge_query:
+            slim_inputs["knowledge_query"] = cls._short_text(knowledge_query, 800)
+        # 35B has the larger context window and must independently review the
+        # complete retrieval result, not only a short 4B citation summary.
+        # Keep source identity plus full clause content while omitting only
+        # transport-only URLs and embedding metadata.
+        full_results = []
+        raw_results = knowledge_context.get("results") if isinstance(knowledge_context, dict) else []
+        for item in raw_results if isinstance(raw_results, list) else []:
+            if not isinstance(item, dict):
+                continue
+            source = item.get("source") if isinstance(item.get("source"), dict) else {}
+            full_results.append({
+                "evidence_id": item.get("evidence_id") or source.get("evidence_id"),
+                "document_id": item.get("document_id") or source.get("document_id"),
+                "document_title": source.get("document_title") or item.get("document_title"),
+                "section_path": source.get("section_path") or item.get("section_path"),
+                "clause_id": source.get("clause_id") or item.get("clause_id"),
+                "score": item.get("score"),
+                "content": item.get("content") or item.get("quote") or source.get("quote"),
+                "metadata": item.get("metadata") or {},
+            })
+        # Restore the complete clause list after generic prompt compaction.
+        # Keep only fields useful for reasoning; do not send transport URLs or
+        # embedding metadata. The cloud service renders this object once in
+        # its canonical event-report prompt.
+        if isinstance(knowledge_context, dict):
+            slim_inputs["knowledge_context"] = {
+                "query": knowledge_context.get("query") or knowledge_query,
+                "total": knowledge_context.get("total", len(full_results)),
+                "results": full_results,
+            }
+        # Do not append the same full JSON to the node prompt as well,
+        # otherwise the model sees duplicate clauses and competing output
+        # instructions.
         prompt = (
             "请对本次库坝安全事件进行云端最终复核，并生成事件处置报告 JSON。"
             "只允许输出一个合法 JSON 对象，不要输出思考过程、解释文字、Markdown 代码块或 <think> 内容。"
             "以视频证据和边缘侧 4B 初判为主，不要虚构时间、地点、人员或设备动作；"
             "发生时间、事件编号等以传入的 sensor_data 为准。"
-            "除摘要字段外，请输出详细报告字段 detailed_scene_analysis、risk_reasoning、"
-            "impact_assessment、response_plan、monitoring_suggestions，并保证这些字段是完整中文段落，"
-            "用于填充正式报告正文。"
+            "必须完整阅读输入中的知识库检索结果，将适用条款作为风险判断和处置建议的约束条件；"
+            "只引用输入中提供的 evidence_id/clause_id，不得虚构条款。"
         )
         return {
             "prompt": prompt,
@@ -468,14 +562,39 @@ class WorkflowExecutorService:
             "images": [],
             "videos": [],
             "media_objects": cloud_media,
+            "knowledge_context": knowledge_context or {},
+            "knowledge_sources": knowledge_sources or [],
+            "knowledge_sources_summary": knowledge_summary or "",
+            "knowledge_query": knowledge_query or "",
             "report_requirement": {
                 "format": "dam_workflow",
                 "require_fields": ["report", "risk_level", "recommendations", "template_data"],
             },
             "request_timeout": max(1, int(settings.workflow_cloud_node_timeout or 30)),
-            **media_options,
+            "media_mode": "video",
+            "max_frames": 1,
+            "fallback_to_frames": True,
+            **{key: value for key, value in media_options.items() if key not in {"media_mode", "max_frames"}},
             **metadata,
         }
+
+    @staticmethod
+    def _find_first_value(values: Any, keys: tuple[str, ...]) -> Any:
+        """Find a knowledge field in the current node or nested 4B output."""
+        if isinstance(values, dict):
+            for key in keys:
+                if values.get(key) not in (None, "", [], {}):
+                    return values[key]
+            for item in values.values():
+                found = WorkflowExecutorService._find_first_value(item, keys)
+                if found not in (None, "", [], {}):
+                    return found
+        elif isinstance(values, (list, tuple)):
+            for item in values:
+                found = WorkflowExecutorService._find_first_value(item, keys)
+                if found not in (None, "", [], {}):
+                    return found
+        return None
 
     @staticmethod
     def _node_wait_timeout(node: Dict[str, Any], default_timeout: int) -> int:
@@ -806,7 +925,11 @@ class WorkflowExecutorService:
     def _execution_status(node_results: List[Dict[str, Any]]) -> str:
         if any(row["status"] == "failed" for row in node_results):
             return "failed"
-        if any(row["status"] == "skipped" for row in node_results):
+        if any(
+            row["status"] == "skipped"
+            and not (isinstance(row.get("output"), dict) and row["output"].get("pass_through"))
+            for row in node_results
+        ):
             return "partial"
         return "success"
 

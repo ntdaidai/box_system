@@ -4,6 +4,7 @@ import re
 import json
 import asyncio
 import operator
+import threading
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 from sqlalchemy.orm import Session
@@ -94,6 +95,23 @@ class ECAEngine:
 
         # 事件触发冷却记录: {event_id: last_trigger_time}
         self.event_last_trigger: Dict[int, datetime] = {}
+
+        # Camera evaluations may arrive from different collector threads. Keep
+        # the instance lookup/update/dispatch decision atomic so two evaluators
+        # cannot create duplicate workflow submissions for one camera event.
+        self._camera_event_locks: Dict[Tuple[int, int, int], threading.Lock] = {}
+        self._camera_event_locks_guard = threading.Lock()
+        self._workflow_dispatch_inflight: set[Tuple[int, int]] = set()
+        self._workflow_dispatch_guard = threading.Lock()
+
+    def _get_camera_event_lock(self, event_id: int, source_id: int, camera_id: int) -> threading.Lock:
+        key = (event_id, source_id, camera_id)
+        with self._camera_event_locks_guard:
+            lock = self._camera_event_locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                self._camera_event_locks[key] = lock
+            return lock
 
     def get_sensor_history(self, source_id: int, time_window_seconds: int) -> List[Dict]:
         """
@@ -2139,6 +2157,18 @@ class ECAEngine:
         db: Session,
     ) -> Optional[SafetyEventInstance]:
         """Create or update a unified camera safety event, then run ECA actions."""
+        lock = self._get_camera_event_lock(event.id, source.id, source.device_id or 0)
+        with lock:
+            return self._trigger_camera_event_locked(event, source, camera_data, db)
+
+    def _trigger_camera_event_locked(
+        self,
+        event: EventLibrary,
+        source: DataSource,
+        camera_data: Dict[str, Any],
+        db: Session,
+    ) -> Optional[SafetyEventInstance]:
+        """Create/update a camera event while its per-source lock is held."""
         if not event or not event.is_activate:
             return None
 
@@ -2221,8 +2251,7 @@ class ECAEngine:
             trigger_type="AUTO",
             risk_level=risk,
             status="SUCCESS",
-            message=f"{event.event_name}已由Qwen摄像头初筛触发"
-                    + ("（疑似命中，待4B/35B复核确认）" if suspected else ""),
+            message=f"{event.event_name}事件已触发",
             operator="SYSTEM",
             payload={
                 "instance_no": instance.instance_no,
@@ -2315,11 +2344,27 @@ class ECAEngine:
     ) -> None:
         global _main_event_loop
         if _main_event_loop and _main_event_loop.is_running():
+            dispatch_key = (event_id, event_instance_id)
+            with self._workflow_dispatch_guard:
+                if dispatch_key in self._workflow_dispatch_inflight:
+                    logger.info(
+                        "跳过重复的摄像头工作流派发: event_id={}, instance_id={}",
+                        event_id,
+                        event_instance_id,
+                    )
+                    return
+                self._workflow_dispatch_inflight.add(dispatch_key)
             future = asyncio.run_coroutine_threadsafe(
                 self.execute_event_actions(event_id, event_instance_id, sensor_data),
                 _main_event_loop,
             )
-            future.add_done_callback(self._handle_async_exception)
+
+            def _on_done(done_future: asyncio.Future):
+                with self._workflow_dispatch_guard:
+                    self._workflow_dispatch_inflight.discard(dispatch_key)
+                self._handle_async_exception(done_future)
+
+            future.add_done_callback(_on_done)
         else:
             logger.warning(
                 f"无法异步执行摄像头事件行为：主事件循环未设置或未运行。事件 {event_id}"

@@ -47,7 +47,7 @@ curl -s -X POST "$MODEL_LIBRARY_URL/api/model-registry/$MODEL_ID/bind-image" \
     "health_check_url": "/health",
     "extra_env": {
       "CLOUD_URL": "http://10.196.85.11:9458",
-      "INFERENCE_PATH": "/infer"
+    "INFERENCE_PATH": "/infer"
     },
     "container_config": {
       "network_mode": "host"

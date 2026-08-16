@@ -19,7 +19,10 @@ class Settings(BaseSettings):
     # 常驻模型：run 模式下不会在推理后停止这些模型。
     resident_model_ids: str = "10,13,14"
     workflow_local_llm_node_timeout: int = 240
-    workflow_cloud_node_timeout: int = 30
+    # The proxy performs a fast upstream health probe before inference. Once
+    # healthy, allow the 35B review to finish instead of treating a normal
+    # multimodal generation as an outage after a short fixed window.
+    workflow_cloud_node_timeout: int = 300
 
     @property
     def resident_model_id_set(self) -> set[int]:

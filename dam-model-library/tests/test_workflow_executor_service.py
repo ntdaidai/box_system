@@ -81,6 +81,26 @@ class WorkflowExecutorServiceTests(unittest.TestCase):
         action_result = next(row for row in result["node_results"] if row["node_id"] == "action_0")
         self.assertEqual(action_result["status"], "skipped")
 
+    def test_unconfigured_tracker_is_pass_through_and_does_not_make_workflow_partial(self):
+        dag = {
+            "nodes": [
+                {"node_id": "start_0", "node_class": "START"},
+                {"node_id": "action_track", "node_class": "ACTION", "node_type": "目标跟踪"},
+                {"node_id": "end_0", "node_class": "END"},
+            ],
+            "edges": [
+                {"source": "start_0", "target": "action_track"},
+                {"source": "action_track", "target": "end_0"},
+            ],
+        }
+
+        result = WorkflowExecutorService().execute(Mock(), dag=dag)
+
+        self.assertEqual(result["status"], "success")
+        action_result = next(row for row in result["node_results"] if row["node_id"] == "action_track")
+        self.assertEqual(action_result["status"], "skipped")
+        self.assertTrue(action_result["output"]["pass_through"])
+
     def test_upstream_cloud_media_objects_override_original_media_for_next_node(self):
         dag = {
             "nodes": [

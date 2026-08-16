@@ -410,7 +410,7 @@
 import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import * as echarts from 'echarts'
-import { BellFilled, CircleCheckFilled, Connection, Promotion, Ship, UserFilled, WarningFilled } from '@element-plus/icons-vue'
+import { BellFilled, CircleCheckFilled, Connection, Pouring, Promotion, Ship, UserFilled, WarningFilled } from '@element-plus/icons-vue'
 import { getUnifiedSafetyEventDetail, getUnifiedSafetyEventStatistics, getUnifiedSafetyEvents } from '@/api/integration'
 import { getDeviceStatus } from '@/api/sensor'
 import { getCameraList } from '@/api/camera'
@@ -466,10 +466,17 @@ const riskLevels = [
 const todayMetricIcons = {
   person: markRaw(UserFilled),
   boat: markRaw(Ship),
-  disaster: markRaw(WarningFilled),
+  disaster: markRaw(Pouring),
   other: markRaw(BellFilled),
   handled: markRaw(CircleCheckFilled),
   unhandled: markRaw(WarningFilled),
+}
+
+const todayMetricTones = {
+  person: 'warning',
+  boat: 'boat',
+  disaster: 'storm',
+  other: 'purple',
 }
 
 const alarmFlowDefinitions = [
@@ -877,7 +884,7 @@ function buildTodayMetric(key, label, today, yesterday) {
     icon: todayMetricIcons[key],
     kind: 'category',
     value: formatNumber(value),
-    tone: key === 'person' ? 'warning' : key === 'boat' ? 'boat' : key === 'disaster' ? 'danger' : 'purple',
+    tone: todayMetricTones[key] || 'purple',
     trend: compareNumber(value, previous),
   }
 }
@@ -2538,10 +2545,7 @@ onBeforeUnmount(() => {
   position: relative;
   border: 1px solid rgba(74, 163, 214, .22);
   border-radius: 8px;
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--metric-color) 12%, transparent), transparent 48%),
-    linear-gradient(180deg, rgba(9, 40, 68, .68), rgba(4, 23, 42, .74)),
-    rgba(4, 22, 39, .76);
+  background: linear-gradient(180deg, rgba(7, 33, 57, .82), rgba(4, 22, 40, .86));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04);
   overflow: hidden;
 }
@@ -2618,7 +2622,8 @@ onBeforeUnmount(() => {
   grid-column: 2;
   grid-row: 2;
   align-self: center;
-  justify-self: start;
+  justify-self: center;
+  transform: translateX(clamp(2px, .25vw, 5px));
 }
 
 .today-card.category > .metric-compare {
@@ -2655,7 +2660,7 @@ onBeforeUnmount(() => {
   justify-content: flex-start;
   margin: 0;
   color: #fff;
-  font-size: clamp(20px, 1.15vw, 26px);
+  font-size: clamp(18px, 1.03vw, 23px);
   line-height: 1;
   white-space: nowrap;
   letter-spacing: 0;
@@ -2805,6 +2810,7 @@ onBeforeUnmount(() => {
 .today-card.danger { --metric-color: #ff6873; }
 .today-card.warning { --metric-color: #FFB648; }
 .today-card.boat { --metric-color: #41c8ff; }
+.today-card.storm { --metric-color: #76b7ff; }
 .today-card.purple { --metric-color: #9b73ff; }
 .today-card.cyan { --metric-color: #43c8ff; }
 .today-card.success { --metric-color: #38d59c; }
@@ -2854,7 +2860,7 @@ onBeforeUnmount(() => {
   }
 
   .metric-value {
-    font-size: 20px;
+    font-size: 18px;
   }
 
   .metric-compare > span {
@@ -2930,7 +2936,7 @@ onBeforeUnmount(() => {
   }
 
   .metric-value {
-    font-size: 18px;
+    font-size: 17px;
   }
 
   .metric-breakdown {
@@ -2975,14 +2981,31 @@ onBeforeUnmount(() => {
     padding-bottom: 8px;
   }
 
+  .today-card.category > .metric-compare {
+    width: auto;
+    min-width: 0;
+  }
+
+  .today-card.category > .metric-compare > span {
+    display: none;
+  }
+
   .today-card.handling {
     --handling-gap: 4px;
-    grid-template-columns: minmax(96px, .35fr) minmax(176px, .65fr);
+    grid-template-columns: minmax(94px, .38fr) minmax(0, .62fr);
     gap: var(--handling-gap);
   }
 
   .metric-breakdown {
-    max-width: 196px;
+    max-width: none;
+  }
+
+  .metric-breakdown > span {
+    padding: 4px 5px;
+  }
+
+  .metric-breakdown b i {
+    min-width: 28px;
   }
 
   .today-card.handling .metric-label {
@@ -4509,6 +4532,12 @@ onBeforeUnmount(() => {
   -webkit-box-orient: vertical;
 }
 
+.device-panel {
+  /* 纵向布局：标题行在上，内容区 flex:1 撑满剩余空间并垂直居中，避免内容贴底溢出 */
+  display: flex;
+  flex-direction: column;
+}
+
 .device-panel.warning {
   border-color: rgba(255, 91, 104, .34);
 }
@@ -4518,7 +4547,8 @@ onBeforeUnmount(() => {
   grid-template-columns: minmax(118px, .9fr) minmax(0, 1.1fr);
   gap: 14px;
   align-items: center;
-  height: calc(100% - 34px);
+  min-height: 0;
+  flex: 1 1 auto;
   margin-top: 10px;
 }
 

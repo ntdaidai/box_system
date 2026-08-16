@@ -7,8 +7,10 @@
 """
 
 import math
+import threading
 import time
 import httpx
+from collections import defaultdict
 from typing import Optional, Any
 from urllib.parse import urlparse, urlunparse
 from sqlalchemy.orm import Session
@@ -31,6 +33,16 @@ class InferService:
 
     def __init__(self):
         self.client = httpx.Client(timeout=300.0)  # 5 分钟超时
+        # run() may be called by several FastAPI worker threads at once. The
+        # lifecycle check/start/stop sequence must be exclusive per model;
+        # otherwise concurrent requests can all observe "stopped" and race
+        # to recreate or stop the same container.
+        self._run_locks: defaultdict[int, threading.Lock] = defaultdict(threading.Lock)
+        self._run_locks_guard = threading.Lock()
+
+    def _get_run_lock(self, model_id: int) -> threading.Lock:
+        with self._run_locks_guard:
+            return self._run_locks[model_id]
 
     def infer(self, db: Session, model_id: int, request_data: dict, validate: bool = False, filter_output: bool = False) -> dict:
         """推理（容器必须已运行）
@@ -136,8 +148,18 @@ class InferService:
         start_time = None
         stop_time = None
         inference_result = None
+        run_lock = self._get_run_lock(model_id)
+        lock_timeout = max(30, int(wait_timeout or 0) + 60)
+        logger.info(f"模型 {model_id} 等待推理执行锁...")
+        if not run_lock.acquire(timeout=lock_timeout):
+            raise HTTPException(status_code=504, detail=f"模型 {model_id} 正在处理其他请求，等待执行锁超时")
+        logger.info(f"模型 {model_id} 已获取推理执行锁")
 
         try:
+            # The model object was loaded before waiting for the lock. Refresh
+            # it so a previous request's start/stop commit cannot be hidden by
+            # a stale SQLAlchemy instance.
+            db.refresh(model)
             # 如果未运行，自动启动；run 语义下非常驻模型推理结束后会停止容器以节省资源。
             if model.runtime_status != "running":
                 logger.info(f"模型 {model_id} 未运行，自动启动...")
@@ -188,6 +210,8 @@ class InferService:
                     lifecycle_service.stop_model(db, model_id)
                 except Exception as e:
                     logger.warning(f"停止容器失败: {e}")
+            run_lock.release()
+            logger.info(f"模型 {model_id} 已释放推理执行锁")
 
         # 构建返回结果
         result = {

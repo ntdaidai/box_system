@@ -3,7 +3,7 @@
 
 工作流结构遵循三类工作流族：
 - natural_disaster：灾害分类模型 -> qwen4B 场景理解 -> qwen35B 增强分析
-- person_behavior：目标检测模型 -> 目标跟踪 -> qwen4B 行为理解 -> qwen35B 增强分析
+- person_behavior：目标检测模型 -> qwen4B 行为理解 -> qwen35B 增强分析
 - extreme_weather：多源数据结构化 -> qwen4B 风险融合 -> qwen35B 增强分析
 
 """
@@ -94,7 +94,6 @@ def _person_behavior_template(event_type: str) -> Dict:
         "visual_tasks": [
             "视频流获取",
             "目标检测模型",
-            "目标跟踪",
             "行为理解",
             "云端增强分析",
         ],
@@ -108,15 +107,6 @@ def _person_behavior_template(event_type: str) -> Dict:
                 model_family="yolov26",
                 event_group="person_behavior",
                 target_event_type=event_type,
-            ),
-            _model_node(
-                "action_track",
-                "目标跟踪",
-                "specialized",
-                model_task="tracking",
-                model_family="tracker",
-                event_group="person_behavior",
-                optional=True,
             ),
             _model_node(
                 "action_reasoning",
@@ -137,7 +127,6 @@ def _person_behavior_template(event_type: str) -> Dict:
         "edges": _chain(
             "start_0",
             "action_detect",
-            "action_track",
             "action_reasoning",
             "action_report",
             "end_0",

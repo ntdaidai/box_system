@@ -5,6 +5,7 @@ The browser loads DocsAPI from OnlyOffice, while OnlyOffice Document Server
 downloads and saves documents through these FastAPI endpoints.
 """
 
+import asyncio
 import hashlib
 import io
 import json
@@ -12,7 +13,9 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal, Optional
@@ -28,7 +31,7 @@ from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.database import get_db
+from app.core.database import SessionLocal, get_db
 from app.models.analysis_report import AnalysisReportKnowledgeCitation
 from app.models.event_library import EventLibrary
 from app.models.knowledge import KnowledgeChunk, KnowledgeDocument
@@ -46,6 +49,12 @@ EDITOR_KEY_VERSION = "download-v3"
 RISK_LABELS = {"LOW": "低风险", "MEDIUM": "中风险", "HIGH": "高风险"}
 
 minio_client: Optional[Minio] = None
+
+
+# docx 知识索引解析缓存：key=对象名，value=(对象 etag, 解析结果列表)
+# 按 etag 判断文件是否变更，变更后自动重新解析，避免每次列表都下载解析
+_docx_index_cache: dict[str, tuple[str, list[dict]]] = {}
+_docx_index_cache_lock = threading.Lock()
 
 
 class CallbackData(BaseModel):
@@ -261,6 +270,33 @@ def merge_knowledge_indexes(existing: list[dict], parsed: list[dict]) -> list[di
         current["display_index"] = len(merged) + 1
         merged.append(current)
     return merged
+
+
+def _load_docx_indexes(client: Minio, object_name: str, etag: str) -> list[dict]:
+    """并发下载并解析 docx 知识索引，按对象 etag 缓存结果。
+
+    使用独立的数据库会话（请求级 db 不能跨线程使用），
+    文件内容变更（etag 变化）后自动重新解析。
+    """
+    with _docx_index_cache_lock:
+        cached = _docx_index_cache.get(object_name)
+        if cached and cached[0] == etag:
+            return cached[1]
+    session = SessionLocal()
+    try:
+        response = client.get_object(BUCKET_NAME, object_name)
+        try:
+            items = parse_docx_knowledge_indexes(response.read(), session)
+        finally:
+            response.close()
+            response.release_conn()
+    except Exception:
+        items = []
+    finally:
+        session.close()
+    with _docx_index_cache_lock:
+        _docx_index_cache[object_name] = (etag, items)
+    return items
 
 
 def get_file_extension(filename: str) -> str:
@@ -799,19 +835,30 @@ async def list_documents(
     db: Session = Depends(get_db),
 ):
     client = get_minio_client()
-    docs = []
-    event_instance_nos: set[str] = set()
     prefix = f"{OBJECT_PREFIX}/{user_id}/"
-    for obj in client.list_objects(BUCKET_NAME, prefix=prefix, recursive=True):
-        if obj.object_name.endswith(".bak"):
-            continue
+    # 先完整收集对象列表，再并发处理，避免串行遍历+逐对象 stat
+    objects = [
+        obj
+        for obj in client.list_objects(BUCKET_NAME, prefix=prefix, recursive=True)
+        if not obj.object_name.endswith(".bak")
+    ]
+
+    event_instance_nos: set[str] = set()
+    for obj in objects:
         try:
-            document_id, filename, ext = parse_object_name(obj.object_name)
+            document_id, _, _ = parse_object_name(obj.object_name)
         except ValueError:
             continue
         event_instance_no = event_instance_no_from_document_id(document_id)
         if event_instance_no:
             event_instance_nos.add(event_instance_no)
+
+    def build_doc(obj):
+        """并发获取对象元数据（stat），构建基础文档记录"""
+        try:
+            document_id, filename, ext = parse_object_name(obj.object_name)
+        except ValueError:
+            return None
         try:
             stat = client.stat_object(BUCKET_NAME, obj.object_name)
             title = get_original_title(stat, filename)
@@ -820,11 +867,13 @@ async def list_documents(
                 stat,
                 infer_created_at_from_document_id(document_id, updated_at),
             )
+            etag = getattr(stat, "etag", None) or ""
         except Exception:
             title = filename
             updated_at = obj.last_modified.isoformat() if obj.last_modified else ""
             created_at = infer_created_at_from_document_id(document_id, updated_at)
-        docs.append({
+            etag = ""
+        return {
             "document_id": document_id,
             "title": title,
             "file_type": ext,
@@ -833,7 +882,15 @@ async def list_documents(
             "created_at": created_at,
             "updated_at": updated_at,
             "_object_name": obj.object_name,
-        })
+            "_etag": etag,
+        }
+
+    # 并发 stat：把 189 次串行网络往返压到 1 轮
+    docs = []
+    with ThreadPoolExecutor(max_workers=24) as pool:
+        for result in pool.map(build_doc, objects):
+            if result:
+                docs.append(result)
 
     event_by_instance_no = {}
     knowledge_indexes_by_report_id: dict[int, list[dict]] = {}
@@ -888,6 +945,31 @@ async def list_documents(
                     "confidence": citation.confidence,
                 })
 
+    # 并发解析 docx 知识索引（带 etag 缓存），之后在组装阶段统一合并
+    docx_indexes_by_object: dict[str, list[dict]] = {}
+    parse_jobs: list[dict] = []
+    for doc in docs:
+        if str(doc.get("file_type") or "").lower() != "docx":
+            continue
+        event_instance_no = event_instance_no_from_document_id(doc["document_id"])
+        event_pair = event_by_instance_no.get(event_instance_no) if event_instance_no else None
+        if not event_pair:
+            continue
+        event, _ = event_pair
+        citation_indexes = knowledge_indexes_by_report_id.get(event.analysis_report_id or 0, [])
+        if not citation_indexes:
+            continue
+        parse_jobs.append(doc)
+    if parse_jobs:
+        # 并发解析 docx（连接池上限约 15，12 并发留出余量给其他请求）
+        with ThreadPoolExecutor(max_workers=12) as pool:
+            futures = [
+                pool.submit(_load_docx_indexes, client, doc["_object_name"], doc.get("_etag") or "")
+                for doc in parse_jobs
+            ]
+            for doc, future in zip(parse_jobs, futures):
+                docx_indexes_by_object[doc["_object_name"]] = future.result()
+
     for doc in docs:
         event_instance_no = event_instance_no_from_document_id(doc["document_id"])
         if not event_instance_no:
@@ -906,17 +988,7 @@ async def list_documents(
             doc["risk_level"] = event.risk_level
             doc["risk_label"] = RISK_LABELS.get(event.risk_level, event.risk_level)
             citation_indexes = knowledge_indexes_by_report_id.get(event.analysis_report_id or 0, [])
-            docx_indexes = []
-            if citation_indexes and str(doc.get("file_type") or "").lower() == "docx":
-                try:
-                    response = client.get_object(BUCKET_NAME, str(doc.get("_object_name") or ""))
-                    try:
-                        docx_indexes = parse_docx_knowledge_indexes(response.read(), db)
-                    finally:
-                        response.close()
-                        response.release_conn()
-                except Exception:
-                    docx_indexes = []
+            docx_indexes = docx_indexes_by_object.get(doc["_object_name"], [])
             doc["knowledge_indexes"] = merge_knowledge_indexes(citation_indexes, docx_indexes)
             doc["title"] = normalize_event_report_title(
                 doc["title"],
@@ -937,6 +1009,7 @@ async def list_documents(
                 1,
             )
         doc.pop("_object_name", None)
+        doc.pop("_etag", None)
 
     docs.sort(key=lambda item: item["updated_at"], reverse=True)
     total = len(docs)

@@ -43,4 +43,5 @@ services:
       - CLOUD_MINIO_SECURE=${A100_MINIO_SECURE:-false}
       - CLOUD_MINIO_BUCKET=${A100_MINIO_BUCKET:-cloud-tasks}
       - CLOUD_MEDIA_PREFIX=${CLOUD_MEDIA_PREFIX:-workflow-media}
+      - CLOUD_MINIO_UPLOAD_TIMEOUT=${CLOUD_MINIO_UPLOAD_TIMEOUT:-15}
     restart: unless-stopped

@@ -3,6 +3,7 @@
 import os
 import json
 import re
+import time
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Any, Dict
@@ -15,6 +16,9 @@ app = FastAPI(
 )
 
 CLOUD_URL = os.getenv("CLOUD_URL", "http://10.196.85.11:9458")
+# The cloud workflow service's canonical model-library entrypoint is /infer.
+# Keep this configurable for deployments that expose only the compatibility
+# alias /predict.
 INFERENCE_PATH = os.getenv("INFERENCE_PATH", "/infer")
 CLOUD_PROBE_TIMEOUT = float(os.getenv("CLOUD_PROBE_TIMEOUT", "1"))
 
@@ -201,6 +205,49 @@ def _normalize_cloud_response(data: dict) -> dict:
     return data
 
 
+def _build_recovery_payload(payload: dict) -> dict:
+    """Use a text-only, structured retry after a failed multimodal response."""
+
+    def strip_media(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: strip_media(item)
+                for key, item in value.items()
+                if key not in {
+                    "images", "image_paths", "image_urls", "videos", "video_paths",
+                    "video_urls", "media_objects", "media", "cloud_media_objects",
+                    "uploaded_media_objects",
+                }
+            }
+        if isinstance(value, list):
+            return [strip_media(item) for item in value]
+        return value
+
+    recovery = strip_media(dict(payload))
+    recovery["read_media"] = False
+    recovery["strict_media"] = False
+    recovery["enable_thinking"] = False
+    recovery["json_mode"] = True
+    recovery["prompt"] = (
+        "请基于同一视频、边缘4B结果和知识库生成最终事件研判。"
+        "只输出一个完整、可解析的 JSON 对象，禁止思考过程、Markdown 和解释文字。"
+        "必须包含 risk_level、confidence、scene_analysis、evidence、"
+        "risk_reasoning、recommendations、template_id、template_data。"
+        "正文简洁但信息完整，所有 JSON 字符串必须闭合。"
+    )
+    recovery["system_prompt"] = (
+        "你是库坝安全事件复核专家。只输出合法JSON，不输出思考过程。"
+    )
+    recovery["report_requirement"] = {
+        "format": "dam_workflow_compact",
+        "require_fields": [
+            "risk_level", "confidence", "scene_analysis", "evidence",
+            "risk_reasoning", "recommendations", "template_id", "template_data",
+        ],
+    }
+    return recovery
+
+
 @app.get("/health")
 async def health():
     """健康检查。"""
@@ -244,11 +291,32 @@ async def workflow_infer(request: InferRequest):
                     "template_data",
                 ],
             }
-        resp = client.post(
-            f"{CLOUD_URL}{INFERENCE_PATH}",
-            json=payload,
-        )
-        resp.raise_for_status()
+        resp = None
+        last_error = None
+        for attempt in range(2):
+            try:
+                resp = client.post(
+                    f"{CLOUD_URL}{INFERENCE_PATH}",
+                    json=_build_recovery_payload(payload) if attempt else payload,
+                )
+                if resp.status_code in {502, 503} and attempt == 0:
+                    try:
+                        error_detail = resp.json()
+                    except Exception:
+                        error_detail = resp.text[:1200]
+                    print(f"云端首次推理失败，改用紧凑 JSON 恢复请求: {error_detail}", flush=True)
+                    time.sleep(0.5)
+                    continue
+                resp.raise_for_status()
+                break
+            except (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError) as exc:
+                last_error = exc
+                if attempt == 0:
+                    time.sleep(0.5)
+                    continue
+                raise
+        if resp is None:
+            raise last_error or RuntimeError("云端推理未返回响应")
         data = _normalize_cloud_response(resp.json())
         report = (
             data.get("scene_analysis")
