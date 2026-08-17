@@ -119,6 +119,7 @@
 import { request } from '../../utils/request'
 import { formatDateTime, formatDuration, riskClass } from '../../utils/format'
 import { readCache, writeCache } from '../../utils/cache'
+import { isLoggedIn } from '../../utils/auth'
 
 const PAGE_SIZE = 10
 
@@ -200,7 +201,8 @@ export default {
 
     ensureStaff() {
       const cached = readCache('mini-staff', null)
-      const query = cached?.staff_id ? `?staff_id=${cached.staff_id}` : ''
+      // 已登录优先走 token 解析；未登录老版本用 staff_id 回落
+      const query = !isLoggedIn() && cached?.staff_id ? `?staff_id=${cached.staff_id}` : ''
       return request({ url: `/staff/me${query}` })
         .then((data) => {
           this.staff = data.staff

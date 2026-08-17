@@ -206,7 +206,7 @@ def _header(section, board_image, context):
         )
     right = table.cell(0, 1).paragraphs[0]
     _paragraph(right, align=WD_ALIGN_PARAGRAPH.RIGHT, before=0, after=0, line=1)
-    _text(right, context.get("report_title", "大藤峡工程空地联动每日巡检报告"), size=8, color=MUTED)
+    _text(right, context.get("report_title", "大藤峡工程空地联动每日处置报告"), size=8, color=MUTED)
     _text(right, f"   {report_date}", size=8, color=BLUE, bold=True)
     for cell in table.rows[0].cells:
         cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.BOTTOM
@@ -219,7 +219,7 @@ def _footer(section, context, numbered=True):
     footer.is_linked_to_previous = False
     p = footer.paragraphs[0]
     _paragraph(p, align=WD_ALIGN_PARAGRAPH.CENTER)
-    _text(p, f"{context.get('period_name', '每日')}巡检报告 · {report_date}", size=7.5, color=MUTED)
+    _text(p, f"{context.get('period_name', '每日')}处置报告 · {report_date}", size=7.5, color=MUTED)
     if numbered:
         _text(p, "    ·    ", size=7.5, color=RULE)
         _field(p, "PAGE")
@@ -262,7 +262,7 @@ def _cover(document, context, board_image):
         )
     title = document.add_paragraph()
     _paragraph(title, align=WD_ALIGN_PARAGRAPH.CENTER, after=8)
-    _text(title, context.get("report_title", "大藤峡工程空地联动每日巡检报告"), name=SERIF, size=24, color=BLUE, bold=True)
+    _text(title, context.get("report_title", "大藤峡工程空地联动每日处置报告"), name=SERIF, size=24, color=BLUE, bold=True)
 
     rule = document.add_paragraph()
     _paragraph(rule, align=WD_ALIGN_PARAGRAPH.CENTER, after=18)
@@ -300,7 +300,7 @@ def _cover(document, context, board_image):
     right = info.cell(0, 1).paragraphs[0]
     _paragraph(right, align=WD_ALIGN_PARAGRAPH.RIGHT)
     _text(right, "文档编号\n", size=8, color=MUTED)
-    _text(right, f"{context.get('document_code_prefix', 'DX-XJRB')}-{context['report_date_compact']}", size=10, color=TEXT, bold=True)
+    _text(right, f"{context.get('document_code_prefix', 'DX-CZBG')}-{context['report_date_compact']}", size=10, color=TEXT, bold=True)
 
 
 def _contents(document, context, board_image):
@@ -537,7 +537,7 @@ def render_daily_report_docx(context: dict[str, Any], board_image: Path) -> byte
     normal.font.name = SANS
     normal._element.rPr.rFonts.set(qn("w:eastAsia"), SANS)
     normal.font.size = Pt(9)
-    document.core_properties.title = f"{context.get('period_name', '每日')}巡检报告{context['report_date_compact']}"
+    document.core_properties.title = f"{context.get('period_name', '每日')}处置报告_EVT_{context['report_date_compact']}"
     document.core_properties.subject = context.get("report_subject", "传感器事件与视觉检测事件每日汇总")
     document.core_properties.author = "box_system"
 

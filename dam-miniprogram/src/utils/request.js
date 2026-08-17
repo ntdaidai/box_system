@@ -1,13 +1,56 @@
 import { MINI_API_BASE, withApiOrigin } from './config'
 
+const TOKEN_STORAGE_KEY = 'dam_mini_cache:mini-token'
+
+function readAuthToken() {
+  try {
+    return uni.getStorageSync(TOKEN_STORAGE_KEY) || ''
+  } catch (error) {
+    return ''
+  }
+}
+
+function clearLoginState() {
+  try {
+    uni.removeStorageSync(TOKEN_STORAGE_KEY)
+    uni.removeStorageSync('dam_mini_cache:mini-staff')
+  } catch (error) {
+    // 忽略存储清理失败
+  }
+}
+
+function handleUnauthorized() {
+  clearLoginState()
+  uni.showModal({
+    title: '登录已失效',
+    content: '账号可能已被管理员移除，请重新扫码登录',
+    confirmText: '去扫码',
+    success: (res) => {
+      if (res.confirm) {
+        import('./auth')
+          .then((mod) => mod.scanQrLogin())
+          .catch((err) => {
+            uni.showToast({ title: err.message || '扫码失败', icon: 'none' })
+          })
+      }
+    },
+  })
+}
+
 function miniApiUrl(path) {
   const rawPath = String(path || '').trim()
   const cleanPath = rawPath.startsWith('/') ? rawPath : `/${rawPath}`
   return `${String(MINI_API_BASE).trim().replace(/\/+$/, '')}${cleanPath}`.trim()
 }
 
+function authHeader() {
+  const authToken = readAuthToken()
+  return authToken ? { Authorization: `Bearer ${authToken}` } : {}
+}
+
 export function request({ url, method = 'GET', data, header }) {
   const requestUrl = miniApiUrl(url)
+  const authToken = readAuthToken()
   console.log('[mini-request]', requestUrl)
   return new Promise((resolve, reject) => {
     uni.request({
@@ -17,9 +60,15 @@ export function request({ url, method = 'GET', data, header }) {
       timeout: 8000,
       header: {
         'content-type': 'application/json',
+        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
         ...(header || {})
       },
       success(res) {
+        if (res.statusCode === 401) {
+          handleUnauthorized()
+          reject(new Error('登录已失效，请重新扫码登录'))
+          return
+        }
         const body = res.data || {}
         if (res.statusCode >= 200 && res.statusCode < 300 && body.code === 200) {
           resolve(body.data || {})
@@ -46,12 +95,18 @@ export function uploadFieldResult({ eventId, filePath, result, remark, operator 
       filePath,
       timeout: 15000,
       name: 'photo',
+      header: authHeader(),
       formData: {
         result,
         remark: remark || '',
         operator: operator || ''
       },
       success(res) {
+        if (res.statusCode === 401) {
+          handleUnauthorized()
+          reject(new Error('登录已失效，请重新扫码登录'))
+          return
+        }
         let body = {}
         try {
           body = JSON.parse(res.data || '{}')
@@ -83,11 +138,17 @@ export function uploadBroadcastAudio({ filePath, eventId, cameraId, operator }) 
       filePath,
       timeout: 15000,
       name: 'audio',
+      header: authHeader(),
       formData: {
         device_ids: '[]',
         operator: operator || '现场处置员'
       },
       success(res) {
+        if (res.statusCode === 401) {
+          handleUnauthorized()
+          reject(new Error('登录已失效，请重新扫码登录'))
+          return
+        }
         let body = {}
         try {
           body = JSON.parse(res.data || '{}')

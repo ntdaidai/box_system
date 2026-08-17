@@ -151,7 +151,7 @@
               <strong class="doc-name">{{ documentTitle(doc) }}</strong>
             </span>
           </div>
-          <div class="row-knowledge-index" :title="knowledgeIndexTitle(doc)">
+          <div class="row-knowledge-index">
             <template v-if="knowledgeIndexItems(doc).length">
               <el-popover
                 placement="bottom-start"
@@ -196,9 +196,17 @@
           <div class="row-date">{{ formatDateTime(doc.created_at) }}</div>
           <div class="row-date">{{ formatDateTime(doc.updatedAt) }}</div>
           <div class="row-actions">
-            <el-button class="action-button edit-button" size="small" @click="editDoc(doc)">编辑</el-button>
-            <el-button class="action-button download-button" size="small" @click="downloadDoc(doc)">下载</el-button>
             <el-button class="action-button preview-button" size="small" @click="previewDoc(doc)">预览</el-button>
+            <el-button class="action-button edit-button" size="small" @click="editDoc(doc)">编辑</el-button>
+            <el-button class="action-button download-button" size="small" @click="downloadDoc(doc)">下载 Word</el-button>
+            <el-button
+              class="action-button download-pdf-button"
+              size="small"
+              :loading="downloadingPdfId === doc.document_id"
+              @click="downloadPdf(doc)"
+            >
+              下载 PDF
+            </el-button>
             <el-button
               class="action-button delete-button"
               size="small"
@@ -590,8 +598,12 @@ const knowledgeIndexItems = (doc) => {
       evidenceId
     ].join(':')
     const displayText = `[${displayIndex}] 《${documentTitle}》`
+    // section_path 为"文档标题>章节路径"层级结构，第一级若与文档标题相同则去掉，避免与 displayText 重复
+    const titleKey = documentTitle.replace(/^《|》$/g, '')
+    const sectionParts = sectionPath.split('>').map((s) => s.trim()).filter(Boolean)
+    const sectionText = sectionParts[0] === titleKey ? sectionParts.slice(1).join('>') : sectionPath
     const metaText = [
-      sectionPath,
+      sectionText,
       clauseId ? `条款 ${clauseId}` : ''
     ].filter(Boolean).join('，') || '未标章节'
     return {
@@ -932,6 +944,8 @@ const editDoc = (doc) => {
   })
 }
 
+const downloadingPdfId = ref('')
+
 const downloadDoc = async (doc) => {
   try {
     const response = await axios.get(`/api/onlyoffice/document/${doc.document_id}`, {
@@ -948,6 +962,29 @@ const downloadDoc = async (doc) => {
   } catch (error) {
     console.error('下载失败:', error)
     ElMessage.error('下载失败')
+  }
+}
+
+// 下载 PDF：复用导出接口，单文档走 output_format=pdf 转换后返回文件流
+const downloadPdf = async (doc) => {
+  downloadingPdfId.value = doc.document_id
+  try {
+    const response = await axios.post(
+      '/api/onlyoffice/documents/export',
+      {
+        user_id: currentUser.value.id,
+        document_ids: [doc.document_id],
+        output_format: 'pdf'
+      },
+      { responseType: 'blob' }
+    )
+    downloadBlob(response.data, getResponseFilename(response, `${documentTitle(doc)}.pdf`))
+    ElMessage.success('PDF 下载完成')
+  } catch (error) {
+    console.error('PDF 下载失败:', error)
+    ElMessage.error('PDF 下载失败')
+  } finally {
+    downloadingPdfId.value = ''
   }
 }
 
@@ -1248,12 +1285,13 @@ onActivated(() => {
   display: flex;
   flex-direction: column;
   min-height: 100%;
+  overflow-x: auto;
 }
 
 .document-header,
 .document-row {
   display: grid;
-  grid-template-columns: 34px 58px minmax(260px, 1.45fr) minmax(220px, 1fr) 112px 96px 104px 150px 150px 210px;
+  grid-template-columns: 34px 58px minmax(180px, 1.8fr) minmax(140px, 1.1fr) minmax(80px, .7fr) minmax(72px, .6fr) minmax(72px, .5fr) minmax(120px, .9fr) minmax(120px, .9fr) minmax(330px, 1.4fr);
   align-items: center;
   gap: 12px;
 }
@@ -1626,6 +1664,7 @@ onActivated(() => {
 }
 
 .action-button {
+  flex-shrink: 0;
   min-width: 44px;
   height: 30px;
   padding: 0 9px;
@@ -1634,6 +1673,7 @@ onActivated(() => {
   font-weight: 600;
   color: #dce9fa;
   background: rgba(37, 70, 106, .38);
+  white-space: nowrap;
 }
 
 .edit-button {
@@ -1642,6 +1682,12 @@ onActivated(() => {
 
 .download-button {
   color: #c8f0ff;
+}
+
+.download-pdf-button {
+  color: #ffd9a8;
+  border-color: rgba(255, 179, 92, .34);
+  background: rgba(166, 92, 7, .18);
 }
 
 .preview-button {

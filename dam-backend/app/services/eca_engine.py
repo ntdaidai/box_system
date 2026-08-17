@@ -157,6 +157,7 @@ class ECAEngine:
             return vision_detector.get_history_snapshot(
                 camera_id,
                 time_window_minutes=time_window_minutes,
+                time_window_seconds=float(time_window_seconds),
             )
         except Exception as exc:
             logger.warning(f"获取摄像头历史快照失败: source={source_id}, error={exc}")
@@ -224,6 +225,18 @@ class ECAEngine:
             # 2. 如果不需要持续时间检查（duration=0），立即触发
             if duration == 0:
                 return True, True
+
+            # A simulated MP4 is one finite evidence window, not a continuation
+            # of the camera's live history. Do not let earlier screenings make
+            # a 30/60-second condition appear satisfied for a short video.
+            input_source = str(current_data.get("input_source") or "").lower()
+            if input_source.startswith("simulation"):
+                self.condition_met_since.pop(condition.id, None)
+                try:
+                    evidence_seconds = float(current_data.get("window_seconds") or 0)
+                except (TypeError, ValueError):
+                    evidence_seconds = 0.0
+                return True, evidence_seconds >= float(duration)
 
             # 3. 获取时间窗口内的历史数据
             source_type = None
@@ -2104,6 +2117,8 @@ class ECAEngine:
             if screening:
                 camera_data["qwen_summary"] = screening.get("summary")
                 camera_data["qwen_risk_level"] = screening.get("risk_level")
+                camera_data["input_source"] = screening.get("input_source")
+                camera_data["window_seconds"] = screening.get("window_seconds")
                 supplemental_context = screening.get("supplemental_context")
                 if isinstance(supplemental_context, dict) and supplemental_context:
                     camera_data["supplemental_context"] = supplemental_context

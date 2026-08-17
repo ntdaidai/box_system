@@ -1,10 +1,36 @@
 <script>
+import { isLoggedIn, scanQrLogin } from './utils/auth'
+
 export default {
   onLaunch(options) {
     const eventId = options?.query?.event_id
+    if (!isLoggedIn()) {
+      this.promptScanLogin()
+    }
     if (eventId) {
       uni.navigateTo({
         url: `/pages/detail/index?event_id=${encodeURIComponent(eventId)}`
+      })
+    }
+  },
+  methods: {
+    promptScanLogin() {
+      uni.showModal({
+        title: '请扫码登录',
+        content: '使用前请扫描管理员提供的登录码完成身份认证',
+        confirmText: '去扫码',
+        cancelText: '暂不',
+        success: (res) => {
+          if (res.confirm) {
+            scanQrLogin()
+              .then(() => {
+                uni.showToast({ title: '登录成功', icon: 'success' })
+              })
+              .catch((err) => {
+                uni.showToast({ title: err.message || '扫码失败', icon: 'none' })
+              })
+          }
+        }
       })
     }
   }

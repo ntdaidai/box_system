@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
+from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+import httpx
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -14,7 +17,11 @@ from sqlalchemy.orm import Session
 from app.api.onlyoffice import (
     BACKEND_PUBLIC_URL,
     ONLYOFFICE_SERVER_URL,
+    CallbackData,
+    content_disposition_attachment,
     content_disposition_inline,
+    convert_document_to_pdf,
+    detect_ooxml_extension,
     document_key,
     get_content_type,
     get_document_type,
@@ -160,12 +167,40 @@ def get_document_file(
     )
 
 
+@router.get("/documents/{document_id}/export")
+def export_document_pdf(
+    document_id: int,
+    db: Session = Depends(get_db),
+):
+    """将知识文档导出为 PDF（docx 等可转换类型走 LibreOffice 转换）。"""
+    document = _get_knowledge_document(db, document_id)
+    client = _get_minio_client()
+    try:
+        response = client.get_object(document.minio_bucket, document.minio_object)
+        content = response.read()
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="知识文档原始文件不存在") from exc
+    finally:
+        response.close()
+        response.release_conn()
+
+    extension = (document.file_type or "").lower()
+    content, title = convert_document_to_pdf(content, document.filename, extension)
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="application/pdf",
+        headers={"Content-Disposition": content_disposition_attachment(title)},
+    )
+
+
 @router.get("/documents/{document_id}/onlyoffice-config")
 def get_document_onlyoffice_config(
     document_id: int,
+    request: Request,
     user_id: str = "knowledge_user",
     user_name: str = "知识库用户",
     chunk_id: Optional[int] = None,
+    mode: str = "view",
     db: Session = Depends(get_db),
 ):
     document = _get_knowledge_document(db, document_id)
@@ -186,9 +221,16 @@ def get_document_onlyoffice_config(
         target_chunk = _get_document_chunk(db, document_id, chunk_id)
         version_key = f"{version_key}:chunk:{target_chunk.id}"
     doc_id = f"knowledge_{document.id}"
-    doc_url = f"{BACKEND_PUBLIC_URL}/api/v1/knowledge/documents/{document.id}/file"
+    # The UI is served through Vite/reverse proxy. Use the browser-facing host
+    # forwarded by that proxy so changing the machine IP does not invalidate
+    # OnlyOffice's document download URL.
+    forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    forwarded_proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    public_base_url = f"{forwarded_proto}://{forwarded_host}" if forwarded_host else BACKEND_PUBLIC_URL
+    doc_url = f"{public_base_url.rstrip('/')}/api/v1/knowledge/documents/{document.id}/file"
     if target_chunk:
         doc_url = f"{doc_url}?target_chunk_id={target_chunk.id}"
+    is_edit = mode == "edit"
     config = {
         "document": {
             "fileType": ext,
@@ -196,18 +238,23 @@ def get_document_onlyoffice_config(
             "title": document.filename or document.title,
             "url": doc_url,
             "permissions": {
-                "comment": False,
+                "comment": is_edit,
                 "download": True,
-                "edit": False,
-                "fillForms": False,
+                "edit": is_edit,
+                "fillForms": is_edit,
                 "print": True,
-                "review": False,
+                "review": is_edit,
             },
         },
         "documentType": get_document_type(ext),
         "editorConfig": {
+            "callbackUrl": (
+                f"{public_base_url.rstrip('/')}/api/v1/knowledge/documents/{document.id}/callback"
+                if is_edit
+                else ""
+            ),
             "lang": "zh-CN",
-            "mode": "view",
+            "mode": mode,
             "user": {"id": user_id, "name": user_name},
             **({
                 "actionLink": {
@@ -242,6 +289,77 @@ def get_document_onlyoffice_config(
             "updated_at": stat.last_modified.isoformat() if stat.last_modified else "",
         },
     }
+
+
+@router.post("/documents/{document_id}/callback")
+async def knowledge_document_callback(
+    document_id: int,
+    callback_data: CallbackData,
+    db: Session = Depends(get_db),
+):
+    """OnlyOffice 保存回调：下载编辑后的文档，写回 MinIO 并重新索引。"""
+    try:
+        if callback_data.status in (2, 6) and callback_data.url:
+            await _save_edited_document(db, document_id, callback_data.url)
+        return {"error": 0}
+    except Exception as exc:
+        print(f"[Knowledge callback] error document_id={document_id}: {exc}")
+        return {"error": 1, "message": str(exc)}
+
+
+async def _save_edited_document(db: Session, document_id: int, url: str) -> None:
+    document = _get_knowledge_document(db, document_id)
+    client = _get_minio_client()
+    async with httpx.AsyncClient(timeout=120.0) as http_client:
+        response = await http_client.get(url)
+        response.raise_for_status()
+        content = response.content
+    if not content:
+        raise HTTPException(status_code=400, detail="编辑保存内容为空")
+
+    # 识别真实扩展名（doc→docx、xls→xlsx 等），扩展名变化时写入新对象并清理旧对象
+    ext = detect_ooxml_extension(content, document.file_type or "")
+    content_type = get_content_type(ext)
+    old_object = document.minio_object
+    if ext != (document.file_type or "").lower():
+        suffix = Path(old_object).suffix
+        new_object = f"{old_object[:-len(suffix)]}.{ext}" if suffix else f"{old_object}.{ext}"
+        client.put_object(
+            document.minio_bucket,
+            new_object,
+            io.BytesIO(content),
+            len(content),
+            content_type=content_type,
+        )
+        try:
+            client.remove_object(document.minio_bucket, old_object)
+        except Exception:
+            pass
+        document.minio_object = new_object
+    else:
+        client.put_object(
+            document.minio_bucket,
+            old_object,
+            io.BytesIO(content),
+            len(content),
+            content_type=content_type,
+        )
+
+    # 更新文档元信息并重新索引
+    old_filename = document.filename or "document.docx"
+    document.filename = f"{Path(old_filename).stem}.{ext}"
+    document.file_type = ext
+    document.file_size = len(content)
+    document.checksum = hashlib.sha256(content).hexdigest()
+    db.add(document)
+    db.commit()
+    try:
+        knowledge_service.index_document_bytes(db, document, content)
+    except Exception as exc:
+        document.status = "failed"
+        document.error_message = str(exc)
+        db.commit()
+        raise HTTPException(status_code=500, detail=f"编辑保存后重新索引失败: {exc}") from exc
 
 
 @router.delete("/documents/{document_id}")

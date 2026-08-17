@@ -22,13 +22,13 @@ class PatrolReportScheduler:
 
     async def start(self) -> None:
         if not settings.PATROL_REPORT_AUTO_ENABLED:
-            logger.info("自动巡检日报调度未启用")
+            logger.info("自动处置日报调度未启用")
             return
         if self._task and not self._task.done():
             return
         self._task = asyncio.create_task(self._run_loop(), name="patrol-report-scheduler")
         logger.info(
-            f"自动巡检日报调度已启动: 每天 {settings.PATROL_REPORT_AUTO_TIME} "
+            f"自动处置日报调度已启动: 每天 {settings.PATROL_REPORT_AUTO_TIME} "
             "汇总前一自然日"
         )
 
@@ -59,7 +59,7 @@ class PatrolReportScheduler:
                 user_id=settings.PATROL_REPORT_USER_ID,
                 report_date=report_date,
             ):
-                logger.info(f"{report_date} 每日巡检报告已存在，跳过生成")
+                logger.info(f"{report_date} 每日处置报告已存在，跳过生成")
                 return
             result = generate_daily_patrol_report(
                 db,
@@ -68,9 +68,9 @@ class PatrolReportScheduler:
                 user_name=settings.PATROL_REPORT_USER_NAME,
             )
             document = result["data"]["document"]
-            logger.info(f"{report_date} 每日巡检报告已生成: {document['title']}")
+            logger.info(f"{report_date} 每日处置报告已生成: {document['title']}")
         except Exception:
-            logger.exception(f"{report_date} 每日巡检报告生成失败")
+            logger.exception(f"{report_date} 每日处置报告生成失败")
         finally:
             db.close()
 

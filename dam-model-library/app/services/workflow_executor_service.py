@@ -135,6 +135,8 @@ class WorkflowExecutorService:
                         filter_output=filter_output,
                     )
                 normalized = self._normalize_output(output)
+                if str(node.get("model_category") or "").lower() == "cloud_llm":
+                    self._validate_cloud_report_output(normalized)
                 context[node_id] = normalized
                 node_results.append(self._node_result(node, "success", normalized, request_data=request_data))
             except Exception as exc:
@@ -551,8 +553,28 @@ class WorkflowExecutorService:
             "只允许输出一个合法 JSON 对象，不要输出思考过程、解释文字、Markdown 代码块或 <think> 内容。"
             "以视频证据和边缘侧 4B 初判为主，不要虚构时间、地点、人员或设备动作；"
             "发生时间、事件编号等以传入的 sensor_data 为准。"
+            "事件名称、上游初判和专有模型类别只是待复核假设，不等于视频已经确认该行为；"
+            "仅检测到船只不能直接认定有人操控、非法捕鱼或电鱼设备，必须分别核对人员、器具、强光、涉水和位置证据。"
             "必须完整阅读输入中的知识库检索结果，将适用条款作为风险判断和处置建议的约束条件；"
+            "请逐条判断候选条款是否适用于当前事件，不要因为检索分数高就默认引用；"
             "只引用输入中提供的 evidence_id/clause_id，不得虚构条款。"
+            "高风险条款只有在其触发条件被视频或运行状态明确满足时才可采用；"
+            "如果条款要求电瓶、长杆、线缆、强光、人员涉水或靠近深水/泄洪区，而输入未提供这些证据，不能据此升级为高风险。"
+            "通用处置条款如果直接支撑正文中的广播、持续跟踪、巡查或安保联动动作，应与场景专用条款并列引用；"
+            "不要因为已经引用了更具体的条款，就无理由漏掉实际支撑处置动作的通用条款。"
+            "不得引用或复述输入知识库中不存在的文档、条款编号、法律条文或‘第几条’；上游文本中的未知条款编号必须忽略。"
+            "凡风险研判、影响评估、处置建议或持续监测使用了知识库条款，正文对应句子必须自然标注引用，"
+            "使用 [K数字] 格式，后端会转换为报告索引；不要只写‘知识库条款指出’而不标编号。"
+            "每条 sentence_citations.sentence 必须是对应正文中的原句或完整连续句，并且必须包含其 evidence_ids 对应的 [K数字]；"
+            "正文中每一个 [K数字] 都必须在 sentence_citations 中有对应记录，正文与 sentence_citations 的 evidence_ids 必须双向一致。"
+            "输出前自检：若某条引用句没有 [K数字]，删除该 sentence_citations 记录；若正文使用了某条依据，先把 [K数字] 写入正文再建立对应记录。"
+            "引用必须按以下顺序生成：先确定实际采用的条款，再在正文原句中写入 [K数字]，"
+            "然后把带有相同 [K数字] 的完整原句逐字复制到 sentence_citations.sentence，最后填写完全相同的 evidence_ids。"
+            "例如正文写‘结合知识库依据[K130]，泄洪期间滩涂人员禁入’，则 sentence_citations.sentence 必须包含这句原文，"
+            "并填写 evidence_ids:[\"K130\"]；禁止先写无标记正文、再单独补充引用数组。"
+            "引用应融入具体判断，例如‘结合知识库依据[K数字]中关于下游禁入区域的规定，"
+            "人员活动位于敏感区域时风险显著升高’。"
+            "禁止输出‘将补充运行状态和知识库依据写入事件报告’等内部流程话术，处置建议只写可执行动作。"
         )
         return {
             "prompt": prompt,
@@ -566,9 +588,24 @@ class WorkflowExecutorService:
             "knowledge_sources": knowledge_sources or [],
             "knowledge_sources_summary": knowledge_summary or "",
             "knowledge_query": knowledge_query or "",
+            # The 35B node has already received the 4B reasoning and must
+            # return a report contract. Keep detailed reasoning in the JSON
+            # fields, but do not expose a separate free-form think stream.
+            # Let the cloud 35B use its reasoning path on the first attempt.
+            # The cloud service still retries with thinking disabled if the
+            # response cannot be normalized into the required JSON contract.
+            "enable_thinking": True,
+            "json_mode": True,
             "report_requirement": {
                 "format": "dam_workflow",
-                "require_fields": ["report", "risk_level", "recommendations", "template_data"],
+                "require_fields": [
+                    "report",
+                    "risk_level",
+                    "recommendations",
+                    "template_data",
+                    "knowledge_sources",
+                    "sentence_citations",
+                ],
             },
             "request_timeout": max(1, int(settings.workflow_cloud_node_timeout or 30)),
             "media_mode": "video",
@@ -881,6 +918,38 @@ class WorkflowExecutorService:
                 data.setdefault("response", content)
                 data.setdefault("report", content)
         return output if "inference_result" in output else data
+
+    @staticmethod
+    def _validate_cloud_report_output(output: Dict[str, Any]) -> None:
+        """Reject successful transport JSON that is not an event report.
+
+        The cloud endpoint can legitimately return other structured objects
+        such as supplemental runtime state. Treating those objects as a
+        report produces a successful but nearly empty DOCX and prevents the
+        local 4B result from being selected as the fallback.
+        """
+        result = output.get("inference_result") if isinstance(output, dict) else None
+        result = result if isinstance(result, dict) else output
+        if not isinstance(result, dict):
+            raise ValueError("云端报告节点未返回结构化对象")
+
+        report = result.get("final_report") if isinstance(result.get("final_report"), dict) else result
+        required = (
+            "detailed_scene_analysis",
+            "risk_reasoning",
+            "impact_assessment",
+            "response_plan",
+            "monitoring_suggestions",
+        )
+        present = [
+            key for key in required
+            if isinstance(report.get(key), str) and report.get(key).strip() not in {"", "—", "-"}
+        ]
+        risk_level = str(result.get("risk_level") or report.get("risk_level") or "").lower()
+        if len(present) < 3 or risk_level not in {"low", "medium", "high", "critical"}:
+            raise ValueError(
+                "云端返回 JSON 不是完整事件报告，缺少报告字段；已转入本地4B结果兜底"
+            )
 
     @staticmethod
     def _node_result(

@@ -215,7 +215,7 @@ def build_period_report_context(
         "status": "READY",
         "period_type": period_type,
         "period_name": period_name,
-        "report_title": f"大藤峡工程空地联动{period_name}巡检报告",
+        "report_title": f"大藤峡工程空地联动{period_name}处置报告",
         "report_subject": f"传感器事件与视觉检测事件{period_name}汇总",
         "report_date": report_date.isoformat(),
         "report_date_cn": period_text,
@@ -223,7 +223,7 @@ def build_period_report_context(
         "report_start_date": start_date.isoformat(),
         "report_end_date": (end_date - dt.timedelta(days=1)).isoformat(),
         "report_date_compact": start_date.strftime("%Y%m%d") if period_type == "daily" else f"{start_date.strftime('%Y%m%d')}_{(end_date - dt.timedelta(days=1)).strftime('%Y%m%d')}",
-        "document_code_prefix": {"daily": "DX-XJRB", "weekly": "DX-XJZB", "monthly": "DX-XJYB"}[period_type],
+        "document_code_prefix": {"daily": "DX-CZBG", "weekly": "DX-CZZB", "monthly": "DX-CZYB"}[period_type],
         "generated_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "stats": stats,
         "events": events,
@@ -278,7 +278,7 @@ def generate_period_patrol_report(
     )
     docx_bytes = render_daily_report_docx(context, REPORT_BOARD_PATH)
     period_name = context["period_name"]
-    filename = f"{period_name}巡检报告{context['report_date_compact']}.docx"
+    filename = f"{period_name}处置报告_EVT_{context['report_date_compact']}.docx"
     document_id = f"{context['period_type']}_patrol_{context['report_date_compact']}"
     document = store_generated_document(
         user_id=user_id,
@@ -291,7 +291,7 @@ def generate_period_patrol_report(
     )
     return {
         "success": True,
-        "message": f"{period_name}巡检报告生成成功",
+        "message": f"{period_name}处置报告生成成功",
         "data": {
             "period_type": context["period_type"],
             "report_date": report_date.isoformat(),

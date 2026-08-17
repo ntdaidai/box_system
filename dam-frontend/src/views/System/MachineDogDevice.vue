@@ -23,7 +23,9 @@
             <span class="panel-kicker">巡检任务</span>
             <h3>路线编排</h3>
           </div>
-          <el-segmented v-model="routeMode" :options="routeModeOptions" size="small" />
+          <el-button class="route-manage-btn" :icon="EditPen" size="small" @click="openRouteEditor">
+            路线管理
+          </el-button>
         </div>
 
         <div class="control-grid">
@@ -39,7 +41,6 @@
           <el-select
             v-model="selectedPresetRouteId"
             placeholder="选择预设路线"
-            :disabled="routeMode !== 'preset'"
             @change="applyPresetRoute"
           >
             <el-option v-for="route in presetRoutes" :key="route.id" :label="route.name" :value="route.id" />
@@ -56,19 +57,16 @@
             <strong>{{ selectedWaypoints.length }}</strong>
           </div>
           <div v-if="selectedWaypoints.length" class="route-chip-list">
-            <button
+            <span
               v-for="(point, index) in selectedWaypoints"
               :key="point.id"
-              type="button"
               class="route-chip"
-              @click="removeWaypoint(point.id)"
             >
               <b>{{ index + 1 }}</b>
               <span>{{ point.name }}</span>
-              <el-icon><Close /></el-icon>
-            </button>
+            </span>
           </div>
-          <div v-else class="route-empty">在地图上点击巡检点，或选择一条预设路线</div>
+          <div v-else class="route-empty">请选择一条预设路线，或点击"编辑路线"自定义巡检点</div>
         </div>
       </div>
 
@@ -89,7 +87,7 @@
           </div>
           <div>
             <span>巡检进度</span>
-            <strong>{{ activeTask ? Math.round(activeTask.progress) : 0 }}%</strong>
+            <strong>{{ activeTask ? Math.round(taskProgress) : 0 }}%</strong>
           </div>
           <div>
             <span>预计剩余</span>
@@ -97,14 +95,14 @@
           </div>
         </div>
         <div class="task-progress">
-          <div :style="{ width: `${activeTask?.progress || 0}%` }"></div>
+          <div :style="{ width: `${taskProgress}%` }"></div>
         </div>
       </div>
     </section>
 
     <section class="workspace">
-      <div class="map-area">
-        <img src="/dam-map.png" alt="大藤峡地图" class="map-image" draggable="false" />
+      <div ref="mapAreaRef" class="map-area">
+        <img src="/9point.png" alt="大藤峡地图" class="map-image" draggable="false" />
 
         <svg class="route-layer" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
           <polyline v-if="activePolyline" class="route-line route-line-back" :points="activePolyline" />
@@ -112,25 +110,23 @@
           <polyline v-if="passedPolyline" class="route-line passed" :points="passedPolyline" />
         </svg>
 
-        <button
-          v-for="point in waypoints"
+        <span
+          v-for="point in displayWaypoints"
           :key="point.id"
-          type="button"
           class="waypoint"
-          :class="{ selected: selectedWaypointIds.includes(point.id), disabled: routeMode === 'preset' }"
-          :style="{ left: `${point.x}%`, top: `${point.y}%` }"
-          @click="toggleWaypoint(point)"
+          :class="{ selected: selectedWaypointIds.includes(point.id) }"
+          :style="{ left: `${point.displayX}%`, top: `${point.displayY}%` }"
         >
           <span class="waypoint-dot">{{ waypointOrder(point.id) || '' }}</span>
           <span class="waypoint-label">{{ point.name }}</span>
-        </button>
+        </span>
 
         <div
           v-for="dog in machineDogs"
           :key="dog.id"
           class="dog-marker"
           :class="[dog.status, { active: dog.id === selectedDeviceId }]"
-          :style="{ left: `${dog.position.x}%`, top: `${dog.position.y}%` }"
+          :style="{ left: `${toDisplay(dog.position).x}%`, top: `${toDisplay(dog.position).y}%` }"
           @click="selectedDeviceId = dog.id"
         >
           <span class="dog-pulse"></span>
@@ -140,20 +136,15 @@
           <span class="dog-label">{{ dog.name }}</span>
         </div>
 
-        <div class="map-toolbar">
-          <span>地图监控</span>
-          <button type="button" @click="routeMode = 'custom'">
-            <el-icon><Location /></el-icon>
-            点选路线
-          </button>
-          <button type="button" @click="deviceDrawerVisible = true">
-            <el-icon><List /></el-icon>
-            设备
-          </button>
+        <div class="charge-zone" :style="{ left: displayChargeZone.x + '%', top: displayChargeZone.y + '%' }">
+          <span class="charge-zone-icon">
+            <el-icon><Lightning /></el-icon>
+          </span>
+          <span class="charge-zone-label">充电区</span>
         </div>
 
         <div class="map-legend">
-          <span><i class="legend-dot online"></i>在线</span>
+          <span><i class="legend-dot idle"></i>空闲</span>
           <span><i class="legend-dot running"></i>巡检中</span>
           <span><i class="legend-dot offline"></i>离线</span>
           <span><i class="legend-line"></i>当前路线</span>
@@ -181,20 +172,106 @@
           ></video>
           <div v-else class="video-placeholder">
             <el-icon :size="36"><VideoCamera /></el-icon>
-            <strong>视频接口占位</strong>
-            <span>填入视频地址即可替换实时画面</span>
+            <strong>实时画面</strong>
+            <span>等待机器狗回传视频</span>
           </div>
           <div class="scan-grid"></div>
         </div>
-        <el-input v-model="videoUrl" class="video-input" clearable placeholder="视频地址，如 /mock/robot-dog.mp4">
-          <template #prepend>videoUrl</template>
-        </el-input>
-        <div class="interface-note">
-          <span>预留接口</span>
-          <code>GET /api/machine-dogs/:id/live-stream</code>
-        </div>
       </aside>
     </section>
+
+    <el-dialog v-model="routeManagerVisible" title="路线管理" width="620px" class="route-editor">
+      <!-- 视图一：路线列表 -->
+      <template v-if="!routeFormVisible">
+        <div class="route-manager-list">
+          <div
+            v-for="route in presetRoutes"
+            :key="route.id"
+            class="route-manager-item"
+            :class="{ active: route.id === selectedPresetRouteId }"
+          >
+            <div class="route-manager-item-main">
+              <strong>{{ route.name }}</strong>
+              <span>{{ route.points.length }} 个巡检点 · {{ route.points.map(waypointName).join(' → ') }}</span>
+            </div>
+            <div class="route-manager-item-actions">
+              <el-button size="small" type="primary" @click="useRoute(route)">使用</el-button>
+              <el-button size="small" @click="editExistingRoute(route)">编辑</el-button>
+              <el-button size="small" :disabled="presetRoutes.length <= 1" @click="deleteRoute(route)">删除</el-button>
+            </div>
+          </div>
+          <div v-if="!presetRoutes.length" class="route-pool-empty">暂无路线，点击下方新建</div>
+        </div>
+        <div class="route-manager-footer">
+          <el-button type="primary" :icon="Plus" @click="startNewRoute">新建路线</el-button>
+        </div>
+      </template>
+
+      <!-- 视图二：新建 / 编辑表单 -->
+      <template v-else>
+        <div class="route-editor-name">
+          <span class="route-editor-label">路线名称</span>
+          <el-input v-model="editingRouteName" placeholder="请输入路线名称，如：岸线综合巡检" maxlength="16" show-word-limit />
+        </div>
+        <div class="route-editor-body">
+          <div class="route-pool">
+            <div class="route-editor-label">可选巡检点（点击添加）</div>
+            <button
+              v-for="point in editablePoolPoints"
+              :key="point.id"
+              type="button"
+              class="route-pool-item"
+              @click="addEditingPoint(point)"
+            >
+              <el-icon><Plus /></el-icon>
+              <span>{{ point.name }}</span>
+            </button>
+            <div v-if="!editablePoolPoints.length" class="route-pool-empty">巡检点已全部加入路线</div>
+          </div>
+          <div class="route-seq">
+            <div class="route-editor-label">路线顺序（{{ editingRoutePointIds.length }}）</div>
+            <div v-if="editingRoutePointIds.length" class="route-seq-list">
+              <div v-for="(pid, index) in editingRoutePointIds" :key="pid" class="route-seq-item">
+                <b>{{ index + 1 }}</b>
+                <span>{{ waypointName(pid) }}</span>
+                <div class="route-seq-actions">
+                  <button type="button" :disabled="index === 0" @click="moveEditingPoint(index, -1)">
+                    <el-icon><Top /></el-icon>
+                  </button>
+                  <button
+                    type="button"
+                    :disabled="index === editingRoutePointIds.length - 1"
+                    @click="moveEditingPoint(index, 1)"
+                  >
+                    <el-icon><Bottom /></el-icon>
+                  </button>
+                  <button type="button" class="danger" @click="removeEditingPoint(pid)">
+                    <el-icon><Close /></el-icon>
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div v-else class="route-seq-empty">请从左侧至少选择一个巡检点</div>
+          </div>
+        </div>
+      </template>
+
+      <template #footer>
+        <template v-if="!routeFormVisible">
+          <el-button @click="routeManagerVisible = false">关闭</el-button>
+        </template>
+        <template v-else>
+          <el-button @click="backToRouteList">返回</el-button>
+          <el-button
+            type="primary"
+            :disabled="!editingRouteName.trim() || editingRoutePointIds.length < 1"
+            @click="saveEditingRoute"
+          >
+            保存路线
+          </el-button>
+        </template>
+      </template>
+    </el-dialog>
 
     <el-drawer
       v-model="deviceDrawerVisible"
@@ -248,11 +325,14 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   Aim,
+  Bottom,
   Close,
-  List,
-  Location,
+  EditPen,
+  Lightning,
   Menu,
+  Plus,
   RefreshLeft,
+  Top,
   VideoCamera,
   VideoPlay,
   View,
@@ -260,82 +340,73 @@ import {
 
 const dogStatusMeta = {
   offline: { text: '离线', className: 'offline' },
-  online: { text: '在线', className: 'online' },
+  online: { text: '空闲', className: 'idle' },
   running: { text: '巡检中', className: 'running' },
-  idle: { text: '待命', className: 'idle' },
+  idle: { text: '空闲', className: 'idle' },
   warning: { text: '异常', className: 'warning' },
 }
 
+// 坐标换算说明：
+// tip.png 是 9point.png 中央区域 (705,308) 起的精确截图，标记位置先映射回 9point 全局坐标（百分比）。
+// 地图容器 object-fit: cover 会根据容器宽高比动态裁切，因此渲染时用 toDisplay() 将全局坐标换算为容器坐标。
 const waypoints = [
-  { id: 'p1', name: '坝顶廊道', x: 25.8, y: 33.5 },
-  { id: 'p2', name: '闸门平台', x: 43.2, y: 50.6 },
-  { id: 'p3', name: '右岸栈桥', x: 58.6, y: 42.2 },
-  { id: 'p4', name: '厂房入口', x: 69.4, y: 62.5 },
-  { id: 'p5', name: '尾水平台', x: 82.2, y: 54.4 },
-  { id: 'p6', name: '升船机区', x: 35.5, y: 66.8 },
+  { id: 'p1', name: '巡检点 1', x: 25.0, y: 45.5 },
+  { id: 'p2', name: '巡检点 2', x: 46.3, y: 41.2 },
+  { id: 'p3', name: '巡检点 3', x: 65.7, y: 37.9 },
 ]
 
-const presetRoutes = [
-  { id: 'route-a', name: '坝面安全巡检', points: ['p1', 'p2', 'p3', 'p5'] },
-  { id: 'route-b', name: '厂房周界巡检', points: ['p2', 'p6', 'p4', 'p5'] },
-  { id: 'route-c', name: '右岸复核路线', points: ['p3', 'p4', 'p5'] },
-]
+// 机器狗充电区（标记图紫色区域，全局坐标）
+const chargeZone = { x: 82, y: 36.2 }
+
+const presetRoutes = ref([
+  { id: 'route-a', name: '岸线由西向东巡检', points: ['p1', 'p2', 'p3'] },
+  { id: 'route-b', name: '岸线由东向西巡检', points: ['p3', 'p2', 'p1'] },
+])
 
 const machineDogs = ref([
   {
     id: 'dog-01',
     name: '机器狗 A01',
     model: 'Unitree B2',
-    status: 'running',
-    battery: 76,
-    signal: 92,
-    location: '坝顶廊道',
-    task: '坝面安全巡检',
-    position: { x: 32.2, y: 39.8 },
-  },
-  {
-    id: 'dog-02',
-    name: '机器狗 A02',
-    model: 'Unitree Go2',
-    status: 'online',
-    battery: 88,
-    signal: 86,
-    location: '厂房入口',
+    status: 'idle',
+    battery: 92,
+    signal: 95,
+    location: '充电区',
     task: '',
-    position: { x: 69.4, y: 62.5 },
-  },
-  {
-    id: 'dog-03',
-    name: '机器狗 B01',
-    model: 'DeepRobotics X30',
-    status: 'warning',
-    battery: 34,
-    signal: 61,
-    location: '右岸栈桥',
-    task: '异常复核',
-    position: { x: 58.6, y: 42.2 },
-  },
-  {
-    id: 'dog-04',
-    name: '机器狗 B02',
-    model: 'DeepRobotics Lite3',
-    status: 'offline',
-    battery: 0,
-    signal: 0,
-    location: '充电仓',
-    task: '',
-    position: { x: 18.6, y: 73.4 },
+    position: { x: chargeZone.x, y: chargeZone.y },
   },
 ])
 
-const routeModeOptions = [
-  { label: '预设路线', value: 'preset' },
-  { label: '地图点选', value: 'custom' },
-]
+// ===== 地图坐标换算（全局坐标 → 容器坐标） =====
+const IMG_W = 3072
+const IMG_H = 1344
+const mapAreaRef = ref(null)
+// 地图容器实际尺寸，通过 ResizeObserver 动态更新
+const mapSize = ref({ w: 0, h: 0 })
+let mapResizeObserver = null
+
+function toDisplay(globalPoint) {
+  const { w, h } = mapSize.value
+  if (!w || !h) return { x: globalPoint.x, y: globalPoint.y }
+  // object-fit: cover 换算：按较窄方向撑满容器，另一方向居中裁切
+  const scale = Math.max(w / IMG_W, h / IMG_H)
+  const offsetX = (IMG_W * scale - w) / 2
+  const offsetY = (IMG_H * scale - h) / 2
+  return {
+    x: ((globalPoint.x / 100) * IMG_W * scale - offsetX) / w * 100,
+    y: ((globalPoint.y / 100) * IMG_H * scale - offsetY) / h * 100,
+  }
+}
+
+// 渲染用的容器坐标（waypoints / 充电区）
+const displayWaypoints = computed(() =>
+  waypoints.map((p) => ({ ...p, displayX: toDisplay(p).x, displayY: toDisplay(p).y }))
+)
+const displayChargeZone = computed(() => toDisplay(chargeZone))
 
 const deviceFilterOptions = [
   { label: '全部', value: 'all' },
-  { label: '在线', value: 'online' },
+  { label: '空闲', value: 'idle' },
   { label: '巡检中', value: 'running' },
   { label: '异常', value: 'warning' },
 ]
@@ -343,17 +414,91 @@ const deviceFilterOptions = [
 const deviceDrawerVisible = ref(false)
 const selectedDeviceId = ref('dog-01')
 const selectedPresetRouteId = ref('route-a')
-const selectedWaypointIds = ref([...presetRoutes[0].points])
-const routeMode = ref('preset')
+const selectedWaypointIds = ref([...presetRoutes.value[0].points])
 const deviceFilter = ref('all')
 const videoUrl = ref('')
-const activeTask = ref({
-  id: 'task-demo',
-  name: '坝面安全巡检',
-  dogId: 'dog-01',
-  routePointIds: [...presetRoutes[0].points],
-  progress: 28,
-})
+// 初始无巡检任务，机器狗停在充电区待命，点击"开始巡检"后从充电区出发巡检
+const activeTask = ref(null)
+
+// 路线管理弹窗状态
+const routeManagerVisible = ref(false)
+const routeFormVisible = ref(false)
+const editingRouteId = ref(null)
+const editingRouteName = ref('')
+const editingRoutePointIds = ref([])
+
+const editablePoolPoints = computed(() =>
+  waypoints.filter((point) => !editingRoutePointIds.value.includes(point.id))
+)
+
+// ===== 巡检任务模拟：充电区出发 → 逐点移动+停留 → 逆序回程 =====
+const STAY_MS = 8000 // 每个巡检点停留时长
+const MOVE_SPEED = 55 // 移动速率系数（百分比距离 → 毫秒，值越大越慢）
+let tripSegments = [] // 当前任务的行程分段（move / stay）
+
+function buildTrip(routePoints) {
+  const segments = []
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y)
+  const moveDur = (from, to) => Math.max(600, dist(from, to) * MOVE_SPEED)
+  // 去程：充电区 → p1 → ... → pN，每到达一个巡检点停留
+  for (let i = 0; i < routePoints.length; i++) {
+    const from = i === 0 ? chargeZone : routePoints[i - 1]
+    const to = routePoints[i]
+    segments.push({ type: 'move', from, to, duration: moveDur(from, to) })
+    segments.push({ type: 'stay', point: to, duration: STAY_MS })
+  }
+  // 回程：pN → ... → p1 → 充电区（不再停留）
+  const backSeq = [...routePoints].reverse()
+  for (let i = 0; i < backSeq.length - 1; i++) {
+    const from = backSeq[i]
+    const to = backSeq[i + 1]
+    segments.push({ type: 'move', from, to, duration: moveDur(from, to) })
+  }
+  if (routePoints.length) {
+    segments.push({ type: 'move', from: backSeq[backSeq.length - 1], to: chargeZone, duration: moveDur(backSeq[backSeq.length - 1], chargeZone) })
+  }
+  return segments
+}
+
+function positionAtElapsed(task) {
+  let acc = 0
+  for (const seg of tripSegments) {
+    if (task.elapsed <= acc + seg.duration) {
+      if (seg.type === 'stay') return { ...seg.point }
+      const local = Math.min(1, (task.elapsed - acc) / seg.duration)
+      return {
+        x: seg.from.x + (seg.to.x - seg.from.x) * local,
+        y: seg.from.y + (seg.to.y - seg.from.y) * local,
+      }
+    }
+    acc += seg.duration
+  }
+  return { ...chargeZone }
+}
+
+function buildPassedPolyline(task) {
+  const pts = []
+  let acc = 0
+  for (const seg of tripSegments) {
+    if (task.elapsed >= acc + seg.duration) {
+      if (seg.type === 'move') pts.push({ ...seg.to })
+    } else {
+      if (seg.type === 'move') {
+        const local = Math.max(0, (task.elapsed - acc) / seg.duration)
+        pts.push({
+          x: seg.from.x + (seg.to.x - seg.from.x) * local,
+          y: seg.from.y + (seg.to.y - seg.from.y) * local,
+        })
+      } else {
+        pts.push({ ...seg.point })
+      }
+      break
+    }
+    acc += seg.duration
+  }
+  if (!pts.length && tripSegments.length) pts.push({ ...chargeZone })
+  return pointsToPolyline(pts.map(toDisplay))
+}
 
 let timer = null
 
@@ -369,20 +514,24 @@ const activeRoutePoints = computed(() => {
   const ids = activeTask.value?.routePointIds?.length ? activeTask.value.routePointIds : selectedWaypointIds.value
   return ids.map((id) => waypoints.find((point) => point.id === id)).filter(Boolean)
 })
-const activePolyline = computed(() => pointsToPolyline(activeRoutePoints.value))
+// 路线与机器狗位置统一换算到容器坐标（cover 动态裁切）
+const activePolyline = computed(() => pointsToPolyline(activeRoutePoints.value.map(toDisplay)))
 const passedPolyline = computed(() => {
-  if (!activeTask.value || activeRoutePoints.value.length < 2) return ''
-  const point = interpolateRoutePoint(activeRoutePoints.value, activeTask.value.progress)
-  const passedCount = Math.floor((activeTask.value.progress / 100) * (activeRoutePoints.value.length - 1)) + 1
-  const passedPoints = activeRoutePoints.value.slice(0, passedCount)
-  return pointsToPolyline([...passedPoints, point])
+  if (!activeTask.value || !tripSegments.length) return ''
+  return buildPassedPolyline(activeTask.value)
 })
 const canStartTask = computed(() =>
-  selectedDog.value && selectedDog.value.status !== 'offline' && selectedWaypoints.value.length >= 2
+  selectedDog.value && selectedDog.value.status !== 'offline' && selectedWaypoints.value.length >= 1
 )
 const remainingTimeText = computed(() => {
-  const progress = activeTask.value?.progress || 0
-  return `${Math.max(1, Math.ceil((100 - progress) / 8))} 分钟`
+  if (!activeTask.value) return '--'
+  const remainMs = Math.max(0, activeTask.value.totalMs - activeTask.value.elapsed)
+  const sec = Math.ceil(remainMs / 1000)
+  return sec < 60 ? `${sec} 秒` : `${Math.floor(sec / 60)} 分 ${sec % 60} 秒`
+})
+const taskProgress = computed(() => {
+  if (!activeTask.value || !activeTask.value.totalMs) return 0
+  return Math.min(100, (activeTask.value.elapsed / activeTask.value.totalMs) * 100)
 })
 const filteredDogs = computed(() => {
   if (deviceFilter.value === 'all') return machineDogs.value
@@ -395,7 +544,7 @@ const summaryCards = computed(() => {
   }, {})
   return [
     { label: '设备总数', value: machineDogs.value.length, className: 'all' },
-    { label: '在线', value: counts.online || 0, className: 'online' },
+    { label: '空闲', value: counts.idle || 0, className: 'idle' },
     { label: '巡检中', value: counts.running || 0, className: 'running' },
     { label: '离线', value: counts.offline || 0, className: 'offline' },
     { label: '异常', value: counts.warning || 0, className: 'warning' },
@@ -406,59 +555,29 @@ function pointsToPolyline(points) {
   return points.map((point) => `${point.x},${point.y}`).join(' ')
 }
 
-function interpolateRoutePoint(points, progress) {
-  if (!points.length) return { x: 0, y: 0 }
-  if (points.length === 1) return points[0]
-
-  const totalSegments = points.length - 1
-  const exact = Math.min(99.999, Math.max(0, progress)) / 100 * totalSegments
-  const index = Math.floor(exact)
-  const local = exact - index
-  const start = points[index]
-  const end = points[index + 1] || start
-  return {
-    x: start.x + (end.x - start.x) * local,
-    y: start.y + (end.y - start.y) * local,
-  }
-}
-
 function updateActiveDogPosition() {
   if (!activeTask.value) return
   const dog = machineDogs.value.find((item) => item.id === activeTask.value.dogId)
   if (!dog) return
 
-  activeTask.value.progress += 0.45
-  if (activeTask.value.progress >= 100) {
-    activeTask.value.progress = 100
-    dog.status = 'online'
+  activeTask.value.elapsed += 300
+  if (activeTask.value.elapsed >= activeTask.value.totalMs) {
+    activeTask.value.elapsed = activeTask.value.totalMs
+    dog.position = { ...chargeZone } // 完成任务后回到充电区
+    dog.status = 'idle'
     dog.task = ''
     activeTask.value = null
-    ElMessage.success('巡检任务已完成')
+    ElMessage.success('巡检任务已完成，机器狗已返回充电区')
     return
   }
 
-  dog.position = interpolateRoutePoint(activeRoutePoints.value, activeTask.value.progress)
+  dog.position = positionAtElapsed(activeTask.value)
 }
 
 function applyPresetRoute(routeId) {
-  const route = presetRoutes.find((item) => item.id === routeId)
+  const route = presetRoutes.value.find((item) => item.id === routeId)
   if (!route) return
   selectedWaypointIds.value = [...route.points]
-}
-
-function toggleWaypoint(point) {
-  if (routeMode.value === 'preset') return
-  const index = selectedWaypointIds.value.indexOf(point.id)
-  if (index >= 0) {
-    selectedWaypointIds.value.splice(index, 1)
-    return
-  }
-  selectedWaypointIds.value.push(point.id)
-}
-
-function removeWaypoint(pointId) {
-  selectedWaypointIds.value = selectedWaypointIds.value.filter((id) => id !== pointId)
-  routeMode.value = 'custom'
 }
 
 function waypointOrder(pointId) {
@@ -466,18 +585,115 @@ function waypointOrder(pointId) {
   return index >= 0 ? index + 1 : ''
 }
 
+function waypointName(pointId) {
+  return waypoints.find((point) => point.id === pointId)?.name || pointId
+}
+
 function resetRoute() {
-  selectedWaypointIds.value = []
-  selectedPresetRouteId.value = ''
-  routeMode.value = 'custom'
+  const route = presetRoutes.value[0]
+  selectedPresetRouteId.value = route.id
+  selectedWaypointIds.value = [...route.points]
+}
+
+// 打开路线管理（先展示路线列表）
+function openRouteEditor() {
+  routeFormVisible.value = false
+  editingRouteId.value = null
+  routeManagerVisible.value = true
+}
+
+// 新建路线：默认不选任何巡检点
+function startNewRoute() {
+  editingRouteId.value = null
+  editingRouteName.value = ''
+  editingRoutePointIds.value = []
+  routeFormVisible.value = true
+}
+
+// 编辑已有路线
+function editExistingRoute(route) {
+  editingRouteId.value = route.id
+  editingRouteName.value = route.name
+  editingRoutePointIds.value = [...route.points]
+  routeFormVisible.value = true
+}
+
+// 使用已有路线（关闭弹窗并应用）
+function useRoute(route) {
+  selectedPresetRouteId.value = route.id
+  selectedWaypointIds.value = [...route.points]
+  routeManagerVisible.value = false
+  routeFormVisible.value = false
+  ElMessage.success(`已选择路线：${route.name}`)
+}
+
+// 删除路线（至少保留一条）
+function deleteRoute(route) {
+  if (presetRoutes.value.length <= 1) {
+    ElMessage.warning('至少需要保留一条路线')
+    return
+  }
+  presetRoutes.value = presetRoutes.value.filter((item) => item.id !== route.id)
+  if (selectedPresetRouteId.value === route.id) {
+    const next = presetRoutes.value[0]
+    selectedPresetRouteId.value = next.id
+    selectedWaypointIds.value = [...next.points]
+  }
+  ElMessage.success(`已删除路线：${route.name}`)
+}
+
+// 返回路线列表
+function backToRouteList() {
+  routeFormVisible.value = false
+  editingRouteId.value = null
+}
+
+function addEditingPoint(point) {
+  if (editingRoutePointIds.value.includes(point.id)) return
+  editingRoutePointIds.value.push(point.id)
+}
+
+function removeEditingPoint(pointId) {
+  editingRoutePointIds.value = editingRoutePointIds.value.filter((id) => id !== pointId)
+}
+
+function moveEditingPoint(index, dir) {
+  const target = index + dir
+  if (target < 0 || target >= editingRoutePointIds.value.length) return
+  const arr = [...editingRoutePointIds.value]
+  ;[arr[index], arr[target]] = [arr[target], arr[index]]
+  editingRoutePointIds.value = arr
+}
+
+function saveEditingRoute() {
+  const name = editingRouteName.value.trim()
+  if (!name || editingRoutePointIds.value.length < 1) return
+  if (editingRouteId.value) {
+    presetRoutes.value = presetRoutes.value.map((item) =>
+      item.id === editingRouteId.value
+        ? { ...item, name, points: [...editingRoutePointIds.value] }
+        : item
+    )
+  } else {
+    const newRoute = { id: `route-${Date.now()}`, name, points: [...editingRoutePointIds.value] }
+    presetRoutes.value.push(newRoute)
+    selectedPresetRouteId.value = newRoute.id
+    selectedWaypointIds.value = [...newRoute.points]
+  }
+  routeFormVisible.value = false
+  editingRouteId.value = null
+  ElMessage.success(`已保存路线：${name}`)
 }
 
 function startInspection() {
   if (!canStartTask.value) return
   const dog = selectedDog.value
-  const routeName = routeMode.value === 'preset'
-    ? presetRoutes.find((item) => item.id === selectedPresetRouteId.value)?.name || '临时巡检路线'
-    : '临时巡检路线'
+  const routeName = presetRoutes.value.find((item) => item.id === selectedPresetRouteId.value)?.name || '临时巡检路线'
+  const routePoints = activeRoutePoints.value
+
+  // 构建行程分段：去程逐点+停留，回程逆序直达充电区
+  tripSegments = buildTrip(routePoints)
+  const totalMs = tripSegments.reduce((sum, seg) => sum + seg.duration, 0)
 
   machineDogs.value = machineDogs.value.map((item) => {
     if (item.id === dog.id) {
@@ -485,7 +701,7 @@ function startInspection() {
         ...item,
         status: 'running',
         task: routeName,
-        position: { ...selectedWaypoints.value[0] },
+        position: { ...chargeZone }, // 从充电区出发
       }
     }
     return item
@@ -495,9 +711,10 @@ function startInspection() {
     name: routeName,
     dogId: dog.id,
     routePointIds: [...selectedWaypointIds.value],
-    progress: 0,
+    elapsed: 0,
+    totalMs,
   }
-  ElMessage.success('巡检任务已下发')
+  ElMessage.success('巡检任务已下发，机器狗从充电区出发')
 }
 
 function selectDog(dog) {
@@ -513,10 +730,21 @@ function assignDog(dog) {
 
 onMounted(() => {
   timer = window.setInterval(updateActiveDogPosition, 300)
+  // 监听地图容器尺寸，动态换算 cover 裁切后的显示坐标
+  const el = mapAreaRef.value
+  if (el && typeof ResizeObserver !== 'undefined') {
+    const updateMapSize = () => {
+      mapSize.value = { w: el.clientWidth, h: el.clientHeight }
+    }
+    updateMapSize()
+    mapResizeObserver = new ResizeObserver(updateMapSize)
+    mapResizeObserver.observe(el)
+  }
 })
 
 onBeforeUnmount(() => {
   if (timer) window.clearInterval(timer)
+  if (mapResizeObserver) mapResizeObserver.disconnect()
 })
 </script>
 
@@ -589,7 +817,7 @@ onBeforeUnmount(() => {
   font-size: 24px;
 }
 
-.summary-card.online strong { color: #48e6bf; }
+.summary-card.idle strong { color: #48e6bf; }
 .summary-card.running strong { color: #43d4ff; }
 .summary-card.offline strong { color: #8494a3; }
 .summary-card.warning strong { color: #ffca66; }
@@ -659,11 +887,11 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 7px;
+  padding: 0 10px;
   border: 1px solid rgba(64, 202, 255, .28);
   border-radius: 8px;
   color: #dff8ff;
   background: rgba(30, 118, 150, .28);
-  cursor: pointer;
 }
 
 .route-chip b {
@@ -753,16 +981,16 @@ onBeforeUnmount(() => {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-columns: minmax(0, 1.35fr) 420px;
   gap: 16px;
-  min-height: 560px;
+  min-height: 400px;
   margin-top: 14px;
   padding: 16px;
 }
 
 .map-area {
   position: relative;
-  min-height: 528px;
+  height: 380px;
   overflow: hidden;
   border: 1px solid rgba(87, 153, 190, .22);
   border-radius: 8px;
@@ -806,28 +1034,65 @@ onBeforeUnmount(() => {
   stroke-dasharray: none;
 }
 
+.charge-zone {
+  position: absolute;
+  z-index: 2;
+  transform: translate(-100%, -50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px;
+  border: 1.5px dashed rgba(67, 230, 184, .62);
+  border-radius: 999px;
+  background: rgba(12, 68, 56, .2);
+  box-shadow:
+    0 0 18px rgba(67, 230, 184, .14),
+    inset 0 0 22px rgba(67, 230, 184, .08);
+  color: #c8f7e8;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: chargeGlow 2.6s ease-in-out infinite;
+}
+
+.charge-zone-icon {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #062a20;
+  background: #43e6b8;
+  box-shadow: 0 0 14px rgba(67, 230, 184, .5);
+  font-size: 13px;
+}
+
+.charge-zone-label {
+  color: #d9fbf0;
+  font-size: 12px;
+}
+
 .waypoint {
   position: absolute;
   z-index: 2;
+  /* 锚点即标记点本身，dot 居中于锚点，label 单独偏移 */
   transform: translate(-50%, -50%);
-  display: grid;
-  gap: 4px;
-  place-items: center;
+  width: 0;
+  height: 0;
   border: 0;
   color: #dff8ff;
   background: transparent;
-  cursor: pointer;
-}
-
-.waypoint.disabled {
-  cursor: default;
 }
 
 .waypoint-dot {
+  position: absolute;
+  left: 50%;
+  top: 50%;
   width: 24px;
   height: 24px;
   display: grid;
   place-items: center;
+  transform: translate(-50%, -50%);
   border: 2px solid rgba(77, 223, 255, .72);
   border-radius: 50%;
   color: #082232;
@@ -835,14 +1100,14 @@ onBeforeUnmount(() => {
   box-shadow: 0 0 16px rgba(69, 215, 255, .5);
   font-size: 12px;
   font-weight: 700;
-}
-
-.waypoint:not(.selected) .waypoint-dot {
-  background: rgba(8, 29, 42, .88);
-  color: transparent;
+  white-space: nowrap;
 }
 
 .waypoint-label {
+  position: absolute;
+  left: 50%;
+  top: 15px;
+  transform: translateX(-50%);
   max-width: 86px;
   padding: 3px 7px;
   border-radius: 6px;
@@ -850,6 +1115,11 @@ onBeforeUnmount(() => {
   background: rgba(4, 17, 28, .74);
   font-size: 12px;
   white-space: nowrap;
+}
+
+.waypoint:not(.selected) .waypoint-dot {
+  background: rgba(8, 29, 42, .88);
+  color: transparent;
 }
 
 .dog-marker {
@@ -884,7 +1154,8 @@ onBeforeUnmount(() => {
   box-shadow: 0 0 16px rgba(65, 217, 255, .42);
 }
 
-.dog-marker.running .dog-body { background: #43e6b8; }
+.dog-marker.idle .dog-body { background: #43e6b8; }
+.dog-marker.running .dog-body { background: #43d9ff; }
 .dog-marker.warning .dog-body { background: #ffca66; }
 .dog-marker.offline .dog-body {
   background: #7e8c99;
@@ -905,49 +1176,21 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.map-toolbar,
 .map-legend {
   position: absolute;
+  right: 14px;
+  bottom: 14px;
   z-index: 4;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
+  padding: 8px 10px;
   border: 1px solid rgba(111, 183, 220, .22);
   border-radius: 8px;
+  color: #abc9d7;
   background: rgba(5, 19, 31, .78);
   backdrop-filter: blur(8px);
-}
-
-.map-toolbar {
-  top: 14px;
-  left: 14px;
-  padding: 8px;
-}
-
-.map-toolbar span {
-  padding: 0 8px;
-  color: #e8f8ff;
-  font-weight: 700;
-}
-
-.map-toolbar button {
-  height: 30px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  border: 1px solid rgba(71, 204, 255, .24);
-  border-radius: 6px;
-  color: #c9eefb;
-  background: rgba(27, 96, 125, .28);
-  cursor: pointer;
-}
-
-.map-legend {
-  right: 14px;
-  bottom: 14px;
-  flex-wrap: wrap;
-  padding: 8px 10px;
-  color: #abc9d7;
   font-size: 12px;
 }
 
@@ -964,7 +1207,8 @@ onBeforeUnmount(() => {
   background: #43d9ff;
 }
 
-.legend-dot.running { background: #43e6b8; }
+.legend-dot.idle { background: #43e6b8; }
+.legend-dot.running { background: #43d9ff; }
 .legend-dot.offline { background: #8997a3; }
 .legend-line {
   width: 24px;
@@ -1025,23 +1269,6 @@ onBeforeUnmount(() => {
   background-size: 28px 28px;
 }
 
-.video-input {
-  margin-top: 12px;
-}
-
-.interface-note {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 12px;
-  color: #8cb1c4;
-  font-size: 12px;
-}
-
-.interface-note code {
-  color: #45d7ff;
-}
-
 .drawer-filter {
   margin-bottom: 14px;
 }
@@ -1091,7 +1318,7 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
-.dog-status.online { color: #49e6bf; background: rgba(73, 230, 191, .12); }
+.dog-status.idle { color: #49e6bf; background: rgba(73, 230, 191, .12); }
 .dog-status.running { color: #43d9ff; background: rgba(67, 217, 255, .12); }
 .dog-status.warning { color: #ffca66; background: rgba(255, 202, 102, .14); }
 .dog-status.offline { color: #98a4ad; background: rgba(137, 151, 163, .14); }
@@ -1128,6 +1355,225 @@ onBeforeUnmount(() => {
   margin-top: 12px;
 }
 
+/* 编辑路线弹窗 */
+.route-editor-name {
+  display: grid;
+  gap: 8px;
+}
+
+.route-editor-label {
+  color: #8db2c8;
+  font-size: 13px;
+}
+
+.route-editor-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.route-pool {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.route-pool-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid rgba(64, 202, 255, .24);
+  border-radius: 8px;
+  color: #c9eefb;
+  background: rgba(27, 96, 125, .28);
+  cursor: pointer;
+}
+
+.route-pool-item:hover {
+  background: rgba(38, 140, 180, .4);
+}
+
+.route-pool-empty,
+.route-seq-empty {
+  padding: 8px;
+  color: #6f8fa5;
+  font-size: 13px;
+}
+
+/* 路线管理（列表视图） */
+.route-manager-list {
+  display: grid;
+  gap: 10px;
+}
+
+.route-manager-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(87, 153, 190, .22);
+  border-radius: 10px;
+  background: rgba(8, 30, 44, .5);
+  transition: border-color .2s, background .2s;
+}
+
+.route-manager-item:hover {
+  border-color: rgba(87, 153, 190, .4);
+}
+
+.route-manager-item.active {
+  border-color: rgba(69, 215, 255, .55);
+  background: rgba(24, 96, 122, .3);
+  box-shadow: 0 0 14px rgba(69, 215, 255, .12);
+}
+
+.route-manager-item-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.route-manager-item-main strong {
+  color: #eefbff;
+  font-size: 14px;
+}
+
+.route-manager-item-main span {
+  color: #7fa3b8;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route-manager-item-actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.route-manager-footer {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(87, 153, 190, .16);
+}
+
+/* 路线管理按钮（主题化） */
+.route-manage-btn.el-button {
+  color: #bdf1ff;
+  border-color: rgba(69, 215, 255, .38);
+  background: linear-gradient(135deg, rgba(27, 96, 125, .32), rgba(14, 54, 74, .4));
+}
+
+.route-manage-btn.el-button:hover {
+  color: #ffffff;
+  border-color: rgba(69, 215, 255, .65);
+  background: linear-gradient(135deg, rgba(38, 140, 180, .42), rgba(18, 72, 96, .5));
+}
+
+.route-seq {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.route-seq-list {
+  display: grid;
+  gap: 6px;
+}
+
+.route-seq-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid rgba(67, 230, 184, .22);
+  border-radius: 8px;
+  background: rgba(8, 30, 44, .6);
+}
+
+.route-seq-item b {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #06212e;
+  background: #4ddfff;
+  font-size: 12px;
+}
+
+.route-seq-item > span {
+  flex: 1;
+  color: #dff8ff;
+  font-size: 13px;
+}
+
+.route-seq-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.route-seq-actions button {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(99, 171, 210, .3);
+  border-radius: 5px;
+  color: #9cc7da;
+  background: rgba(20, 62, 84, .5);
+  cursor: pointer;
+}
+
+.route-seq-actions button:disabled {
+  opacity: .35;
+  cursor: default;
+}
+
+.route-seq-actions button.danger {
+  color: #ff9a8c;
+  border-color: rgba(255, 120, 110, .3);
+}
+
+:deep(.route-editor) {
+  border: 1px solid rgba(87, 153, 190, .28);
+  border-radius: 10px;
+  background: #0a1c2b;
+  color: #dcecf8;
+}
+
+:deep(.route-editor .el-dialog__title) {
+  color: #f0fbff;
+}
+
+:deep(.route-editor .el-dialog__body) {
+  padding: 18px 20px;
+}
+
+:deep(.route-editor .el-dialog__footer) {
+  padding-top: 14px;
+  border-top: 1px solid rgba(87, 153, 190, .16);
+}
+
+@keyframes chargeGlow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 14px rgba(67, 230, 184, .18),
+      inset 0 0 18px rgba(67, 230, 184, .06);
+  }
+  50% {
+    box-shadow:
+      0 0 28px rgba(67, 230, 184, .36),
+      inset 0 0 28px rgba(67, 230, 184, .13);
+  }
+}
+
 @keyframes pulse {
   0% {
     transform: scale(.72);
@@ -1155,12 +1601,6 @@ onBeforeUnmount(() => {
   --el-segmented-item-selected-color: #eafaff;
   --el-segmented-item-hover-color: #eafaff;
   --el-border-radius-base: 6px;
-}
-
-:deep(.el-input-group__prepend) {
-  color: #84afc5;
-  background: rgba(4, 17, 28, .86);
-  border-color: rgba(96, 151, 191, .24);
 }
 
 @media (max-width: 1180px) {
@@ -1195,12 +1635,7 @@ onBeforeUnmount(() => {
   }
 
   .map-area {
-    min-height: 420px;
-  }
-
-  .map-toolbar {
-    right: 12px;
-    flex-wrap: wrap;
+    height: 280px;
   }
 }
 </style>

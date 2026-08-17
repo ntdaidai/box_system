@@ -116,28 +116,25 @@ const routes = [
           },
         ],
       },
-      // ========== 告警管理 ==========
+      // ========== 旧告警路由兼容重定向 ==========
       {
         path: 'alarm',
-        redirect: '/alarm/safety-events',
+        redirect: '/workspace/safety-events',
         meta: {},
         children: [
           {
             path: 'list',
-            name: 'AlarmListRedirect',
-            redirect: '/alarm/safety-events',
+            redirect: '/workspace/safety-events',
             meta: {}
           },
           {
             path: 'safety-events',
-            name: 'AlarmSafetyEvents',
-            component: () => import('@/views/Alarm/SafetyEvents.vue'),
+            redirect: '/workspace/safety-events',
             meta: { title: '告警管理' }
           },
           {
             path: 'safety-events/:id',
-            name: 'AlarmSafetyEventDetail',
-            component: () => import('@/views/Alarm/SafetyEventDetail.vue'),
+            redirect: (to) => ({ path: `/workspace/safety-events/${to.params.id}` }),
             meta: { title: '安全事件详情' }
           },
         ],
@@ -243,7 +240,7 @@ const routes = [
           {
             path: 'linkage/drone',
             name: 'SystemLinkageDroneView',
-            component: () => import('@/views/Monitor/DroneView.vue'),
+            component: () => import('@/views/System/DroneLinkage.vue'),
             meta: { title: '无人机设备' }
           },
           {
@@ -272,17 +269,30 @@ const routes = [
           },
         ],
       },
-      // ========== 数据管理 ==========
+      // ========== 业务管理（告警 + 数据） ==========
       {
-        path: 'document',
-        redirect: '/document/hub',
-        meta: { title: '数据管理' },
+        path: 'workspace',
+        redirect: '/workspace/safety-events',
+        meta: { title: '业务管理' },
+        component: () => import('@/views/Workspace.vue'),
         children: [
           {
-            path: 'hub',
+            path: 'safety-events',
+            name: 'AlarmSafetyEvents',
+            component: () => import('@/views/Alarm/SafetyEvents.vue'),
+            meta: { title: '告警管理' }
+          },
+          {
+            path: 'safety-events/:id',
+            name: 'AlarmSafetyEventDetail',
+            component: () => import('@/views/Alarm/SafetyEventDetail.vue'),
+            meta: { title: '安全事件详情' }
+          },
+          {
+            path: 'documents',
             name: 'DocumentHub',
             component: () => import('@/views/DocumentHub.vue'),
-            meta: { title: '文档管理' }
+            meta: { title: '报告管理' }
           },
           {
             path: 'knowledge',
@@ -291,28 +301,48 @@ const routes = [
             meta: { title: '知识库' }
           },
           {
-            path: 'upload',
-            name: 'DocumentUpload',
-            redirect: '/document/hub',
-            meta: { title: '文档上传' }
-          },
-          {
-            path: 'list',
-            name: 'DocumentList',
-            redirect: '/document/hub',
-            meta: { title: '文档列表' }
-          },
-          {
             path: 'editor/:documentId',
             name: 'DocumentEditor',
             component: () => import('@/views/DocumentEditor.vue'),
             meta: { title: '文档编辑' }
           },
+        ],
+      },
+      // ========== 旧数据路由兼容重定向 ==========
+      {
+        path: 'document',
+        redirect: '/workspace/documents',
+        meta: { title: '数据管理' },
+        children: [
+          {
+            path: 'hub',
+            redirect: '/workspace/documents',
+            meta: { title: '报告管理' }
+          },
+          {
+            path: 'knowledge',
+            redirect: '/workspace/knowledge',
+            meta: { title: '知识库' }
+          },
+          {
+            path: 'upload',
+            redirect: '/workspace/documents',
+            meta: { title: '文档上传' }
+          },
+          {
+            path: 'list',
+            redirect: '/workspace/documents',
+            meta: { title: '文档列表' }
+          },
           {
             path: 'test',
-            name: 'DocumentTest',
-            redirect: '/document/hub',
+            redirect: '/workspace/documents',
             meta: { title: '文档测试' }
+          },
+          {
+            path: 'editor/:documentId',
+            redirect: (to) => ({ path: `/workspace/editor/${to.params.documentId}` }),
+            meta: { title: '文档编辑' }
           },
         ],
       },

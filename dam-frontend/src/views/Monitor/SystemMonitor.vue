@@ -127,33 +127,71 @@
               </g>
 
               <g class="nodes">
-                <g
-                  v-for="node in topologyNodes"
-                  :key="node.id"
-                  class="runtime-node"
-                  :class="[
-                    node.tone,
-                    {
-                      selected: selectedNodeId === node.id,
-                      highlighted: highlightedNodeId === node.id,
-                      impacted: impactedNodeIds.includes(node.id),
-                    },
-                  ]"
-                  :transform="`translate(${node.x} ${node.y})`"
-                >
-                  <circle v-if="node.pulse" r="48" class="node-pulse" />
-                  <rect
-                    :x="-node.width / 2"
-                    :y="-node.height / 2"
-                    :width="node.width"
-                    :height="node.height"
-                    rx="14"
-                    class="node-body"
-                  />
-                  <circle :cx="-node.width / 2 + 18" :cy="-node.height / 2 + 18" r="5" class="node-led" />
-                  <text class="node-title" text-anchor="middle" y="-3">{{ node.displayLabel }}</text>
-                  <text class="node-status" text-anchor="middle" y="23">{{ node.displaySubline }}</text>
-                </g>
+                <template v-for="node in topologyNodes" :key="node.id">
+                  <g
+                    v-if="node.container"
+                    class="runtime-node"
+                    :class="[
+                      node.tone,
+                      {
+                        selected: selectedNodeId === node.id,
+                        highlighted: highlightedNodeId === node.id,
+                        impacted: impactedNodeIds.includes(node.id),
+                      },
+                    ]"
+                    :transform="`translate(${node.x} ${node.y})`"
+                  >
+                    <rect
+                      :x="-node.width / 2"
+                      :y="-node.height / 2"
+                      :width="node.width"
+                      :height="node.height"
+                      rx="18"
+                      class="node-body container-body"
+                    />
+                    <circle :cx="-node.width / 2 + 20" :cy="-node.height / 2 + 20" r="5" class="node-led" />
+                    <text class="node-container-title" text-anchor="middle" :y="-node.height / 2 + 126">{{ node.displayLabel }}</text>
+                    <text class="node-container-subtitle" text-anchor="middle" :y="-node.height / 2 + 146">{{ node.displaySubline }}</text>
+                    <g
+                      v-for="child in node.children"
+                      :key="child.id"
+                      class="runtime-node container-child"
+                      :class="childTone(child.id)"
+                      :transform="`translate(${child.ox} ${child.oy})`"
+                    >
+                      <rect :x="-child.width / 2" :y="-child.height / 2" :width="child.width" :height="child.height" rx="10" class="node-body child-body" />
+                      <circle :cx="-child.width / 2 + 16" :cy="-child.height / 2 + 16" r="4" class="node-led" />
+                      <text class="node-child-title" text-anchor="middle" y="-2">{{ child.label }}</text>
+                      <text class="node-child-status" text-anchor="middle" y="18">{{ child.sublabel }}</text>
+                    </g>
+                  </g>
+                  <g
+                    v-else
+                    class="runtime-node"
+                    :class="[
+                      node.tone,
+                      {
+                        selected: selectedNodeId === node.id,
+                        highlighted: highlightedNodeId === node.id,
+                        impacted: impactedNodeIds.includes(node.id),
+                      },
+                    ]"
+                    :transform="`translate(${node.x} ${node.y})`"
+                  >
+                    <circle v-if="node.pulse" r="48" class="node-pulse" />
+                    <rect
+                      :x="-node.width / 2"
+                      :y="-node.height / 2"
+                      :width="node.width"
+                      :height="node.height"
+                      rx="14"
+                      class="node-body"
+                    />
+                    <circle :cx="-node.width / 2 + 18" :cy="-node.height / 2 + 18" r="5" class="node-led" />
+                    <text class="node-title" text-anchor="middle" y="-3">{{ node.displayLabel }}</text>
+                    <text class="node-status" text-anchor="middle" y="23">{{ node.displaySubline }}</text>
+                  </g>
+                </template>
               </g>
             </g>
           </svg>
@@ -164,7 +202,6 @@
             <div class="panel-title">
               <strong>系统运行状态</strong>
             </div>
-            <time>{{ currentTimeText }}</time>
           </header>
           <div class="runtime-status-grid">
             <div v-for="item in runtimeStatusCards" :key="item.key" class="runtime-status-item" :class="item.tone">
@@ -266,10 +303,10 @@ let focusTimer = null
 
 const zones = [
   { key: 'perception', label: '感知层', x: 34, y: 46, width: 205, height: 548 },
-  { key: 'decision', label: '决策层', x: 276, y: 46, width: 206, height: 548 },
+  { key: 'decision', label: '规则层', x: 276, y: 46, width: 206, height: 548 },
   { key: 'model', label: '模型层', x: 520, y: 46, width: 238, height: 548 },
   { key: 'analysis', label: '分析层', x: 796, y: 46, width: 206, height: 548 },
-  { key: 'system', label: '系统层', x: 1040, y: 46, width: 206, height: 548 },
+  { key: 'system', label: '决策层', x: 1040, y: 46, width: 206, height: 548 },
 ]
 
 const topologyDefinition = [
@@ -282,12 +319,15 @@ const topologyDefinition = [
   { id: 'edge-qwen', label: '边缘模型', sublabel: '千问小模型', x: 640, y: 142, width: 150, height: 78, description: '边缘侧多模态小模型用于现场快速筛选和轻量判断。' },
   { id: 'vision-model', label: '专有模型', sublabel: '视觉推理', x: 640, y: 318, width: 150, height: 82, description: 'YOLO 检测 / 分类模型负责视频巡查中的专有视觉识别。' },
   { id: 'cloud-model', label: '云端模型', sublabel: '千问大模型', x: 640, y: 494, width: 150, height: 78, description: '云端千问多模态大模型提供更强语义理解和复杂场景判断。' },
-  { id: 'scene-reasoning', label: '场景推理', sublabel: '综合研判', x: 900, y: 318, width: 150, height: 82, description: '汇聚规则、专有模型和云端模型结果，形成面向场景的安全研判。' },
+  { id: 'scene-reasoning', label: '场景推理', sublabel: '综合研判', x: 900, y: 330, width: 200, height: 260, container: true, children: [
+    { id: 'scene-classify', label: '场景分类', sublabel: '场景语义', ox: 0, oy: -70, width: 130, height: 56, description: '对画面进行场景语义分类，识别水域、坝体、岸坡等现场场景类型。' },
+    { id: 'scene-detect', label: '目标检测', sublabel: '目标感知', ox: 0, oy: 70, width: 130, height: 56, description: '在场景内检测行人、船只等重点目标，输出检测框与置信度。' },
+  ], description: '汇聚场景分类、目标检测、规则和云端模型结果，形成面向场景的综合研判。' },
   { id: 'broadcast', label: '广播联动', sublabel: '现场提醒', x: 1144, y: 116, width: 126, height: 64, description: '广播服务订阅安全事件动作并执行现场提醒。' },
   { id: 'drone', label: '无人机', sublabel: '巡查调度', x: 1144, y: 220, width: 126, height: 64, description: '无人机调度服务根据事件动作执行巡检派发。' },
   { id: 'machine-dog', label: '机器狗', sublabel: '地面巡检', x: 1144, y: 324, width: 126, height: 64, description: '机器狗承接地面近距巡检、补盲确认和现场复核任务。' },
   { id: 'staff', label: '人工任务', sublabel: '处置派发', x: 1144, y: 428, width: 126, height: 64, description: '人工任务服务承接高风险事件处置流转。' },
-  { id: 'report', label: '巡查报告', sublabel: '报告生成', x: 1144, y: 532, width: 126, height: 64, description: '巡查报告根据事件和巡检结果生成，作为联动执行结果沉淀。' },
+  { id: 'report', label: '处置报告', sublabel: '报告生成', x: 1144, y: 532, width: 126, height: 64, description: '处置报告根据事件和处置结果生成，作为联动执行结果沉淀。' },
 ]
 
 const edgeDefinition = [
@@ -312,12 +352,6 @@ const edgeDefinition = [
 const nodePositions = ref(Object.fromEntries(
   topologyDefinition.map((node) => [node.id, { x: node.x, y: node.y }]),
 ))
-
-const currentTimeText = computed(() => currentTime.value.toLocaleTimeString('zh-CN', {
-  hour12: false,
-  hour: '2-digit',
-  minute: '2-digit',
-}))
 
 const systemReachable = computed(() => Object.keys(systemInfo.value || {}).length > 0)
 const collectorRunning = computed(() => Boolean(systemInfo.value.sensor_collector_running))
@@ -431,6 +465,14 @@ function nodeStatus(id) {
       tone: systemReachable.value ? 'ok' : 'neutral',
       text: systemReachable.value ? '研判可用' : '待确认',
     },
+    'scene-classify': {
+      tone: modelTone,
+      text: systemReachable.value ? '分类可用' : '待确认',
+    },
+    'scene-detect': {
+      tone: modelTone,
+      text: systemReachable.value ? '检测可用' : '待确认',
+    },
     broadcast: {
       tone: runtimeTone,
       text: eventRuntimeReady.value ? '可执行' : '阻断',
@@ -503,8 +545,12 @@ const resourceIssueMetrics = computed(() => resourceMetrics.value.filter((metric
 const uptimeText = computed(() => {
   const hours = Number(systemInfo.value.system_uptime_hours || 0)
   if (!hours) return '--'
-  if (hours >= 24) return `${formatNumber(hours / 24)}d`
-  return `${formatNumber(hours)}h`
+  if (hours >= 24) {
+    const days = Math.floor(hours / 24)
+    const restHours = Math.round(hours % 24)
+    return restHours > 0 ? `${days}天${restHours}小时` : `${days}天`
+  }
+  return `${Math.round(hours)}小时`
 })
 
 const runtimeStatusCards = computed(() => {
@@ -557,20 +603,34 @@ const runtimeStatusCards = computed(() => {
   ]
 })
 
-const topologyNodes = computed(() => topologyDefinition.map((node) => {
-  const status = nodeStatus(node.id)
-  const position = nodePositions.value[node.id] || { x: node.x, y: node.y }
-  return {
-    ...node,
-    x: position.x,
-    y: position.y,
-    tone: status.tone,
-    statusText: status.text,
-    displayLabel: node.label,
-    displaySubline: node.sublabel,
-    facts: nodeFacts(node.id),
-  }
-}))
+function childTone(id) {
+  return nodeStatus(id).tone
+}
+
+const topologyNodes = computed(() => {
+  // 容器节点内的子节点不作为独立节点渲染，由容器统一绘制
+  const containerChildIds = new Set(
+    topologyDefinition
+      .filter((node) => node.container)
+      .flatMap((node) => (node.children || []).map((child) => child.id)),
+  )
+  return topologyDefinition
+    .filter((node) => !containerChildIds.has(node.id))
+    .map((node) => {
+      const status = nodeStatus(node.id)
+      const position = nodePositions.value[node.id] || { x: node.x, y: node.y }
+      return {
+        ...node,
+        x: position.x,
+        y: position.y,
+        tone: status.tone,
+        statusText: status.text,
+        displayLabel: node.label,
+        displaySubline: node.sublabel,
+        facts: nodeFacts(node.id),
+      }
+    })
+})
 
 const topologyNodeMap = computed(() => Object.fromEntries(topologyNodes.value.map((node) => [node.id, node])))
 
@@ -823,10 +883,20 @@ function nodeFacts(id) {
       { label: '调用方式', value: '云端接口' },
     ],
     'scene-reasoning': [
-      { label: '输入来源', value: '规则 / 专有模型 / 云端模型' },
+      { label: '输入来源', value: '场景分类 / 目标检测 / 云端模型' },
       { label: '研判状态', value: edgeModelReady.value || cloudModelReady.value ? '可用' : '受阻' },
       { label: '输出对象', value: '风险等级' },
       { label: '下游联动', value: '广播 / 巡查 / 报告' },
+    ],
+    'scene-classify': [
+      { label: '分类类型', value: '场景语义' },
+      { label: '识别对象', value: '水域 / 坝体 / 岸坡' },
+      { label: '输入来源', value: '专有模型' },
+    ],
+    'scene-detect': [
+      { label: '检测对象', value: '人员 / 船只' },
+      { label: '输出结果', value: '检测框 / 置信度' },
+      { label: '输入来源', value: '专有模型' },
     ],
     broadcast: [
       { label: '动作类型', value: '广播联动' },
@@ -853,7 +923,7 @@ function nodeFacts(id) {
       { label: '闭环方式', value: '接单 / 完成' },
     ],
     report: [
-      { label: '动作类型', value: '巡查报告' },
+      { label: '动作类型', value: '处置报告' },
       { label: '执行状态', value: eventRuntimeReady.value ? '可生成' : '阻断' },
       { label: '存储对象', value: '证据 / 文档' },
       { label: '输出结果', value: '事件报告' },
@@ -1063,7 +1133,7 @@ const serviceItems = computed(() => [
   },
   {
     key: 'patrol-report',
-    name: '巡查报告',
+    name: '处置报告',
     group: 'Action',
     status: systemReachable.value ? 'online' : 'standby',
     tone: systemReachable.value ? 'ok' : 'ok',
@@ -1479,6 +1549,39 @@ onUnmounted(() => {
 .node-status {
   fill: #7f95a3;
   font-size: 12px;
+}
+
+.node-container-title {
+  fill: #edf6f7;
+  font-size: 17px;
+  font-weight: 650;
+}
+
+.node-container-subtitle {
+  fill: #7f95a3;
+  font-size: 11px;
+}
+
+.node-child-title {
+  fill: #edf6f7;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.node-child-status {
+  fill: #7f95a3;
+  font-size: 11px;
+}
+
+.container-body {
+  fill: rgba(13, 34, 48, 0.72);
+  stroke: rgba(132, 164, 177, 0.32);
+  stroke-width: 1.4;
+  stroke-dasharray: 6 5;
+}
+
+.container-child .child-body {
+  fill: rgba(17, 40, 55, 0.96);
 }
 
 .runtime-node.ok .node-status { fill: #79ddc5; }

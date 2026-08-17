@@ -1,4 +1,4 @@
-const API_BASE_URL = 'http://192.168.31.52:8090'.trim()
+const API_BASE_URL = 'http://10.199.204.140:8090'.trim()
 
 export {
   API_BASE_URL,

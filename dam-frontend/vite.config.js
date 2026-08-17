@@ -28,6 +28,17 @@ export default defineConfig({
         target: 'http://localhost:8090',  // Python 后端端口
         changeOrigin: true,
         ws: true,
+        configure: (proxy) => {
+          // Preserve the browser-facing host for generated OnlyOffice file URLs.
+          proxy.on('proxyReq', (proxyReq, req) => {
+            if (req.headers.host) proxyReq.setHeader('X-Forwarded-Host', req.headers.host)
+            if (req.headers['x-forwarded-proto']) {
+              proxyReq.setHeader('X-Forwarded-Proto', req.headers['x-forwarded-proto'])
+            } else {
+              proxyReq.setHeader('X-Forwarded-Proto', 'http')
+            }
+          })
+        },
       },
       // DJI Cloud API 代理（dij 项目后端，Docker 映射 6790->6789）
       '/dij-api': {

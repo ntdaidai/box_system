@@ -145,6 +145,8 @@ class DamEventReportService:
             logger.info("DAM事件报告跳过：未找到可用的大模型分析结果 instance={}", instance.instance_no)
             return None
 
+        self.sync_instance_risk_from_report(instance, selected)
+        db.flush()
         context = self.build_context(db, instance, event, workflow_payload, selected)
         docx_bytes = self.render_docx(context)
         # 报告文件名：以 ECA 触发的事件名命名，如「洪水灾害告警处置报告」
@@ -205,8 +207,14 @@ class DamEventReportService:
             db.query(AnalysisReportKnowledgeCitation).filter(
                 AnalysisReportKnowledgeCitation.report_id == report.id
             ).delete()
-            sources = workflow_insight.get("knowledge_sources")
-            citations = workflow_insight.get("sentence_citations")
+            sources = (
+                workflow_insight.get("report_knowledge_sources")
+                or workflow_insight.get("knowledge_sources")
+            )
+            citations = (
+                workflow_insight.get("report_sentence_citations")
+                or workflow_insight.get("sentence_citations")
+            )
             if isinstance(sources, list) and isinstance(citations, list):
                 source_by_evidence = {
                     str(item.get("evidence_id") or f"K{item.get('chunk_id')}"): item
@@ -331,6 +339,8 @@ class DamEventReportService:
             if not text or self.looks_like_model_thinking(text):
                 continue
             if node_id == "action_report":
+                if not self.is_complete_cloud_report(output):
+                    continue
                 return {
                     "source": "qwen35b",
                     "source_label": "Qwen3.6-35B-A3B 云端增强分析",
@@ -346,6 +356,32 @@ class DamEventReportService:
                 "node_id": node_id,
             }
         return None
+
+    def is_complete_cloud_report(self, output: Any) -> bool:
+        """Do not select a successful transport JSON as a report.
+
+        Older workflow records may contain a supplemental runtime-state JSON
+        under the cloud node even though the node was marked successful.
+        Require the report fields before allowing it to replace the 4B result.
+        """
+        result = output.get("inference_result") if isinstance(output, dict) else output
+        result = result if isinstance(result, dict) else {}
+        candidate = result.get("final_report") if isinstance(result.get("final_report"), dict) else result
+        required = (
+            "detailed_scene_analysis",
+            "risk_reasoning",
+            "impact_assessment",
+            "response_plan",
+            "monitoring_suggestions",
+        )
+        present = sum(
+            1
+            for key in required
+            if isinstance(candidate.get(key), str)
+            and candidate.get(key).strip() not in {"", "—", "-"}
+        )
+        risk_level = str(result.get("risk_level") or candidate.get("risk_level") or "").lower()
+        return present >= 3 and risk_level in {"low", "medium", "high", "critical"}
 
     def find_cloud_error(self, node_results: list[Any]) -> Optional[str]:
         for row in node_results:
@@ -548,16 +584,48 @@ class DamEventReportService:
         video_items = self.collect_video_items(workflow_payload, visual, evidence)
         selected_text = self.clean_report_text(selected["text"])
         workflow_insight = self.workflow_insight(workflow_payload, visual, selected_text)
+        report_sources, report_citations = self.report_knowledge_citations(
+            workflow_payload,
+            selected,
+            workflow_insight,
+        )
+        # Keep the all-node values available for audit/debugging, while the
+        # rendered report and its citation table use only the final node's
+        # citations that are actually present in its report text.
+        workflow_insight["knowledge_sources_all"] = workflow_insight.get("knowledge_sources") or []
+        workflow_insight["sentence_citations_all"] = workflow_insight.get("sentence_citations") or []
+        workflow_insight["knowledge_sources"] = report_sources
+        workflow_insight["sentence_citations"] = report_citations
+        workflow_insight["knowledge_sources_summary"] = self.format_knowledge_sources(
+            report_sources,
+            report_citations,
+        )
+        # The final report may combine the edge model's citations with the
+        # cloud review. Keep one shared source order for every rendered field;
+        # otherwise the cloud response numbers its own subset independently
+        # from the report's merged knowledge-basis section.
+        merged_citation_sources = workflow_insight.get("knowledge_sources")
+        if isinstance(merged_citation_sources, list):
+            selected["citation_sources"] = merged_citation_sources
+        merged_sentence_citations = workflow_insight.get("sentence_citations")
+        if isinstance(merged_sentence_citations, list):
+            selected["citation_ids"] = [
+                str(evidence_id).strip()
+                for citation in merged_sentence_citations
+                if isinstance(citation, dict)
+                for evidence_id in citation.get("evidence_ids") or []
+                if str(evidence_id).strip()
+            ]
         observation = dict(instance.latest_observation or {})
         risk_escalation = observation.get("risk_escalation") if isinstance(observation.get("risk_escalation"), dict) else {}
         supplemental_context = observation.get("supplemental_context") if isinstance(observation.get("supplemental_context"), dict) else {}
         if risk_escalation:
             workflow_insight["risk_escalation"] = risk_escalation
             workflow_insight["risk_escalation_summary"] = self.risk_escalation_summary(risk_escalation, supplemental_context)
-            workflow_insight["knowledge_sources_summary"] = self.merge_knowledge_summaries(
-                workflow_insight.get("knowledge_sources_summary"),
-                self.risk_escalation_knowledge_summary(risk_escalation),
-            )
+            # Keep escalation hits in the audit context, but do not render
+            # them as final report citations unless the selected model cites
+            # them in the report body.
+            workflow_insight["risk_escalation_knowledge_summary"] = self.risk_escalation_knowledge_summary(risk_escalation)
         workflow_insight["event_name"] = getattr(event, "event_name", None) or instance.summary or "安全事件"
         workflow_insight["event_code"] = getattr(event, "event_code", None)
         if not image_items and video_items:
@@ -590,7 +658,7 @@ class DamEventReportService:
             "instance_no": instance.instance_no,
             "instance_no_prefix": self.instance_no_parts(instance.instance_no)[0],
             "instance_no_suffix": self.instance_no_parts(instance.instance_no)[1],
-            "risk_label": RISK_NAMES.get(str(instance.max_risk_level or instance.risk_level or "").upper(), "低风险"),
+            "risk_label": self.report_risk_label(instance, selected),
             "result_label": self.result_label(instance),
             "occur_time": self.format_datetime(instance.started_at),
             "occur_time_display": self.format_datetime(instance.started_at).replace(" ", "\n"),
@@ -604,7 +672,13 @@ class DamEventReportService:
             "location_short": self.compact(location_text, 36),
             "evidence_count": len(image_items),
             "summary": self.event_summary(instance, event, source, visual, workflow_insight),
-            "key_observation": self.key_observation(workflow_payload, visual, selected_text, workflow_insight),
+            "key_observation": self.key_observation(
+                workflow_payload,
+                visual,
+                selected_text,
+                workflow_insight,
+                selected,
+            ),
             "source_summary": self.source_summary(image_items, video_items, selected),
             "handling_source": selected["source_label"],
             "timeline_count": len(timeline),
@@ -658,7 +732,7 @@ class DamEventReportService:
         context["event_name"] = getattr(event, "event_name", None) or instance.summary or "安全事件"
         context["instance_no"] = instance.instance_no
         context["instance_no_prefix"], context["instance_no_suffix"] = self.instance_no_parts(instance.instance_no)
-        context["risk_label"] = RISK_NAMES.get(str(instance.max_risk_level or instance.risk_level or "").upper(), "低风险")
+        context["risk_label"] = self.report_risk_label(instance, selected)
         context["result_label"] = self.result_label(instance)
         context["occur_time"] = self.format_datetime(instance.started_at)
         context["occur_time_display"] = self.format_datetime(instance.started_at).replace(" ", "\n")
@@ -1944,6 +2018,7 @@ class DamEventReportService:
         visual: dict[str, Any],
         selected_text: str,
         insight: Optional[dict[str, Any]] = None,
+        selected: Optional[dict[str, Any]] = None,
     ) -> str:
         insight = insight or {}
         parts = []
@@ -1953,8 +2028,17 @@ class DamEventReportService:
         screening = visual.get("screening") if isinstance(visual.get("screening"), dict) else {}
         if screening.get("summary") and not self.looks_like_model_thinking(str(screening.get("summary"))):
             parts.append(str(screening.get("summary")))
-        if not parts and insight.get("qwen4b_risk_reasoning"):
-            parts.append(self.compact(str(insight.get("qwen4b_risk_reasoning")), 220))
+        if not parts:
+            selected_observation = self.find_in_selected(selected, "key_observation") if selected else None
+            if not selected_observation and selected and selected.get("source") == "qwen35b":
+                selected_observation = (
+                    self.find_in_selected(selected, "detailed_scene_analysis")
+                    or self.find_in_selected(selected, "scene_analysis")
+                )
+            if selected_observation:
+                parts.append(self.compact(str(selected_observation), 220))
+            elif insight.get("qwen4b_risk_reasoning"):
+                parts.append(self.compact(str(insight.get("qwen4b_risk_reasoning")), 220))
         main_class = insight.get("specialized_class")
         confidence = insight.get("specialized_confidence")
         if main_class:
@@ -1967,6 +2051,60 @@ class DamEventReportService:
         if parts:
             return "；".join(parts[:3])
         return self.compact(selected_text, 180)
+
+    def report_risk_label(self, instance: SafetyEventInstance, selected: dict[str, Any]) -> str:
+        """Use the selected final model result consistently in the report header."""
+        current = str(instance.max_risk_level or instance.risk_level or "").upper()
+        if current in RISK_NAMES:
+            return RISK_NAMES[current]
+        value = self.find_in_selected(selected, "risk_level")
+        text = str(value or "").strip().lower()
+        labels = {
+            "high": "高风险",
+            "critical": "严重风险",
+            "medium": "中风险",
+            "low": "低风险",
+            "高风险": "高风险",
+            "严重风险": "严重风险",
+            "中风险": "中风险",
+            "低风险": "低风险",
+        }
+        if text in labels:
+            return labels[text]
+        return "低风险"
+
+    def sync_instance_risk_from_report(
+        self,
+        instance: SafetyEventInstance,
+        selected: dict[str, Any],
+    ) -> None:
+        """Promote the event risk when the final report finds a higher risk.
+
+        The trigger stores the initial screening risk. A completed 4B/35B
+        report is the final review result, so its higher level must be visible
+        in the event center as well as in the DOCX. Never downgrade an event's
+        recorded maximum risk during report generation.
+        """
+        value = self.find_in_selected(selected, "risk_level")
+        text = str(value or "").strip().lower()
+        final_risk = {
+            "critical": "HIGH",
+            "严重风险": "HIGH",
+            "high": "HIGH",
+            "高风险": "HIGH",
+            "medium": "MEDIUM",
+            "中风险": "MEDIUM",
+            "low": "LOW",
+            "低风险": "LOW",
+        }.get(text)
+        if not final_risk:
+            return
+        rank = {"LOW": 1, "MEDIUM": 2, "HIGH": 3}
+        current_max = str(instance.max_risk_level or instance.risk_level or "LOW").upper()
+        if rank.get(final_risk, 0) > rank.get(current_max, 0):
+            instance.max_risk_level = final_risk
+        if rank.get(final_risk, 0) >= rank.get(str(instance.risk_level or "LOW").upper(), 0):
+            instance.risk_level = final_risk
 
     def first_nested_value(self, value: Any, key: str) -> Any:
         values = self.find_nested_values(value, key)
@@ -2345,9 +2483,31 @@ class DamEventReportService:
         return self.apply_knowledge_citation_indexes(self.clean_model_output_field(text), citation_map)
 
     def knowledge_citation_index_map(self, selected: dict[str, Any]) -> dict[str, int]:
-        sources = self.find_in_selected(selected, "knowledge_sources") or selected.get("knowledge_sources")
+        sources = selected.get("citation_sources")
+        if not isinstance(sources, list):
+            sources = self.find_in_selected(selected, "knowledge_sources") or selected.get("knowledge_sources")
         if not isinstance(sources, list):
             return {}
+        citation_ids = {
+            str(value).strip()
+            for value in selected.get("citation_ids") or []
+            if str(value).strip()
+        }
+        if citation_ids:
+            cited_sources = []
+            for item in sources:
+                if not isinstance(item, dict):
+                    continue
+                identifiers = {
+                    str(item.get("evidence_id") or "").strip(),
+                    str(item.get("clause_id") or "").strip(),
+                }
+                chunk_id = str(item.get("chunk_id") or "").strip()
+                if chunk_id:
+                    identifiers.add(f"K{chunk_id}")
+                if identifiers & citation_ids:
+                    cited_sources.append(item)
+            sources = cited_sources
         mapping: dict[str, int] = {}
         seen: set[tuple[str, str]] = set()
         index = 0
@@ -2367,6 +2527,9 @@ class DamEventReportService:
                 mapping[str(evidence_id)] = index
             if item.get("chunk_id"):
                 mapping[f"K{item.get('chunk_id')}"] = index
+            clause_id = str(item.get("clause_id") or "").strip()
+            if clause_id:
+                mapping[clause_id] = index
         return mapping
 
     def apply_knowledge_citation_indexes(self, text: str, citation_map: dict[str, int]) -> str:
@@ -2378,15 +2541,24 @@ class DamEventReportService:
                 continue
             result = result.replace(f"[{evidence_id}]", f"[{index}]")
             result = re.sub(rf"(?<!\[){re.escape(evidence_id)}(?!\])", f"[{index}]", result)
-        first_index = min(citation_map.values()) if citation_map else 1
-        result = re.sub(r"\[K\d+\]", f"[{first_index}]", result)
-        result = re.sub(r"(?<!\[)K\d+(?!\])", f"[{first_index}]", result)
-        result = re.sub(r"知识库依据(?!\s*\[\d+\])", f"知识库依据[{first_index}]", result)
-        result = re.sub(r"结合知识库(?!依据)", f"结合知识库依据[{first_index}]", result)
+        # Never turn an unknown model-generated K-id into an arbitrary valid
+        # index. That would make a fabricated citation look grounded. Keep
+        # the prose, but remove only the unsupported marker.
+        result = re.sub(r"结合知识库依据\s*\[K\d+\]\s*中", "结合现场证据", result)
+        result = re.sub(r"知识库依据\s*\[K\d+\]\s*中", "现有证据", result)
+        result = re.sub(r"\[K\d+\]", "", result)
+        result = re.sub(r"(?<!\[)K\d+(?!\])", "", result)
+        result = re.sub(r"结合知识库(?!依据)", "结合知识库依据", result)
         return result
 
     def normalize_report_context_citations(self, context: dict[str, Any], selected: dict[str, Any]) -> None:
         citation_map = self.knowledge_citation_index_map(selected)
+        if not citation_map:
+            workflow_insight = context.get("workflow_insight") or {}
+            if isinstance(workflow_insight, dict):
+                citation_map = self.knowledge_citation_index_map({
+                    "raw_output": workflow_insight,
+                })
         knowledge_summary = (
             (context.get("workflow_insight") or {}).get("knowledge_sources_summary")
             or context.get("knowledge_sources_summary")
@@ -2601,6 +2773,16 @@ class DamEventReportService:
         text = re.sub(r"(?<![A-Za-z])high(?![A-Za-z])", "高风险", text, flags=re.IGNORECASE)
         text = re.sub(r"(?<![A-Za-z])medium(?![A-Za-z])", "中风险", text, flags=re.IGNORECASE)
         text = re.sub(r"(?<![A-Za-z])low(?![A-Za-z])", "低风险", text, flags=re.IGNORECASE)
+        text = re.sub(
+            r"(?:并)?将(?:补充运行状态和)?知识库依据(?:\[\d+\])?(?:写入|记录到|写入到)(?:本次)?(?:事件)?报告",
+            "同步记录现场复核和人员撤离结果",
+            text,
+        )
+        text = re.sub(
+            r"(?:模型|系统)(?:将|会)依据知识库(?:生成|完善)(?:本次)?报告",
+            "结合现场证据和运行状态完成风险研判",
+            text,
+        )
         text = re.sub(r"\s+", " ", text).strip()
         text = self.normalize_punctuation(text)
         if self.looks_like_model_thinking(text):
@@ -2739,12 +2921,159 @@ class DamEventReportService:
                 or self.find_in_value(reasoning, "monitoring_suggestions")
             ),
         })
+        # Keep citations emitted by the cloud reviewer in the same audit trail
+        # as the edge citations. The source list is de-duplicated so the report
+        # basis remains readable when both nodes cite the same clauses.
+        cloud_reasoning = self.find_node_inference(workflow_payload, "action_report")
+        cloud_sources = self.find_in_value(cloud_reasoning, "knowledge_sources")
+        cloud_citations = self.find_in_value(cloud_reasoning, "sentence_citations")
+        if isinstance(cloud_sources, list):
+            merged_sources = []
+            seen_sources = set()
+            for source in [*(result.get("knowledge_sources") or []), *cloud_sources]:
+                if not isinstance(source, dict):
+                    continue
+                source_key = str(
+                    source.get("evidence_id")
+                    or source.get("clause_id")
+                    or source.get("chunk_id")
+                    or ""
+                ).strip()
+                if not source_key or source_key in seen_sources:
+                    continue
+                seen_sources.add(source_key)
+                merged_sources.append(source)
+            result["knowledge_sources"] = merged_sources
+        if isinstance(cloud_citations, list):
+            result["sentence_citations"] = [
+                *(result.get("sentence_citations") or []),
+                *cloud_citations,
+            ]
+        if isinstance(cloud_sources, list) or isinstance(cloud_citations, list):
+            result["knowledge_sources_summary"] = self.format_knowledge_sources(
+                result.get("knowledge_sources") or [],
+                result.get("sentence_citations"),
+            )
         return result
+
+    def report_knowledge_citations(
+        self,
+        workflow_payload: dict[str, Any],
+        selected: dict[str, Any],
+        workflow_insight: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Return only citations used by the selected final report node.
+
+        Edge citations remain in ``*_all`` for audit, but they must not make
+        the final DOCX knowledge section claim support that the selected cloud
+        report did not actually use.
+        """
+        all_sources = [
+            item for item in workflow_insight.get("knowledge_sources") or []
+            if isinstance(item, dict)
+        ]
+        node_id = selected.get("node_id") or "action_reasoning"
+        node = self.find_node_inference(workflow_payload, str(node_id))
+        node_citations = self.find_in_value(node, "sentence_citations")
+        raw_citations = [item for item in node_citations if isinstance(item, dict)] if isinstance(node_citations, list) else []
+
+        # A final node sometimes puts [K...] directly in a report field but
+        # omits the corresponding sentence_citations entry. Accept only those
+        # markers from the selected node, and resolve them against the complete
+        # retrieved source list; never use edge-only citations here.
+        text_parts: list[str] = []
+        for key in (
+            "detailed_scene_analysis",
+            "risk_reasoning",
+            "impact_assessment",
+            "response_plan",
+            "monitoring_suggestions",
+            "key_observation",
+            "conclusion",
+        ):
+            value = self.find_in_selected(selected, key)
+            if value not in (None, "", []):
+                text_parts.append(str(value))
+        # ``selected.text`` may be a transport summary containing nested
+        # template_data/handling_summary content that is not rendered as a
+        # report paragraph. Only use it when no formal report field exists.
+        if not text_parts and selected.get("text"):
+            text_parts.append(str(selected.get("text")))
+        selected_text_ids = {
+            match.group(0)
+            for text in text_parts
+            for match in re.finditer(r"\bK\d+\b", text)
+        }
+        # A structured sentence_citations entry is not enough by itself. The
+        # final report must visibly cite the same evidence; otherwise the
+        # knowledge section would list clauses that readers cannot find in the
+        # report body. This also filters model output where a second citation
+        # is present in JSON but its sentence has no [K...] marker.
+        citations = []
+        selected_ids: set[str] = set(selected_text_ids)
+        for citation in raw_citations:
+            evidence_ids = {
+                str(evidence_id).strip()
+                for evidence_id in citation.get("evidence_ids") or []
+                if str(evidence_id).strip()
+            }
+            sentence_ids = {
+                match.group(0)
+                for match in re.finditer(r"\bK\d+\b", str(citation.get("sentence") or ""))
+            }
+            visible_ids = evidence_ids & sentence_ids & selected_text_ids
+            if not visible_ids:
+                continue
+            citations.append(citation)
+            selected_ids.update(visible_ids)
+        sources = []
+        for source in all_sources:
+            identifiers = {
+                str(source.get("evidence_id") or "").strip(),
+                str(source.get("clause_id") or "").strip(),
+            }
+            chunk_id = str(source.get("chunk_id") or "").strip()
+            if chunk_id:
+                identifiers.add(f"K{chunk_id}")
+            if identifiers & selected_ids:
+                sources.append(source)
+        return sources, citations
 
     @staticmethod
     def format_knowledge_sources(sources: Any, sentence_citations: Any = None) -> str:
         if not isinstance(sources, list):
             return ""
+        citation_ids: set[str] = set()
+        if isinstance(sentence_citations, list):
+            for citation in sentence_citations:
+                if not isinstance(citation, dict):
+                    continue
+                for evidence_id in citation.get("evidence_ids") or []:
+                    value = str(evidence_id or "").strip()
+                    if value:
+                        citation_ids.add(value)
+
+        # The retrieval list contains candidates; the report's knowledge basis
+        # should show only clauses the model actually cited in its正文. Keep
+        # the full list in workflow context for reasoning and audit purposes.
+        if isinstance(sentence_citations, list):
+            if not citation_ids:
+                return "模型未在正文中明确引用知识库条款"
+            selected_sources = []
+            for item in sources:
+                if not isinstance(item, dict):
+                    continue
+                identifiers = {
+                    str(item.get("evidence_id") or "").strip(),
+                    str(item.get("clause_id") or "").strip(),
+                }
+                chunk_id = str(item.get("chunk_id") or "").strip()
+                if chunk_id:
+                    identifiers.add(f"K{chunk_id}")
+                if identifiers & citation_ids:
+                    selected_sources.append(item)
+            sources = selected_sources
+
         lines = []
         seen = set()
         source_count = 0
@@ -2761,11 +3090,20 @@ class DamEventReportService:
                 continue
             seen.add(key)
             source_count += 1
-            line = f"[{source_count}] 《{str(title).strip()}》"
-            if section:
-                line += f"，{str(section).strip()}"
+            title_text = str(title).strip()
+            section_text = str(section).strip()
+            # The root section is often identical to the document title.
+            # Show only the document name there; for nested paths keep the
+            # readable child section without repeating the title.
+            if section_text == title_text:
+                section_text = ""
+            elif section_text.startswith(f"{title_text} > "):
+                section_text = section_text[len(title_text) + 3:]
+            line = f"[{source_count}] 《{title_text}》："
+            if section_text:
+                line += section_text
             if clause:
-                line += f"，条款 {str(clause).strip()}"
+                line += f"{'，' if section_text else ''}条款 {str(clause).strip()}"
             lines.append(line)
             if source_count >= 5:
                 break

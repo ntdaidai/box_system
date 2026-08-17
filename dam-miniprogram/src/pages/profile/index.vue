@@ -1,74 +1,87 @@
 <template>
   <view class="page profile-page">
-    <view class="profile-panel">
-      <view class="profile-top">
-        <image v-if="staff.avatar_url" class="avatar-img" :src="staff.avatar_url" mode="aspectFill" />
-        <view v-else class="avatar">{{ avatarText }}</view>
-        <view class="profile-main">
-          <view>{{ staff.display_name || '现场处置员' }}</view>
-          <text>{{ staff.nickname || '大藤峡安全巡查' }}</text>
-        </view>
-      </view>
-
-      <view class="info-grid">
-        <view>
-          <text>人员ID</text>
-          <text>{{ staff.staff_no || '--' }}</text>
-        </view>
-        <view>
-          <text>所属组别</text>
-          <text>{{ staff.group_name || '--' }}</text>
-        </view>
-      </view>
+    <!-- 未登录：扫码登录引导 -->
+    <view v-if="!loggedIn" class="profile-panel login-panel">
+      <view class="login-icon">◎</view>
+      <view class="login-title">现场处置员</view>
+      <text class="login-desc">扫描管理员提供的登录码即可完成身份认证，登录后长期有效</text>
+      <button class="primary-btn login-btn" @tap="handleScanLogin">扫码登录</button>
     </view>
 
-    <view class="filter-panel">
-      <picker mode="selector" :range="cameraOptions" :value="selectedPointIndex" @change="onPointPick">
-        <view class="filter-select">{{ pointFilterLabel }}</view>
-      </picker>
-      <picker mode="date" :value="filters.date" @change="onDateChange">
-        <view class="filter-select">{{ filters.date || '发生日期' }}</view>
-      </picker>
-      <view class="filter-actions">
-        <button class="filter-btn" @tap="reload">筛选</button>
-        <button class="clear-btn" @tap="clearFilters">清空</button>
-      </view>
-    </view>
+    <!-- 已登录：人员信息与处理记录 -->
+    <template v-else>
+      <view class="profile-panel">
+        <view class="profile-top">
+          <image v-if="staff.avatar_url" class="avatar-img" :src="staff.avatar_url" mode="aspectFill" />
+          <view v-else class="avatar">{{ avatarText }}</view>
+          <view class="profile-main">
+            <view>{{ staff.display_name || '现场处置员' }}</view>
+            <text>{{ staff.group_name || '大藤峡安全巡查' }}</text>
+          </view>
+        </view>
 
-    <view class="handled-panel">
-      <view class="section-head">
-        <text>我的处理</text>
-        <text>共 {{ total }} 条</text>
+        <view class="info-grid">
+          <view>
+            <text>人员ID</text>
+            <text>{{ staff.staff_no || '--' }}</text>
+          </view>
+          <view>
+            <text>所属组别</text>
+            <text>{{ staff.group_name || '--' }}</text>
+          </view>
+        </view>
+
+        <button class="ghost-btn logout-btn" @tap="handleLogout">退出登录</button>
       </view>
 
-      <view v-if="loading" class="handled-empty">加载中...</view>
-      <view v-else-if="handledEvents.length === 0" class="handled-empty">暂无人工处理记录</view>
-      <view v-else class="handled-list">
-        <view
-          v-for="item in handledEvents"
-          :key="item.event_id"
-          class="handled-item"
-          @tap="openDetail(item.event_id)"
+      <view class="filter-panel">
+        <picker mode="selector" :range="cameraOptions" :value="selectedPointIndex" @change="onPointPick">
+          <view class="filter-select">{{ pointFilterLabel }}</view>
+        </picker>
+        <picker mode="date" :value="filters.date" @change="onDateChange">
+          <view class="filter-select">{{ filters.date || '发生日期' }}</view>
+        </picker>
+        <view class="filter-actions">
+          <button class="filter-btn" @tap="reload">筛选</button>
+          <button class="clear-btn" @tap="clearFilters">清空</button>
+        </view>
+      </view>
+
+      <view class="handled-panel">
+        <view class="section-head">
+          <text>我的处理</text>
+          <text>共 {{ total }} 条</text>
+        </view>
+
+        <view v-if="loading" class="handled-empty">加载中...</view>
+        <view v-else-if="handledEvents.length === 0" class="handled-empty">暂无人工处理记录</view>
+        <view v-else class="handled-list">
+          <view
+            v-for="item in handledEvents"
+            :key="item.event_id"
+            class="handled-item"
+            @tap="openDetail(item.event_id)"
+          >
+            <view class="item-main">
+              <view>{{ item.event_name || item.event_type }}</view>
+              <text>{{ item.monitor_point }}</text>
+            </view>
+            <view class="item-side">
+              <text>{{ item.business_status_label }}</text>
+              <text>{{ item.completedText }}</text>
+            </view>
+          </view>
+        </view>
+
+        <button
+          v-if="hasMore && !loading"
+          class="ghost-btn load-more"
+          @tap="loadMore"
         >
-          <view class="item-main">
-            <view>{{ item.event_name || item.event_type }}</view>
-            <text>{{ item.monitor_point }}</text>
-          </view>
-          <view class="item-side">
-            <text>{{ item.business_status_label }}</text>
-            <text>{{ item.completedText }}</text>
-          </view>
-        </view>
+          加载更多
+        </button>
       </view>
-
-      <button
-        v-if="hasMore && !loading"
-        class="ghost-btn load-more"
-        @tap="loadMore"
-      >
-        加载更多
-      </button>
-    </view>
+    </template>
   </view>
 </template>
 
@@ -76,6 +89,7 @@
 import { request } from '../../utils/request'
 import { formatDateTime, riskClass } from '../../utils/format'
 import { readCache, writeCache } from '../../utils/cache'
+import { isLoggedIn, scanQrLogin, logout } from '../../utils/auth'
 
 const PAGE_SIZE = 10
 
@@ -98,6 +112,10 @@ export default {
   },
 
   computed: {
+    loggedIn() {
+      return isLoggedIn()
+    },
+
     avatarText() {
       return String(this.staff.display_name || '巡').slice(0, 1)
     },
@@ -107,10 +125,8 @@ export default {
     }
   },
 
-  onLoad() {
-    this.staff = readCache('mini-staff', {})
-    this.handledEvents = readCache('handled-events', [])
-    this.ensureStaff().then(() => Promise.all([this.loadCameraOptions(), this.reload()]))
+  onShow() {
+    this.refreshProfile()
   },
 
   onPullDownRefresh() {
@@ -118,8 +134,45 @@ export default {
   },
 
   methods: {
+    // 刷新个人资料：未登录仅展示扫码引导，登录后拉取最新人员信息
+    refreshProfile() {
+      this.staff = readCache('mini-staff', {})
+      this.handledEvents = readCache('handled-events', [])
+      if (!isLoggedIn()) return
+      this.ensureStaff().then(() => Promise.all([this.loadCameraOptions(), this.reload()]))
+    },
+
+    // 扫码登录入口
+    handleScanLogin() {
+      scanQrLogin()
+        .then(() => {
+          uni.showToast({ title: '登录成功', icon: 'success' })
+          this.refreshProfile()
+        })
+        .catch((error) => {
+          uni.showToast({ title: error.message || '扫码失败', icon: 'none' })
+        })
+    },
+
+    // 退出登录
+    handleLogout() {
+      uni.showModal({
+        title: '退出登录',
+        content: '确认退出当前账号？',
+        success: (res) => {
+          if (!res.confirm) return
+          logout()
+          this.staff = {}
+          this.handledEvents = []
+          writeCache('mini-staff', {})
+          this.reload()
+        }
+      })
+    },
+
     ensureStaff() {
-      const query = this.staff?.staff_id ? `?staff_id=${this.staff.staff_id}` : ''
+      // 已登录优先走 token 解析；未登录老版本用 staff_id 回落
+      const query = isLoggedIn() || !this.staff?.staff_id ? '' : `?staff_id=${this.staff.staff_id}`
       return request({ url: `/staff/me${query}` })
         .then((data) => {
           this.staff = data.staff || {}
@@ -223,6 +276,54 @@ export default {
 .profile-page {
   padding-top: 20rpx;
   padding-bottom: 48rpx;
+}
+
+.login-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 56rpx 32rpx 44rpx;
+  text-align: center;
+}
+
+.login-icon {
+  width: 120rpx;
+  height: 120rpx;
+  line-height: 120rpx;
+  border-radius: 50%;
+  background: #eaf3f5;
+  color: #0f4c5c;
+  font-size: 64rpx;
+  font-weight: 800;
+  margin-bottom: 22rpx;
+}
+
+.login-title {
+  color: #172026;
+  font-size: 36rpx;
+  font-weight: 800;
+  margin-bottom: 10rpx;
+}
+
+.login-desc {
+  color: #6c7a80;
+  font-size: 25rpx;
+  line-height: 40rpx;
+  margin-bottom: 32rpx;
+}
+
+.login-btn {
+  width: 320rpx;
+  height: 80rpx;
+  line-height: 80rpx;
+  font-size: 30rpx;
+}
+
+.logout-btn {
+  margin-top: 22rpx;
+  height: 72rpx;
+  line-height: 72rpx;
+  font-size: 26rpx;
 }
 
 .profile-panel,

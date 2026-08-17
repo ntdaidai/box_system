@@ -230,7 +230,7 @@ def parse_docx_knowledge_indexes(content: bytes, db: Session) -> list[dict]:
             break
         if not in_knowledge_section:
             continue
-        matched = re.match(r"^\[(\d+)\]\s*《([^》]+)》\s*[，,]?\s*(.*)$", text)
+        matched = re.match(r"^\[(\d+)\]\s*《([^》]+)》\s*[，,：:]?\s*(.*)$", text)
         if not matched:
             continue
         display_index = int(matched.group(1))
@@ -238,15 +238,20 @@ def parse_docx_knowledge_indexes(content: bytes, db: Session) -> list[dict]:
         rest = matched.group(3).strip()
         clause_match = re.search(r"(?:^|[，,]\s*)条款\s+([A-Za-z0-9_-]+)", rest)
         clause_id = clause_match.group(1).strip() if clause_match else ""
-        section_path = rest[:clause_match.start()].strip(" ，,") if clause_match else rest
+        section_path = rest[:clause_match.start()].strip(" ，,：:") if clause_match else rest.strip(" ，,：:")
         ref = find_knowledge_ref(db, title=title, clause_id=clause_id, section_path=section_path)
+        display_section_path = ref.get("section_path") or section_path
+        if display_section_path == title:
+            display_section_path = ""
+        elif display_section_path.startswith(f"{title} > "):
+            display_section_path = display_section_path[len(title) + 3:]
         items.append({
             "display_index": display_index,
             "evidence_id": ref.get("evidence_id") or "",
             "chunk_id": ref.get("chunk_id"),
             "document_id": ref.get("document_id"),
             "document_title": ref.get("document_title") or title,
-            "section_path": ref.get("section_path") or section_path,
+            "section_path": display_section_path,
             "clause_id": ref.get("clause_id") or clause_id,
             "support_type": "report_section",
             "confidence": "",

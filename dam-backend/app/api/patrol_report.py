@@ -1,4 +1,4 @@
-"""Automatic patrol report APIs."""
+"""自动处置报告接口。"""
 
 import datetime as dt
 
@@ -17,7 +17,7 @@ from app.services.patrol_report_service import (
 )
 
 
-router = APIRouter(prefix="/api/patrol-report", tags=["自动巡查报告"])
+router = APIRouter(prefix="/api/patrol-report", tags=["自动处置报告"])
 
 
 class DailyReportGenerateRequest(BaseModel):

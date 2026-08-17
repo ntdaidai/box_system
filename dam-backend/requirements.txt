@@ -34,6 +34,7 @@ redis[hiredis]==5.0.1
 
 # 工具
 python-dotenv==1.0.0
+qrcode[pil]==7.4.2
 loguru==0.7.2
 minio>=7.2.0
 docxtpl>=0.16.8

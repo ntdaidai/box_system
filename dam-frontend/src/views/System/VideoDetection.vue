@@ -709,7 +709,7 @@ function inferFrameSourceLabel(item) {
   const ownRef = item?.path || item?.object_name || item?.object_key || item?.file_url || item?.url || ''
   const text = `${item?.role || ''} ${sourceRef} ${ownRef}`.toLowerCase()
   if (text.includes('qwen4b_review_frame_candidate') || text.includes('qwen4b_selected_representative_frame') || text.includes('qwen4b-proxy-media')) {
-    return 'Qwen复核帧'
+    return '复核帧'
   }
   if (text.includes('qwen_screening') || text.includes('/camera/')) return '初筛帧'
   return '复核帧'

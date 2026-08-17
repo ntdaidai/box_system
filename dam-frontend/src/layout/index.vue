@@ -82,7 +82,7 @@ import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores'
 import {
-  ArrowDown, Connection, DataAnalysis, Setting, VideoCamera,
+  ArrowDown, Connection, DataAnalysis, Management, Setting, VideoCamera,
 } from '@element-plus/icons-vue'
 import {
   AlarmTriangleIcon,
@@ -112,8 +112,7 @@ function getCustomIcon(iconKey) {
 const navList = [
   { name: '综合态势', path: '/dashboard', icon: SystemOverviewIcon },
   { name: '感知监测', path: '/monitor', icon: RealtimeMonitorIcon },
-  { name: '告警管理', path: '/alarm', icon: AlarmTriangleIcon },
-  { name: '数据管理', path: '/document', icon: DocumentSheetIcon },
+  { name: '业务管理', path: '/workspace', icon: Management },
   { name: '系统管理', path: '/system', icon: Setting },
 ]
 
@@ -144,11 +143,21 @@ const menuMap = {
       icon: SystemOverviewIcon,
     },
   ],
-  '/alarm': [
+  '/workspace': [
     {
-      name: '告警管理',
-      path: '/alarm/safety-events',
+      name: '安全事件',
+      path: '/workspace/safety-events',
       icon: AlarmTriangleIcon,
+    },
+    {
+      name: '报告管理',
+      path: '/workspace/documents',
+      icon: DocumentSheetIcon,
+    },
+    {
+      name: '知识库',
+      path: '/workspace/knowledge',
+      icon: DataAnalysis,
     },
   ],
   '/system': [
@@ -181,10 +190,6 @@ const menuMap = {
       ],
     },
   ],
-  '/document': [
-    { name: '文档管理', path: '/document/hub', icon: DocumentSheetIcon },
-    { name: '知识库', path: '/document/knowledge', icon: DataAnalysis },
-  ],
 }
 
 // 当前导航
@@ -205,7 +210,7 @@ const isRegionAnnotator = computed(() => route.path === '/overview-camera-region
 // 需要显示侧边栏的模块
 const showSiderbar = computed(() => {
   const path = route.path
-  return path.startsWith('/monitor') || path.startsWith('/alarm') || path.startsWith('/system') || path.startsWith('/document')
+  return path.startsWith('/monitor') || path.startsWith('/workspace') || path.startsWith('/system')
 })
 
 // 当前菜单
@@ -215,7 +220,7 @@ const currentMenu = computed(() => {
 
 const sidebarActivePath = computed(() => {
   if (route.path === '/monitor/camera/image' || route.path === '/monitor/camera/video') return '/monitor/camera'
-  if (route.path.startsWith('/alarm/safety-events')) return '/alarm/safety-events'
+  if (route.path.startsWith('/workspace/safety-events')) return '/workspace/safety-events'
   return route.path
 })
 
@@ -251,6 +256,8 @@ const handleNavClick = (item) => {
 .siderBox :deep(.el-sub-menu__title) {
   font-size: 18px;
   font-weight: 600;
+  /* 统一侧边栏字体颜色（与业务管理/安全事件菜单一致） */
+  color: var(--text-secondary) !important;
 }
 
 .siderBox :deep(.el-menu > .el-menu-item),
@@ -290,6 +297,8 @@ const handleNavClick = (item) => {
   font-weight: 500;
   margin: 0 0 8px !important;
   background: transparent !important;
+  /* 二级子项与一级菜单同色 */
+  color: var(--text-secondary) !important;
 }
 
 .siderBox :deep(.el-sub-menu .el-menu-item .el-icon) {

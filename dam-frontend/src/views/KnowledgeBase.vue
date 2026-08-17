@@ -133,9 +133,9 @@
           <div class="row-tokens">{{ formatTokens(doc.token_count) }}</div>
           <div class="row-date">{{ formatTime(doc.create_time) }}</div>
           <div class="row-status">
-            <el-tag :type="statusType(doc.status)" size="small" effect="plain">
+            <span class="status-pill" :class="`status-${doc.status}`">
               {{ statusLabel(doc.status) }}
-            </el-tag>
+            </span>
           </div>
           <div class="row-actions">
             <el-button
@@ -144,10 +144,26 @@
               :disabled="!supportsOnlyOffice(doc)"
               @click="openDocument(doc)"
             >
-              查看
+              预览
+            </el-button>
+            <el-button
+              class="action-button edit-button"
+              size="small"
+              :disabled="!supportsEditing(doc)"
+              @click="openEditor(doc)"
+            >
+              编辑
             </el-button>
             <el-button class="action-button download-button" size="small" @click="downloadDocument(doc)">
-              下载
+              下载 Word
+            </el-button>
+            <el-button
+              class="action-button download-pdf-button"
+              size="small"
+              :loading="downloadingPdfId === doc.id"
+              @click="downloadPdf(doc)"
+            >
+              下载 PDF
             </el-button>
             <el-button class="action-button delete-button" size="small" @click="deleteDocument(doc)">
               删除
@@ -185,7 +201,7 @@
         <div class="preview-header">
           <el-button class="preview-back-button" :icon="ArrowLeft" @click="closePreview">返回</el-button>
           <div class="preview-title-stack">
-            <span class="preview-kicker">知识文档预览</span>
+            <span class="preview-kicker">{{ previewMode === 'edit' ? '知识文档编辑' : '知识文档预览' }}</span>
             <h2 class="preview-title" :title="previewTitle">{{ previewTitle }}</h2>
           </div>
         </div>
@@ -197,7 +213,7 @@
             <OnlyOfficeEditor
               v-if="officeConfig"
               :config="officeConfig"
-              mode="view"
+              :mode="previewMode"
               editor-height="100%"
               @error="onOfficeError"
             />
@@ -224,6 +240,7 @@ import {
 } from '@element-plus/icons-vue'
 import OnlyOfficeEditor from '@/components/OnlyOfficeEditor.vue'
 import request from '@/utils/request'
+import axios from 'axios'
 
 const bases = ref([])
 const selectedBaseId = ref(null)
@@ -240,6 +257,7 @@ const pageSize = 8
 const previewDialogVisible = ref(false)
 const previewLoading = ref(false)
 const previewDocument = ref(null)
+const previewMode = ref('view') // 'view' 预览 | 'edit' 编辑
 const officeLoading = ref(false)
 const officeConfig = ref(null)
 const officeError = ref('')
@@ -354,10 +372,24 @@ async function uploadKnowledge(options) {
 }
 
 async function openDocument(row) {
+  await openWithMode(row, 'view')
+}
+
+// 打开编辑器（mode='edit'），保存后由后端回调写回并重新索引
+async function openEditor(row) {
+  if (!supportsEditing(row)) {
+    ElMessage.warning('该文件类型暂不支持在线编辑')
+    return
+  }
+  await openWithMode(row, 'edit')
+}
+
+async function openWithMode(row, mode) {
   if (!supportsOnlyOffice(row)) {
     ElMessage.warning('该文件类型暂不支持 OnlyOffice 原文预览，可下载后查看')
     return
   }
+  previewMode.value = mode
   previewDialogVisible.value = true
   previewLoading.value = true
   previewDocument.value = null
@@ -366,13 +398,13 @@ async function openDocument(row) {
   try {
     const response = await request.get(`/v1/knowledge/documents/${row.id}`)
     previewDocument.value = response.data
-    await loadOfficePreview(previewDocument.value.id)
+    await loadOfficePreview(previewDocument.value.id, mode)
   } finally {
     previewLoading.value = false
   }
 }
 
-async function loadOfficePreview(documentId) {
+async function loadOfficePreview(documentId, mode) {
   if (!documentId || officeConfig.value || officeLoading.value) return
   officeLoading.value = true
   officeError.value = ''
@@ -381,6 +413,7 @@ async function loadOfficePreview(documentId) {
       params: {
         user_id: 'knowledge_user',
         user_name: '知识库用户',
+        mode: mode || 'view',
       },
       localCacheAllowStale: false,
     })
@@ -400,6 +433,11 @@ function resetPreview() {
   previewDocument.value = null
   officeConfig.value = null
   officeError.value = ''
+  // 编辑模式下关闭后稍等保存回调落库，再刷新列表
+  if (previewMode.value === 'edit') {
+    setTimeout(loadAll, 2500)
+  }
+  previewMode.value = 'view'
 }
 
 function onOfficeError(error) {
@@ -410,6 +448,17 @@ function supportsOnlyOffice(document) {
   return onlyOfficeExtensions.has(String(document?.file_type || '').toLowerCase())
 }
 
+// 在线编辑仅支持可被 OnlyOffice 编辑的办公文档（PDF 仅可预览/下载）
+const editingExtensions = new Set([
+  'doc', 'docx', 'odt', 'rtf', 'txt',
+  'xls', 'xlsx', 'ods', 'csv',
+  'ppt', 'pptx', 'odp',
+])
+
+function supportsEditing(document) {
+  return editingExtensions.has(String(document?.file_type || '').toLowerCase())
+}
+
 async function downloadDocument(row) {
   const link = document.createElement('a')
   link.href = `/api/v1/knowledge/documents/${row.id}/file`
@@ -417,6 +466,37 @@ async function downloadDocument(row) {
   document.body.appendChild(link)
   link.click()
   document.body.removeChild(link)
+}
+
+function downloadBlob(blob, filename) {
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.setAttribute('download', filename)
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  window.URL.revokeObjectURL(url)
+}
+
+// 下载 PDF：走后端转换接口，返回 PDF 文件流
+const downloadingPdfId = ref('')
+
+async function downloadPdf(row) {
+  downloadingPdfId.value = row.id
+  try {
+    const response = await axios.get(`/api/v1/knowledge/documents/${row.id}/export`, {
+      responseType: 'blob',
+    })
+    const baseName = String(row.title || row.filename || 'knowledge-document').replace(/\.\w+$/, '')
+    downloadBlob(response.data, `${baseName}.pdf`)
+    ElMessage.success('PDF 下载完成')
+  } catch (error) {
+    console.error('PDF 下载失败:', error)
+    ElMessage.error('PDF 下载失败')
+  } finally {
+    downloadingPdfId.value = ''
+  }
 }
 
 async function deleteDocument(row) {
@@ -469,14 +549,6 @@ function statusLabel(status) {
     indexed: '已索引',
     failed: '失败',
   }[status] || status
-}
-
-function statusType(status) {
-  return {
-    uploaded: 'warning',
-    indexed: 'success',
-    failed: 'danger',
-  }[status] || 'info'
 }
 
 function formatTime(value) {
@@ -719,7 +791,7 @@ function sortClass(field) {
 .document-header,
 .document-row {
   display: grid;
-  grid-template-columns: 46px minmax(150px, 1.5fr) minmax(64px, .7fr) minmax(72px, .8fr) minmax(52px, .6fr) minmax(56px, .6fr) minmax(64px, .7fr) minmax(122px, 1.2fr) minmax(64px, .7fr) minmax(150px, 1.4fr);
+  grid-template-columns: 46px minmax(150px, 1.5fr) minmax(64px, .7fr) minmax(72px, .8fr) minmax(52px, .6fr) minmax(56px, .6fr) minmax(64px, .7fr) minmax(122px, 1.2fr) minmax(64px, .7fr) minmax(330px, 1.4fr);
   align-items: center;
   gap: 12px;
 }
@@ -952,6 +1024,7 @@ function sortClass(field) {
 }
 
 .action-button {
+  flex-shrink: 0;
   min-width: 44px;
   height: 30px;
   padding: 0 9px;
@@ -960,11 +1033,35 @@ function sortClass(field) {
   color: #dce9fa;
   background: rgba(37, 70, 106, .38);
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .download-button { color: #c8f0ff; }
+.download-pdf-button { color: #ffd9a8; border-color: rgba(255, 179, 92, .34); background: rgba(166, 92, 7, .18); }
 .preview-button { color: #35e5f2; border-color: rgba(53, 229, 242, .34); background: rgba(7, 148, 166, .18); }
+.edit-button { color: #a8f0c8; border-color: rgba(85, 214, 143, .34); background: rgba(21, 132, 83, .18); }
 .delete-button { color: #ffb8ca; border-color: rgba(255, 92, 128, .35); background: rgba(189, 49, 95, .18); }
+
+/* 状态胶囊 */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  height: 24px;
+  padding: 0 12px;
+  border: 1px solid rgba(126, 152, 170, .24);
+  border-radius: 999px;
+  color: #b6c7d4;
+  background: rgba(126, 152, 170, .08);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+.status-uploaded { color: #ffe1a6; border-color: rgba(255, 191, 92, .35); background: rgba(166, 116, 7, .18); }
+.status-indexed { color: #7df0c8; border-color: rgba(61, 204, 150, .35); background: rgba(31, 160, 108, .16); }
+.status-failed { color: #ffb8ca; border-color: rgba(255, 92, 128, .35); background: rgba(189, 49, 95, .18); }
 
 .empty-state {
   display: flex;
@@ -1118,7 +1215,7 @@ function sortClass(field) {
 @media (max-width: 1280px) {
   .document-header,
   .document-row {
-    grid-template-columns: 40px minmax(120px, 1.5fr) minmax(64px, .7fr) minmax(72px, .8fr) minmax(52px, .6fr) minmax(122px, 1.2fr) minmax(64px, .7fr) minmax(130px, 1.4fr);
+    grid-template-columns: 40px minmax(120px, 1.5fr) minmax(64px, .7fr) minmax(72px, .8fr) minmax(52px, .6fr) minmax(122px, 1.2fr) minmax(64px, .7fr) minmax(330px, 1.4fr);
   }
 
   .document-header .row-sections,

@@ -12,42 +12,73 @@
     </section>
 
     <section class="filters">
-      <el-select v-model="query.status" placeholder="全部处置状态" @change="reloadFromFirstPage">
+      <el-select v-model="query.source_type" placeholder="请选择事件来源" @change="onSourceTypeChange">
+        <el-option label="全部事件来源" value="all" />
+        <el-option label="摄像头" value="camera" />
+        <el-option label="传感器" value="sensor" />
+      </el-select>
+      <el-select
+        v-if="query.source_type === 'camera'"
+        v-model="query.source_id"
+        placeholder="选择摄像头"
+        clearable
+        @change="onCameraChange"
+      >
+        <el-option
+          v-for="camera in cameraOptions"
+          :key="camera.id"
+          :label="camera.camera_name || camera.name || camera.id"
+          :value="camera.id"
+        />
+      </el-select>
+      <el-select
+        v-if="query.source_type === 'sensor' || (query.source_type === 'camera' && query.source_id)"
+        v-model="query.event_category"
+        placeholder="全部事件类型"
+        @change="onCategoryChange"
+      >
+        <el-option label="全部事件类型" value="all" />
+        <el-option
+          v-for="event in categoryOptions"
+          :key="event.value"
+          :label="event.label"
+          :value="event.value"
+        />
+      </el-select>
+      <el-select
+        v-if="hasCategory"
+        v-model="query.risk_level"
+        placeholder="全部风险等级"
+        @change="onRiskChange"
+      >
+        <el-option label="全部风险等级" value="all" />
+        <el-option label="低风险" value="LOW" />
+        <el-option label="中风险" value="MEDIUM" />
+        <el-option label="高风险" value="HIGH" />
+      </el-select>
+      <el-select
+        v-if="hasRisk"
+        v-model="query.status"
+        placeholder="全部处置状态"
+        @change="reloadFromFirstPage"
+      >
         <el-option label="全部处置状态" value="all" />
         <el-option label="待处理" value="PENDING" />
         <el-option label="处理中" value="PROCESSING" />
         <el-option label="已完成" value="COMPLETED" />
         <el-option label="误报" value="FALSE_ALARM" />
       </el-select>
-      <el-select v-model="query.risk_level" placeholder="全部风险等级" @change="reloadFromFirstPage">
-        <el-option label="全部风险等级" value="all" />
-        <el-option label="低风险" value="LOW" />
-        <el-option label="中风险" value="MEDIUM" />
-        <el-option label="高风险" value="HIGH" />
-      </el-select>
-      <el-select v-model="query.source_type" placeholder="全部事件来源" @change="reloadFromFirstPage">
-        <el-option label="全部事件来源" value="all" />
-        <el-option label="摄像头" value="camera" />
-        <el-option label="传感器" value="sensor" />
-      </el-select>
-      <el-select v-model="query.event_category" placeholder="全部事件类型" @change="reloadFromFirstPage">
-        <el-option label="全部事件类型" value="all" />
-        <el-option
-          v-for="event in eventTypeOptions"
-          :key="event.value"
-          :label="event.label"
-          :value="event.value"
-        />
-      </el-select>
       <el-date-picker
-        v-model="query.event_date"
-        class="event-date-picker"
-        type="date"
+        v-model="dateRange"
+        class="date-range-picker"
+        type="daterange"
         value-format="YYYY-MM-DD"
-        placeholder="发生日期"
+        range-separator="至"
+        start-placeholder="开始日期"
+        end-placeholder="结束日期"
         popper-class="alarm-date-popper"
         clearable
-        @change="reloadFromFirstPage"
+        @change="onDateRangeChange"
       />
       <el-input
         v-model.trim="query.keyword"
@@ -69,7 +100,7 @@
         :default-sort="{ prop: 'started_at', order: 'descending' }"
         @sort-change="handleSortChange"
       >
-        <el-table-column label="事件编号" prop="id" width="176" sortable="custom" align="center" header-align="center">
+        <el-table-column label="事件编号" prop="id" min-width="176" sortable="custom" align="center" header-align="center">
           <template #default="{ row }">
             <span class="event-no">{{ displayEventNo(row) }}</span>
           </template>
@@ -79,12 +110,12 @@
             <strong class="event-name">{{ row.event_name || '未命名事件' }}</strong>
           </template>
         </el-table-column>
-        <el-table-column label="风险等级" prop="risk_level" width="116" sortable="custom" align="center" header-align="center">
+        <el-table-column label="风险等级" prop="risk_level" min-width="116" sortable="custom" align="center" header-align="center">
           <template #default="{ row }">
             <el-tag :type="riskTag(row.risk_level)" effect="dark">{{ riskLevelLabel(row.risk_level, row.risk_label) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="来源" width="108" align="center" header-align="center">
+        <el-table-column label="来源" min-width="108" align="center" header-align="center">
           <template #default="{ row }">
             <span class="source-pill" :class="`is-${row.source_type || 'unknown'}`">{{ sourceLabel(row.source_type) }}</span>
           </template>
@@ -101,17 +132,17 @@
             <span v-else class="event-summary">{{ row.summary || '暂无摘要' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="处置状态" width="126" align="center" header-align="center">
+        <el-table-column label="处置状态" min-width="126" align="center" header-align="center">
           <template #default="{ row }">
             <span class="event-status" :class="statusClass(row.status)">{{ statusLabel(row.status) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="开始时间" prop="started_at" width="190" sortable="custom" align="center" header-align="center">
+        <el-table-column label="开始时间" prop="started_at" min-width="190" sortable="custom" align="center" header-align="center">
           <template #default="{ row }">
             <time class="event-time">{{ formatTime(row.started_at) }}</time>
           </template>
         </el-table-column>
-        <el-table-column label="最后完成时间" prop="resolved_at" width="190" sortable="custom" align="center" header-align="center">
+        <el-table-column label="最后完成时间" prop="resolved_at" min-width="190" sortable="custom" align="center" header-align="center">
           <template #default="{ row }">
             <time class="event-time">{{ formatTime(row.resolved_at) }}</time>
           </template>
@@ -150,12 +181,15 @@ import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowRight, BellFilled, Clock, Finished, Refresh, Search, WarningFilled } from '@element-plus/icons-vue'
+import { getCameraList } from '@/api/camera'
 import { getUnifiedSafetyEventCategories, getUnifiedSafetyEvents } from '@/api/integration'
 
 const router = useRouter()
 const loading = ref(false)
 const items = ref([])
 const eventTypeOptions = ref([])
+const cameraOptions = ref([])
+const dateRange = ref([])
 const total = ref(0)
 const overview = ref({
   pending: 0,
@@ -170,6 +204,9 @@ const query = reactive({
   source_type: 'all',
   event_category: 'all',
   event_date: '',
+  source_id: '',
+  start_time: '',
+  end_time: '',
   keyword: '',
   sort_by: 'time',
   sort_order: 'desc',
@@ -178,7 +215,7 @@ const query = reactive({
 })
 
 const hasActiveFilters = computed(() => {
-  return ['status', 'risk_level', 'source_type', 'event_category', 'event_date', 'keyword']
+  return ['status', 'risk_level', 'source_type', 'event_category', 'source_id', 'start_time', 'end_time', 'keyword']
     .some((key) => Boolean(normalizedQueryValue(query[key])))
 })
 const overviewHint = computed(() => hasActiveFilters.value ? '当前筛选范围' : '全部告警累计')
@@ -188,7 +225,7 @@ const overviewCards = computed(() => [
   { label: '高风险', value: overview.value.high, hint: overviewHint.value, icon: WarningFilled, tone: 'tone-high' },
   { label: '中风险', value: overview.value.medium, hint: overviewHint.value, icon: WarningFilled, tone: 'tone-medium' },
   { label: '低风险', value: overview.value.low, hint: overviewHint.value, icon: WarningFilled, tone: 'tone-low' },
-  { label: '已闭环', value: overview.value.closed, hint: overviewHint.value, icon: Finished, tone: 'tone-closed' },
+  { label: '已处置', value: overview.value.closed, hint: overviewHint.value, icon: Finished, tone: 'tone-closed' },
 ])
 
 async function loadEvents() {
@@ -270,6 +307,52 @@ async function fetchOverviewCounts() {
 function reloadFromFirstPage() {
   query.page = 1
   loadEvents()
+}
+
+// 事件类型选项：传感器分支仅「极端天气」，摄像头分支按接口动态列表
+const categoryOptions = computed(() =>
+  query.source_type === 'sensor'
+    ? [{ value: 'environment', label: '极端天气' }]
+    : eventTypeOptions.value,
+)
+
+// 下一级筛选框是否出现：上一级已选择时逐级展开
+const hasCategory = computed(() => query.event_category && query.event_category !== 'all')
+const hasRisk = computed(() => query.risk_level && query.risk_level !== 'all')
+
+// 级联：选择上一级时清空所有下游筛选并回到第一页
+function onSourceTypeChange() {
+  query.source_id = ''
+  query.event_category = 'all'
+  query.risk_level = 'all'
+  query.status = 'all'
+  reloadFromFirstPage()
+}
+
+function onCameraChange() {
+  query.event_category = 'all'
+  query.risk_level = 'all'
+  query.status = 'all'
+  reloadFromFirstPage()
+}
+
+function onCategoryChange() {
+  query.risk_level = 'all'
+  query.status = 'all'
+  reloadFromFirstPage()
+}
+
+function onRiskChange() {
+  query.status = 'all'
+  reloadFromFirstPage()
+}
+
+// 时间范围：写入起止日期后回到第一页
+function onDateRangeChange() {
+  const [start, end] = dateRange.value || []
+  query.start_time = start || ''
+  query.end_time = end || ''
+  reloadFromFirstPage()
 }
 
 function openDetail(row) {
@@ -368,7 +451,17 @@ async function loadEventTypes() {
   }
 }
 
+async function loadCameras() {
+  try {
+    const res = await getCameraList()
+    cameraOptions.value = res.data?.cameras || []
+  } catch (error) {
+    cameraOptions.value = []
+  }
+}
+
 loadEventTypes()
+loadCameras()
 loadEvents()
 </script>
 
@@ -479,6 +572,7 @@ loadEvents()
 }
 .filters {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 14px;
   justify-content: flex-start;
@@ -491,8 +585,8 @@ loadEvents()
 .filters .el-select {
   width: 150px;
 }
-.filters .event-date-picker {
-  width: 150px;
+.filters .date-range-picker {
+  width: 228px;
 }
 .filters .el-input {
   max-width: 360px;

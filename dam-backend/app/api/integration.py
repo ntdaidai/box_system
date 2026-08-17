@@ -632,6 +632,9 @@ def list_safety_events(
     event_category: Optional[str] = Query(None, max_length=64),
     event_id: Optional[int] = Query(None, ge=1),
     event_date: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    source_id: Optional[int] = Query(None, ge=1),
+    start_time: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    end_time: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     sort_by: Optional[str] = Query(None, pattern="^(index|risk|time|resolved)$"),
     sort_order: Optional[str] = Query(None, pattern="^(asc|desc)$"),
     keyword: Optional[str] = Query(None),
@@ -660,6 +663,14 @@ def list_safety_events(
         start_at = dt.datetime.combine(day, dt.time.min)
         end_at = start_at + dt.timedelta(days=1)
         query = query.filter(SafetyEventInstance.started_at >= start_at, SafetyEventInstance.started_at < end_at)
+    if source_id:
+        query = query.filter(SafetyEventInstance.source_id == source_id)
+    if start_time:
+        start_at = dt.datetime.combine(dt.date.fromisoformat(start_time), dt.time.min)
+        query = query.filter(SafetyEventInstance.started_at >= start_at)
+    if end_time:
+        end_at = dt.datetime.combine(dt.date.fromisoformat(end_time), dt.time.min) + dt.timedelta(days=1)
+        query = query.filter(SafetyEventInstance.started_at < end_at)
     if keyword:
         like = f"%{keyword}%"
         query = query.filter(or_(SafetyEventInstance.instance_no.like(like), SafetyEventInstance.summary.like(like), EventLibrary.event_name.like(like)))

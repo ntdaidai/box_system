@@ -436,10 +436,15 @@ class VisionDetector:
         self,
         camera_id: str,
         *,
-        time_window_minutes: int,
+        time_window_minutes: int = 1,
+        time_window_seconds: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """Return ECA-compatible camera snapshots from recent Qwen updates."""
-        cutoff = time.time() - max(1, int(time_window_minutes)) * 60
+        if time_window_seconds is not None:
+            history_seconds = max(0.1, float(time_window_seconds))
+        else:
+            history_seconds = max(1, int(time_window_minutes)) * 60
+        cutoff = time.time() - history_seconds
         with self.lock:
             records = [
                 dict(record)

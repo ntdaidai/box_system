@@ -48,8 +48,10 @@ class MiniProgramStaff(Base):
     group_id = Column(String(64), nullable=False, default="default", index=True, comment="所属组别ID")
     group_name = Column(String(128), nullable=False, default="默认处置组", index=True, comment="所属组别名称")
     phone = Column(String(32), nullable=True, comment="联系电话")
+    description = Column(String(255), nullable=True, comment="人员描述")
     status = Column(String(32), nullable=False, default="ACTIVE", index=True, comment="状态")
     last_login_at = Column(DateTime, nullable=True, comment="最近登录时间")
+    last_active_at = Column(DateTime, nullable=True, comment="最近活跃时间")
     create_time = Column(DateTime, default=datetime.now, comment="创建时间")
     update_time = Column(
         DateTime,

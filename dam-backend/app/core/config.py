@@ -168,6 +168,11 @@ class Settings:
     JWT_ALGORITHM: str = _get_env("JWT_ALGORITHM", "HS256")
     JWT_EXPIRE_SECONDS: int = int(_get_env("JWT_EXPIRE_SECONDS", "1296000"))  # 15d
 
+    # ── 小程序处置人员登录 (二维码扫码登录) ─────────────────
+    STAFF_TOKEN_EXPIRE_SECONDS: int = int(_get_env("STAFF_TOKEN_EXPIRE_SECONDS", "315360000"))  # 10年≈长期有效
+    STAFF_ONLINE_THRESHOLD_SECONDS: int = int(_get_env("STAFF_ONLINE_THRESHOLD_SECONDS", "300"))  # 在线判定阈值 5 分钟
+    STAFF_QR_TICKET_TTL_SECONDS: int = int(_get_env("STAFF_QR_TICKET_TTL_SECONDS", "300"))  # 登录码有效期 5 分钟
+
     # ── 默认管理员 (无鉴权模式下作为接口操作者占位) ───────────
     DEFAULT_ADMIN_USERNAME: str = _get_env("DEFAULT_ADMIN_USERNAME", "admin")
     DEFAULT_ADMIN_PASSWORD: str = _get_env("DEFAULT_ADMIN_PASSWORD", "admin")

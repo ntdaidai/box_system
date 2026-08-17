@@ -102,8 +102,10 @@
             </div>
           </div>
           <div class="trend-legend">
-            <span><i class="person"></i>人员入侵</span>
-            <span><i class="boat"></i>船只捕鱼</span>
+            <span @mouseenter="onTrendLegendEnter('人员入侵')" @mouseleave="onTrendLegendLeave"><i class="person"></i>人员入侵</span>
+            <span @mouseenter="onTrendLegendEnter('船只捕鱼')" @mouseleave="onTrendLegendLeave"><i class="boat"></i>船只捕鱼</span>
+            <span @mouseenter="onTrendLegendEnter('自然灾害')" @mouseleave="onTrendLegendLeave"><i class="disaster"></i>自然灾害</span>
+            <span @mouseenter="onTrendLegendEnter('极端天气')" @mouseleave="onTrendLegendLeave"><i class="weather"></i>极端天气</span>
           </div>
           <div ref="trendChartRef" class="line-chart echarts-chart" aria-label="人员入侵和船只捕鱼安全事件记录"></div>
         </section>
@@ -611,7 +613,7 @@ const todayMetrics = computed(() => {
     buildTodayMetric('person', '人员告警', today, yesterday),
     buildTodayMetric('boat', '船只告警', today, yesterday),
     buildTodayMetric('disaster', '自然灾害告警', today, yesterday),
-    buildTodayMetric('other', '其他告警', today, yesterday),
+    buildTodayMetric('other', '极端天气告警', today, yesterday),
     buildHandlingMetric('handled', '已处理告警', todayHandled, yesterdayHandled, 'success'),
     buildHandlingMetric('unhandled', '未处理告警', todayUnhandled, yesterdayUnhandled, 'danger'),
   ]
@@ -650,10 +652,14 @@ const intrusionTrend = computed(() => {
   const labels = trendLabels(currentMode)
   const person = trendBuckets(currentMode, 'person')
   const boat = trendBuckets(currentMode, 'boat')
+  const disaster = trendBuckets(currentMode, 'disaster')
+  const weather = trendBuckets(currentMode, 'weather')
   return {
     labels,
     person,
     boat,
+    disaster,
+    weather,
   }
 })
 
@@ -718,7 +724,7 @@ const riskCompositionData = computed(() => {
     { name: '安全事件', events: cameraSource.filter((event) => ['person', 'boat'].includes(getOverviewCategory(event))) },
     { name: '自然灾害', events: cameraSource.filter((event) => getOverviewCategory(event) === 'disaster') },
     {
-      name: '其他',
+      name: '极端天气',
       events: [
         ...cameraSource.filter((event) => getOverviewCategory(event) === 'other'),
         ...selectedSensorEventsForNine.value,
@@ -1043,7 +1049,7 @@ function renderTrendChart() {
   const chart = getChart(el, 'intrusion-trend')
   if (!chart) return
   chart.setOption({
-    color: ['#ff6873', '#41c8ff'],
+    color: ['#ff6873', '#41c8ff', '#ffb648', '#38d59c'],
     tooltip: { ...chartTooltip, trigger: 'axis' },
     grid: { left: 28, right: 10, top: 16, bottom: 24 },
     xAxis: {
@@ -1060,11 +1066,48 @@ function renderTrendChart() {
       splitLine: { lineStyle: { color: chartGridColor, type: 'dashed' } },
       axisLabel: { color: chartTextColor, fontSize: rfs(10) },
     },
-    series: [
-      buildLineSeries('人员入侵', intrusionTrend.value.person, '#ff6873'),
-      buildLineSeries('船只捕鱼', intrusionTrend.value.boat, '#41c8ff'),
-    ],
+    series: buildTrendSeries(),
   }, true)
+}
+
+// 折线 series 列表：人员入侵 / 船只捕鱼 / 自然灾害 / 极端天气
+function buildTrendSeries() {
+  return [
+    buildLineSeries('人员入侵', intrusionTrend.value.person, '#ff6873'),
+    buildLineSeries('船只捕鱼', intrusionTrend.value.boat, '#41c8ff'),
+    buildLineSeries('自然灾害', intrusionTrend.value.disaster, '#ffb648'),
+    buildLineSeries('极端天气', intrusionTrend.value.weather, '#38d59c'),
+  ]
+}
+
+// 悬停图例：复刻"悬停线上"的效果——该线高亮加粗、其他线淡出、并显示对应数据点提示
+function onTrendLegendEnter(name) {
+  const chart = getChart(trendChartRef.value, 'intrusion-trend')
+  if (!chart) return
+  const index = buildTrendSeries().findIndex((item) => item.name === name)
+  if (index < 0) return
+  chart.dispatchAction({ type: 'highlight', seriesIndex: index })
+  // 找到该系列最后一个非零数据点，在那里显示提示，与悬停线上的 tooltip 一致
+  const key = ['person', 'boat', 'disaster', 'weather'][index]
+  const data = (intrusionTrend.value[key] || []).filter((v) => typeof v === 'number')
+  let dataIndex = Math.max(0, data.length - 1)
+  for (let i = data.length - 1; i >= 0; i--) {
+    if (data[i] > 0) {
+      dataIndex = i
+      break
+    }
+  }
+  chart.dispatchAction({ type: 'showTip', seriesIndex: index, dataIndex })
+}
+
+function onTrendLegendLeave() {
+  const chart = getChart(trendChartRef.value, 'intrusion-trend')
+  if (!chart) return
+  // 恢复全部系列的默认状态并隐藏提示
+  buildTrendSeries().forEach((_, index) => {
+    chart.dispatchAction({ type: 'downplay', seriesIndex: index })
+  })
+  chart.dispatchAction({ type: 'hideTip' })
 }
 
 function buildLineSeries(name, data, color) {
@@ -1533,6 +1576,11 @@ function getOverviewCategory(event) {
     || category.includes('DEBRIS')
     || /洪水|地震|泥石流|滑坡/.test(text)
   ) return 'disaster'
+  if (
+    category === 'ENVIRONMENT'
+    || category.includes('WEATHER')
+    || /极端天气|台风|暴雨|大风|高温|低温/.test(text)
+  ) return 'weather'
   return 'other'
 }
 
@@ -3185,6 +3233,10 @@ onBeforeUnmount(() => {
   font-variant-numeric: tabular-nums;
 }
 
+.trend-legend span {
+  cursor: pointer;
+}
+
 .trend-legend i {
   display: inline-block;
   width: clamp(8px, .45vw, 10px);
@@ -3203,6 +3255,25 @@ onBeforeUnmount(() => {
 .trend-panel .panel-heading {
   height: 34px;
   min-height: 0;
+  gap: 8px;
+}
+
+/* 标题自适应：占满剩余空间，按钮组保持完整不被挤压 */
+.trend-panel .panel-heading h2 {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  font-size: clamp(14px, .92vw, 20px);
+}
+
+.trend-panel .segmented {
+  flex-shrink: 0;
+}
+
+.trend-panel .segmented button {
+  height: clamp(22px, 1.22vw, 28px);
+  padding: 0 clamp(8px, .48vw, 10px);
+  font-size: clamp(11px, .66vw, 13px);
 }
 
 .trend-legend {
@@ -3211,10 +3282,10 @@ onBeforeUnmount(() => {
   min-height: 0;
   align-items: center;
   justify-content: flex-end;
-  gap: clamp(12px, .7vw, 18px);
+  gap: clamp(8px, .45vw, 12px);
   margin: 0;
   color: #a4d2ee;
-  font-size: clamp(13px, .78vw, 17px);
+  font-size: clamp(11px, .62vw, 14px);
   overflow: hidden;
 }
 
@@ -3224,6 +3295,36 @@ onBeforeUnmount(() => {
 
 .trend-legend i.boat {
   background: #41c8ff;
+}
+
+.trend-legend i.disaster {
+  background: #ffb648;
+}
+
+.trend-legend i.weather {
+  background: #38d59c;
+}
+
+/* 告警记录：标题自适应，按钮组不被挤压 */
+.hourly-card .sub-heading {
+  gap: 8px;
+}
+
+.hourly-card .sub-heading h3 {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  font-size: clamp(13px, .85vw, 17px);
+}
+
+.hourly-card .mini-segmented {
+  flex-shrink: 0;
+}
+
+.hourly-card .mini-segmented button {
+  height: clamp(20px, 1.15vw, 25px);
+  padding: 0 clamp(6px, .4vw, 9px);
+  font-size: clamp(10px, .6vw, 12px);
 }
 
 .line-chart {

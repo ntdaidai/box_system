@@ -429,7 +429,7 @@ const mainFlowSteps = computed(() => {
       key: 'archive',
       title: '闭环归档',
       state: archiveState,
-      statusText: isResolved.value ? '已闭环' : '未开始',
+      statusText: isResolved.value ? '已处置' : '未开始',
       time: formatShortTime(resolveLog?.create_time || event.value?.resolved_at),
       detail: event.value?.resolve_reason || '等待事件闭环',
       icon: CircleCheckFilled,
@@ -581,7 +581,7 @@ function stepStatusText(state) {
 }
 
 function goBack() {
-  router.push('/alarm/safety-events')
+  router.push('/workspace/safety-events')
 }
 
 function openReport() {
