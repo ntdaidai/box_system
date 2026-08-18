@@ -30,6 +30,13 @@ from app.services.dam_workflow_client import dam_workflow_client
 from app.services.sensor_event_video_evidence import sensor_event_video_evidence_service
 from app.services.unified_sensor_event_service import unified_sensor_event_service
 from app.services.safety_event_runtime_service import safety_event_runtime_service
+from app.services.timeline_text import (
+    action_label,
+    format_duration,
+    risk_label,
+    status_label,
+    truncate,
+)
 
 # 主事件循环引用，用于从同步代码提交异步任务
 _main_event_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -836,6 +843,13 @@ class ECAEngine:
                 event_id, sensor_data, db, event, event_instance=instance
             )
 
+            flow_actions = (action_result.get("actions") or {}) if isinstance(action_result, dict) else {}
+            flow_resource = flow_actions.get("resource_info") or {}
+            flow_steps = flow_actions.get("steps") or []
+            flow_step_count = int(flow_resource.get("executed_steps_count") or 0)
+            flow_skipped = int(flow_resource.get("skipped_steps_count") or 0)
+            flow_plan = int(flow_resource.get("original_steps_count") or 0)
+            flow_failed = sum(1 for s in flow_steps if not bool(s.get("success")))
             safety_event_runtime_service.append_timeline(
                 db,
                 instance,
@@ -843,8 +857,18 @@ class ECAEngine:
                 log_type="ACTION",
                 trigger_type="AUTO",
                 status="SUCCESS",
-                message="ECA事件动作执行完成",
-                payload={"instance_no": instance.instance_no, "actions": action_result},
+                message=(
+                    f"事件联动动作执行完成：共执行 {flow_step_count} 个动作步骤"
+                    f"（计划 {flow_plan} 个、跳过 {flow_skipped} 个）"
+                    + (f"，失败 {flow_failed} 个" if flow_failed else "")
+                ),
+                payload={
+                    "instance_no": instance.instance_no,
+                    "actions": action_result,
+                    "step_count": flow_step_count,
+                    "skipped_count": flow_skipped,
+                    "failure_count": flow_failed,
+                },
             )
             instance.status = "COMPLETED"
             instance.state = "RESOLVED"
@@ -864,7 +888,7 @@ class ECAEngine:
                         log_type="ACTION",
                         trigger_type="AUTO",
                         status="FAILED",
-                        message="ECA行为流程执行失败",
+                        message=f"事件联动动作执行失败：{truncate(str(e))}",
                         payload={"instance_no": instance.instance_no, "error": str(e)},
                     )
                     db.commit()
@@ -957,8 +981,16 @@ class ECAEngine:
                 trigger_type="AUTO",
                 status="PROCESSING",
                 title="智能路由规划",
-                message="智能路由正在根据事件类型、传感器数据和摄像头证据生成工作流",
-                payload={"instance_no": instance.instance_no, "event_name": event.event_name},
+                message=(
+                    f"智能路由开始规划：正在解析事件「{event.event_name}」的类型、"
+                    "传感器读数与摄像头证据，调用 dam-workflow 生成处置工作流"
+                ),
+                payload={
+                    "instance_no": instance.instance_no,
+                    "event_name": event.event_name,
+                    "event_category": event.event_category,
+                    "source_type": instance.source_type,
+                },
             )
             db.commit()
             result = await dam_workflow_client.analyze_event(
@@ -982,13 +1014,19 @@ class ECAEngine:
                 trigger_type="AUTO",
                 status="SUCCESS",
                 title="智能路由规划",
-                message=f"智能路由已生成工作流：{node_count}个节点，{edge_count}条边",
+                message=(
+                    f"智能路由规划完成：已生成工作流（{node_count}个节点、{edge_count}条边），"
+                    f"事件类型 {result.get('event_type') or event.event_name}，"
+                    f"包含视觉理解任务 {len(result.get('visual_tasks') or [])} 项"
+                ),
                 payload={
                     "instance_no": instance.instance_no,
                     "event_type": result.get("event_type"),
                     "node_count": node_count,
                     "edge_count": edge_count,
                     "visual_tasks": result.get("visual_tasks") or [],
+                    "event_category": event.event_category,
+                    "source_type": instance.source_type,
                 },
             )
             db.commit()
@@ -1003,11 +1041,16 @@ class ECAEngine:
                     trigger_type="AUTO",
                     status="PROCESSING",
                     title="模型库工作流执行",
-                    message="模型库正在按 DAG 启动按需模型并执行视频理解链路",
+                    message=(
+                        f"模型库工作流执行中：正在按 DAG（{node_count}个节点）启动按需模型，"
+                        f"执行视频理解链路（视觉任务 {len(result.get('visual_tasks') or [])} 项）"
+                    ),
                     payload={
                         "instance_no": instance.instance_no,
                         "event_type": result.get("event_type"),
                         "node_count": node_count,
+                        "edge_count": edge_count,
+                        "visual_count": len(result.get("visual_tasks") or []),
                     },
                 )
                 db.commit()
@@ -1070,6 +1113,8 @@ class ECAEngine:
                 "event_type": result.get("event_type"),
                 "visual_tasks": result.get("visual_tasks") or [],
                 "final_dag": final_dag,
+                "node_count": node_count,
+                "edge_count": edge_count,
                 "execution_result": execution_result,
                 "execution_error": execution_error,
                 "fallback_used": fallback_used,
@@ -1084,10 +1129,10 @@ class ECAEngine:
                 status="SUCCESS" if not execution_error or fallback_used else "FAILED",
                 title="模型库工作流执行",
                 message=(
-                    f"模型库工作流执行完成：{node_count}个节点，{edge_count}条边；"
-                    f"执行状态 {execution_status}"
+                    f"模型库工作流执行完成：{node_count}个节点、{edge_count}条边；"
+                    f"执行状态：{status_label(execution_status)}（{execution_status}）"
                     + (
-                        "；云端增强/报告节点不可用，已启用本地报告兜底"
+                        f"；云端增强/报告节点不可用，已启用本地报告兜底（{truncate(fallback_reason)}）"
                         if fallback_used
                         else ""
                     )
@@ -1107,7 +1152,7 @@ class ECAEngine:
                 trigger_type="AUTO",
                 status="FAILED",
                 title="智能路由规划",
-                message="智能路由生成失败",
+                message=f"智能路由生成失败：{truncate(str(e))}",
                 payload={
                     "instance_no": instance.instance_no,
                     "event_name": event.event_name,
@@ -1343,6 +1388,9 @@ class ECAEngine:
     ) -> None:
         """Generate a report from DAM workflow output without breaking ECA execution."""
         try:
+            report_dag = workflow_payload.get("final_dag") or {}
+            report_node_count = len(report_dag.get("nodes") or [])
+            report_edge_count = len(report_dag.get("edges") or [])
             safety_event_runtime_service.append_timeline(
                 db,
                 instance,
@@ -1351,8 +1399,16 @@ class ECAEngine:
                 trigger_type="AUTO",
                 status="PROCESSING",
                 title="事件报告生成",
-                message="正在根据模型链路输出填充事件处置报告",
-                payload={"instance_no": instance.instance_no},
+                message=(
+                    f"事件处置报告生成中：正在根据模型链路输出"
+                    f"（工作流 {report_node_count} 个节点、{report_edge_count} 条边）填充报告内容"
+                ),
+                payload={
+                    "instance_no": instance.instance_no,
+                    "node_count": report_node_count,
+                    "edge_count": report_edge_count,
+                    "event_type": workflow_payload.get("event_type"),
+                },
             )
             db.commit()
             report = dam_event_report_service.generate_from_workflow(
@@ -1370,8 +1426,15 @@ class ECAEngine:
                     trigger_type="AUTO",
                     status="FAILED",
                     title="事件报告生成",
-                    message="未获得可用于生成报告的大模型分析结果，报告暂未生成",
-                    payload={"instance_no": instance.instance_no},
+                    message=(
+                        "事件处置报告暂未生成：模型库未返回可用的分析结果"
+                        f"（兜底={truncate(workflow_payload.get('fallback_reason') or '未启用')}）"
+                    ),
+                    payload={
+                        "instance_no": instance.instance_no,
+                        "fallback_used": workflow_payload.get("fallback_used"),
+                        "fallback_reason": workflow_payload.get("fallback_reason"),
+                    },
                 )
                 db.commit()
                 return
@@ -1394,7 +1457,7 @@ class ECAEngine:
                 log_type="REPORT",
                 trigger_type="AUTO",
                 status="FAILED",
-                message="事件处置报告生成失败",
+                message=f"事件处置报告生成失败：{truncate(str(report_error))}",
                 payload={
                     "instance_no": instance.instance_no,
                     "error": str(report_error),
@@ -1481,11 +1544,13 @@ class ECAEngine:
                         log_type="ACTION",
                         trigger_type="AUTO",
                         status="SUCCESS",
-                        message=f"{step.step_name}执行完成",
+                        message=f"{step.step_name}执行完成：动作「{action_label(step.action_type)}」已成功执行",
                         event_action_id=step.id,
                         payload={
                             "instance_no": event_instance.instance_no,
                             "action_type": step.action_type,
+                            "action_label": action_label(step.action_type),
+                            "step_name": step.step_name,
                             "result": step_result,
                         },
                     )
@@ -1507,11 +1572,13 @@ class ECAEngine:
                         log_type="ACTION",
                         trigger_type="AUTO",
                         status="FAILED",
-                        message=f"{step.step_name}执行失败",
+                        message=f"{step.step_name}执行失败：{truncate(str(e))}",
                         event_action_id=step.id,
                         payload={
                             "instance_no": event_instance.instance_no,
                             "action_type": step.action_type,
+                            "action_label": action_label(step.action_type),
+                            "step_name": step.step_name,
                             "error": str(e),
                         },
                     )
@@ -1935,7 +2002,15 @@ class ECAEngine:
                         operator="SYSTEM",
                         event_id=event.id if event else instance.current_event_id,
                         event_action_id=step.id,
-                        payload={"level": level, "channels": channels, "alarm_type": alarm_type},
+                        payload={
+                            "level": level,
+                            "channels": channels,
+                            "alarm_type": alarm_type,
+                            "action_type": getattr(step, "action_type", None),
+                            "action_name": getattr(step, "action_name", None),
+                            "step_name": getattr(step, "step_name", None),
+                            "device_id": device_id,
+                        },
                     )
                     timeline_id = timeline.id
             db.commit()
@@ -2266,12 +2341,23 @@ class ECAEngine:
             trigger_type="AUTO",
             risk_level=risk,
             status="SUCCESS",
-            message=f"{event.event_name}事件已触发",
+            message=(
+                f"{event.event_name}事件已触发：来源 {source.source_name}，"
+                f"事件编号 {instance.instance_no}，初判风险 {risk_label(risk)}"
+                + ("，疑似人员/船只待复核" if suspected else "")
+            ),
             operator="SYSTEM",
             payload={
                 "instance_no": instance.instance_no,
                 "observation": observation,
                 "suspected": suspected,
+                "source_type": "camera",
+                "source_name": source.source_name,
+                "camera_name": observation.get("visual", {}).get("camera_name") if isinstance(observation.get("visual"), dict) else None,
+                "event_category": event.event_category,
+                "risk_level": risk,
+                "confidence": observation.get("visual", {}).get("confidence") if isinstance(observation.get("visual"), dict) else None,
+                "suspected_label": observation.get("suspected_label"),
             },
             create_time=now,
         ))
@@ -2445,9 +2531,23 @@ class ECAEngine:
             trigger_type="AUTO",
             risk_level=instance.risk_level,
             status="SUCCESS",
-            message=f"{event.event_name}摄像头条件已恢复，事件自动闭环",
+            message=(
+                f"{event.event_name}条件已恢复（来源 {source.source_name}），事件自动闭环"
+                + (
+                    f"，历时 {format_duration((now - instance.started_at).total_seconds())}"
+                    if instance.started_at
+                    else ""
+                )
+            ),
             operator="SYSTEM",
-            payload={"reason": "camera_condition_recovered", "observation": camera_data},
+            payload={
+                "reason": "camera_condition_recovered",
+                "observation": camera_data,
+                "source_name": source.source_name,
+                "source_type": "camera",
+                "duration_seconds": int((now - instance.started_at).total_seconds()) if instance.started_at else None,
+                "recovered_at": now.isoformat(),
+            },
             create_time=now,
         ))
         db.commit()

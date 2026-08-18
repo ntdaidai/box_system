@@ -41,7 +41,7 @@
           <span>区域名</span>
           <span>区域类型</span>
           <span>所属点位</span>
-          <span>启用状态</span>
+          <span>是否启用</span>
           <span>配置时间</span>
           <span>操作</span>
         </div>
@@ -108,9 +108,9 @@
               :viewBox="`0 0 ${overlayWidth} ${overlayHeight}`"
               preserveAspectRatio="xMidYMid meet"
               @click="handleOverlayClick"
-              @mousemove="dragVertex"
+              @mousemove="handleStageMouseMove"
               @mouseup="endDrag"
-              @mouseleave="endDrag"
+              @mouseleave="handleStageMouseLeave"
             >
               <g
                 v-for="zone in editorZones"
@@ -166,6 +166,32 @@
                   </text>
                 </g>
               </g>
+              <!-- 矩形画框：已放置的左上角锚点与实时预览虚线框 -->
+              <g v-if="rectFirstPoint" class="vertex-marker" @click.stop.prevent>
+                <circle
+                  class="vertex-anchor"
+                  :cx="rectFirstPoint.x * overlayWidth"
+                  :cy="rectFirstPoint.y * overlayHeight"
+                  :r="vertexAnchorRadius"
+                />
+                <text
+                  class="vertex-index"
+                  :x="vertexLabelPoint(rectFirstPoint).x"
+                  :y="vertexLabelPoint(rectFirstPoint).y"
+                  :font-size="vertexIndexFontSize"
+                >
+                  1
+                </text>
+              </g>
+              <rect
+                v-if="rectPreviewRect"
+                class="zone-rect-preview"
+                :x="rectPreviewRect.x"
+                :y="rectPreviewRect.y"
+                :width="rectPreviewRect.width"
+                :height="rectPreviewRect.height"
+                :stroke="selectedZone ? zoneColor(selectedZone) : '#48d8ff'"
+              />
             </svg>
             <div v-if="streamLoading" class="stage-loading">
               <el-icon class="is-loading"><Loading /></el-icon>
@@ -202,7 +228,7 @@
           </el-form-item>
           <section class="ros-panel">
             <div class="ros-heading">
-              <strong>区域顶点 (ROS)</strong>
+              <strong>区域顶点</strong>
               <b>顶点 {{ selectedZone.polygon_points.length }}</b>
             </div>
             <div class="ros-unit">
@@ -248,7 +274,9 @@
               </div>
               <div v-if="!selectedZone.polygon_points.length" class="point-empty">暂无顶点</div>
             </div>
+            <!-- 旧多边形画法入口：矩形画法下隐藏，代码保留以便回退 -->
             <button
+              v-if="false"
               type="button"
               class="add-point-button"
               :disabled="selectedZone.polygon_points.length >= 15"
@@ -298,6 +326,9 @@ const streamLoading = ref(false)
 const stageImageRef = ref(null)
 const drawing = ref(false)
 const dragging = ref(null)
+// 矩形画框临时状态：已放置的左上角点、鼠标实时预览点（归一化 0-1 坐标）
+const rectFirstPoint = ref(null)
+const rectPreview = ref(null)
 const saving = ref(false)
 const drawDialogVisible = ref(false)
 const editorMode = ref('')
@@ -315,7 +346,19 @@ const zoneLabelFontSize = computed(() => Math.max(16, Math.min(64, overlayWidth.
 const vertexAnchorRadius = computed(() => Math.max(6, Math.min(28, overlayWidth.value * 0.007)))
 const vertexIndexFontSize = computed(() => Math.max(13, Math.min(42, overlayWidth.value * 0.016)))
 const drawDialogTitle = computed(() => (editorMode.value === 'create' ? '新增区域' : '区域画框'))
-const drawTipText = computed(() => (editorMode.value === 'create' ? '正在新增区域：点击画面添加顶点' : '点击画面新增顶点，拖拽顶点微调位置'))
+const drawTipText = computed(() => {
+  if (rectFirstPoint.value) return '已放置左上角，请点击画面确定右下角'
+  if (selectedZone.value?.polygon_points?.length) return '区域已生成：可拖拽顶点微调，或修改右侧坐标'
+  return '点击画面放置矩形左上角，再点击右下角完成矩形'
+})
+const rectPreviewRect = computed(() => {
+  if (!rectFirstPoint.value || !rectPreview.value) return null
+  const x = Math.min(rectFirstPoint.value.x, rectPreview.value.x) * overlayWidth.value
+  const y = Math.min(rectFirstPoint.value.y, rectPreview.value.y) * overlayHeight.value
+  const width = Math.abs(rectFirstPoint.value.x - rectPreview.value.x) * overlayWidth.value
+  const height = Math.abs(rectFirstPoint.value.y - rectPreview.value.y) * overlayHeight.value
+  return { x, y, width, height }
+})
 const pagedZones = computed(() => {
   const start = (zonePage.value - 1) * pageSize
   return zones.value.slice(start, start + pageSize)
@@ -367,6 +410,8 @@ async function activateCamera() {
   editorMode.value = ''
   draftZone.value = null
   drawDialogVisible.value = false
+  rectFirstPoint.value = null
+  rectPreview.value = null
   streamUrl.value = ''
   await loadZones()
 }
@@ -421,8 +466,49 @@ function pointerToUnitPoint(event) {
 
 function handleOverlayClick(event) {
   if (!drawing.value || !selectedZone.value) return
+  // 已有顶点的区域进入编辑微调，点击画面不再追加点，避免覆盖已有区域
+  if (selectedZone.value.polygon_points.length) return
   const point = pointerToUnitPoint(event)
-  appendPointToSelectedZone(point)
+  // 第一点：记录左上角，等待右下角
+  if (!rectFirstPoint.value) {
+    rectFirstPoint.value = point
+    return
+  }
+  // 第二点：由两个角点生成矩形 4 顶点，完成画框
+  selectedZone.value.polygon_points = rectPointsFromCorners(rectFirstPoint.value, point)
+  rectFirstPoint.value = null
+  rectPreview.value = null
+  drawing.value = false
+}
+
+// 由两个角点（任意顺序）生成顺时针 4 点多边形，供 polygon_points 存储
+function rectPointsFromCorners(first, second) {
+  const minX = Math.min(first.x, second.x)
+  const maxX = Math.max(first.x, second.x)
+  const minY = Math.min(first.y, second.y)
+  const maxY = Math.max(first.y, second.y)
+  return [
+    { x: minX, y: minY },
+    { x: maxX, y: minY },
+    { x: maxX, y: maxY },
+    { x: minX, y: maxY },
+  ]
+}
+
+// 画布鼠标移动：拖拽顶点时走原逻辑，矩形预览时跟随鼠标
+function handleStageMouseMove(event) {
+  if (dragging.value) {
+    dragVertex(event)
+    return
+  }
+  if (rectFirstPoint.value) {
+    rectPreview.value = pointerToUnitPoint(event)
+  }
+}
+
+function handleStageMouseLeave() {
+  endDrag()
+  rectPreview.value = null
 }
 
 function handleZoneClick(zoneId, event) {
@@ -453,6 +539,8 @@ function startNewZone() {
   selectedZoneId.value = draftZone.value.id
   editorMode.value = 'create'
   drawDialogVisible.value = true
+  rectFirstPoint.value = null
+  rectPreview.value = null
   if (!streamUrl.value) refreshStream()
   drawing.value = true
 }
@@ -481,6 +569,8 @@ function openZoneEditor(zoneId) {
   editorMode.value = 'edit'
   drawing.value = true
   drawDialogVisible.value = true
+  rectFirstPoint.value = null
+  rectPreview.value = null
   if (!streamUrl.value) refreshStream()
 }
 
@@ -489,6 +579,8 @@ function handleDrawDialogClosed() {
   dragging.value = null
   editorMode.value = ''
   draftZone.value = null
+  rectFirstPoint.value = null
+  rectPreview.value = null
 }
 
 function showZoneAnchors(zone) {
@@ -662,7 +754,7 @@ async function persistZones(options = {}) {
   const invalidZone = zonesToSave.find((zone) => zone.polygon_points.length < 3 || zone.polygon_points.length > 15)
   if (invalidZone) {
     selectedZoneId.value = invalidZone.id
-    ElMessage.warning('多边形区域必须包含 3 到 15 个顶点')
+    ElMessage.warning('区域尚未完成画框：请点击两个点确定矩形，区域至少需要 3 个顶点')
     return false
   }
   saving.value = true
@@ -876,6 +968,14 @@ onMounted(async () => {
   stroke-dasharray: 9 6;
   vector-effect: non-scaling-stroke;
   filter: drop-shadow(0 0 4px currentColor);
+}
+.zone-rect-preview {
+  fill: rgba(72, 216, 255, 0.08);
+  stroke-width: 3px;
+  stroke-dasharray: 9 6;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 4px currentColor);
+  pointer-events: none;
 }
 .editable-zone.disabled { opacity: 0.42; }
 .zone-name {
@@ -1219,6 +1319,7 @@ onMounted(async () => {
   color: #9bbbd0;
   font-size: 12px;
   font-weight: 800;
+  text-align: center;
 }
 .point-row {
   padding: 8px;
@@ -1242,6 +1343,7 @@ onMounted(async () => {
 }
 .coordinate-field :deep(.el-input-number) { width: 100%; }
 .coordinate-field :deep(.el-input__wrapper) { padding-right: 11px; }
+.coordinate-field :deep(.el-input__inner) { text-align: center; }
 .point-delete {
   height: 36px;
   border: 1px solid rgba(255, 93, 108, 0.28);

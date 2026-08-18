@@ -7,6 +7,7 @@ import datetime as dt
 import io
 import json
 import re
+import secrets
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,7 +23,6 @@ from app.core.cache import invalidate_cache
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.security import create_staff_token, get_default_user, staff_from_token
-from app.services.qr_login_store import qr_login_store
 from app.models.broadcast import BroadcastDevice, BroadcastTemplate
 from app.models.camera import Camera
 from app.models.camera_detection_zone import CameraDetectionZone
@@ -52,6 +52,7 @@ from app.services.safety_event_operation_service import (
     operate_safety_event,
     timeline_dict as _timeline_to_dict,
 )
+from app.services.timeline_text import truncate
 from app.services.safety_event_ws import safety_event_ws_manager
 from app.services.wechat_subscription_service import (
     WeChatSubscriptionError,
@@ -148,6 +149,10 @@ class StaffUpdateRequest(BaseModel):
     phone: Optional[str] = Field(None, max_length=32)
 
 
+class StaffEnabledRequest(BaseModel):
+    enabled: bool = True
+
+
 class QrLoginRequest(BaseModel):
     ticket: str = Field(..., min_length=1, max_length=256)
     code: Optional[str] = Field(None, max_length=256)
@@ -180,6 +185,14 @@ def _is_online(row: MiniProgramStaff) -> bool:
     return elapsed <= settings.STAFF_ONLINE_THRESHOLD_SECONDS
 
 
+def _staff_work_status(row: MiniProgramStaff, busy_assignees: set) -> str:
+    """人员工作状态：working 工作中 / idle 空闲 / offline 离线（5 分钟未活跃）。"""
+    if not _is_online(row):
+        return "offline"
+    operator = _staff_operator(row)
+    return "working" if operator in busy_assignees else "idle"
+
+
 def _staff_to_dict(row: MiniProgramStaff) -> dict:
     return {
         "id": row.id,
@@ -200,6 +213,7 @@ def _staff_to_dict(row: MiniProgramStaff) -> dict:
         "last_login_at": _timestamp(row.last_login_at),
         "last_active_at": _timestamp(row.last_active_at),
         "is_online": _is_online(row),
+        "enabled": (row.status or "").upper() == "ACTIVE",
         "create_time": _timestamp(row.create_time),
         "update_time": _timestamp(row.update_time),
     }
@@ -213,10 +227,21 @@ def _staff_status_label(status: Optional[str]) -> str:
 
 
 def _default_staff(db: Session) -> MiniProgramStaff:
+    """小程序端兜底处置人员。
+
+    优先返回现存的启用成员（首个），只有当数据库完全没有成员时才自动创建默认
+    处置员——这样后台删除「现场处置员」后不会再被列表接口自动重建。
+    """
+    row = (
+        db.query(MiniProgramStaff)
+        .filter(MiniProgramStaff.status == "ACTIVE")
+        .order_by(MiniProgramStaff.id.asc())
+        .first()
+    )
+    if row:
+        return row
+    # 兼容迁移前旧的复杂编号数据
     row = db.query(MiniProgramStaff).filter(MiniProgramStaff.staff_no == "staff_001").first()
-    if not row:
-        # 兼容迁移前旧的复杂编号数据
-        row = db.query(MiniProgramStaff).filter(MiniProgramStaff.staff_no == "MP_STAFF_001").first()
     if row:
         return row
     row = MiniProgramStaff(
@@ -848,11 +873,35 @@ async def list_staff(
             .order_by(MiniProgramStaff.group_name.asc())
             .all()
         )
+        # 一次性收集进行中的处置任务，用于判定"工作中/空闲"
+        busy_assignees = {
+            op
+            for (op,) in db.query(SafetyEventTask.assignee)
+            .filter(
+                SafetyEventTask.assignee.isnot(None),
+                SafetyEventTask.task_status.in_(["ACCEPTED", "PROCESSING"]),
+            )
+            .all()
+        }
+        # 全部成员工作状态统计（不随分页变化，供顶部概览卡片使用）
+        all_rows = db.query(MiniProgramStaff).all()
+        offline = sum(1 for r in all_rows if not _is_online(r))
+        working = sum(
+            1 for r in all_rows
+            if _is_online(r) and _staff_operator(r) in busy_assignees
+        )
+        summary = {
+            "total": len(all_rows),
+            "offline": offline,
+            "working": working,
+            "idle": len(all_rows) - offline - working,
+        }
         items = []
         for row in rows:
             item = _staff_to_dict(row)
             item["status_label"] = _staff_status_label(row.status)
             item["openid_bound"] = bool(row.openid)
+            item["work_status"] = _staff_work_status(row, busy_assignees)
             items.append(item)
         return MiniResponse(data={
             "items": items,
@@ -861,6 +910,7 @@ async def list_staff(
             "page_size": page_size,
             "has_more": page * page_size < total,
             "groups": [value for (value,) in group_rows if value],
+            "summary": summary,
         })
     finally:
         db.close()
@@ -916,6 +966,25 @@ async def update_staff(staff_id: int, payload: StaffUpdateRequest):
         db.close()
 
 
+@router.put("/staff/{staff_id}/enabled", response_model=MiniResponse, summary="后台启用/停用处置人员")
+async def update_staff_enabled(staff_id: int, payload: StaffEnabledRequest):
+    db = SessionLocal()
+    try:
+        row = db.query(MiniProgramStaff).filter(MiniProgramStaff.id == staff_id).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="人员不存在")
+        row.status = "ACTIVE" if payload.enabled else "INACTIVE"
+        row.update_time = dt.datetime.now()
+        db.commit()
+        db.refresh(row)
+        return MiniResponse(
+            data={"staff": _staff_to_dict(row), "enabled": payload.enabled},
+            message="人员已启用" if payload.enabled else "人员已停用",
+        )
+    finally:
+        db.close()
+
+
 @router.delete("/staff/{staff_id}", response_model=MiniResponse, summary="后台删除处置人员")
 async def delete_staff(staff_id: int):
     db = SessionLocal()
@@ -923,7 +992,6 @@ async def delete_staff(staff_id: int):
         row = db.query(MiniProgramStaff).filter(MiniProgramStaff.id == staff_id).first()
         if not row:
             raise HTTPException(status_code=404, detail="人员不存在")
-        qr_login_store.revoke_by_staff(staff_id)
         db.delete(row)
         db.commit()
         return MiniResponse(data={"staff_id": staff_id}, message="人员已删除")
@@ -938,10 +1006,13 @@ async def generate_staff_qrcode(staff_id: int):
         row = db.query(MiniProgramStaff).filter(MiniProgramStaff.id == staff_id).first()
         if not row:
             raise HTTPException(status_code=404, detail="人员不存在")
-        ticket, expires_at = qr_login_store.issue(staff_id)
+        # 永久登录码：ticket 持久化到数据库，无过期时间，后端重启后依然有效
+        ticket = secrets.token_urlsafe(32)
+        row.qr_ticket = ticket
+        db.commit()
         return MiniResponse(data={
             "ticket": ticket,
-            "expires_at": expires_at,
+            "expires_at": None,
             "qr_url": f"{QR_LOGIN_SCHEME}?ticket={ticket}",
         }, message="登录码已生成")
     finally:
@@ -950,8 +1021,13 @@ async def generate_staff_qrcode(staff_id: int):
 
 @router.get("/staff/{staff_id}/qrcode.png", summary="后台人员登录码二维码图片")
 async def staff_qrcode_png(staff_id: int, ticket: str = Query(..., max_length=256)):
-    if not qr_login_store.peek(staff_id, ticket):
-        raise HTTPException(status_code=404, detail="登录码不存在或已失效")
+    db = SessionLocal()
+    try:
+        row = db.query(MiniProgramStaff).filter(MiniProgramStaff.id == staff_id).first()
+        if not row or row.qr_ticket != ticket:
+            raise HTTPException(status_code=404, detail="登录码不存在或已失效")
+    finally:
+        db.close()
     import qrcode
 
     qr = qrcode.QRCode(border=1, box_size=8)
@@ -1367,7 +1443,7 @@ async def accept_event_task(request: Request, event_id: str, payload: EventOpera
             log_type="MANUAL",
             trigger_type="MANUAL",
             status="SUCCESS",
-            message=f"{operator}接受任务",
+            message=f"{operator}（小程序）接受处置任务（任务 #{task.id}）",
             operator=operator,
             payload={
                 "instance_no": event.instance_no,
@@ -1452,7 +1528,10 @@ async def submit_field_result(
             log_type="RESOLVE",
             trigger_type="MANUAL",
             status="SUCCESS",
-            message=f"{result_label}，事件闭环",
+            message=truncate(
+                f"{operator_name} 提交现场处理结果：{result_label}，事件已闭环"
+                f"（备注：{remark or '无'}）"
+            ),
             operator=operator_name,
             payload={
                 "instance_no": event.instance_no,
@@ -1511,13 +1590,13 @@ async def miniprogram_login(payload: MiniLoginRequest):
 
 @router.post("/auth/qr-login", response_model=MiniResponse, summary="小程序扫码登录")
 async def qr_login(payload: QrLoginRequest):
-    staff_id = qr_login_store.consume(payload.ticket)
-    if staff_id is None:
-        raise HTTPException(status_code=400, detail="登录码已过期或已被使用，请让管理员刷新登录码")
     db = SessionLocal()
     try:
-        staff = db.query(MiniProgramStaff).filter(MiniProgramStaff.id == staff_id).first()
-        if not staff or staff.status != "ACTIVE":
+        # 永久登录码：按数据库中的 ticket 匹配，不消耗、无过期时间
+        staff = db.query(MiniProgramStaff).filter(MiniProgramStaff.qr_ticket == payload.ticket).first()
+        if not staff:
+            raise HTTPException(status_code=400, detail="登录码不存在，请让管理员重新生成登录码")
+        if staff.status != "ACTIVE":
             raise HTTPException(status_code=404, detail="人员不存在或已停用")
         # 换取 openid：配置了微信密钥且有 code 走微信 jscode2session，否则回退联调 openid
         openid = _optional_text(payload.openid)

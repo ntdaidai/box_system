@@ -43,7 +43,7 @@
           <div class="col-connection">连接信息</div>
           <div class="col-console">控制台</div>
           <div class="col-status">状态</div>
-          <div class="col-enabled">启用状态</div>
+          <div class="col-enabled">是否启用</div>
           <div class="col-actions">操作</div>
         </div>
         <article v-for="row in pagedCameras" :key="row.id" class="camera-row" :class="row.connected ? 'is-online' : 'is-offline'">

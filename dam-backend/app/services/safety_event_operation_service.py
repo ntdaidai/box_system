@@ -15,9 +15,9 @@ from app.models.safety_integration import SafetyEventEvidence, SafetyEventInstan
 from app.services.safety_event_engine import RISK_HIGH, get_safety_event_engine
 from app.services.safety_event_runtime_service import safety_event_runtime_service
 from app.services.safety_event_ws import safety_event_ws_manager
+from app.services.timeline_text import risk_label, status_label, truncate
 
 
-RISK_LABELS = {"LOW": "低风险", "MEDIUM": "中风险", "HIGH": "高风险"}
 ACTION_MESSAGES = {
     "ACKNOWLEDGE": "工作人员已确认事件",
     "DISPATCH_TASK": "已派现场人员处置",
@@ -131,7 +131,14 @@ async def operate_safety_event(
         if rank[target_risk] > rank.get(event.max_risk_level, 0):
             event.max_risk_level = target_risk
         log_type = "RISK_CHANGE"
-        message = f"人工将风险从{RISK_LABELS.get(previous_risk, previous_risk)}升级为{RISK_LABELS[target_risk]}"
+        risk_before = previous_risk
+        risk_after = target_risk
+        message = (
+            f"工作人员 {operator} 将风险由{risk_label(previous_risk)}升级为{risk_label(target_risk)}"
+            f"（操作前事件状态：{status_label(previous_status)}）"
+        )
+        if reason:
+            message = f"{message}（处置说明：{truncate(reason)}）"
     else:
         if action in {"DISPATCH_TASK", "ACCEPT_TASK", "COMPLETE_TASK"} and event.risk_level != RISK_HIGH:
             raise HTTPException(status_code=409, detail="只有高风险事件需要人工处置")
@@ -175,11 +182,29 @@ async def operate_safety_event(
             event.status = "FALSE_ALARM" if action == "FALSE_ALARM" else "COMPLETED"
             event.resolved_at = now
             event.resolve_reason = reason or ("人工标记误报" if action == "FALSE_ALARM" else "人工闭环")
+        risk_before = risk_after = None
         log_type = "RESOLVE" if event.state == "RESOLVED" else "MANUAL"
-        message = reason or ACTION_MESSAGES[action]
 
     event.version = (event.version or 0) + 1
     db.flush()
+    task_id = task.id if task else None
+    if action == "ACKNOWLEDGE":
+        message = f"工作人员 {operator} 确认事件（操作前状态：{status_label(previous_status)}）"
+    elif action == "DISPATCH_TASK":
+        assignee_name = assignee or getattr(task, "assignee", None) or "待指派人员"
+        message = f"工作人员 {operator} 已派现场人员 {assignee_name} 处置（任务 #{task_id}）"
+    elif action == "ACCEPT_TASK":
+        message = f"工作人员 {operator} 已接受处置任务（任务 #{task_id}）"
+    elif action == "COMPLETE_TASK":
+        message = f"工作人员 {operator} 已完成现场处置，事件闭环（任务 #{task_id}）"
+    elif action == "FALSE_ALARM":
+        message = f"工作人员 {operator} 判断为误报，事件已归档"
+    elif action == "RESOLVE":
+        message = f"工作人员 {operator} 确认事件解除，事件已闭环"
+    else:
+        message = ACTION_MESSAGES[action]
+    if reason:
+        message = f"{message}（处置说明：{truncate(reason)}）"
     log = safety_event_runtime_service.append_timeline(
         db,
         event,
@@ -197,7 +222,9 @@ async def operate_safety_event(
             "operator_role": getattr(user, "role", None),
             "reason": reason,
             "assignee": assignee if action != "UPGRADE" else None,
-            "task_id": task.id if task else None,
+            "task_id": task_id,
+            "risk_before": risk_before,
+            "risk_after": risk_after,
         },
         create_time=now,
     )

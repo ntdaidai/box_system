@@ -2572,18 +2572,18 @@ onBeforeUnmount(() => {
   container: todayPanel / inline-size;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  gap: clamp(7px, .42vw, 10px);
-  padding-bottom: clamp(18px, 1vw, 24px);
+  gap: clamp(6px, .3vw, 8px);
+  padding-bottom: clamp(12px, .6vw, 16px);
 }
 
 .today-strip-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-rows: repeat(2, minmax(64px, .86fr)) repeat(2, minmax(68px, .92fr));
-  column-gap: clamp(7px, .42vw, 10px);
-  row-gap: clamp(15px, .95vw, 21px);
+  grid-template-rows: repeat(2, minmax(54px, .86fr)) repeat(2, minmax(58px, .92fr));
+  column-gap: clamp(6px, .3vw, 8px);
+  row-gap: clamp(8px, .4vw, 11px);
   min-height: 0;
-  padding-bottom: clamp(10px, .6vw, 14px);
+  padding-bottom: clamp(4px, .22vw, 6px);
   box-sizing: border-box;
 }
 
@@ -2606,7 +2606,7 @@ onBeforeUnmount(() => {
   align-content: center;
   column-gap: clamp(8px, .48vw, 11px);
   row-gap: clamp(5px, .3vw, 7px);
-  padding: clamp(8px, .48vw, 11px) clamp(9px, .55vw, 13px);
+  padding: clamp(6px, .34vw, 8px) clamp(8px, .48vw, 11px);
 }
 
 .today-card.handling {
@@ -2616,7 +2616,7 @@ onBeforeUnmount(() => {
   grid-template-columns: minmax(132px, .36fr) minmax(236px, .64fr);
   align-items: center;
   gap: var(--handling-gap);
-  padding: clamp(8px, .48vw, 10px) clamp(10px, .6vw, 14px);
+  padding: clamp(7px, .4vw, 9px) clamp(10px, .6vw, 14px);
 }
 
 .today-card::before {
@@ -2870,10 +2870,10 @@ onBeforeUnmount(() => {
 
 @container todayPanel (max-width: 470px) {
   .today-strip-list {
-    grid-template-rows: repeat(2, minmax(62px, .86fr)) repeat(2, minmax(66px, .92fr));
+    grid-template-rows: repeat(2, minmax(54px, .86fr)) repeat(2, minmax(58px, .92fr));
     column-gap: 8px;
-    row-gap: 16px;
-    padding-bottom: 10px;
+    row-gap: 8px;
+    padding-bottom: 6px;
   }
 
   .today-card.category {
@@ -2882,14 +2882,14 @@ onBeforeUnmount(() => {
     align-content: center;
     column-gap: 7px;
     row-gap: 5px;
-    padding: 7px 8px;
+    padding: 6px 8px;
   }
 
   .today-card.handling {
     --handling-gap: 6px;
     grid-template-columns: minmax(116px, .35fr) minmax(210px, .65fr);
     gap: var(--handling-gap);
-    padding: 7px 8px;
+    padding: 6px 8px;
   }
 
   .handling-title {

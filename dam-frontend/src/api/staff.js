@@ -23,6 +23,11 @@ export function deleteStaff(id) {
   return request.delete(`/miniprogram/v1/staff/${id}`)
 }
 
+// 启用 / 停用人员
+export function updateStaffEnabled(id, enabled) {
+  return request.put(`/miniprogram/v1/staff/${id}/enabled`, { enabled })
+}
+
 // 生成人员登录码（返回 { ticket, expires_at, qr_url }）
 export function getStaffLoginCode(id) {
   return request.post(`/miniprogram/v1/staff/${id}/qrcode`)

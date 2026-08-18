@@ -14,7 +14,7 @@
         <div v-if="!isTemplateView" class="tab-actions">
           <button type="button" class="toolbar-template-entry" @click="showTemplates">
             <el-icon><Tickets /></el-icon>
-            <span>查看模板 {{ broadcastTemplates.length }}</span>
+            <span>查看模板</span>
           </button>
           <el-button type="primary" :icon="Plus" @click="openDeviceDialog()">新增设备</el-button>
           <el-select
@@ -64,7 +64,7 @@
             <div class="col-device">设备名称</div>
             <div class="col-device-desc">描述</div>
             <div class="col-device-status">状态</div>
-            <div class="col-device-enabled">启用状态</div>
+            <div class="col-device-enabled">是否启用</div>
             <div class="col-device-actions">操作</div>
           </div>
           <article v-for="row in pagedBroadcastDevices" :key="row.id" class="broadcast-row">
@@ -686,7 +686,7 @@ onMounted(refreshCurrent)
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 14px;
   flex-wrap: nowrap;
 }
 .tab-actions :deep(.el-button) {
@@ -802,7 +802,7 @@ onMounted(refreshCurrent)
   background: #081b2d;
 }
 .broadcast-list {
-  min-width: 1320px;
+  min-width: 1180px;
 }
 .template-list {
   min-width: 1400px;
@@ -840,7 +840,7 @@ onMounted(refreshCurrent)
 }
 .broadcast-list-header-row,
 .broadcast-row {
-  grid-template-columns: minmax(240px, 1.15fr) minmax(320px, 1.45fr) 124px 132px 300px;
+  grid-template-columns: minmax(180px, 1fr) minmax(260px, 1.15fr) 152px 164px 300px;
 }
 .template-list-header-row,
 .template-row {

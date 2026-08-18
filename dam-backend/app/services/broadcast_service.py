@@ -25,6 +25,7 @@ from app.models.broadcast import (
 from app.models.camera import Camera
 from app.models.event_action import EventActionConfig
 from app.services.safety_event_runtime_service import safety_event_runtime_service
+from app.services.timeline_text import truncate
 
 
 TRIGGER_AUTO = "AUTO"
@@ -793,29 +794,48 @@ class BroadcastService:
             "result": item.get("result"),
             "message": item.get("message"),
         } for item in items]
+        total_count = len(items)
+        success_count = sum(
+            1 for d in device_results if d.get("result") in ("SUCCESS", "PARTIAL_SUCCESS")
+        )
+        failed_devices = [
+            d.get("device_name") or d.get("device_id")
+            for d in device_results
+            if d.get("result") == "FAILED"
+        ]
         if one_touch:
             payload = {
                 "instance_no": instance.instance_no,
                 "action_type": "MANUAL_ONE_TOUCH_BROADCAST",
                 "devices": device_results,
+                "total_count": total_count,
+                "success_count": success_count,
+                "failed_devices": failed_devices,
             }
-            message = "用户使用一键喊话"
+            action_display = "一键喊话"
         else:
             payload = {
                 "instance_no": instance.instance_no,
                 "action_type": "AUTO_BROADCAST" if trigger_type == TRIGGER_AUTO else "MANUAL_BROADCAST",
                 "devices": device_results,
+                "total_count": total_count,
+                "success_count": success_count,
+                "failed_devices": failed_devices,
             }
             if trigger_type == TRIGGER_AUTO:
                 payload["template_id"] = command.get("template_id")
-            message = "系统自动广播" if trigger_type == TRIGGER_AUTO else "用户执行人工广播"
+            action_display = "系统自动广播" if trigger_type == TRIGGER_AUTO else "用户执行人工广播"
+        result_label = {"SUCCESS": "成功", "PARTIAL_SUCCESS": "部分成功", "FAILED": "失败"}.get(result, result)
+        message = f"{action_display}：{total_count}台设备喊话{result_label}"
+        if failed_devices:
+            message += f"，失败设备：{truncate('、'.join(str(d) for d in failed_devices))}"
         action_id = command.get("engine_action_id")
         if action_id:
             safety_event_runtime_service.finish_engine_action(
                 db,
                 str(action_id),
                 status="SUCCESS" if successful else "FAILED",
-                message=message if successful else f"{message}失败",
+                message=message,
                 payload=payload,
             )
         else:
@@ -826,7 +846,7 @@ class BroadcastService:
                 log_type="ACTION",
                 trigger_type=trigger_type,
                 status="SUCCESS" if successful else "FAILED",
-                message=message if successful else f"{message}失败",
+                message=message,
                 operator=operator,
                 payload=payload,
             )

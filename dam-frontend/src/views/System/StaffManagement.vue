@@ -1,9 +1,31 @@
 <template>
   <div class="staff-page">
-    <header class="page-header">
-      <div>
+    <header class="page-header staff-overview-bar">
+      <div class="title-block">
         <h2>现场人员</h2>
-        <p>维护小程序现场处置人员，扫码登录后长期有效，删除人员即登录失效</p>
+        <p>维护小程序现场处置人员</p>
+      </div>
+      <div class="status-summary">
+        <div class="metric">
+          <i class="dot total"></i>
+          <strong class="metric-num">{{ summary.total }}</strong>
+          <span class="metric-label">总数</span>
+        </div>
+        <div class="metric">
+          <i class="dot idle"></i>
+          <strong class="metric-num">{{ summary.idle }}</strong>
+          <span class="metric-label">空闲</span>
+        </div>
+        <div class="metric">
+          <i class="dot working"></i>
+          <strong class="metric-num">{{ summary.working }}</strong>
+          <span class="metric-label">工作中</span>
+        </div>
+        <div class="metric">
+          <i class="dot offline"></i>
+          <strong class="metric-num">{{ summary.offline }}</strong>
+          <span class="metric-label">离线</span>
+        </div>
       </div>
       <el-button :icon="Refresh" :loading="loading" @click="loadStaff">刷新</el-button>
     </header>
@@ -16,21 +38,8 @@
         </div>
         <div class="tab-actions panel-toolbar">
           <el-button type="primary" :icon="Plus" @click="openStaffDialog()">新增人员</el-button>
-          <el-input
-            v-model.trim="filters.keyword"
-            class="keyword-input"
-            clearable
-            placeholder="姓名 / 编号 / OpenID"
-            @keyup.enter="applyFilters"
-            @clear="applyFilters"
-          />
-          <el-select v-model="filters.group" class="group-select" placeholder="所属组别" clearable @change="applyFilters">
-            <el-option v-for="item in groups" :key="item" :label="item" :value="item" />
-          </el-select>
-          <el-select v-model="filters.online" class="status-select" placeholder="状态" @change="applyFilters">
-            <el-option label="全部" value="" />
-            <el-option label="在线" value="online" />
-            <el-option label="离线" value="offline" />
+          <el-select v-model="filters.group" class="group-filter-select" placeholder="所属组别" clearable @change="applyFilters">
+            <el-option v-for="item in allGroups" :key="item" :label="item" :value="item" />
           </el-select>
           <el-button type="primary" :icon="Search" @click="applyFilters">筛选</el-button>
         </div>
@@ -42,8 +51,9 @@
         <div v-if="staffRows.length" class="staff-list-header-row">
           <div class="col-name">人员名称</div>
           <div class="col-description">描述</div>
+          <div class="col-phone">联系电话</div>
           <div class="col-group">组别</div>
-          <div class="col-status">状态</div>
+          <div class="col-enabled">是否启用</div>
           <div class="col-actions">操作</div>
         </div>
 
@@ -57,20 +67,18 @@
           <div class="col-description staff-description">
             <span>{{ row.description || '--' }}</span>
           </div>
+          <div class="col-phone staff-phone">
+            <span>{{ row.phone || '--' }}</span>
+          </div>
           <div class="col-group group-cell">
             <span>{{ row.group_name || '--' }}</span>
           </div>
-          <div class="col-status">
-            <el-tooltip
-              :content="row.is_online
-                ? `最后活跃：${formatDateTime(row.last_active_at)}`
-                : (row.last_active_at ? `最后活跃：${formatDateTime(row.last_active_at)}` : '从未活跃')"
-              placement="top"
-            >
-              <span class="status-pill" :class="row.is_online ? 'is-online' : 'is-offline'">
-                {{ row.is_online ? '在线' : '离线' }}
-              </span>
-            </el-tooltip>
+          <div class="col-enabled">
+            <el-switch
+              :model-value="row.enabled !== false"
+              :loading="enableLoading[row.id]"
+              @change="(value) => toggleStaffEnabled(row, value)"
+            />
           </div>
           <div class="col-actions action-buttons list-actions">
             <el-button class="test-action" @click="openLoginCodeDialog(row)">登录码</el-button>
@@ -104,11 +112,11 @@
       :close-on-click-modal="false"
       destroy-on-close
     >
-      <el-form ref="staffFormRef" label-position="top" class="staff-form">
-        <el-form-item label="人员名称" required>
+      <el-form ref="staffFormRef" :model="staffForm" :rules="staffRules" label-position="top" class="staff-form">
+        <el-form-item label="人员名称" prop="display_name">
           <el-input v-model.trim="staffForm.display_name" maxlength="128" placeholder="请输入人员名称" />
         </el-form-item>
-        <el-form-item label="描述">
+        <el-form-item label="描述" prop="description">
           <el-input
             v-model="staffForm.description"
             type="textarea"
@@ -118,19 +126,21 @@
             placeholder="人员职责、备注等信息（可选）"
           />
         </el-form-item>
-        <el-form-item label="所属组别">
+        <el-form-item label="所属组别" prop="group_name">
           <el-select
             v-model="staffForm.group_name"
             class="dialog-group-select"
-            allow-create
+            popper-class="staff-filter-popper"
             filterable
+            allow-create
             default-first-option
-            placeholder="选择或输入新组别"
+            clearable
+            placeholder="请选择组别，或输入新组名创建"
           >
-            <el-option v-for="item in groups" :key="item" :label="item" :value="item" />
+            <el-option v-for="item in allGroups" :key="item" :label="item" :value="item" />
           </el-select>
         </el-form-item>
-        <el-form-item label="联系电话">
+        <el-form-item label="联系电话" prop="phone">
           <el-input v-model.trim="staffForm.phone" maxlength="32" placeholder="联系电话（可选）" />
         </el-form-item>
         <div v-if="staffForm.id" class="staff-meta">
@@ -158,10 +168,8 @@
           <img :src="staffQrCodeUrl(qrStaff.id, qrTicket)" alt="登录二维码" class="qr-img" />
         </div>
         <div v-else class="qr-loading">生成中...</div>
-        <div class="qr-countdown" :class="{ 'is-expired': qrCountdown <= 0 }">
-          {{ qrCountdown > 0 ? `剩余 ${formatCountdown(qrCountdown)}` : '已过期，请刷新' }}
-        </div>
-        <p class="qr-tip">5 分钟内有效，单次使用；人员用小程序扫此码即可登录，登录后长期有效</p>
+        <div class="qr-permanent">永久有效</div>
+        <p class="qr-tip">登录码永久有效；人员用小程序扫此码即可登录，登录后长期有效，删除人员即登录失效</p>
       </div>
       <template #footer>
         <el-button type="primary" :loading="qrRefreshing" @click="refreshLoginCode">刷新登录码</el-button>
@@ -171,7 +179,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh, Search } from '@element-plus/icons-vue'
 import {
@@ -181,14 +189,34 @@ import {
   getStaffLoginCode,
   staffQrCodeUrl,
   updateStaff,
+  updateStaffEnabled,
 } from '@/api/staff'
+
+// 固定点位组：九号点位组、一号点位组、三号点位组
+const GROUP_OPTIONS = ['九号点位组', '一号点位组', '三号点位组']
+
+// 全部组别：固定三组 + 后端已存在的自定义组（列表筛选、弹窗下拉共用）
+const allGroups = ref([...GROUP_OPTIONS])
+
+function mergeGroups(serverGroups = []) {
+  const seen = new Set(GROUP_OPTIONS)
+  const merged = [...GROUP_OPTIONS]
+  for (const g of serverGroups) {
+    if (g && !seen.has(g)) {
+      seen.add(g)
+      merged.push(g)
+    }
+  }
+  return merged
+}
 
 const loading = ref(false)
 const page = ref(1)
 const pageSize = 10
 const total = ref(0)
-const groups = ref([])
 const rows = ref([])
+const enableLoading = reactive({})
+const summary = ref({ total: 0, idle: 0, offline: 0, working: 0 })
 const filters = reactive({
   keyword: '',
   group: '',
@@ -199,10 +227,6 @@ const staffRows = computed(() => rows.value)
 
 onMounted(() => {
   loadStaff()
-})
-
-onUnmounted(() => {
-  clearQrTimer()
 })
 
 async function loadStaff() {
@@ -217,7 +241,11 @@ async function loadStaff() {
     })
     rows.value = data.data?.items || data.items || []
     total.value = Number(data.data?.total ?? data.total ?? 0)
-    groups.value = data.data?.groups || data.groups || groups.value
+    summary.value = data.data?.summary || { total: 0, idle: 0, offline: 0, working: 0 }
+    const serverGroups = data.data?.groups || data.groups
+    if (Array.isArray(serverGroups)) {
+      allGroups.value = mergeGroups(serverGroups)
+    }
   } finally {
     loading.value = false
   }
@@ -228,16 +256,10 @@ function applyFilters() {
   loadStaff()
 }
 
-function formatDateTime(value) {
-  if (!value) return '--'
-  const date = typeof value === 'number' ? new Date(value * 1000) : new Date(value)
-  if (Number.isNaN(date.getTime())) return '--'
-  return date.toLocaleString('zh-CN', { hour12: false })
-}
-
 // ── 新增 / 编辑 ──────────────────────────────────────────────
 const staffDialogVisible = ref(false)
 const saving = ref(false)
+const staffFormRef = ref(null)
 const staffForm = reactive({
   id: null,
   staff_no: '',
@@ -247,6 +269,11 @@ const staffForm = reactive({
   phone: '',
   openid_bound: false,
 })
+
+const staffRules = {
+  display_name: [{ required: true, message: '请输入人员名称', trigger: 'blur' }],
+  group_name: [{ required: true, message: '请选择或输入所属组别', trigger: 'change' }],
+}
 
 function openStaffDialog(row) {
   if (row) {
@@ -271,11 +298,13 @@ function openStaffDialog(row) {
     })
   }
   staffDialogVisible.value = true
+  nextTick(() => staffFormRef.value?.clearValidate?.())
 }
 
 async function submitStaff() {
-  if (!staffForm.display_name?.trim()) {
-    ElMessage.warning('请填写人员名称')
+  try {
+    await staffFormRef.value?.validate?.()
+  } catch {
     return
   }
   saving.value = true
@@ -320,14 +349,27 @@ async function confirmDeleteStaff(row) {
   }
 }
 
+// ── 启用 / 停用 ───────────────────────────────────────────────
+async function toggleStaffEnabled(row, enabled) {
+  const previous = row.enabled !== false
+  row.enabled = enabled
+  enableLoading[row.id] = true
+  try {
+    const res = await updateStaffEnabled(row.id, enabled)
+    ElMessage.success(res.message || (enabled ? '人员已启用' : '人员已停用'))
+  } catch (error) {
+    row.enabled = previous
+    ElMessage.error(error.response?.data?.detail || '启用状态更新失败')
+  } finally {
+    enableLoading[row.id] = false
+  }
+}
+
 // ── 登录码（二维码）──────────────────────────────────────────
 const qrVisible = ref(false)
 const qrRefreshing = ref(false)
 const qrStaff = ref(null)
 const qrTicket = ref('')
-const qrExpiresAt = ref(0)
-const qrCountdown = ref(0)
-let qrTimer = null
 
 async function openLoginCodeDialog(row) {
   qrStaff.value = row
@@ -342,39 +384,12 @@ async function refreshLoginCode() {
   try {
     const data = await getStaffLoginCode(qrStaff.value.id)
     qrTicket.value = data.data?.ticket || data.ticket
-    qrExpiresAt.value = Number(data.data?.expires_at ?? data.expires_at ?? 0)
-    startQrTimer()
   } finally {
     qrRefreshing.value = false
   }
 }
 
-function startQrTimer() {
-  clearQrTimer()
-  updateCountdown()
-  qrTimer = setInterval(updateCountdown, 1000)
-}
-
-function updateCountdown() {
-  qrCountdown.value = Math.max(0, Math.ceil(qrExpiresAt.value - Date.now() / 1000))
-  if (qrCountdown.value <= 0) clearQrTimer()
-}
-
-function clearQrTimer() {
-  if (qrTimer) {
-    clearInterval(qrTimer)
-    qrTimer = null
-  }
-}
-
-function formatCountdown(sec) {
-  const minutes = Math.floor(sec / 60)
-  const seconds = sec % 60
-  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
-}
-
 function closeQrDialog() {
-  clearQrTimer()
   qrStaff.value = null
   qrTicket.value = ''
 }
@@ -405,6 +420,64 @@ function closeQrDialog() {
   border-radius: 8px;
   background: linear-gradient(90deg, rgba(14, 48, 76, .82) 0%, rgba(9, 29, 48, .72) 58%, rgba(7, 20, 34, .46) 100%);
   box-shadow: inset 0 1px 0 rgba(147, 206, 241, .08);
+}
+
+/* 顶部概览：标题 + 统计卡片 + 刷新按钮（参考机器狗设备页） */
+.staff-overview-bar {
+  min-height: 96px;
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) minmax(460px, 1.8fr) auto;
+  align-items: center;
+  gap: 18px;
+}
+
+/* 顶部统计：紧凑发光圆点 + 大数字 + 小标签，细分割线分隔，融入 header 不突兀 */
+.status-summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  flex-wrap: nowrap;
+}
+
+.metric {
+  min-width: 96px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 18px;
+  white-space: nowrap;
+}
+
+.metric + .metric {
+  border-left: 1px solid rgba(96, 151, 191, .18);
+}
+
+.metric .dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  align-self: center;
+  border-radius: 50%;
+  background: #8db2c8;
+  box-shadow: 0 0 8px rgba(141, 178, 200, .75);
+}
+
+.metric .dot.idle { background: #48e6bf; box-shadow: 0 0 8px rgba(72, 230, 191, .75); }
+.metric .dot.working { background: #43d4ff; box-shadow: 0 0 8px rgba(67, 212, 255, .75); }
+.metric .dot.offline { background: #8494a3; box-shadow: none; }
+
+.metric-num {
+  color: #f2fbff;
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-label {
+  color: #8db2c8;
+  font-size: 12px;
 }
 
 .page-header h2,
@@ -498,33 +571,19 @@ function closeQrDialog() {
   background: #1b6a9c;
 }
 
-.keyword-input {
-  width: 230px;
+.group-filter-select {
+  width: 180px;
 }
 
-.group-select {
-  width: 150px;
-}
-
-.status-select {
-  width: 112px;
-}
-
-.keyword-input :deep(.el-input__wrapper),
-.group-select :deep(.el-select__wrapper),
-.status-select :deep(.el-select__wrapper) {
+.group-filter-select :deep(.el-select__wrapper) {
   min-height: 34px;
   border-radius: 6px;
   background: #0d2740;
   box-shadow: 0 0 0 1px rgba(84, 148, 193, .36) inset;
 }
 
-.keyword-input :deep(.el-input__inner),
-.keyword-input :deep(.el-input__inner::placeholder),
-.group-select :deep(.el-select__selected-item),
-.group-select :deep(.el-select__placeholder),
-.status-select :deep(.el-select__selected-item),
-.status-select :deep(.el-select__placeholder) {
+.group-filter-select :deep(.el-select__selected-item),
+.group-filter-select :deep(.el-select__placeholder) {
   color: #d7edf6;
   font-weight: 700;
 }
@@ -535,7 +594,7 @@ function closeQrDialog() {
 }
 
 .staff-list {
-  min-width: 1320px;
+  min-width: 1380px;
   overflow: hidden;
   border-radius: 8px 8px 0 0;
   background: #081b2d;
@@ -544,7 +603,7 @@ function closeQrDialog() {
 .staff-list-header-row,
 .staff-row {
   display: grid;
-  grid-template-columns: minmax(220px, 1.1fr) minmax(300px, 1.45fr) 150px 112px 320px;
+  grid-template-columns: minmax(200px, 1fr) minmax(260px, 1.25fr) 140px 150px 112px 300px;
   align-items: center;
   gap: 14px;
 }
@@ -574,8 +633,9 @@ function closeQrDialog() {
 
 .col-name,
 .col-description,
+.col-phone,
 .col-group,
-.col-status,
+.col-enabled,
 .col-actions {
   min-width: 0;
   display: grid;
@@ -618,31 +678,6 @@ strong {
   white-space: nowrap;
 }
 
-.status-pill {
-  display: inline-flex;
-  align-items: center;
-  width: fit-content;
-  height: 24px;
-  padding: 0 10px;
-  justify-content: center;
-  border-radius: 4px;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1;
-}
-
-.status-pill.is-online {
-  border: 1px solid rgba(92, 215, 154, .34);
-  color: #81efad;
-  background: rgba(48, 154, 118, .18);
-}
-
-.status-pill.is-offline {
-  border: 1px solid rgba(235, 124, 133, .34);
-  color: #ffabb5;
-  background: rgba(142, 48, 62, .18);
-}
-
 .staff-description span {
   display: -webkit-box;
   overflow: hidden;
@@ -652,6 +687,12 @@ strong {
   text-overflow: ellipsis;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+}
+
+.staff-phone span {
+  color: #b9d2e6;
+  font-size: 14px;
+  white-space: nowrap;
 }
 
 .list-actions {
@@ -686,9 +727,9 @@ strong {
 }
 
 .list-actions :deep(.delete-action) {
-  border-color: rgba(224, 96, 104, .46);
-  color: #ffb9bf;
-  background: rgba(112, 40, 46, .42);
+  border-color: rgba(226, 88, 109, .46);
+  color: #ffb1bd;
+  background: rgba(128, 36, 54, .48);
 }
 
 .list-actions :deep(.test-action:hover) {
@@ -704,9 +745,46 @@ strong {
 }
 
 .list-actions :deep(.delete-action:hover) {
-  border-color: rgba(224, 96, 104, .72);
-  color: #ffe3e6;
-  background: rgba(140, 48, 55, .55);
+  border-color: rgba(226, 88, 109, .68);
+  color: #ffd5dd;
+  background: rgba(144, 42, 62, .62);
+}
+
+/* 双保险：全局 + !important 覆盖（与广播列表一致，确保三色按钮必然生效） */
+:global(.staff-page .list-actions .el-button.test-action) {
+  border-color: rgba(82, 178, 143, .54) !important;
+  color: #b9f1d8 !important;
+  background: rgba(30, 103, 78, .42) !important;
+}
+
+:global(.staff-page .list-actions .el-button.edit-action) {
+  border-color: rgba(66, 164, 224, .50) !important;
+  color: #d5f0ff !important;
+  background: rgba(29, 91, 133, .70) !important;
+}
+
+:global(.staff-page .list-actions .el-button.delete-action) {
+  border-color: rgba(226, 88, 109, .46) !important;
+  color: #ffb1bd !important;
+  background: rgba(128, 36, 54, .48) !important;
+}
+
+:global(.staff-page .list-actions .el-button.test-action:hover) {
+  border-color: rgba(82, 178, 143, .72) !important;
+  color: #e3fff1 !important;
+  background: rgba(36, 123, 92, .56) !important;
+}
+
+:global(.staff-page .list-actions .el-button.edit-action:hover) {
+  border-color: rgba(66, 164, 224, .72) !important;
+  color: #effaff !important;
+  background: rgba(33, 107, 156, .82) !important;
+}
+
+:global(.staff-page .list-actions .el-button.delete-action:hover) {
+  border-color: rgba(226, 88, 109, .68) !important;
+  color: #ffd5dd !important;
+  background: rgba(144, 42, 62, .62) !important;
 }
 
 .empty-list {
@@ -755,66 +833,148 @@ strong {
   background: #0b2238;
 }
 
-/* ── 弹窗样式（对齐广播页深色主题）────────────────────────── */
-.staff-config-dialog :deep(.el-dialog),
-.qr-dialog :deep(.el-dialog) {
+/* ── 弹窗样式（对齐广播页深色主题；el-dialog teleport 到 body，须用 :global）── */
+:global(.staff-config-dialog.el-dialog) {
+  border: 1px solid rgba(97, 167, 214, .40);
+  border-radius: 10px;
+  background: #1d426a;
+}
+
+:global(.staff-config-dialog .el-dialog__header) {
+  position: relative;
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 18px 58px 10px 24px;
+}
+
+:global(.staff-config-dialog .el-dialog__title) {
+  color: #eef7ff;
+  font-size: 22px;
+  line-height: 1.2;
+  font-weight: 800;
+}
+
+:global(.staff-config-dialog .el-dialog__headerbtn) {
+  top: 14px;
+  right: 18px;
+  width: 34px;
+  height: 34px;
+}
+
+:global(.staff-config-dialog .el-dialog__close) {
+  color: #c8d9e7;
+}
+
+:global(.staff-config-dialog .el-dialog__body) {
+  padding: 12px 24px 8px;
+}
+
+:global(.staff-config-dialog .el-dialog__footer) {
+  padding: 12px 24px 20px;
+}
+
+/* 表单 label：浅色大号加粗，对标广播 */
+:global(.staff-config-dialog .el-form-item__label) {
+  margin-bottom: 8px !important;
+  color: #e2f0fb !important;
+  font-size: 15px !important;
+  font-weight: 700 !important;
+}
+
+/* 必填红星改到标签文字右侧（对标广播列表"红点在右边"细节） */
+:global(.staff-config-dialog .el-form-item.is-required:not(.is-no-asterisk).asterisk-left > .el-form-item__label::before) {
+  display: none !important;
+}
+
+:global(.staff-config-dialog .el-form-item.is-required:not(.is-no-asterisk).asterisk-left > .el-form-item__label::after) {
+  content: "*" !important;
+  margin-left: 6px !important;
+  color: #ff6b78 !important;
+  font-size: 20px !important;
+  font-weight: 900 !important;
+  line-height: 1 !important;
+  vertical-align: -2px !important;
+}
+
+/* 输入框 / 文本域 / 下拉框：深色内阴影，对标广播 */
+:global(.staff-config-dialog .el-input__wrapper),
+:global(.staff-config-dialog .el-textarea__inner),
+:global(.staff-config-dialog .el-select__wrapper) {
+  border-radius: 6px;
+  background: #092034;
+  box-shadow: inset 0 0 0 1px rgba(36, 128, 176, .46);
+  color: #f4fbff;
+}
+
+:global(.staff-config-dialog .el-input__inner),
+:global(.staff-config-dialog .el-textarea__inner) {
+  color: #f4fbff;
+}
+
+:global(.staff-config-dialog .el-input__inner::placeholder),
+:global(.staff-config-dialog .el-textarea__inner::placeholder) {
+  color: #a5b8c7;
+}
+
+:global(.staff-config-dialog .el-select__selected-item),
+:global(.staff-config-dialog .el-select__placeholder) {
+  color: #f4fbff;
+  font-weight: 600;
+}
+
+:global(.staff-config-dialog .el-input__count) {
+  display: none;
+}
+
+/* 所属组别下拉（allow-create）popper 深色主题 */
+:global(.staff-filter-popper.el-select__popper) {
+  border: 1px solid rgba(72, 216, 255, .28);
+  background: #082033;
+  box-shadow: 0 16px 36px rgba(0, 7, 18, .38);
+}
+
+:global(.staff-filter-popper .el-select-dropdown__item) {
+  color: #aecdde;
+}
+
+:global(.staff-filter-popper .el-select-dropdown__item.is-hovering),
+:global(.staff-filter-popper .el-select-dropdown__item:hover) {
+  color: #e9fbff;
+  background: rgba(72, 216, 255, .12);
+}
+
+:global(.staff-filter-popper .el-select-dropdown__item.is-selected),
+:global(.staff-filter-popper .el-select-dropdown__item.selected) {
+  color: #50e1d0;
+  font-weight: 800;
+}
+
+/* 二维码弹窗：同样用 :global 兜底深色主题 */
+:global(.qr-dialog.el-dialog) {
   border: 1px solid rgba(96, 151, 191, .28);
   border-radius: 10px;
   background: #0d2136;
 }
 
-.staff-config-dialog :deep(.el-dialog__header),
-.qr-dialog :deep(.el-dialog__header) {
+:global(.qr-dialog .el-dialog__header) {
   padding: 18px 22px 10px;
   border-bottom: 1px solid rgba(96, 151, 191, .16);
 }
 
-.staff-config-dialog :deep(.el-dialog__title),
-.qr-dialog :deep(.el-dialog__title) {
+:global(.qr-dialog .el-dialog__title) {
   color: #f3f8fd;
   font-size: 17px;
   font-weight: 700;
 }
 
-.staff-config-dialog :deep(.el-dialog__body),
-.qr-dialog :deep(.el-dialog__body) {
+:global(.qr-dialog .el-dialog__body) {
   padding: 20px 22px;
 }
 
-.staff-config-dialog :deep(.el-dialog__footer),
-.qr-dialog :deep(.el-dialog__footer) {
+:global(.qr-dialog .el-dialog__footer) {
   padding: 12px 22px 18px;
-}
-
-.staff-form :deep(.el-form-item__label) {
-  color: #d9ecfa;
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.staff-form :deep(.el-form-item__label::before) {
-  color: #ff7b85;
-}
-
-.staff-form :deep(.el-input__wrapper),
-.staff-form :deep(.el-textarea__inner),
-.dialog-group-select :deep(.el-select__wrapper) {
-  border-radius: 6px;
-  background: #0a1f35;
-  box-shadow: 0 0 0 1px rgba(84, 148, 193, .30) inset;
-  color: #e6f4ff;
-}
-
-.staff-form :deep(.el-input__inner),
-.staff-form :deep(.el-textarea__inner) {
-  color: #e6f4ff;
-  font-weight: 600;
-}
-
-.staff-form :deep(.el-input__inner::placeholder),
-.staff-form :deep(.el-textarea__inner::placeholder) {
-  color: #5f82a0;
-  font-weight: 400;
 }
 
 .dialog-group-select {
@@ -866,14 +1026,16 @@ strong {
   font-size: 13px;
 }
 
-.qr-countdown {
-  color: #79d4a8;
-  font-size: 14px;
+.qr-permanent {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 12px;
+  border: 1px solid rgba(92, 215, 154, .34);
+  border-radius: 12px;
+  color: #81efad;
+  background: rgba(48, 154, 118, .18);
+  font-size: 13px;
   font-weight: 700;
-}
-
-.qr-countdown.is-expired {
-  color: #ffabb5;
 }
 
 .qr-tip {

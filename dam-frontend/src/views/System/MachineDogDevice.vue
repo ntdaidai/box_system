@@ -29,7 +29,7 @@
         </div>
 
         <div class="control-grid">
-          <el-select v-model="selectedDeviceId" placeholder="选择机器狗" popper-class="dog-select-popper">
+          <el-select v-model="selectedDeviceId" class="dog-picker" placeholder="选择机器狗" popper-class="dog-select-popper">
             <el-option
               v-for="dog in machineDogs"
               :key="dog.id"
@@ -40,15 +40,16 @@
           </el-select>
           <el-select
             v-model="selectedPresetRouteId"
+            class="route-picker"
             placeholder="选择预设路线"
             @change="applyPresetRoute"
           >
             <el-option v-for="route in presetRoutes" :key="route.id" :label="route.name" :value="route.id" />
           </el-select>
-          <el-button :icon="VideoPlay" type="primary" :disabled="!canStartTask" @click="startInspection">
+          <el-button class="ctrl-btn" :icon="VideoPlay" type="primary" :disabled="!canStartTask" @click="startInspection">
             开始巡检
           </el-button>
-          <el-button :icon="RefreshLeft" @click="resetRoute">重置路线</el-button>
+          <el-button class="ctrl-btn" :icon="RefreshLeft" @click="resetRoute">重置路线</el-button>
         </div>
 
         <div class="selected-route">
@@ -98,6 +99,55 @@
           <div :style="{ width: `${taskProgress}%` }"></div>
         </div>
       </div>
+
+      <div class="machine-status">
+        <div class="panel-heading compact">
+          <div>
+            <span class="panel-kicker">设备状态</span>
+            <h3>{{ selectedDog?.name || '未选择设备' }}</h3>
+          </div>
+          <span v-if="selectedDog" class="live-badge">{{ dogStatusMeta[selectedDog.status].text }}</span>
+        </div>
+        <div v-if="selectedDog" class="status-grid">
+          <div class="status-cell">
+            <span class="status-label">设备型号</span>
+            <strong>{{ selectedDog.model }}</strong>
+          </div>
+          <div class="status-cell">
+            <span class="status-label">移动速度</span>
+            <strong :class="{ moving: selectedDog.speed > 0 }">
+              {{ selectedDog.speed.toFixed(1) }} <em>m/s</em>
+            </strong>
+          </div>
+          <div class="status-cell">
+            <span class="status-label">当前位置</span>
+            <strong class="status-loc" :title="selectedDog.location">{{ selectedDog.location }}</strong>
+          </div>
+          <div class="status-cell">
+            <span class="status-label">当前任务</span>
+            <strong class="status-task" :title="selectedDog.task || '待命'">{{ selectedDog.task || '待命' }}</strong>
+          </div>
+          <div class="status-cell">
+            <span class="status-label">电量</span>
+            <div class="status-meter">
+              <div class="meter-track" :class="{ low: selectedDog.battery < 30 }">
+                <div class="meter-fill battery" :style="{ width: `${selectedDog.battery}%` }"></div>
+              </div>
+              <b>{{ selectedDog.battery }}%</b>
+            </div>
+          </div>
+          <div class="status-cell">
+            <span class="status-label">信号强度</span>
+            <div class="status-meter">
+              <div class="meter-track">
+                <div class="meter-fill signal" :style="{ width: `${selectedDog.signal}%` }"></div>
+              </div>
+              <b>{{ selectedDog.signal }}%</b>
+            </div>
+          </div>
+        </div>
+        <div v-else class="status-empty">请先在左侧选择设备</div>
+      </div>
     </section>
 
     <section class="workspace">
@@ -141,6 +191,11 @@
             <el-icon><Lightning /></el-icon>
           </span>
           <span class="charge-zone-label">充电区</span>
+        </div>
+
+        <div class="map-corner-label">
+          <el-icon :size="13"><MapLocation /></el-icon>
+          <span>9号巡检区域</span>
         </div>
 
         <div class="map-legend">
@@ -330,6 +385,7 @@ import {
   Close,
   EditPen,
   Lightning,
+  MapLocation,
   Menu,
   Plus,
   RefreshLeft,
@@ -410,6 +466,7 @@ const machineDogs = ref([
     battery: 92,
     signal: 95,
     location: '充电区',
+    speed: 0, // 移动速度（m/s），巡检移动时更新
     task: '',
     position: { x: chargeZone.x, y: chargeZone.y },
   },
@@ -478,6 +535,7 @@ const editablePoolPoints = computed(() =>
 // ===== 巡检任务模拟：充电区出发 → 逐点移动+停留 → 逆序回程 =====
 const STAY_MS = 3500 // 每个巡检点停留时长
 const MOVE_SPEED = 100 // 移动速率系数（百分比距离 → 毫秒，值越大越慢）
+const CRUISE_SPEED = 1.5 // 移动巡航速度（m/s），用于设备状态框实时展示
 let tripSegments = [] // 当前任务的行程分段（move / stay）
 
 function buildTrip(routePoints) {
@@ -518,6 +576,16 @@ function positionAtElapsed(task) {
     acc += seg.duration
   }
   return { ...chargeZone }
+}
+
+// 返回 elapsed 时刻所在的行程分段（用于设备状态框的实时速度展示）
+function currentTripSegment(task) {
+  let acc = 0
+  for (const seg of tripSegments) {
+    if (task.elapsed <= acc + seg.duration) return { seg, local: 1 }
+    acc += seg.duration
+  }
+  return { seg: null, local: 0 }
 }
 
 function buildPassedPolyline(task) {
@@ -608,6 +676,7 @@ function updateActiveDogPosition() {
   if (activeTask.value.elapsed >= activeTask.value.totalMs) {
     activeTask.value.elapsed = activeTask.value.totalMs
     dog.position = { ...chargeZone } // 完成任务后回到充电区
+    dog.speed = 0
     dog.status = 'idle'
     dog.task = ''
     activeTask.value = null
@@ -616,6 +685,8 @@ function updateActiveDogPosition() {
   }
 
   dog.position = positionAtElapsed(activeTask.value)
+  // 更新实时速度：移动段巡航速度，停留/待命为 0
+  dog.speed = currentTripSegment(activeTask.value).seg?.type === 'move' ? CRUISE_SPEED : 0
 }
 
 function applyPresetRoute(routeId) {
@@ -750,6 +821,7 @@ function startInspection() {
         ...item,
         status: 'running',
         task: routeName,
+        speed: 0,
         position: { ...chargeZone }, // 从充电区出发
       }
     }
@@ -839,6 +911,25 @@ onBeforeUnmount(() => {
   letter-spacing: 0;
 }
 
+/* 面板标题左侧装饰竖条 */
+.panel-heading h3 {
+  position: relative;
+  padding-left: 11px;
+  line-height: 1;
+}
+
+.panel-heading h3::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 15px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #43d9ff, #43e6b8);
+}
+
 .status-summary {
   display: grid;
   grid-template-columns: repeat(5, minmax(74px, 1fr));
@@ -877,7 +968,7 @@ onBeforeUnmount(() => {
 
 .command-panel {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(310px, .8fr);
+  grid-template-columns: minmax(0, 1.6fr) minmax(280px, .8fr) minmax(280px, .8fr);
   gap: 16px;
   margin-top: 14px;
   padding: 16px;
@@ -899,10 +990,25 @@ onBeforeUnmount(() => {
 }
 
 .control-grid {
-  display: grid;
-  grid-template-columns: minmax(160px, 1fr) minmax(180px, 1fr) auto auto;
+  display: flex;
+  align-items: center;
   gap: 10px;
   margin-top: 16px;
+}
+
+/* 横向压缩路线选择控件：下拉框定宽，按钮紧凑 */
+.control-grid .dog-picker {
+  flex: 0 0 170px;
+}
+
+.control-grid .route-picker {
+  flex: 0 1 260px;
+  min-width: 0;
+}
+
+.control-grid .ctrl-btn {
+  flex: 0 0 auto;
+  margin-left: 0;
 }
 
 .selected-route {
@@ -1026,6 +1132,115 @@ onBeforeUnmount(() => {
   border-radius: inherit;
   background: linear-gradient(90deg, #42e8bd, #36cfff);
   transition: width .28s ease;
+}
+
+/* 机器状态框：展示当前选中设备的电量、速度、信号等信息 */
+.machine-status {
+  padding: 14px;
+  border: 1px solid rgba(78, 151, 188, .18);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(13, 42, 60, .9), rgba(8, 24, 38, .88));
+}
+
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.status-cell {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(94, 163, 196, .14);
+  border-radius: 8px;
+  background: rgba(1, 10, 19, .38);
+}
+
+.status-label {
+  display: block;
+  margin-bottom: 6px;
+  color: #789caf;
+  font-size: 11px;
+  letter-spacing: .5px;
+}
+
+.status-cell > strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: #eef9ff;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-cell strong.moving {
+  color: #3ed9ff;
+}
+
+.status-cell strong em {
+  font-style: normal;
+  color: #6f95ab;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.status-cell strong.status-loc,
+.status-cell strong.status-task {
+  color: #9fd4e8;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.status-meter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.meter-track {
+  flex: 1;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(118, 142, 164, .2);
+}
+
+.meter-fill {
+  height: 100%;
+  border-radius: inherit;
+  transition: width .28s ease;
+}
+
+.meter-fill.battery {
+  background: linear-gradient(90deg, #42e8bd, #36cfff);
+}
+
+.meter-track.low .meter-fill.battery {
+  background: linear-gradient(90deg, #ff9f43, #ff5f57);
+}
+
+.meter-fill.signal {
+  background: linear-gradient(90deg, #6ac8ff, #3d7bff);
+}
+
+.status-meter b {
+  flex: 0 0 auto;
+  color: #eef9ff;
+  font-size: 13px;
+}
+
+.status-empty {
+  margin-top: 14px;
+  padding: 18px 10px;
+  border-radius: 8px;
+  color: #6f8fa5;
+  text-align: center;
+  font-size: 13px;
+  background: rgba(1, 10, 19, .38);
 }
 
 .workspace {
@@ -1223,6 +1438,29 @@ onBeforeUnmount(() => {
   background: rgba(3, 12, 20, .76);
   font-size: 12px;
   white-space: nowrap;
+}
+
+.map-corner-label {
+  position: absolute;
+  left: 14px;
+  top: 14px;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid rgba(111, 183, 220, .22);
+  border-radius: 8px;
+  color: #e6f6ff;
+  background: rgba(5, 19, 31, .78);
+  backdrop-filter: blur(8px);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+
+.map-corner-label .el-icon {
+  color: #42d9ff;
 }
 
 .map-legend {
@@ -1652,6 +1890,17 @@ onBeforeUnmount(() => {
   --el-border-radius-base: 6px;
 }
 
+/* 中等视口：路线编排占整行，当前任务与设备状态并排，避免控件被挤压溢出 */
+@media (max-width: 1520px) {
+  .command-panel {
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 1fr);
+  }
+
+  .route-builder {
+    grid-column: 1 / -1;
+  }
+}
+
 @media (max-width: 1180px) {
   .overview-bar,
   .command-panel,
@@ -1664,7 +1913,13 @@ onBeforeUnmount(() => {
   }
 
   .control-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    flex-wrap: wrap;
+  }
+
+  .control-grid .dog-picker,
+  .control-grid .route-picker {
+    flex: 1 1 40%;
+    min-width: 170px;
   }
 
   .workspace {
@@ -1678,9 +1933,23 @@ onBeforeUnmount(() => {
   }
 
   .status-summary,
-  .control-grid,
   .task-metrics {
     grid-template-columns: 1fr;
+  }
+
+  .control-grid {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .control-grid .dog-picker,
+  .control-grid .route-picker {
+    flex: 1 1 auto;
+    width: 100%;
+  }
+
+  .control-grid .ctrl-btn {
+    width: 100%;
   }
 
   .map-area {

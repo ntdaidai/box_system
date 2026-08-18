@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from app.models.safety_integration import SafetyEventInstance, SafetyEventTimelineLog
 from app.services.safety_event_runtime_service import safety_event_runtime_service
+from app.services.timeline_text import risk_label, truncate
 from app.services.safety_event_engine import (
     DISPOSAL_MONITORING,
     HANDLING_AUTO,
@@ -336,7 +337,33 @@ class SqlSafetyEventStore:
             "event_resolved": "安全事件已关闭",
             "EVENT_RESOLVED": "安全事件已关闭",
         }
-        return names.get(action.get("action_type"), "安全事件动作")
+        action_type = str(action.get("action_type") or "SYSTEM")
+        payload = action.get("payload") or {}
+        risk = payload.get("risk_level") or action.get("risk_level")
+        if action_type in {"event_created"}:
+            return f"安全事件已创建，初判风险：{risk_label(risk)}" if risk else "安全事件已创建"
+        if action_type in {"risk_changed", "RISK_CHANGED"}:
+            before = payload.get("from")
+            after = payload.get("to")
+            msg = f"风险等级变化：{risk_label(before)} → {risk_label(after)}"
+            reason = payload.get("reason")
+            if reason:
+                msg += f"（原因：{truncate(reason)}）"
+            return msg
+        if action_type in {"event_resolved", "EVENT_RESOLVED"}:
+            reason = payload.get("reason") or "事件处置完成"
+            return f"安全事件已闭环（原因：{truncate(reason)}）"
+        if action_type in {"target_left", "TARGET_LEFT"}:
+            return f"目标已离开危险区域（当前风险等级 {risk_label(risk)}）" if risk else "目标离开危险区域"
+        if action_type in {"AUTO_BROADCAST", "broadcast_requested"}:
+            return f"系统自动广播驱离（风险 {risk_label(risk)}）" if risk else "系统自动广播驱离"
+        if action_type in {"DRONE_DISPATCH", "drone_dispatch_requested"}:
+            return f"系统自动派出无人机取证驱离（风险 {risk_label(risk)}）" if risk else "系统自动派出无人机取证驱离"
+        if action_type in {"STAFF_DISPATCH", "staff_task_requested"}:
+            return f"创建人工处置任务（风险 {risk_label(risk)}）" if risk else "创建人工处置任务"
+        if action_type in {"push_requested", "PUSH_REQUESTED"}:
+            return f"请求消息推送（风险 {risk_label(risk)}）" if risk else "请求消息推送"
+        return names.get(action_type, "安全事件动作")
 
     @staticmethod
     def _unified_event_code(entity_type: str, risk_level: str) -> Optional[str]:

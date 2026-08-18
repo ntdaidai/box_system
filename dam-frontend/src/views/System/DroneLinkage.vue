@@ -4,7 +4,7 @@
     <header class="page-header">
       <div>
         <h2>无人机设备</h2>
-        <p>展示 DJI 真实无人机与绑定机场，选择航线测试自动巡检；设备配置请在 DJI 控制台完成</p>
+        <p>展示无人机与绑定机场，选择航线测试自动巡检；航线以地图总览方式查看</p>
       </div>
       <el-button :icon="Refresh" :loading="loading" @click="refreshCurrent">刷新</el-button>
     </header>
@@ -12,15 +12,11 @@
     <!-- 工具条 -->
     <section class="resource-control-card">
       <header class="tab-header">
-        <h3>{{ isWaylineView ? '航线列表' : '无人机列表' }}</h3>
-        <div v-if="!isWaylineView" class="tab-actions">
-          <a class="console-entry" :href="djiConsoleUrl" target="_blank" rel="noopener">
-            <el-icon><Promotion /></el-icon>
-            <span>DJI 控制台</span>
-          </a>
-          <button type="button" class="toolbar-template-entry" @click="showWaylines">
-            <el-icon><Tickets /></el-icon>
-            <span>查看航线 {{ waylineFiles.length }}</span>
+        <h3>无人机列表</h3>
+        <div class="tab-actions">
+          <button type="button" class="toolbar-map-entry" @click="openWaylineMap">
+            <el-icon><MapLocation /></el-icon>
+            <span>查看航线 {{ waylineRoutes.length }}</span>
           </button>
           <el-select
             v-model="deviceFilters.status"
@@ -33,18 +29,11 @@
             <el-option label="离线" value="offline" />
           </el-select>
         </div>
-        <div v-else class="tab-actions">
-          <button type="button" class="toolbar-return-entry" @click="showDevices">
-            <el-icon><ArrowLeft /></el-icon>
-            <span>返回设备列表</span>
-          </button>
-          <el-button :icon="Refresh" :loading="waylineLoading" @click="loadWaylines">刷新航线</el-button>
-        </div>
       </header>
     </section>
 
     <!-- 设备列表 -->
-    <section v-if="!isWaylineView" class="resource-list-card" v-loading="deviceLoading">
+    <section class="resource-list-card" v-loading="deviceLoading">
       <div class="device-list" :class="{ 'is-empty': !filteredDevices.length }">
         <div v-if="filteredDevices.length" class="device-list-header-row">
           <div class="col-name">设备名称</div>
@@ -52,6 +41,7 @@
           <div class="col-dock">绑定机场</div>
           <div class="col-battery">电量(剩余飞行时间)</div>
           <div class="col-status">状态</div>
+          <div class="col-enabled">是否启用</div>
           <div class="col-actions">操作</div>
         </div>
         <article
@@ -81,13 +71,21 @@
               {{ row.online ? '在线' : '离线' }}
             </span>
           </div>
+          <div class="col-enabled">
+            <el-switch
+              :model-value="row.enabled !== false"
+              @change="(value) => toggleEnabled(row, value)"
+            />
+          </div>
           <div class="col-actions list-actions">
             <el-button class="test-action" @click="openTestDialog(row)">测试</el-button>
+            <el-button class="edit-action" @click="openEditDialog(row)">编辑</el-button>
+            <el-button class="delete-action" @click="confirmDeleteDevice(row)">删除</el-button>
           </div>
         </article>
         <div v-if="!filteredDevices.length" class="empty-list">
           <strong>{{ authError ? 'DJI 服务连接失败' : '暂无在线无人机' }}</strong>
-          <span>{{ authError || '请先在 DJI 控制台绑定机场与无人机，再回到本页刷新' }}</span>
+          <span>{{ authError || '当前无匹配的无人机设备' }}</span>
         </div>
       </div>
       <el-pagination
@@ -100,50 +98,12 @@
       />
     </section>
 
-    <!-- 航线视图 -->
-    <section v-else class="resource-list-card" v-loading="waylineLoading">
-      <div class="wayline-list" :class="{ 'is-empty': !waylineFiles.length }">
-        <div v-if="waylineFiles.length" class="wayline-list-header-row">
-          <div>航线名称</div>
-          <div>文件类型</div>
-          <div>更新时间</div>
-          <div>操作</div>
-        </div>
-        <article v-for="w in waylineFiles" :key="w.id || w.wayline_id" class="wayline-row">
-          <div class="wayline-name">
-            <strong>{{ w.file_name || w.name || `航线-${w.id}` }}</strong>
-          </div>
-          <div class="wayline-type">
-            <span>{{ w.wayline_type === 1 ? '航点' : w.wayline_type === 2 ? '建图航迹' : '--' }}</span>
-          </div>
-          <div class="wayline-time">{{ formatTime(w.update_time || w.create_time) }}</div>
-          <div class="wayline-actions list-actions">
-            <a class="edit-action-link" :href="djiConsoleUrl" target="_blank" rel="noopener">
-              <el-button class="edit-action" size="small">到控制台管理</el-button>
-            </a>
-          </div>
-        </article>
-        <div v-if="!waylineFiles.length" class="empty-list">
-          <strong>暂无航线文件</strong>
-          <span>请在 DJI 控制台上传航线后刷新</span>
-        </div>
-      </div>
-      <el-pagination
-        v-if="waylineFiles.length > pageSize"
-        v-model:current-page="waylinePage"
-        class="list-pagination"
-        :page-size="pageSize"
-        :total="waylineFiles.length"
-        layout="prev, pager, next"
-      />
-    </section>
-
     <!-- 测试弹窗 -->
     <el-dialog
       v-model="testDialogVisible"
       title="无人机测试 · 航线巡检"
       width="92%"
-      top="3vh"
+      align-center
       class="drone-test-dialog"
       destroy-on-close
       :close-on-click-modal="false"
@@ -153,7 +113,6 @@
         <div class="test-toolbar">
           <div class="test-device">
             <strong>{{ testingDevice?.device_name || '--' }}</strong>
-            <span>{{ testingDevice?.dockName || '--' }} · {{ wsOnlineText }}</span>
           </div>
           <div class="test-wayline">
             <span class="toolbar-label">选择航线</span>
@@ -166,21 +125,18 @@
               popper-class="drone-filter-popper"
             >
               <el-option
-                v-for="w in waylineFiles"
-                :key="w.id || w.wayline_id"
-                :label="w.file_name || w.name"
-                :value="w.id || w.wayline_id"
+                v-for="route in waylineRoutes"
+                :key="route.name"
+                :label="route.name"
+                :value="route.name"
               />
             </el-select>
             <el-button
-              class="test-start-btn"
+              :icon="VideoCamera"
+              :disabled="!testWaylineId"
               type="primary"
-              :icon="VideoPlay"
-              :disabled="!testWaylineId || testStarting || testing"
               @click="handleStartTest"
-            >
-              {{ testStarting ? '启动中...' : testing ? '巡检中' : '启动' }}
-            </el-button>
+            >开始</el-button>
             <el-button v-if="testing" :icon="Close" @click="handleStopTest">停止</el-button>
           </div>
         </div>
@@ -238,86 +194,121 @@
 
           <div class="test-video">
             <div class="video-stage">
-              <video v-if="isLive" ref="liveVideoRef" class="video-stream" autoplay muted playsinline></video>
+              <video
+                v-if="testing && demoVideoSrc"
+                :key="testWaylineId"
+                :src="demoVideoSrc"
+                class="video-stream"
+                autoplay
+                muted
+                loop
+                playsinline
+              ></video>
               <div v-else class="video-placeholder">
                 <el-icon :size="36"><VideoCamera /></el-icon>
-                <strong>{{ liveLoading ? '连接视频流...' : videoError ? '画面未连接' : '实时画面' }}</strong>
-                <span>{{ liveLoading ? '正在建立推流连接' : videoError ? '不影响航线模拟' : '启动航线后自动开启画面' }}</span>
+                <strong>请选择航线</strong>
+                <span>选择航线后点击开始，播放对应的巡检演示视频</span>
               </div>
+              <div v-if="testing" class="video-progress-badge">{{ testProgress }}%</div>
               <div class="scan-grid"></div>
             </div>
           </div>
         </div>
+      </div>
+    </el-dialog>
 
-        <!-- 底部遥测 -->
-        <div class="test-telemetry">
-          <div class="telemetry-item">
-            <span class="t-label">电量</span>
-            <span class="t-value" :class="batteryTone">{{ osdData.batteryPct ?? '--' }}%</span>
-          </div>
-          <div class="telemetry-item">
-            <span class="t-label">剩余飞行</span>
-            <span class="t-value">{{ osdData.remainMin ?? '--' }}min</span>
-          </div>
-          <div class="telemetry-item">
-            <span class="t-label">高度</span>
-            <span class="t-value">{{ osdData.height ?? '--' }}m</span>
-          </div>
-          <div class="telemetry-item">
-            <span class="t-label">水平速度</span>
-            <span class="t-value">{{ osdData.speed ?? '--' }}m/s</span>
-          </div>
-          <div class="telemetry-item">
-            <span class="t-label">离机场</span>
-            <span class="t-value">{{ osdData.homeDist ?? '--' }}m</span>
-          </div>
-          <div class="telemetry-item">
-            <span class="t-label">飞行模式</span>
-            <span class="t-value mode" :class="osdData.modeTone">{{ osdData.modeText }}</span>
-          </div>
-          <div class="telemetry-item">
-            <span class="t-label">GPS/RTK</span>
-            <span class="t-value">{{ osdData.gps ?? '--' }}/{{ osdData.rtk ?? '--' }}</span>
-          </div>
-          <div class="telemetry-item">
-            <span class="t-label">任务进度</span>
-            <span class="t-value">{{ testProgress }}%</span>
-          </div>
+    <!-- 航线大图弹窗（对标感知源“查看点位图”的图片方式展示） -->
+    <el-dialog
+      v-model="waylineMapVisible"
+      class="wayline-map-dialog"
+      title="航线总览图"
+      width="95vw"
+      top="3vh"
+    >
+      <div class="wayline-map-stage">
+        <img src="/dam-map.png" alt="大藤峡航线总览" draggable="false" />
+        <svg
+          class="wayline-map-svg"
+          viewBox="0 0 100 100"
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          <g v-for="(route, index) in waylineRoutes" :key="route.name" class="wayline-map-route-group">
+            <polyline class="wayline-map-route route-glow" :class="`tone-${index}`" :points="routePolyline(route)" />
+            <polyline class="wayline-map-route" :class="`tone-${index}`" :points="routePolyline(route)" />
+            <circle
+              v-for="(pt, i) in route.waypoints"
+              :key="`${route.name}-${i}`"
+              class="wayline-map-point"
+              :cx="pt.x"
+              :cy="pt.y"
+              r="1.4"
+            />
+          </g>
+        </svg>
+        <div class="wayline-map-fixed-point" style="left: 94.9%; top: 24.9%;">
+          <img src="/starting-point.png" alt="机场" />
+          <span>P3 机场</span>
+        </div>
+        <div class="wayline-map-fixed-point" style="left: 47.4%; top: 58.1%;">
+          <img src="/waypoint.png" alt="禁渔点" />
+          <span>禁渔点</span>
+        </div>
+        <div class="wayline-map-fixed-point" style="left: 96.3%; top: 54.3%;">
+          <img src="/waypoint.png" alt="禁涉水点" />
+          <span>禁涉水点</span>
+        </div>
+        <div class="wayline-map-legend">
+          <span class="legend-item"><img src="/starting-point.png" class="legend-icon-img" />起始点</span>
+          <span class="legend-item"><img src="/waypoint.png" class="legend-icon-img" />航点</span>
+          <span class="legend-item"><i class="legend-line tone-0"></i>禁渔航线</span>
+          <span class="legend-item"><i class="legend-line tone-1"></i>禁涉水航线</span>
         </div>
       </div>
+    </el-dialog>
+
+    <!-- 编辑无人机弹窗 -->
+    <el-dialog
+      v-model="editDialogVisible"
+      title="编辑无人机设备"
+      width="520px"
+      class="drone-edit-dialog"
+      destroy-on-close
+    >
+      <el-form label-position="top" @submit.prevent>
+        <el-form-item label="设备名称">
+          <el-input v-model.trim="editForm.device_name" maxlength="64" placeholder="请输入设备名称" />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model.trim="editForm.device_desc" type="textarea" :rows="3" maxlength="200" placeholder="请输入设备描述" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="saveEdit">保存</el-button>
+      </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  ArrowLeft, Close, Promotion, Refresh, Tickets, VideoCamera, VideoPlay,
+  Close, MapLocation, Refresh, VideoCamera,
 } from '@element-plus/icons-vue'
 import {
-  createFlightTask,
   dijLogin,
   getBoundDevices,
   getCurrentWorkspace,
   getDroneDevices,
-  getLiveCapacity,
-  getWaylineFiles,
-  startLiveStream,
-  startSimulation,
-  stopLiveStream,
-  stopSimulation,
 } from '@/api/drone'
-import { parseFlightMode } from '@/utils/droneWs'
 
 // ========== 配置 ==========
 const DIJ_HOST = '127.0.0.1:6790'
 const DIJ_USERNAME = 'adminPC'
 const DIJ_PASSWORD = 'adminPC'
-// DJI 控制台地址（dij-frontend，端口 8081）
-const djiConsoleUrl = computed(() => `http://${window.location.hostname || 'localhost'}:8081`)
-
-// 模拟航线（用于地图动画；真实航线以 DJI wayline 为准）
+// 模拟航线（用于地图动画与航线总览图；真实航线以 DJI wayline 为准）
 const ROUTES = {
   '禁渔航线': {
     name: '禁渔航线',
@@ -336,18 +327,29 @@ const ROUTES = {
     ],
   },
 }
+
+// 示例无人机数据（DJI 拓扑不可用或暂无真实设备时用于界面展示）
+const MOCK_DRONES = [
+  { device_sn: 'mock-drone-001', device_name: '御3行业版-1号', device_desc: 'P3 机场起降，负责禁渔区常态化巡检', device_model: 'M30T', dockName: 'P3 机场', battery: 86, remain: 32, status: 'online' },
+  { device_sn: 'mock-drone-002', device_name: 'M350 RTK-2号', device_desc: 'P2 机场起降，负责禁涉水区重点巡查', device_model: 'M350', dockName: 'P2 机场', battery: 54, remain: 18, status: 'online' },
+  { device_sn: 'mock-drone-003', device_name: '精灵4 RTK-3号', device_desc: 'P1 机场起降，应急巡检备用机', device_model: 'P4RTK', dockName: 'P1 机场', battery: 23, remain: 6, status: 'offline', enabled: false },
+]
+
 // ========== 视图状态 ==========
-const viewMode = ref('devices')
 const loading = ref(false)
 const deviceLoading = ref(false)
-const waylineLoading = ref(false)
 const authError = ref('')
+
+// 演示视频映射：固定演示航线 → 本地演示视频（点击开始后播放，模拟真实视频流）
+const DEMO_VIDEO_MAP = {
+  '禁渔航线': '/demo/wading.mp4',
+  '禁涉水航线': '/demo/fishing.mp4',
+}
 
 // ========== dij 连接 ==========
 let workspaceId = ''
 let wsClose = null
 const wsState = ref('closed')
-const wsOnlineText = computed(() => (wsState.value === 'connected' ? '已连接' : '未连接'))
 
 // ========== DJI 拓扑数据 ==========
 const djiDrones = ref([])      // 飞行器（domain=0）
@@ -377,13 +379,13 @@ const pagedDevices = computed(() => {
   return filteredDevices.value.slice(start, start + pageSize)
 })
 
-// 列表 = DJI 真实飞行器 + 合并 WS OSD（电量/剩余飞行时间）+ 绑定机场
+// 列表 = DJI 真实飞行器 + 合并 WS OSD（电量/剩余飞行时间）+ 绑定机场；示例数据自带电量/时长字段
 const devices = computed(() =>
   djiDrones.value.map((d) => {
     const osd = osdMap[d.device_sn] || {}
-    const battery = osd.battery?.capacity_percent
-    const remain = osd.battery?.remain_flight_time
-    const online = onlineSet.has(d.device_sn) || d.status === 'online'
+    const battery = osd.battery?.capacity_percent ?? d.battery ?? null
+    const remain = osd.battery?.remain_flight_time ?? d.remain ?? null
+    const online = onlineSet.has(d.device_sn) || d.status === 'online' || d.online === true
     return {
       ...d,
       device_name: d.nickname || d.device_name || d.deviceCallsign || d.device_sn,
@@ -396,8 +398,9 @@ const devices = computed(() =>
   })
 )
 
-// 从拓扑中解析飞行器绑定的机场名称
+// 从拓扑中解析飞行器绑定的机场名称（示例数据自带 dockName 时优先使用）
 function bindDockName(drone) {
+  if (drone.dockName) return drone.dockName
   if (drone.parent_name) return drone.parent_name
   // 通过机场节点的 child_device_sn 反向匹配
   const dock = rawTopology.value.find(
@@ -407,96 +410,74 @@ function bindDockName(drone) {
   return '--'
 }
 
-const isWaylineView = computed(() => viewMode.value === 'waylines')
-
-// ========== 航线 ==========
-const waylineFiles = ref([])
-const waylinePage = ref(1)
-
 // ========== 测试弹窗 ==========
 const testDialogVisible = ref(false)
 const testingDevice = ref(null)
 const testWaylineId = ref('')
-const testStarting = ref(false)
 const testing = ref(false)
 const testProgress = ref(0)
-const liveVideoRef = ref(null)
-const isLive = ref(false)
-const liveLoading = ref(false)
-const videoError = ref(false)
-let peerConnection = null
-let currentEventSource = null
-let currentJobId = ''
-let currentVideoId = ''
 
 // 地图动画
 const dronePos = ref({ x: 94.9, y: 24.9 })
-const selectedWayline = computed(() =>
-  waylineFiles.value.find((w) => (w.id || w.wayline_id) === testWaylineId.value) || null
-)
-const activeRoute = computed(() => {
-  const name = selectedWayline.value?.file_name || selectedWayline.value?.name || ''
-  return getRouteByName(name) || null
-})
+const activeRoute = computed(() => ROUTES[testWaylineId.value] || null)
 const activeRouteName = computed(() => activeRoute.value?.name || '当前航线')
 const activeRoutePoints = computed(() => activeRoute.value?.waypoints || [])
 const activeRoutePolyline = computed(() =>
   activeRoutePoints.value.map((p) => `${p.x},${p.y}`).join(' ')
 )
 const droneOnMapStyle = computed(() => ({ left: `${dronePos.value.x}%`, top: `${dronePos.value.y}%` }))
+// 当前航线对应的演示视频地址（选择航线后右侧自动播放）
+const demoVideoSrc = computed(() => DEMO_VIDEO_MAP[testWaylineId.value] || '')
 
-// 测试遥测
-const osdData = computed(() => {
-  const osd = testingDevice.value ? osdMap[testingDevice.value.device_sn] || {} : {}
-  const battery = osd.battery || {}
-  return {
-    batteryPct: battery.capacity_percent,
-    remainMin: battery.remain_flight_time,
-    height: fmt(osd.height),
-    speed: fmt(osd.horizontal_speed),
-    homeDist: fmt(osd.home_distance),
-    modeText: parseFlightMode(osd.mode_code),
-    modeTone: modeToneClass(osd.mode_code),
-    gps: osd.position_state?.gps_number,
-    rtk: osd.position_state?.rtk_number,
+// 本地航线动画（演示用途，不依赖后端模拟/实时流）
+let animFrame = null
+let animStart = null
+const ANIM_DURATION = 30000 // 单次演示时长 30s
+function pointAt(pts, t) {
+  const segs = pts.slice(0, -1).map((p, i) => ({
+    a: p,
+    b: pts[i + 1],
+    len: Math.hypot(pts[i + 1].x - p.x, pts[i + 1].y - p.y),
+  }))
+  const total = segs.reduce((s, x) => s + x.len, 0) || 1
+  let target = t * total
+  for (const seg of segs) {
+    if (target <= seg.len) {
+      const k = seg.len ? target / seg.len : 0
+      return { x: seg.a.x + (seg.b.x - seg.a.x) * k, y: seg.a.y + (seg.b.y - seg.a.y) * k }
+    }
+    target -= seg.len
   }
-})
-const batteryTone = computed(() => {
-  const pct = osdData.value.batteryPct
-  if (pct == null) return ''
-  if (pct <= 20) return 'tone-danger'
-  if (pct <= 40) return 'tone-warn'
-  return 'tone-ok'
-})
+  const last = pts[pts.length - 1]
+  return { x: last.x, y: last.y }
+}
+function startLocalAnimation(route) {
+  stopLocalAnimation()
+  const pts = route?.waypoints || []
+  if (pts.length < 2) return
+  animStart = performance.now()
+  const step = (now) => {
+    const t = Math.min(1, (now - animStart) / ANIM_DURATION)
+    dronePos.value = pointAt(pts, t)
+    testProgress.value = Math.round(t * 100)
+    if (t < 1) {
+      animFrame = requestAnimationFrame(step)
+    } else {
+      testing.value = false
+    }
+  }
+  animFrame = requestAnimationFrame(step)
+}
+function stopLocalAnimation() {
+  if (animFrame) { cancelAnimationFrame(animFrame); animFrame = null }
+  animStart = null
+}
 
 // ========== 工具函数 ==========
-const fmt = (v) => {
-  const n = Number(v)
-  return Number.isFinite(n) ? n.toFixed(1) : null
-}
 function batteryClass(pct) {
   if (pct <= 20) return 'is-danger'
   if (pct <= 40) return 'is-warn'
   return 'is-ok'
-}
-function modeToneClass(code) {
-  if (code === 6 || code === 14 || code === 20) return 'tone-danger'
-  if (code === 4 || code === 5 || code === 25) return 'tone-ok'
-  return ''
-}
-function getRouteByName(name) {
-  if (!name) return null
-  if (ROUTES[name]) return ROUTES[name]
-  for (const key of Object.keys(ROUTES)) {
-    if (name.includes(key) || key.includes(name)) return ROUTES[key]
-  }
-  return null
-}
-function formatTime(t) {
-  if (!t) return '--'
-  const d = new Date(t)
-  if (Number.isNaN(d.getTime())) return '--'
-  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 function normalizeDevice(d) {
   return {
@@ -523,7 +504,7 @@ async function initDrone() {
   } catch {
     // 忽略
   }
-  await Promise.all([loadDjiTopology(), loadWaylines()])
+  await loadDjiTopology()
   connectWebSocket()
 }
 
@@ -561,30 +542,21 @@ async function loadDjiTopology() {
         }
       }
     }
+    // DJI 拓扑不可用或暂无真实设备时，回退示例数据用于界面展示
+    if (!drones.length) {
+      drones = MOCK_DRONES.map((d) => ({ ...d }))
+    }
     djiDrones.value = drones
     // 同步在线集合
     djiDrones.value.forEach((d) => {
       if (d.status === 'online') onlineSet.add(d.device_sn)
     })
   } catch (err) {
-    console.warn('[无人机] 获取 DJI 拓扑失败:', err)
+    // DJI 服务连接失败时同样回退示例数据，保证列表始终有内容展示
+    console.warn('[无人机] 获取 DJI 拓扑失败，回退示例数据:', err)
+    djiDrones.value = MOCK_DRONES.map((d) => ({ ...d }))
   } finally {
     deviceLoading.value = false
-  }
-}
-
-async function loadWaylines() {
-  waylineLoading.value = true
-  try {
-    if (workspaceId) {
-      const res = await getWaylineFiles(workspaceId, { page: 1, page_size: 100 })
-      waylineFiles.value = res.data?.list || res.data || []
-    }
-  } catch (err) {
-    console.warn('[无人机] 获取航线失败:', err)
-    waylineFiles.value = []
-  } finally {
-    waylineLoading.value = false
   }
 }
 
@@ -642,16 +614,6 @@ function connectWebSocket() {
           case 'dock_osd':
             if (sn) osdMap[sn] = host
             break
-          case 'flighttask_progress':
-            if (data?.job_id) {
-              if (data.job_id === currentJobId) {
-                testProgress.value = Math.round(Number(data.progress || 0) * 100)
-                if (data.status === 3 || data.status === 4 || data.status === 5) {
-                  setTimeout(() => { testing.value = false }, 1000)
-                }
-              }
-            }
-            break
           default:
             break
         }
@@ -672,14 +634,56 @@ function connectWebSocket() {
   }
 }
 
-// ========== 视图切换 ==========
-function showWaylines() {
-  viewMode.value = 'waylines'
-  waylinePage.value = 1
+// ========== 航线大图弹窗 ==========
+const waylineMapVisible = ref(false)
+const waylineRoutes = Object.values(ROUTES)
+function routePolyline(route) {
+  return (route.waypoints || []).map((p) => `${p.x},${p.y}`).join(' ')
 }
-function showDevices() {
-  viewMode.value = 'devices'
-  devicePage.value = 1
+function openWaylineMap() {
+  waylineMapVisible.value = true
+}
+
+// ========== 编辑 / 删除（对标广播设备列表样式，示例数据与本地信息编辑） ==========
+const editDialogVisible = ref(false)
+const editingDevice = ref(null)
+const editForm = reactive({ device_name: '', device_desc: '' })
+
+function openEditDialog(row) {
+  editingDevice.value = row
+  editForm.device_name = row.device_name || ''
+  editForm.device_desc = row.device_desc || ''
+  editDialogVisible.value = true
+}
+
+function saveEdit() {
+  if (!editingDevice.value) return
+  const idx = djiDrones.value.findIndex((d) => d.device_sn === editingDevice.value.device_sn)
+  if (idx >= 0) {
+    djiDrones.value[idx] = {
+      ...djiDrones.value[idx],
+      device_name: editForm.device_name,
+      nickname: editForm.device_name,
+      device_desc: editForm.device_desc,
+    }
+  }
+  editDialogVisible.value = false
+  ElMessage.success('设备信息已更新')
+}
+
+function confirmDeleteDevice(row) {
+  ElMessageBox.confirm(`确认删除无人机「${row.device_name}」？`, '删除设备', { type: 'warning' })
+    .then(() => {
+      djiDrones.value = djiDrones.value.filter((d) => d.device_sn !== row.device_sn)
+      ElMessage.success('设备已删除')
+    })
+    .catch(() => {})
+}
+
+// 启用开关：本地切换展示状态（DJI 设备无启停接口，仅界面展示）
+function toggleEnabled(row, value) {
+  const idx = djiDrones.value.findIndex((d) => d.device_sn === row.device_sn)
+  if (idx >= 0) djiDrones.value[idx].enabled = value
 }
 
 // ========== 测试弹窗 ==========
@@ -689,149 +693,23 @@ async function openTestDialog(row) {
   testProgress.value = 0
   dronePos.value = { x: 94.9, y: 24.9 }
   testDialogVisible.value = true
-  await nextTick()
-  if (!waylineFiles.value.length && workspaceId) loadWaylines()
 }
 
-// 启动：保存任务 -> 模拟飞行 -> 开启视频
-async function handleStartTest() {
-  if (!testingDevice.value || !testWaylineId.value) return
-  const wl = selectedWayline.value
-  const name = wl?.file_name || wl?.name || '测试航线'
-  const route = getRouteByName(name) || ROUTES['禁渔航线']
-  testStarting.value = true
-  try {
-    // 1. 保存飞行任务（复用 DJI 航线任务接口）
-    let jobId = `test_${Date.now()}`
-    try {
-      const res = await createFlightTask(workspaceId, {
-        name: `${name}_测试`,
-        fileId: testWaylineId.value,
-        dockSn: testingDevice.value.parent_sn || testingDevice.value.device_sn,
-        waylineType: 0,
-        taskType: 0,
-        rthAltitude: 100,
-        outOfControlAction: 0,
-      })
-      if (res.data?.job_id) jobId = res.data.job_id
-    } catch (err) {
-      console.warn('[测试] 保存任务失败，继续模拟:', err.message)
-    }
-    currentJobId = jobId
-    // 2. 模拟飞行（地图动画；失败不阻断测试，仍展示航线）
-    try {
-      await startSimulation({
-        job_id: jobId,
-        route_name: route.name,
-        waypoints: route.waypoints,
-        duration: 60000,
-      })
-      connectSimulationSSE(jobId)
-    } catch (err) {
-      console.warn('[测试] 模拟飞行启动失败，仅展示航线:', err.message)
-    }
-    testing.value = true
-    // 3. 视频流（失败不影响测试）
-    await startTestLive()
-  } catch (err) {
-    ElMessage.error(err.message || '启动失败')
-  } finally {
-    testStarting.value = false
+// 点击开始：左侧地图动画 + 右侧演示视频（模拟真实视频流，无进度条）
+function handleStartTest() {
+  const route = ROUTES[testWaylineId.value]
+  if (!route) {
+    ElMessage.warning('请先选择航线')
+    return
   }
+  stopLocalAnimation()
+  startLocalAnimation(route)
+  testing.value = true
 }
 
-function connectSimulationSSE(jobId) {
-  if (currentEventSource) { currentEventSource.close(); currentEventSource = null }
-  const token = localStorage.getItem('dij_token')
-  const sseUrl = `/dij-api/manage/api/v1/simulation/events/${jobId}?x-auth-token=${encodeURIComponent(token || '')}`
-  const es = new EventSource(sseUrl)
-  currentEventSource = es
-  es.addEventListener('position', (e) => {
-    try {
-      const data = JSON.parse(e.data)
-      dronePos.value = { x: data.x, y: data.y }
-      testProgress.value = Math.round(Number(data.progress || 0) * 100)
-    } catch { /* 忽略 */ }
-  })
-  es.addEventListener('complete', () => {
-    testing.value = false
-    testProgress.value = 100
-    es.close()
-    currentEventSource = null
-  })
-  es.onerror = () => {
-    if (es.readyState === EventSource.CLOSED) currentEventSource = null
-  }
-}
-
-async function startTestLive() {
-  if (!testingDevice.value) return
-  videoError.value = false
-  liveLoading.value = true
-  try {
-    const capRes = await getLiveCapacity()
-    const droneCap = (capRes.data || []).find((d) => d.sn === testingDevice.value.device_sn)
-    const cameraIndex = droneCap?.cameras_list?.[0]?.index || '88-0-0'
-    const videoIndex = droneCap?.cameras_list?.[0]?.videos_list?.[0]?.index || 'normal-0'
-    currentVideoId = `${testingDevice.value.device_sn}/${cameraIndex}/${videoIndex}`
-    await startLiveStream({ video_id: currentVideoId, url_type: 1, video_quality: 0 })
-    await new Promise((r) => setTimeout(r, 1500))
-    const videoEl = liveVideoRef.value
-    if (!videoEl) throw new Error('视频元素不存在')
-    const streamName = `${testingDevice.value.device_sn}-88-0-0`
-    await connectWhep(videoEl, streamName)
-    isLive.value = true
-  } catch (err) {
-    // 视频流失败不影响航线模拟（测试功能不成熟阶段放宽）
-    console.warn('[测试] 视频流启动失败，不影响航线模拟:', err.message)
-    videoError.value = true
-  } finally {
-    liveLoading.value = false
-  }
-}
-
-async function connectWhep(videoEl, streamName) {
-  if (peerConnection) { try { peerConnection.close() } catch {} peerConnection = null }
-  const pc = new RTCPeerConnection({ bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require' })
-  peerConnection = pc
-  pc.addTransceiver('video', { direction: 'recvonly' })
-  pc.ontrack = (event) => {
-    if (event.streams?.[0]) {
-      videoEl.srcObject = event.streams[0]
-      videoEl.play().catch(() => {})
-    }
-  }
-  const offer = await pc.createOffer()
-  await pc.setLocalDescription(offer)
-  await new Promise((resolve) => {
-    if (pc.iceGatheringState === 'complete') { resolve(); return }
-    pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') resolve() }
-    setTimeout(resolve, 2000)
-  })
-  const resp = await fetch(`/drone-mediamtx/live/${streamName}/whep`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/sdp' },
-    body: pc.localDescription.sdp,
-  })
-  if (!resp.ok) throw new Error(`WHEP 连接失败: ${resp.status}`)
-  const answer = await resp.text()
-  await pc.setRemoteDescription({ type: 'answer', sdp: answer })
-}
-
-async function handleStopTest() {
-  if (currentEventSource) { currentEventSource.close(); currentEventSource = null }
-  if (currentJobId) {
-    try { await stopSimulation(currentJobId) } catch { /* 忽略 */ }
-  }
+function handleStopTest() {
+  stopLocalAnimation()
   testing.value = false
-  videoError.value = false
-  if (peerConnection) { try { peerConnection.close() } catch {} peerConnection = null }
-  if (liveVideoRef.value) liveVideoRef.value.srcObject = null
-  isLive.value = false
-  if (currentVideoId) {
-    try { await stopLiveStream({ video_id: currentVideoId }) } catch { /* 忽略 */ }
-    currentVideoId = ''
-  }
 }
 
 // ========== 生命周期 ==========
@@ -841,8 +719,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   if (wsClose) wsClose()
-  if (currentEventSource) { currentEventSource.close(); currentEventSource = null }
-  if (peerConnection) { try { peerConnection.close() } catch {} peerConnection = null }
+  stopLocalAnimation()
 })
 
 watch(deviceFilters, () => { devicePage.value = 1 })
@@ -851,10 +728,18 @@ watch(filteredDevices, (items) => {
   if (devicePage.value > maxPage) devicePage.value = maxPage
 })
 
+// 测试弹窗中切换航线：重置演示状态（重新点击开始才启动）
+watch(testWaylineId, () => {
+  stopLocalAnimation()
+  testing.value = false
+  testProgress.value = 0
+  dronePos.value = { x: 94.9, y: 24.9 }
+})
+
 async function refreshCurrent() {
   loading.value = true
   try {
-    await Promise.all([loadDjiTopology(), loadWaylines()])
+    await loadDjiTopology()
   } finally {
     loading.value = false
   }
@@ -919,42 +804,41 @@ async function refreshCurrent() {
 .resource-control-card .tab-header { width: 100%; }
 .resource-list-card { margin-top: 16px; overflow: hidden; }
 
-/* 工具条按钮 */
-.console-entry,
-.toolbar-template-entry,
-.toolbar-return-entry {
-  height: 36px;
+/* 工具条按钮：查看航线（大按钮，对标感知源“查看点位图”） */
+.toolbar-map-entry {
+  flex: 0 0 auto;
+  height: 42px;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 18px 0 12px;
+  border: 1px solid rgba(72, 216, 255, 0.58);
   border-radius: 6px;
-  cursor: pointer;
-  font-size: 13px;
+  color: #e8faff;
+  background: linear-gradient(135deg, rgba(23, 116, 155, 0.88), rgba(10, 59, 88, 0.86));
+  font: inherit;
+  font-size: 15px;
   font-weight: 800;
-  padding: 0 14px;
-  text-decoration: none;
-  transition: all 0.18s ease;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(213, 247, 255, 0.10), 0 0 18px rgba(72, 216, 255, 0.16);
+  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
 }
-/* DJI 控制台（强调色） */
-.console-entry {
-  border: 1px solid rgba(72, 216, 255, 0.65);
-  background: linear-gradient(135deg, rgba(18, 92, 133, 0.85), rgba(10, 52, 78, 0.9));
-  color: #c8f4ff;
-  box-shadow: 0 0 12px rgba(72, 216, 255, 0.18);
+.toolbar-map-entry:hover {
+  border-color: rgba(126, 238, 255, 0.82);
+  color: #ffffff;
+  background: linear-gradient(135deg, rgba(30, 136, 181, 0.96), rgba(12, 72, 108, 0.92));
 }
-.console-entry:hover { border-color: #48d8ff; color: #fff; background: rgba(22, 112, 158, 0.9); }
-.toolbar-template-entry {
-  border: 1px solid rgba(72, 216, 255, 0.42);
-  background: rgba(21, 82, 120, 0.55);
-  color: #a8ecff;
+.toolbar-map-entry .el-icon {
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 5px;
+  color: #031825;
+  background: #48d8ff;
+  font-size: 18px;
 }
-.toolbar-template-entry:hover { border-color: #48d8ff; color: #fff; background: rgba(29, 111, 158, 0.75); }
-.toolbar-return-entry {
-  border: 1px solid rgba(70, 151, 198, 0.48);
-  background: rgba(14, 52, 82, 0.9);
-  color: #c6e8ff;
-}
-.toolbar-return-entry:hover { border-color: rgba(72, 216, 255, 0.78); color: #fff; }
 .tab-actions :deep(.el-button) { height: 36px; margin-left: 0; }
 .status-filter-select { width: 116px; flex: 0 0 auto; }
 .status-filter-select :deep(.el-select__wrapper) {
@@ -967,16 +851,14 @@ async function refreshCurrent() {
 .status-filter-select :deep(.el-select__placeholder) { color: #d7edf6; font-weight: 700; }
 
 /* ===== 设备列表 ===== */
-.device-list,
-.wayline-list { min-width: 1100px; overflow: hidden; background: #081b2d; }
-.device-list.is-empty,
-.wayline-list.is-empty { min-width: 0; }
+.device-list { min-width: 1400px; overflow: hidden; background: #081b2d; }
+.device-list.is-empty { min-width: 0; }
 .device-list-header-row,
 .device-row {
   display: grid;
   align-items: center;
   gap: 14px;
-  grid-template-columns: minmax(200px, 1.15fr) minmax(240px, 1.35fr) minmax(140px, 0.9fr) minmax(150px, 1fr) 100px 120px;
+  grid-template-columns: minmax(190px, 1.05fr) minmax(210px, 1.15fr) minmax(120px, 0.75fr) minmax(150px, 1fr) 100px 100px 300px;
 }
 .device-list-header-row {
   min-height: 48px;
@@ -997,11 +879,19 @@ async function refreshCurrent() {
 }
 .device-row:hover { background: #102940; }
 .device-row > div { min-width: 0; }
-.col-dock, .col-battery, .col-status, .col-actions {
+.col-dock, .col-battery, .col-status, .col-enabled, .col-actions {
   display: grid;
   gap: 5px;
   justify-items: center;
   text-align: center;
+}
+.col-enabled :deep(.el-switch__core) {
+  border-color: rgba(120, 153, 176, 0.34);
+  background: rgba(96, 118, 134, 0.38);
+}
+.col-enabled :deep(.el-switch.is-checked .el-switch__core) {
+  border-color: rgba(64, 158, 255, 0.66);
+  background: #409eff;
 }
 .device-name-cell { display: grid; align-items: center; justify-items: center; text-align: center; }
 .device-name-cell strong {
@@ -1018,6 +908,11 @@ async function refreshCurrent() {
   color: #6d90a8;
   font-size: 11px;
   font-family: monospace;
+}
+.device-description {
+  display: grid;
+  justify-items: center;
+  text-align: center;
 }
 .device-description span {
   display: -webkit-box;
@@ -1053,18 +948,60 @@ async function refreshCurrent() {
 .battery-num.is-warn { color: #e6a23c; }
 .battery-num.is-danger { color: #ff4d4f; }
 .battery-remain { color: #7f9bb0; font-size: 12px; }
-.list-actions { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: nowrap; }
+.list-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: nowrap;
+}
 .list-actions :deep(.el-button) {
-  height: 32px;
+  width: auto;
+  height: 34px;
+  min-height: 34px;
   margin: 0;
-  padding: 0 14px;
+  padding: 0 16px;
   border-radius: 5px;
   font-size: 13px;
   font-weight: 800;
 }
 .list-actions :deep(.test-action) { border-color: rgba(82, 178, 143, 0.46); color: #b9f1d8; background: rgba(30, 103, 78, 0.38); }
 .list-actions :deep(.edit-action) { border-color: rgba(66, 164, 224, 0.50); color: #d5f0ff; background: rgba(29, 91, 133, 0.70); }
-.edit-action-link { text-decoration: none; }
+.list-actions :deep(.delete-action) { border-color: rgba(226, 88, 109, 0.46); color: #ffb1bd; background: rgba(128, 36, 54, 0.48); }
+.list-actions :deep(.test-action:hover) { border-color: rgba(82, 178, 143, 0.70); color: #e3fff1; background: rgba(36, 123, 92, 0.52); }
+.list-actions :deep(.edit-action:hover) { border-color: rgba(66, 164, 224, 0.72); color: #effaff; background: rgba(33, 107, 156, 0.82); }
+.list-actions :deep(.delete-action:hover) { border-color: rgba(226, 88, 109, 0.68); color: #ffd5dd; background: rgba(144, 42, 62, 0.62); }
+/* 与广播设备列表按钮样式严格对齐（!important 兜底，防止被 element-plus 默认样式覆盖） */
+:global(.linkage-drone-page .list-actions .el-button.test-action) {
+  border-color: rgba(82, 178, 143, .54) !important;
+  color: #b9f1d8 !important;
+  background: rgba(30, 103, 78, .42) !important;
+}
+:global(.linkage-drone-page .list-actions .el-button.edit-action) {
+  border-color: rgba(66, 164, 224, .50) !important;
+  color: #d5f0ff !important;
+  background: rgba(29, 91, 133, .70) !important;
+}
+:global(.linkage-drone-page .list-actions .el-button.delete-action) {
+  border-color: rgba(226, 88, 109, .46) !important;
+  color: #ffb1bd !important;
+  background: rgba(128, 36, 54, .48) !important;
+}
+:global(.linkage-drone-page .list-actions .el-button.test-action:hover) {
+  border-color: rgba(82, 178, 143, .72) !important;
+  color: #e3fff1 !important;
+  background: rgba(36, 123, 92, .56) !important;
+}
+:global(.linkage-drone-page .list-actions .el-button.edit-action:hover) {
+  border-color: rgba(66, 164, 224, .72) !important;
+  color: #effaff !important;
+  background: rgba(33, 107, 156, .82) !important;
+}
+:global(.linkage-drone-page .list-actions .el-button.delete-action:hover) {
+  border-color: rgba(226, 88, 109, .68) !important;
+  color: #ffd5dd !important;
+  background: rgba(144, 42, 62, .62) !important;
+}
 .empty-list {
   min-height: 220px;
   display: flex;
@@ -1092,35 +1029,6 @@ async function refreshCurrent() {
 }
 .list-pagination :deep(.el-pager li.is-active) { border-color: #4ba7e6; color: #fff; background: #3f95d7; }
 
-/* ===== 航线视图 ===== */
-.wayline-list-header-row,
-.wayline-row {
-  display: grid;
-  align-items: center;
-  gap: 14px;
-  grid-template-columns: minmax(260px, 2fr) 130px 170px 150px;
-}
-.wayline-list-header-row {
-  min-height: 48px;
-  padding: 0 20px;
-  color: #a9c7de;
-  font-size: 14px;
-  font-weight: 800;
-  text-align: center;
-  background: #15314d;
-}
-.wayline-row {
-  min-height: 62px;
-  padding: 10px 20px;
-  border-top: 1px solid rgba(149, 190, 220, 0.10);
-  background: #092034;
-  color: #d7e8f8;
-}
-.wayline-row > div { min-width: 0; }
-.wayline-name strong { color: #f3f8fd; font-size: 15px; }
-.wayline-type span { color: #8fb6d1; }
-.wayline-time { color: #7f9bb0; font-size: 13px; text-align: center; }
-
 /* ===== 测试弹窗 ===== */
 .drone-test-dialog :deep(.el-dialog) {
   background: #0a1c2e;
@@ -1144,7 +1052,20 @@ async function refreshCurrent() {
 .test-wayline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .toolbar-label { color: #a9c7de; font-size: 13px; font-weight: 700; }
 .wayline-select { width: 240px; }
-.test-start-btn { font-weight: 800; }
+.video-progress-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 3;
+  padding: 2px 10px;
+  border: 1px solid rgba(72, 216, 255, 0.35);
+  border-radius: 12px;
+  background: rgba(7, 20, 34, 0.72);
+  color: #48d8ff;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: monospace;
+}
 
 .test-body {
   display: grid;
@@ -1287,26 +1208,136 @@ async function refreshCurrent() {
   background-size: 24px 24px;
 }
 
-.test-telemetry {
-  display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  gap: 8px;
-  padding: 12px 14px;
-  border: 1px solid rgba(87, 165, 199, 0.15);
-  border-radius: 10px;
-  background: rgba(3, 18, 29, 0.4);
+/* ===== 航线大图弹窗（对标感知源“查看点位图”的图片方式） ===== */
+:global(.wayline-map-dialog.el-dialog) {
+  border: 1px solid rgba(72, 216, 255, 0.24);
+  border-radius: 8px;
+  background: #07131a;
+  box-shadow: 0 24px 60px rgba(0, 7, 18, 0.46);
 }
-.telemetry-item { display: flex; flex-direction: column; gap: 3px; }
-.t-label { font-size: 11px; color: #607f94; }
-.t-value { font-size: 15px; font-weight: 800; font-family: monospace; color: #a9c9da; }
-.t-value.tone-ok { color: #67c23a; }
-.t-value.tone-warn { color: #e6a23c; }
-.t-value.tone-danger { color: #ff4d4f; }
-.t-value.mode { font-family: inherit; }
+:global(.wayline-map-dialog .el-dialog__header) {
+  margin: 0;
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(137, 174, 184, 0.14);
+}
+:global(.wayline-map-dialog .el-dialog__title) {
+  color: #e9f7ff;
+  font-weight: 900;
+}
+:global(.wayline-map-dialog .el-dialog__body) {
+  padding: 12px;
+}
+.wayline-map-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 2168 / 725;
+  max-height: 84vh;
+  overflow: hidden;
+  border: 1px solid rgba(137, 174, 184, 0.16);
+  border-radius: 8px;
+  background: #02080d;
+}
+.wayline-map-stage > img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  filter: saturate(1.08) contrast(1.06) brightness(0.76);
+}
+.wayline-map-svg {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.wayline-map-route {
+  fill: none;
+  stroke-width: 0.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 2.2 1.3;
+  vector-effect: non-scaling-stroke;
+}
+.wayline-map-route.route-glow {
+  stroke-width: 1.8;
+  stroke-dasharray: none;
+  opacity: 0.4;
+}
+.wayline-map-route.tone-0 { stroke: #48d8ff; }
+.wayline-map-route.tone-1 { stroke: #ffd166; }
+.wayline-map-point {
+  fill: #eafcff;
+  stroke: #48d8ff;
+  stroke-width: 0.4;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 5px rgba(72, 216, 255, 0.75));
+}
+.wayline-map-fixed-point {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  pointer-events: none;
+}
+.wayline-map-fixed-point img { width: 22px; height: 22px; object-fit: contain; }
+.wayline-map-fixed-point span {
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  font-family: monospace;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+.wayline-map-legend {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 14;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(4, 16, 26, 0.78);
+  font-size: 12px;
+  color: #9fc3da;
+}
+.wayline-map-legend .legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.wayline-map-legend .legend-icon-img { width: 14px; height: 14px; object-fit: contain; vertical-align: middle; }
+.wayline-map-legend .legend-line {
+  display: inline-block;
+  width: 20px;
+  height: 2px;
+  vertical-align: middle;
+}
+.wayline-map-legend .legend-line.tone-0 { background: #48d8ff; }
+.wayline-map-legend .legend-line.tone-1 { background: #ffd166; }
+
+/* ===== 编辑无人机弹窗 ===== */
+.drone-edit-dialog :deep(.el-dialog) {
+  background: #0a1c2e;
+  border: 1px solid rgba(93, 184, 225, 0.25);
+  border-radius: 12px;
+}
+.drone-edit-dialog :deep(.el-dialog__title) { color: #f3f8fd; font-weight: 800; }
+.drone-edit-dialog :deep(.el-form-item__label) { color: #a9c7de; }
+.drone-edit-dialog :deep(.el-input__wrapper),
+.drone-edit-dialog :deep(.el-textarea__inner) {
+  background: #0d2740;
+  box-shadow: 0 0 0 1px rgba(84, 148, 193, 0.36) inset;
+  color: #d7e8f8;
+}
+.drone-edit-dialog :deep(.el-input__inner) { color: #d7e8f8; }
 
 /* 响应式 */
 @media (max-width: 1280px) {
-  .test-telemetry { grid-template-columns: repeat(4, 1fr); }
   .test-body { grid-template-columns: 1fr 1fr; }
 }
 </style>

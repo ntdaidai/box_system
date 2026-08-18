@@ -14,6 +14,7 @@ from app.models.event_library import EventLibrary
 from app.models.safety_integration import SafetyEventInstance, SafetyEventTimelineLog
 from app.services.knowledge_service import knowledge_service
 from app.services.safety_event_runtime_service import safety_event_runtime_service
+from app.services.timeline_text import risk_label, truncate
 
 
 PERSON_EVENT_CODES = {"PERSON_INTRUSION", "PERSON_WATERFRONT", "PERSON_WADING"}
@@ -38,13 +39,18 @@ class SupplementalContextService:
         observation["supplemental_context"] = normalized
         instance.latest_observation = observation
 
+        context_active = bool(normalized.get("active", True))
         safety_event_runtime_service.append_timeline(
             db,
             instance,
             log_type="SUPPLEMENTAL_CONTEXT",
             status="SUCCESS",
             title="补充运行状态",
-            message=f"已补充运行状态：{normalized.get('label') or normalized.get('context_type')}",
+            message=(
+                f"工作人员补充运行状态：{normalized.get('label') or normalized.get('context_type')}"
+                f"（类型 {normalized.get('context_type')}，影响区域 {truncate(normalized.get('affected_area') or '未知')}，"
+                f"严重程度 {risk_label(normalized.get('severity_hint'))}，状态 {'持续中' if context_active else '已结束'}）"
+            ),
             operator=operator,
             payload={"supplemental_context": normalized},
         )
@@ -68,7 +74,11 @@ class SupplementalContextService:
                 log_type="RISK_CHANGE",
                 status="SUCCESS",
                 title="知识库风险升级",
-                message=f"结合补充信息和知识库依据，风险由{self._risk_label(before)}升级为高风险",
+                message=(
+                    f"结合补充信息「{normalized.get('label') or normalized.get('context_type')}」与知识库依据，"
+                    f"系统将风险由{risk_label(before)}升级为{risk_label(after)}"
+                    + (f"（原因：{truncate(reason)}）" if reason else "")
+                ),
                 operator="SYSTEM",
                 risk_level="HIGH",
                 payload={
@@ -76,6 +86,7 @@ class SupplementalContextService:
                     "risk_after": after,
                     "reason": reason,
                     "knowledge_hits": self._knowledge_hit_summary(hits),
+                    "escalation_source": "knowledge_base",
                 },
             )
             self._store_existing_report_citations(db, instance, hits, reason)
@@ -94,12 +105,13 @@ class SupplementalContextService:
                 log_type="RISK_REVIEW",
                 status="SUCCESS",
                 title="知识库风险复核",
-                message=reason,
+                message=f"知识库复核完成：{truncate(reason)}；当前风险维持{risk_label(after)}",
                 operator="SYSTEM",
                 payload={
                     "risk_before": before,
                     "risk_after": after,
                     "knowledge_hits": self._knowledge_hit_summary(hits),
+                    "knowledge_hit_count": len(hits),
                 },
             )
 
@@ -262,10 +274,6 @@ class SupplementalContextService:
         if not high_hit:
             return "已记录泄洪状态和人员线索，但知识库未命中高风险禁入条款，风险维持原等级"
         return "风险维持原等级"
-
-    @staticmethod
-    def _risk_label(level: str) -> str:
-        return {"LOW": "低风险", "MEDIUM": "中风险", "HIGH": "高风险"}.get(level, level)
 
     def _store_existing_report_citations(
         self,

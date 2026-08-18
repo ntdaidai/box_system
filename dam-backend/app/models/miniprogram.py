@@ -50,6 +50,7 @@ class MiniProgramStaff(Base):
     phone = Column(String(32), nullable=True, comment="联系电话")
     description = Column(String(255), nullable=True, comment="人员描述")
     status = Column(String(32), nullable=False, default="ACTIVE", index=True, comment="状态")
+    qr_ticket = Column(String(64), nullable=True, comment="永久登录二维码 ticket（DB 持久化，扫码即绑定 openid）")
     last_login_at = Column(DateTime, nullable=True, comment="最近登录时间")
     last_active_at = Column(DateTime, nullable=True, comment="最近活跃时间")
     create_time = Column(DateTime, default=datetime.now, comment="创建时间")

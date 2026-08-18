@@ -104,6 +104,12 @@
                 <div class="log-body">
                   <strong>{{ logTitle(item) }}</strong>
                   <p v-if="logMessage(item)">{{ logMessage(item) }}</p>
+                  <dl v-if="logDetailFields(item).length" class="log-fields">
+                    <div v-for="field in logDetailFields(item)" :key="field.label">
+                      <dt>{{ field.label }}</dt>
+                      <dd>{{ field.value }}</dd>
+                    </div>
+                  </dl>
                 </div>
                 <div class="log-source">
                   <span>{{ operatorLabel(item.operator) }}</span>
@@ -692,6 +698,136 @@ function logMessage(item) {
 function timelineTone(item) {
   if (isFailedStatus(item?.status)) return 'is-failed'
   return ({ TRIGGER: 'is-trigger', DAM_WORKFLOW: 'is-action', WORKFLOW: 'is-action', RISK_CHANGE: 'is-warning', ACTION: 'is-action', RESOLVE: 'is-resolve', MANUAL: 'is-manual' })[item?.log_type] || 'is-system'
+}
+
+// 动作类型 -> 中文（覆盖人工操作 operation 与后端 action_type 两种命名）
+function actionTypeLabel(value) {
+  const labels = {
+    ACKNOWLEDGE: '确认事件',
+    DISPATCH_TASK: '派发任务',
+    ACCEPT_TASK: '接受任务',
+    COMPLETE_TASK: '完成任务',
+    FALSE_ALARM: '标记误报',
+    RESOLVE: '解除事件',
+    UPGRADE: '风险升级',
+    STAFF_COMPLETED: '现场处置完成',
+    broadcast: '自动广播',
+    AUTO_BROADCAST: '系统自动广播',
+    MANUAL_BROADCAST: '人工广播',
+    MANUAL_ONE_TOUCH_BROADCAST: '一键喊话',
+    drone_dispatch: '无人机派飞',
+    DRONE_DISPATCH: '系统自动派飞',
+    staff_task: '人工处置任务',
+    STAFF_DISPATCH: '创建处置任务',
+    alert: '告警通知',
+    camera_snapshot: '摄像头抓拍',
+    llm: '大模型分析',
+    http: 'HTTP 调用',
+    script: '脚本执行',
+  }
+  return labels[value] || localizeText(value) || ''
+}
+
+// 模型库工作流执行状态 -> 中文
+function executionStatusLabel(value) {
+  return ({ success: '成功', failed: '失败', not_submitted: '未提交', SUCCESS: '成功', FAILED: '失败', NOT_SUBMITTED: '未提交' })[value] || value || ''
+}
+
+// payload 可能是对象或 JSON 字符串，统一转对象
+function parsePayload(payload) {
+  if (!payload) return {}
+  if (typeof payload === 'object') return payload
+  try {
+    return JSON.parse(payload)
+  } catch (e) {
+    return {}
+  }
+}
+
+// 动作执行结果 -> 可读文本
+function resultStatusText(result) {
+  if (!result) return ''
+  if (typeof result === 'string') return localizeText(result)
+  if (typeof result === 'object') {
+    const bits = []
+    if (result.status) bits.push(localizeText(result.status))
+    if (result.message) bits.push(result.message)
+    return bits.join('：')
+  }
+  return ''
+}
+
+// 记录流每条日志下方的结构化明细区（按日志类型取 payload 字段）
+function logDetailFields(item) {
+  const p = parsePayload(item?.payload)
+  const type = item?.log_type
+  const fields = []
+  const push = (label, value) => {
+    if (value === undefined || value === null) return
+    if (String(value).trim() === '') return
+    fields.push({ label, value: String(value) })
+  }
+
+  if (type === 'TRIGGER') {
+    push('来源', p.source_name || p.camera_name || sensorSourceName())
+    push('事件编号', p.instance_no)
+    push('事件类型', p.event_category ? eventCategoryLabel(p.event_category) : '')
+    push('初判风险', p.risk_level ? riskLevelLabel(p.risk_level) : '')
+    push('目标类型', p.target_type ? targetLabel(p.target_type) : '')
+    if (p.confidence != null) push('置信度', Number(p.confidence).toFixed(2))
+    if (p.suspected) push('疑似待复核', p.suspected_label || '是')
+  } else if (type === 'DAM_WORKFLOW') {
+    push('事件类型', p.event_type)
+    if (p.node_count != null) push('工作流规模', `${p.node_count} 节点 / ${p.edge_count ?? 0} 边`)
+    if (p.visual_tasks?.length) push('视觉任务', `${p.visual_tasks.length} 项：${p.visual_tasks.join('、')}`)
+    if (p.visual_count != null) push('视觉任务', `${p.visual_count} 项`)
+    if (p.execution_status) push('执行状态', executionStatusLabel(p.execution_status))
+    if (p.fallback_used != null) push('是否兜底', p.fallback_used ? (p.fallback_reason || '是') : '否')
+    push('执行错误', p.execution_error || p.error)
+  } else if (type === 'ACTION') {
+    push('动作名称', p.action_label || p.action_name || p.step_name)
+    push('动作类型', p.action_type ? actionTypeLabel(p.action_type) : '')
+    if (p.total_count != null) {
+      const failedText = p.failed_devices?.length ? `，失败：${p.failed_devices.join('、')}` : ''
+      push('广播结果', `${p.success_count ?? 0}/${p.total_count} 台成功${failedText}`)
+    }
+    if (p.step_count != null) push('步骤统计', `执行 ${p.step_count} / 跳过 ${p.skipped_count ?? 0} / 失败 ${p.failure_count ?? 0}`)
+    push('告警级别', p.level ? riskLevelLabel(p.level) : '')
+    if (p.channels?.length) push('通知渠道', p.channels.join('、'))
+    push('执行结果', resultStatusText(p.result))
+    push('失败原因', p.error)
+  } else if (type === 'SUPPLEMENTAL_CONTEXT') {
+    const sc = p.supplemental_context || {}
+    push('运行状态', sc.label)
+    push('状态类型', sc.context_type)
+    push('影响区域', sc.affected_area)
+    push('严重程度', sc.severity_hint ? riskLevelLabel(sc.severity_hint) : '')
+    push('状态', sc.active ? '持续中' : '已结束')
+    push('来源', sc.source)
+    push('提交人', sc.submitted_by)
+    push('备注', sc.note)
+  } else if (type === 'RISK_CHANGE') {
+    if (p.risk_before || p.risk_after) push('风险变化', `${riskLevelLabel(p.risk_before)} → ${riskLevelLabel(p.risk_after)}`)
+    push('变化原因', p.reason)
+    push('触发方式', p.operation === 'UPGRADE' ? '人工升级' : (p.escalation_source === 'knowledge_base' ? '系统·知识库依据' : ''))
+    if (p.from_status && p.to_status) push('状态流转', `${statusLabel(p.from_status)} → ${statusLabel(p.to_status)}`)
+  } else if (type === 'RISK_REVIEW') {
+    push('复核结论', p.risk_after ? `风险维持 ${riskLevelLabel(p.risk_after)}` : '风险维持原等级')
+    if (p.knowledge_hit_count != null) push('命中条款数', `${p.knowledge_hit_count} 条`)
+  } else if (type === 'REPORT') {
+    push('报告编号', p.analysis_report_id)
+    push('来源模型', p.llm_source_label)
+    push('失败原因', p.error)
+  } else if (type === 'MANUAL' || type === 'RESOLVE') {
+    push('处置动作', p.operation ? actionTypeLabel(p.operation) : (p.canonical_action_type ? actionTypeLabel(p.canonical_action_type) : ''))
+    if (p.from_status && p.to_status) push('状态流转', `${statusLabel(p.from_status)} → ${statusLabel(p.to_status)}`)
+    push('责任人', p.assignee)
+    push('任务编号', p.task_id)
+    push('现场结果', p.result_label)
+    push('处置说明', p.reason)
+    push('备注', p.remark)
+  }
+  return fields
 }
 
 function targetLabel(value) {
@@ -1523,6 +1659,25 @@ dd {
   line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.log-body dl.log-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 6px 14px;
+  margin: 8px 0 0;
+  padding: 8px 0 0;
+  border-top: 1px dashed rgba(126, 171, 202, .16);
+}
+.log-fields dt {
+  color: #6f92a8;
+  font-size: 11px;
+}
+.log-fields dd {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  color: #c9dce9;
+  font-size: 13px;
+  line-height: 1.4;
 }
 .log-source {
   color: #7f9eb3;

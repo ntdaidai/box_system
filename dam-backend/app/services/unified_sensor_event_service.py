@@ -12,6 +12,7 @@ from app.models.event_condition import EventCondition
 from app.models.event_library import EventLibrary
 from app.models.safety_integration import SafetyEventInstance, SafetyEventTimelineLog
 from app.services.safety_event_runtime_service import safety_event_runtime_service
+from app.services.timeline_text import format_duration, risk_label
 
 
 RISK_NAMES = {1: "LOW", 2: "MEDIUM", 3: "HIGH"}
@@ -76,9 +77,19 @@ class UnifiedSensorEventService:
                     trigger_type="AUTO",
                     risk_level=risk,
                     status="SUCCESS",
-                    message=f"{event.event_name}已触发",
+                    message=(
+                        f"{event.event_name}已触发：来源 {source.source_name}，"
+                        f"事件编号 {instance.instance_no}，初判风险 {risk_label(risk)}"
+                    ),
                     operator="SYSTEM",
-                    payload={"instance_no": instance.instance_no, "observation": observation},
+                    payload={
+                        "instance_no": instance.instance_no,
+                        "observation": observation,
+                        "source_type": "sensor",
+                        "source_name": source.source_name,
+                        "event_category": event.event_category,
+                        "risk_level": risk,
+                    },
                     create_time=now,
                 ))
             else:
@@ -119,9 +130,23 @@ class UnifiedSensorEventService:
             trigger_type="AUTO",
             risk_level=instance.risk_level,
             status="SUCCESS",
-            message=f"{event.event_name}条件已恢复，事件自动闭环",
+            message=(
+                f"{event.event_name}条件已恢复（来源 {source.source_name}），事件自动闭环"
+                + (
+                    f"，历时 {format_duration((now - instance.started_at).total_seconds())}"
+                    if instance.started_at
+                    else ""
+                )
+            ),
             operator="SYSTEM",
-            payload={"reason": "condition_recovered", "observation": observation},
+            payload={
+                "reason": "condition_recovered",
+                "observation": observation,
+                "source_name": source.source_name,
+                "source_type": "sensor",
+                "duration_seconds": int((now - instance.started_at).total_seconds()) if instance.started_at else None,
+                "recovered_at": now.isoformat(),
+            },
             create_time=now,
         ))
         db.commit()

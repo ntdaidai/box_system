@@ -38,6 +38,7 @@ from app.models.safety_integration import (
 from app.services.minio_service import minio_service
 from app.services.patrol_report_service import store_generated_document
 from app.services.safety_event_runtime_service import safety_event_runtime_service
+from app.services.timeline_text import truncate
 
 
 TEMPLATE_PATH = Path(BASE_DIR) / "app" / "templates" / "dam_event_handling_report_template.docx"
@@ -182,7 +183,7 @@ class DamEventReportService:
             log_type="REPORT",
             trigger_type="AUTO",
             status="SUCCESS",
-            message=f"{event_name}处置报告已生成：{selected['source_label']}",
+            message=truncate(f"{event_name}处置报告已生成：{selected['source_label']}（报告编号 {report.id}）"),
             payload={
                 "instance_no": instance.instance_no,
                 "analysis_report_id": report.id,
