@@ -19,6 +19,27 @@
               <i :class="{ live: simulationActive }"></i>
               {{ mediaStatus }}
             </div>
+            <el-select
+              v-model="cameraId"
+              class="camera-picker"
+              :disabled="simulationActive || screening"
+              placeholder="选择摄像头"
+              @change="loadZonesForCamera"
+            >
+              <el-option
+                v-for="camera in cameras"
+                :key="camera.id"
+                :label="camera.name"
+                :value="String(camera.id)"
+              />
+            </el-select>
+            <el-button
+              plain
+              :disabled="simulationActive || screening || !cameraId"
+              @click="openZoneDialog"
+            >
+              {{ selectedZone ? `检测区域：${selectedZone.zone_name}` : '选择检测区域' }}
+            </el-button>
             <el-button
               type="warning"
               plain
@@ -46,15 +67,24 @@
             accept="video/mp4,video/quicktime,video/webm,.m4v"
             @change="handleNativeVideoFile"
           />
-          <video
-            v-if="videoUrl"
-            ref="videoRef"
-            :src="videoUrl"
-            controls
-            playsinline
-            @ended="handleVideoEnded"
-            @pause="handleNativePause"
-          />
+          <div v-if="videoUrl" class="video-frame" :style="videoFrameStyle">
+            <video
+              ref="videoRef"
+              :src="videoUrl"
+              controls
+              playsinline
+              @loadedmetadata="handleVideoMetadata"
+              @ended="handleVideoEnded"
+              @pause="handleNativePause"
+            />
+            <div
+              v-if="detectionRegion"
+              class="detection-region-overlay"
+              :style="detectionRegionStyle"
+            >
+              <span>{{ selectedZone?.zone_name || '检测区域' }}</span>
+            </div>
+          </div>
           <button v-else class="empty-stage" type="button" @click="openVideoPicker">
             <el-icon><VideoCamera /></el-icon>
             <strong>选择本地视频</strong>
@@ -144,6 +174,32 @@
     </section>
 
     <el-dialog
+      v-model="zoneDialogVisible"
+      title="选择检测区域"
+      width="560px"
+      class="zone-picker-dialog"
+    >
+      <p class="zone-picker-hint">区域来自当前摄像头的配置；检测时使用所选区域的外接矩形。</p>
+      <el-radio-group v-model="selectedZoneId" class="zone-picker-list">
+        <el-radio
+          v-for="zone in zones"
+          :key="zone.id"
+          :label="String(zone.id)"
+          :disabled="zone.enabled === false"
+          border
+        >
+          <strong>{{ zone.zone_name }}</strong>
+          <small>{{ zoneTypeLabel(zone.zone_type) }}</small>
+        </el-radio>
+      </el-radio-group>
+      <el-empty v-if="!zones.length" description="当前摄像头暂无已配置区域" />
+      <template #footer>
+        <el-button @click="zoneDialogVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="!selectedZone" @click="zoneDialogVisible = false">确认区域</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
       v-model="supplementDialogVisible"
       title="选择特殊工况"
       width="520px"
@@ -189,21 +245,27 @@
 </template>
 
 <script setup>
-import { computed, markRaw, nextTick, onBeforeUnmount, ref } from 'vue'
+import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   CircleCheckFilled, Connection, Promotion, VideoCamera, VideoPause, VideoPlay, Warning, WarningFilled,
 } from '@element-plus/icons-vue'
-import { simulateCameraVideoScreening } from '@/api/camera'
+import { getCameraList, getCameraZones, simulateCameraVideoScreening } from '@/api/camera'
 import { getUnifiedSafetyEventDetail } from '@/api/integration'
+import { normalizeZones } from '@/utils/cameraDetectionView'
 
 const FRAME_COUNT = 8
 const WINDOW_SECONDS = 10
 const DEFAULT_CAMERA_ID = 1
 const DEFAULT_CAMERA_NAME = '9号监测点'
 const router = useRouter()
-const cameraId = ref(DEFAULT_CAMERA_ID)
+const cameraId = ref(String(DEFAULT_CAMERA_ID))
+const cameras = ref([])
+const zones = ref([])
+const selectedZoneId = ref('')
+const zoneDialogVisible = ref(false)
+const videoAspectRatio = ref(16 / 9)
 const fileInputRef = ref(null)
 const videoRef = ref(null)
 const videoUrl = ref('')
@@ -225,7 +287,32 @@ const supplementDialogVisible = ref(false)
 const supplementForm = ref(defaultSupplementForm())
 const selectedSupplementContext = ref(null)
 
-const selectedCameraName = computed(() => DEFAULT_CAMERA_NAME)
+const selectedCameraName = computed(() => cameras.value.find(item => String(item.id) === String(cameraId.value))?.name || DEFAULT_CAMERA_NAME)
+const selectedZone = computed(() => zones.value.find(item => String(item.id) === String(selectedZoneId.value)) || null)
+const detectionRegion = computed(() => {
+  const points = selectedZone.value?.polygon_points || []
+  if (points.length < 3) return null
+  const xs = points.map(point => Number(point.x)).filter(Number.isFinite)
+  const ys = points.map(point => Number(point.y)).filter(Number.isFinite)
+  if (!xs.length || !ys.length) return null
+  return {
+    x1: Math.min(...xs),
+    y1: Math.min(...ys),
+    x2: Math.max(...xs),
+    y2: Math.max(...ys),
+  }
+})
+const videoFrameStyle = computed(() => ({ aspectRatio: String(videoAspectRatio.value) }))
+const detectionRegionStyle = computed(() => {
+  const region = detectionRegion.value
+  if (!region) return {}
+  return {
+    left: `${region.x1 * 100}%`,
+    top: `${region.y1 * 100}%`,
+    width: `${(region.x2 - region.x1) * 100}%`,
+    height: `${(region.y2 - region.y1) * 100}%`,
+  }
+})
 const mediaStatus = computed(() => {
   if (screening.value) return '分析中'
   if (simulationActive.value) return '实时采集中'
@@ -452,7 +539,10 @@ async function toggleSimulation() {
     stopSimulation(true)
     return
   }
-  if (!cameraId.value || !videoFile.value) return
+  if (!cameraId.value || !videoFile.value || !selectedZone.value) {
+    ElMessage.warning('请先选择摄像头、检测区域和现场视频')
+    return
+  }
   lastError.value = ''
   simulationActive.value = true
   await videoRef.value?.play().catch(() => null)
@@ -482,6 +572,7 @@ async function submitVideoFile() {
       videoFile.value,
       {
         windowSeconds: WINDOW_SECONDS,
+        zoneId: selectedZoneId.value,
         supplementalContext: selectedSupplementContext.value,
       },
     )
@@ -498,6 +589,55 @@ async function submitVideoFile() {
     screening.value = false
     stopSimulation(false)
   }
+}
+
+async function loadCameras() {
+  try {
+    const response = await getCameraList({ silentError: true })
+    cameras.value = (response.data?.cameras || []).map(camera => ({
+      ...camera,
+      id: String(camera.id),
+      name: camera.name || camera.camera_name || `摄像头 ${camera.id}`,
+    }))
+    if (!cameras.value.some(camera => String(camera.id) === String(cameraId.value))) {
+      cameraId.value = cameras.value[0]?.id || ''
+    }
+    await loadZonesForCamera()
+  } catch (error) {
+    lastError.value = error?.response?.data?.detail || error?.message || '摄像头列表加载失败'
+  }
+}
+
+async function loadZonesForCamera() {
+  zones.value = []
+  selectedZoneId.value = ''
+  if (!cameraId.value) return
+  try {
+    const response = await getCameraZones(cameraId.value, { silentError: true })
+    zones.value = normalizeZones(response.data)
+    selectedZoneId.value = zones.value.find(zone => zone.enabled !== false)?.id || ''
+  } catch (error) {
+    lastError.value = error?.response?.data?.detail || error?.message || '检测区域加载失败'
+  }
+}
+
+function openZoneDialog() {
+  zoneDialogVisible.value = true
+}
+
+function zoneTypeLabel(type) {
+  return ({
+    PERSON_LOW: '人员低风险区',
+    PERSON_MEDIUM: '人员中风险区',
+    PERSON_HIGH: '人员高风险区',
+    FISHING: '捕鱼区',
+  })[type] || '检测区域'
+}
+
+function handleVideoMetadata() {
+  const width = Number(videoRef.value?.videoWidth)
+  const height = Number(videoRef.value?.videoHeight)
+  if (width > 0 && height > 0) videoAspectRatio.value = width / height
 }
 
 async function refreshEventDetail(id = result.value?.event_instance_id) {
@@ -820,6 +960,8 @@ onBeforeUnmount(() => {
     if (item.url?.startsWith('blob:')) URL.revokeObjectURL(item.url)
   })
 })
+
+onMounted(loadCameras)
 </script>
 
 <style scoped>
@@ -929,6 +1071,18 @@ h3 {
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+.camera-picker {
+  width: 150px;
+}
+.video-frame {
+  position: relative;
+  width: min(100%, calc(100vh * 1.8));
+  height: 100%;
+  max-height: 100%;
+  margin: 0 auto;
+  overflow: hidden;
+  background: #02070d;
+}
 .runtime-state {
   gap: 8px;
   min-height: 32px;
@@ -965,8 +1119,51 @@ h3 {
 .video-stage video {
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  display: block;
+  object-fit: fill;
   background: #02070d;
+}
+.detection-region-overlay {
+  position: absolute;
+  border: 2px solid #ffcb57;
+  background: rgba(255, 203, 87, .08);
+  box-shadow: 0 0 0 1px rgba(2, 7, 13, .72), inset 0 0 18px rgba(255, 203, 87, .08);
+  pointer-events: none;
+}
+.detection-region-overlay span {
+  position: absolute;
+  left: -2px;
+  top: -27px;
+  padding: 5px 8px;
+  color: #101923;
+  background: #ffcb57;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.zone-picker-hint {
+  margin: 0 0 14px;
+  color: #6f899d;
+  font-size: 13px;
+}
+.zone-picker-list {
+  display: grid;
+  gap: 10px;
+}
+.zone-picker-list .el-radio {
+  width: 100%;
+  height: auto;
+  min-height: 48px;
+  margin: 0;
+  align-items: center;
+}
+.zone-picker-list .el-radio__label {
+  display: grid;
+  gap: 3px;
+}
+.zone-picker-list small {
+  color: #7892a7;
+  font-size: 12px;
 }
 .empty-stage {
   display: grid;

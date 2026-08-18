@@ -589,7 +589,7 @@ def _sync_camera_runtime(row: Camera, *, auto_start: bool = False) -> Optional[d
 
 def _sync_camera_web_proxy(row: Camera, db: Session) -> Optional[dict]:
     runtime_id = str(row.id)
-    if not row.enabled:
+    if not row.enabled or not settings.CAMERA_WEB_PROXY_ENABLED:
         camera_web_proxy_manager.stop_proxy(runtime_id)
         return None
     try:
@@ -1153,6 +1153,7 @@ async def simulate_camera_screening_video(
     camera_id: str,
     file: UploadFile = File(...),
     supplemental_context: Optional[str] = Form(None),
+    zone_id: Optional[str] = Form(None, description="本次模拟使用的摄像头检测区域ID"),
     window_seconds: float = Query(10.0, ge=1.0, le=60.0),
     db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
@@ -1162,6 +1163,19 @@ async def simulate_camera_screening_video(
         raise HTTPException(status_code=404, detail="摄像头设备不存在")
     if not row.enabled:
         raise HTTPException(status_code=409, detail="摄像头设备未启用")
+    if not zone_id:
+        raise HTTPException(status_code=400, detail="请先选择摄像头检测区域")
+    selected_zone = next(
+        (
+            zone for zone in get_camera_zone_store().get(str(row.id))
+            if str(zone.get("zone_id") or zone.get("id")) == str(zone_id)
+        ),
+        None,
+    )
+    if not selected_zone:
+        raise HTTPException(status_code=404, detail="所选检测区域不存在")
+    if selected_zone.get("enabled") is False:
+        raise HTTPException(status_code=409, detail="所选检测区域已停用")
 
     filename = file.filename or "simulation.mp4"
     suffix = Path(filename).suffix.lower()
@@ -1193,6 +1207,7 @@ async def simulate_camera_screening_video(
             input_source="simulation_video",
             window_seconds=window_seconds,
             supplemental_context=supplemental_payload,
+            zone_id=str(zone_id),
         )
     finally:
         await file.close()

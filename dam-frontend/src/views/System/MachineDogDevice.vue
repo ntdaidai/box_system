@@ -203,6 +203,7 @@
           <div v-if="!presetRoutes.length" class="route-pool-empty">暂无路线，点击下方新建</div>
         </div>
         <div class="route-manager-footer">
+          <el-button @click="resetToDefaultRoutes">恢复默认</el-button>
           <el-button type="primary" :icon="Plus" @click="startNewRoute">新建路线</el-button>
         </div>
       </template>
@@ -358,10 +359,47 @@ const waypoints = [
 // 机器狗充电区（标记图紫色区域，全局坐标）
 const chargeZone = { x: 82, y: 36.2 }
 
-const presetRoutes = ref([
+// 路线数据持久化：编辑后的路线保存到 localStorage，刷新页面后保持
+const ROUTE_STORAGE_KEY = 'machine-dog-preset-routes-v1'
+const SELECTED_ROUTE_STORAGE_KEY = 'machine-dog-selected-route-v1'
+// 默认路线（首次访问或点击「恢复默认」时使用）
+const DEFAULT_PRESET_ROUTES = [
   { id: 'route-a', name: '岸线由西向东巡检', points: ['p1', 'p2', 'p3'] },
   { id: 'route-b', name: '岸线由东向西巡检', points: ['p3', 'p2', 'p1'] },
-])
+]
+
+function cloneDefaultRoutes() {
+  return DEFAULT_PRESET_ROUTES.map((route) => ({ ...route, points: [...route.points] }))
+}
+
+function loadStoredRoutes() {
+  try {
+    const raw = localStorage.getItem(ROUTE_STORAGE_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed
+    }
+  } catch (e) {
+    // 存储数据损坏时回退默认路线
+  }
+  return cloneDefaultRoutes()
+}
+
+function persistRoutes() {
+  localStorage.setItem(ROUTE_STORAGE_KEY, JSON.stringify(presetRoutes.value))
+}
+
+// 恢复默认路线（清空本地保存）
+function resetToDefaultRoutes() {
+  presetRoutes.value = cloneDefaultRoutes()
+  selectedPresetRouteId.value = presetRoutes.value[0].id
+  selectedWaypointIds.value = [...presetRoutes.value[0].points]
+  localStorage.removeItem(ROUTE_STORAGE_KEY)
+  localStorage.removeItem(SELECTED_ROUTE_STORAGE_KEY)
+  ElMessage.success('已恢复默认路线')
+}
+
+const presetRoutes = ref(loadStoredRoutes())
 
 const machineDogs = ref([
   {
@@ -413,7 +451,13 @@ const deviceFilterOptions = [
 
 const deviceDrawerVisible = ref(false)
 const selectedDeviceId = ref('dog-01')
-const selectedPresetRouteId = ref('route-a')
+const selectedPresetRouteId = ref(
+  (() => {
+    const stored = localStorage.getItem(SELECTED_ROUTE_STORAGE_KEY)
+    if (stored && presetRoutes.value.some((route) => route.id === stored)) return stored
+    return presetRoutes.value[0]?.id || ''
+  })()
+)
 const selectedWaypointIds = ref([...presetRoutes.value[0].points])
 const deviceFilter = ref('all')
 const videoUrl = ref('')
@@ -432,8 +476,8 @@ const editablePoolPoints = computed(() =>
 )
 
 // ===== 巡检任务模拟：充电区出发 → 逐点移动+停留 → 逆序回程 =====
-const STAY_MS = 8000 // 每个巡检点停留时长
-const MOVE_SPEED = 55 // 移动速率系数（百分比距离 → 毫秒，值越大越慢）
+const STAY_MS = 3500 // 每个巡检点停留时长
+const MOVE_SPEED = 100 // 移动速率系数（百分比距离 → 毫秒，值越大越慢）
 let tripSegments = [] // 当前任务的行程分段（move / stay）
 
 function buildTrip(routePoints) {
@@ -622,6 +666,7 @@ function editExistingRoute(route) {
 function useRoute(route) {
   selectedPresetRouteId.value = route.id
   selectedWaypointIds.value = [...route.points]
+  localStorage.setItem(SELECTED_ROUTE_STORAGE_KEY, route.id)
   routeManagerVisible.value = false
   routeFormVisible.value = false
   ElMessage.success(`已选择路线：${route.name}`)
@@ -638,7 +683,9 @@ function deleteRoute(route) {
     const next = presetRoutes.value[0]
     selectedPresetRouteId.value = next.id
     selectedWaypointIds.value = [...next.points]
+    localStorage.setItem(SELECTED_ROUTE_STORAGE_KEY, next.id)
   }
+  persistRoutes()
   ElMessage.success(`已删除路线：${route.name}`)
 }
 
@@ -679,7 +726,9 @@ function saveEditingRoute() {
     presetRoutes.value.push(newRoute)
     selectedPresetRouteId.value = newRoute.id
     selectedWaypointIds.value = [...newRoute.points]
+    localStorage.setItem(SELECTED_ROUTE_STORAGE_KEY, newRoute.id)
   }
+  persistRoutes()
   routeFormVisible.value = false
   editingRouteId.value = null
   ElMessage.success(`已保存路线：${name}`)

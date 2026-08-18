@@ -11,6 +11,14 @@
       <div class="control-panel">
         <header class="panel-header">
           <div><span class="section-index">01</span><div><small>SENSOR</small><h3>触发参数</h3></div></div>
+          <el-select v-model="cameraId" class="camera-picker" :disabled="submitting" placeholder="选择摄像头">
+            <el-option
+              v-for="camera in cameras"
+              :key="camera.id"
+              :label="camera.name"
+              :value="String(camera.id)"
+            />
+          </el-select>
           <el-button
             type="primary"
             :icon="VideoPlay"
@@ -113,13 +121,14 @@
 </template>
 
 <script setup>
-import { computed, markRaw, nextTick, onBeforeUnmount, ref } from 'vue'
+import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   CircleCheckFilled, Connection, DataAnalysis, Promotion, VideoCamera, VideoPlay, Warning, WarningFilled,
 } from '@element-plus/icons-vue'
 import { simulateSensorEvent } from '@/api/eca'
+import { getCameraList } from '@/api/camera'
 import { getUnifiedSafetyEventDetail } from '@/api/integration'
 
 const router = useRouter()
@@ -136,6 +145,8 @@ const presets = [
 ]
 
 const selectedKey = ref('')
+const cameraId = ref('1')
+const cameras = ref([])
 const fileInputRef = ref(null)
 const videoRef = ref(null)
 const videoFile = ref(null)
@@ -153,17 +164,19 @@ const selectedPreset = computed(() => presets.find(item => item.key === selected
 const detailEvent = computed(() => detail.value?.event || null)
 const chainTimeline = computed(() => detail.value?.timeline || [])
 const conditionItems = computed(() => triggerResult.value?.condition_check?.conditions || [])
-const canSubmit = computed(() => Boolean(selectedPreset.value?.eventId && videoFile.value && !submitting.value))
+const canSubmit = computed(() => Boolean(selectedPreset.value?.eventId && cameraId.value && videoFile.value && !submitting.value))
 const submitDisabledReason = computed(() => {
   if (!selectedPreset.value?.eventId) return '请先选择测试事件'
+  if (!cameraId.value) return '请先选择摄像头'
   if (!videoFile.value) return '请先选择现场视频'
   if (submitting.value) return '正在提交'
   return '开始模拟'
 })
 const submitHint = computed(() => {
   if (canSubmit.value) return `已选择 ${selectedPreset.value.label} 和现场视频，可以开始模拟`
-  if (!selectedPreset.value?.eventId && !videoFile.value) return '请选择测试事件，并上传现场视频'
+  if (!selectedPreset.value?.eventId && !videoFile.value) return '请选择测试事件、摄像头，并上传现场视频'
   if (!selectedPreset.value?.eventId) return '请选择测试事件'
+  if (!cameraId.value) return '请选择摄像头'
   return '请上传现场视频'
 })
 
@@ -341,7 +354,7 @@ function buildSensorData() {
   return {
     ...(preset.sensorData || {}),
     sensor_location: sensorLocationLabel(preset.sensorName),
-    camera_id: 1,
+    camera_id: Number(cameraId.value),
   }
 }
 
@@ -396,7 +409,7 @@ async function submit() {
       eventId: preset.eventId,
       sensorName: preset.sensorName,
       sensorData: buildSensorData(),
-      cameraId: 1,
+      cameraId: Number(cameraId.value),
       force: true,
       file: videoFile.value,
     })
@@ -408,6 +421,22 @@ async function submit() {
     lastError.value = error?.response?.data?.detail || error?.message || '触发失败'
   } finally {
     submitting.value = false
+  }
+}
+
+async function loadCameras() {
+  try {
+    const response = await getCameraList({ silentError: true })
+    cameras.value = (response.data?.cameras || []).map(camera => ({
+      ...camera,
+      id: String(camera.id),
+      name: camera.name || camera.camera_name || `摄像头 ${camera.id}`,
+    }))
+    if (!cameras.value.some(camera => String(camera.id) === String(cameraId.value))) {
+      cameraId.value = cameras.value[0]?.id || ''
+    }
+  } catch (error) {
+    lastError.value = error?.response?.data?.detail || error?.message || '摄像头列表加载失败'
   }
 }
 
@@ -526,6 +555,8 @@ onBeforeUnmount(() => {
   stopPolling()
   if (videoUrl.value) URL.revokeObjectURL(videoUrl.value)
 })
+
+onMounted(loadCameras)
 </script>
 
 <style scoped>
@@ -613,6 +644,11 @@ h3 {
   padding: 0 16px;
   border-bottom: 1px solid var(--line);
   background: var(--panel-soft);
+}
+.camera-picker {
+  width: 170px;
+  margin-left: auto;
+  margin-right: 10px;
 }
 .panel-header > div:first-child {
   gap: 11px;

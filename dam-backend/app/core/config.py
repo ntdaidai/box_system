@@ -272,6 +272,10 @@ class Settings:
         _get_env("MINIPROGRAM_LIVE_STARTUP_GRACE_SECONDS", "2.0")
     )
     FFMPEG_BIN: str = _get_env("FFMPEG_BIN", "ffmpeg")
+    # 摄像头 Web 管理界面代理总开关：false 时不监听 1234x 端口，避免暴露摄像头管理页
+    CAMERA_WEB_PROXY_ENABLED: bool = (
+        _get_env("CAMERA_WEB_PROXY_ENABLED", "true").lower() == "true"
+    )
     CAMERA_WEB_PROXY_BIND_HOST: str = _get_env("CAMERA_WEB_PROXY_BIND_HOST", "0.0.0.0")
     CAMERA_WEB_PROXY_PUBLIC_HOST: str = _get_env("CAMERA_WEB_PROXY_PUBLIC_HOST", PUBLIC_HOST)
     CAMERA_WEB_PROXY_PORT_START: int = int(_get_env("CAMERA_WEB_PROXY_PORT_START", "12345"))

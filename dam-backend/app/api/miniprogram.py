@@ -6,6 +6,7 @@ import asyncio
 import datetime as dt
 import io
 import json
+import re
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -212,11 +213,14 @@ def _staff_status_label(status: Optional[str]) -> str:
 
 
 def _default_staff(db: Session) -> MiniProgramStaff:
-    row = db.query(MiniProgramStaff).filter(MiniProgramStaff.staff_no == "MP_STAFF_001").first()
+    row = db.query(MiniProgramStaff).filter(MiniProgramStaff.staff_no == "staff_001").first()
+    if not row:
+        # 兼容迁移前旧的复杂编号数据
+        row = db.query(MiniProgramStaff).filter(MiniProgramStaff.staff_no == "MP_STAFF_001").first()
     if row:
         return row
     row = MiniProgramStaff(
-        staff_no="MP_STAFF_001",
+        staff_no="staff_001",
         username="mp_staff_001",
         display_name="现场处置员",
         nickname="大藤峡安全巡查",
@@ -228,6 +232,17 @@ def _default_staff(db: Session) -> MiniProgramStaff:
     db.commit()
     db.refresh(row)
     return row
+
+
+def _next_staff_no(db: Session) -> str:
+    """生成下一个简单人员编号，形如 staff_002（从现有编号中取最大序号 +1）。"""
+    rows = db.query(MiniProgramStaff.staff_no).all()
+    seq = 0
+    for (no,) in rows:
+        match = re.fullmatch(r"staff_(\d+)", no or "")
+        if match:
+            seq = max(seq, int(match.group(1)))
+    return f"staff_{seq + 1:03d}"
 
 
 def _resolve_staff(
@@ -857,7 +872,7 @@ async def create_staff(payload: StaffCreateRequest):
     try:
         group_name = _optional_text(payload.group_name) or "默认处置组"
         row = MiniProgramStaff(
-            staff_no=f"MP_STAFF_{uuid.uuid4().hex[:8]}",
+            staff_no=_next_staff_no(db),
             display_name=payload.display_name.strip(),
             description=_optional_text(payload.description),
             group_id=group_name,

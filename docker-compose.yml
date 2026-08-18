@@ -121,6 +121,8 @@ services:
       YOLO_IOU: "0.45"
       CAMERA_DETECTION_FPS: "${CAMERA_DETECTION_FPS:-5}"
       CAMERA_JPEG_QUALITY: "${CAMERA_JPEG_QUALITY:-80}"
+      # 关闭摄像头 Web 管理界面代理（不再监听 1234x 端口，避免暴露摄像头管理页）
+      CAMERA_WEB_PROXY_ENABLED: "${CAMERA_WEB_PROXY_ENABLED:-false}"
       MINIPROGRAM_LIVE_ENABLED: "${MINIPROGRAM_LIVE_ENABLED:-true}"
       MINIPROGRAM_LIVE_USE_SUBSTREAM: "${MINIPROGRAM_LIVE_USE_SUBSTREAM:-true}"
       MINIPROGRAM_LIVE_PUBLISH_BASE_URL: "${MINIPROGRAM_LIVE_PUBLISH_BASE_URL:-rtmp://127.0.0.1:1936}"
@@ -294,6 +296,9 @@ services:
     image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/bluenviron/mediamtx:latest-linuxarm64
     container_name: dij-mediamtx
     restart: unless-stopped
+    environment:
+      # 统一由 .env 的 PUBLIC_HOST 控制 WebRTC NAT IP
+      - MTX_WEBRTCICEHOSTNAT1TO1IPS=${PUBLIC_HOST:-192.168.31.52}
     ports:
       - "1936:1935"       # RTMP 推流入口
       - "8555:8554"       # RTSP 流输出（WebRTC-Streamer 拉流）
@@ -314,6 +319,8 @@ services:
       - "6790:6789"
     environment:
       - TZ=Asia/Shanghai
+      # 统一由 .env 的 PUBLIC_HOST 控制 MQTT/MinIO/RTMP 地址
+      - PUBLIC_HOST=${PUBLIC_HOST:-192.168.31.52}
     volumes:
       - ./dij-backend/DJI-Cloud-API-Demo-main:/app
       - dij-maven-repo:/root/.m2
@@ -350,6 +357,8 @@ services:
       - dij-frontend-node-modules:/app/node_modules
     environment:
       - VITE_APP_ENVIRONMENT=development
+      # 统一由 .env 的 PUBLIC_HOST 控制前端 API/WS/RTMP 地址
+      - VITE_PUBLIC_HOST=${PUBLIC_HOST:-192.168.31.52}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

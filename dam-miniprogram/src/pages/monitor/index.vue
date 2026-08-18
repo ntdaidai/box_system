@@ -29,26 +29,17 @@
       </view>
 
       <view class="video-box">
+        <!-- live-player 直接播放实时视频流（RTMP），不走快照轮询 -->
         <live-player
-          v-if="streamUrl && !liveFallback"
+          v-if="streamUrl"
           :key="livePlayerKey"
           class="video-frame"
           :src="streamUrl"
           mode="live"
           autoplay
-          muted
           object-fit="contain"
-          :min-cache="0.5"
-          :max-cache="1.5"
           @statechange="handleLiveStateChange"
           @error="handleLiveError"
-        />
-        <image
-          v-else-if="snapshotUrl"
-          class="video-frame"
-          :src="snapshotUrl"
-          mode="aspectFit"
-          @error="handleSnapshotError"
         />
         <view v-else class="video-empty">{{ videoText }}</view>
         <view v-if="showAssistBox && selectedCamera.id" class="assist-overlay">
@@ -69,7 +60,7 @@
           class="ghost-btn action-btn"
           :loading="videoLoading"
           :disabled="videoLoading || !selectedCamera.id"
-          @tap="refreshCameraSnapshot(true)"
+          @tap="loadLiveStream(true)"
         >
           刷新页面
         </button>
@@ -130,7 +121,7 @@
 </template>
 
 <script>
-import { absoluteUrl, request, uploadBroadcastAudio } from '../../utils/request'
+import { request, uploadBroadcastAudio } from '../../utils/request'
 import { readCache, writeCache } from '../../utils/cache'
 
 export default {
@@ -142,16 +133,11 @@ export default {
       loadError: '',
       videoLoading: false,
       streamUrl: '',
-      snapshotUrl: '',
-      liveFallback: false,
-      liveConnected: false,
       livePlayerKey: 0,
       videoText: '正在加载摄像头',
       cameraBroadcasting: false,
       recordingBroadcast: false,
       broadcastRecorder: null,
-      liveTimer: null,
-      liveConnectTimer: null,
       showAssistBox: false
     }
   },
@@ -192,14 +178,11 @@ export default {
   },
 
   onHide() {
-    this.stopLiveRefresh()
-    this.stopLiveConnectTimer()
+    // 页面隐藏时停止播放，返回后再重新连接
     this.streamUrl = ''
   },
 
   onUnload() {
-    this.stopLiveRefresh()
-    this.stopLiveConnectTimer()
     if (this.recordingBroadcast) this.broadcastRecorder?.stop()
   },
 
@@ -248,46 +231,35 @@ export default {
     },
 
     selectCameraByIndex(index) {
-      if (index === this.selectedCameraIndex && this.snapshotUrl) return
+      if (index === this.selectedCameraIndex && this.streamUrl) return
       this.selectedCameraIndex = index
       this.streamUrl = ''
-      this.snapshotUrl = ''
-      this.liveFallback = false
-      this.liveConnected = false
       this.videoText = '正在切换点位'
       this.openSelectedCamera(true)
     },
 
     openSelectedCamera(showToast) {
       if (!this.selectedCamera.id) {
-        this.stopLiveRefresh()
-        this.snapshotUrl = ''
+        this.streamUrl = ''
         this.videoText = this.loadError || '暂无可选摄像头'
         return Promise.resolve()
       }
-      this.startLiveRefresh()
-      return this.refreshCameraSnapshot(showToast)
+      return this.loadLiveStream(showToast)
     },
 
-    refreshCameraSnapshot(showToast = false) {
+    loadLiveStream(showToast = false) {
       const cameraId = this.selectedCamera.id
       if (!cameraId || this.videoLoading) return Promise.resolve()
       this.videoLoading = true
       return request({ url: `/cameras/${encodeURIComponent(cameraId)}/video` })
         .then((data) => {
+          // live-player 直接播放实时视频流（RTMP）
           this.streamUrl = data.stream_url || ''
-          this.snapshotUrl = `${absoluteUrl(data.snapshot_url)}?t=${Date.now()}`
-          this.liveFallback = !this.streamUrl
-          this.liveConnected = false
           this.livePlayerKey += 1
-          this.videoText = this.streamUrl ? '正在连接实时视频流' : '实时快照模式'
-          this.startLiveConnectTimer()
+          this.videoText = this.streamUrl ? '正在连接实时视频流' : '当前摄像头暂未返回实时画面'
         })
         .catch((error) => {
           this.streamUrl = ''
-          this.liveFallback = true
-          this.liveConnected = false
-          this.snapshotUrl = ''
           this.videoText = error.message || '当前摄像头暂未返回实时画面'
           if (showToast) {
             uni.showToast({ title: this.videoText, icon: 'none' })
@@ -298,55 +270,19 @@ export default {
         })
     },
 
-    handleSnapshotError() {
-      this.snapshotUrl = ''
-      this.videoText = '当前摄像头暂未返回实时画面'
-    },
-
     handleLiveStateChange(event) {
       const code = Number(event?.detail?.code || 0)
       if (code === 2004) {
-        this.liveConnected = true
-        this.stopLiveConnectTimer()
-        this.liveFallback = false
         this.videoText = '实时视频已连接'
       } else if (code === 2103) {
         this.videoText = '实时视频正在重连'
       } else if (code < 0) {
-        this.enableSnapshotFallback('实时视频中断，已切换快照预览')
+        this.videoText = '实时视频连接失败'
       }
     },
 
     handleLiveError() {
-      this.enableSnapshotFallback('实时视频播放失败，已切换快照预览')
-    },
-
-    enableSnapshotFallback(message) {
-      this.stopLiveConnectTimer()
-      this.liveFallback = true
-      this.liveConnected = false
-      this.videoText = message
-      if (this.selectedCamera.id) {
-        this.snapshotUrl = `${absoluteUrl(`/api/miniprogram/v1/cameras/${encodeURIComponent(this.selectedCamera.id)}/snapshot.jpg`)}?t=${Date.now()}`
-      }
-      this.startLiveRefresh()
-    },
-
-    startLiveConnectTimer() {
-      this.stopLiveConnectTimer()
-      if (!this.streamUrl || this.liveFallback) return
-      this.liveConnectTimer = setTimeout(() => {
-        if (!this.liveConnected && this.streamUrl) {
-          this.enableSnapshotFallback('实时视频未连通，已切换快照预览')
-        }
-      }, 5000)
-    },
-
-    stopLiveConnectTimer() {
-      if (this.liveConnectTimer) {
-        clearTimeout(this.liveConnectTimer)
-        this.liveConnectTimer = null
-      }
+      this.videoText = '实时视频播放失败'
     },
 
     toggleAssistBox() {
@@ -355,22 +291,6 @@ export default {
         title: this.showAssistBox ? '辅助框已显示' : '辅助框已隐藏',
         icon: 'none'
       })
-    },
-
-    startLiveRefresh() {
-      this.stopLiveRefresh()
-      this.liveTimer = setInterval(() => {
-        if (this.liveFallback && this.selectedCamera.id) {
-          this.snapshotUrl = `${absoluteUrl(`/api/miniprogram/v1/cameras/${encodeURIComponent(this.selectedCamera.id)}/snapshot.jpg`)}?t=${Date.now()}`
-        }
-      }, 2500)
-    },
-
-    stopLiveRefresh() {
-      if (this.liveTimer) {
-        clearInterval(this.liveTimer)
-        this.liveTimer = null
-      }
     },
 
     zoneTypeLabel(type) {

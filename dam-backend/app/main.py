@@ -103,19 +103,20 @@ async def lifespan(app: FastAPI):
 
         rows = db.query(Camera).filter(Camera.enabled == True).all()  # noqa: E712
         proxy_count = 0
-        for row in rows:
-            runtime_id = str(row.id)
-            try:
-                proxy = camera_web_proxy_manager.start_proxy(
-                    camera_id=runtime_id,
-                    target_host=row.ip_address,
-                    target_port=row.web_port or 80,
-                    preferred_port=row.web_proxy_port,
-                )
-                row.web_proxy_port = int(proxy["listen_port"])
-                proxy_count += 1
-            except Exception as proxy_exc:
-                logger.warning(f"数据库摄像头 Web 控制台监听加载失败: camera={row.id}, error={proxy_exc}")
+        if settings.CAMERA_WEB_PROXY_ENABLED:
+            for row in rows:
+                runtime_id = str(row.id)
+                try:
+                    proxy = camera_web_proxy_manager.start_proxy(
+                        camera_id=runtime_id,
+                        target_host=row.ip_address,
+                        target_port=row.web_port or 80,
+                        preferred_port=row.web_proxy_port,
+                    )
+                    row.web_proxy_port = int(proxy["listen_port"])
+                    proxy_count += 1
+                except Exception as proxy_exc:
+                    logger.warning(f"数据库摄像头 Web 控制台监听加载失败: camera={row.id}, error={proxy_exc}")
         db.commit()
         logger.info(f"已加载 0 路常驻摄像头运行时，{proxy_count} 路 Web 控制台监听")
     except Exception as e:

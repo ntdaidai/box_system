@@ -53,10 +53,10 @@ def main() -> None:
               status, create_time, update_time
             )
             SELECT
-              'MP_STAFF_001', 'mp_staff_001', '现场处置员', '大藤峡安全巡查',
+              'staff_001', 'mp_staff_001', '现场处置员', '大藤峡安全巡查',
               'default', '默认处置组', 'ACTIVE', NOW(), NOW()
             WHERE NOT EXISTS (
-              SELECT 1 FROM mini_program_staff WHERE staff_no = 'MP_STAFF_001'
+              SELECT 1 FROM mini_program_staff WHERE staff_no = 'staff_001'
             )
             """
         ))

@@ -105,13 +105,7 @@
       </view>
     </view>
 
-    <button
-      v-if="hasMore && !loading"
-      class="ghost-btn load-more"
-      @tap="loadMore"
-    >
-      加载更多
-    </button>
+    <pager :page="page" :total-pages="totalPages" @change="goPage" />
   </view>
 </template>
 
@@ -120,10 +114,17 @@ import { request } from '../../utils/request'
 import { formatDateTime, formatDuration, riskClass } from '../../utils/format'
 import { readCache, writeCache } from '../../utils/cache'
 import { isLoggedIn } from '../../utils/auth'
+import { subscribeRiskAlert } from '../../utils/subscribe'
+import Pager from '../../components/pager/pager.vue'
 
 const PAGE_SIZE = 10
+const NOTIFY_PROMPT_KEY = 'mini_notify_prompted'
 
 export default {
+  components: {
+    Pager
+  },
+
   data() {
     return {
       tabs: [
@@ -150,7 +151,8 @@ export default {
       total: 0,
       hasMore: false,
       loading: false,
-      loadError: ''
+      loadError: '',
+      subscribingAlerts: false
     }
   },
 
@@ -161,12 +163,19 @@ export default {
 
     pointFilterLabel() {
       return this.cameraOptions[this.selectedPointIndex] || '全部点位'
+    },
+
+    // 总页数，每页 10 条
+    totalPages() {
+      return Math.max(1, Math.ceil(this.total / PAGE_SIZE))
     }
   },
 
   onLoad() {
     this.restoreCached()
     this.bootstrap()
+    // 进入页面后引导勾选服务通知
+    this.promptRiskAlert()
   },
 
   onPullDownRefresh() {
@@ -252,10 +261,13 @@ export default {
       return this.loadEvents(false)
     },
 
-    loadMore() {
-      if (!this.hasMore || this.loading) return
-      this.page += 1
-      this.loadEvents(true)
+    // 切换分页：直接加载指定页码，每页 10 条
+    goPage(target) {
+      if (target === this.page || this.loading) return
+      this.page = target
+      this.loadEvents(false).then(() => {
+        uni.pageScrollTo({ scrollTop: 0, duration: 200 })
+      })
     },
 
     loadEvents(append) {
@@ -380,6 +392,42 @@ export default {
             .catch((error) => uni.showToast({ title: error.message, icon: 'none' }))
         }
       })
+    },
+
+    // 进入页面后引导勾选服务通知（只提示一次，避免每次进入都打扰）
+    promptRiskAlert() {
+      const prompted = readCache(NOTIFY_PROMPT_KEY, false)
+      if (prompted) return
+      writeCache(NOTIFY_PROMPT_KEY, true)
+      uni.showModal({
+        title: '开启服务通知',
+        content: '订阅后，有低/中/高风险时会收到微信提醒',
+        confirmText: '去开启',
+        cancelText: '暂不',
+        success: (res) => {
+          if (!res.confirm) return
+          this.handleSubscribeRiskAlerts()
+        }
+      })
+    },
+
+    handleSubscribeRiskAlerts() {
+      if (this.subscribingAlerts) return
+      this.subscribingAlerts = true
+      subscribeRiskAlert()
+        .then((data) => {
+          const quota = Number(data.remaining_quota || 1)
+          uni.showToast({
+            title: `已订阅${quota > 1 ? quota + '次' : ''}`,
+            icon: 'success'
+          })
+        })
+        .catch((error) => {
+          uni.showToast({ title: error.message || '订阅失败', icon: 'none' })
+        })
+        .finally(() => {
+          this.subscribingAlerts = false
+        })
     },
 
     openDetail(eventId) {
@@ -684,13 +732,6 @@ export default {
   height: 68rpx;
   line-height: 68rpx;
   font-size: 25rpx;
-}
-
-.load-more {
-  margin-top: 22rpx;
-  height: 72rpx;
-  line-height: 72rpx;
-  font-size: 26rpx;
 }
 
 .empty {

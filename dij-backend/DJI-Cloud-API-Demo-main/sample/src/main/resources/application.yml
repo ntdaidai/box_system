@@ -45,7 +45,7 @@ mqtt:
   # BASIC parameters are required.
   BASIC:
     protocol: MQTT # @see com.dji.sample.component.mqtt.model.MqttProtocolEnum
-    host: 192.168.31.52
+    host: ${PUBLIC_HOST:192.168.31.52} # 由 .env 的 PUBLIC_HOST 统一控制，改 IP 只需改 .env
     port: 1883
     username: admin
     password: admin
@@ -54,7 +54,7 @@ mqtt:
     path:
   DRC:
     protocol: WS # @see com.dji.sample.component.mqtt.model.MqttProtocolEnum
-    host: 192.168.31.52
+    host: ${PUBLIC_HOST:192.168.31.52} # 由 .env 的 PUBLIC_HOST 统一控制，改 IP 只需改 .env
     port: 8083
     path: /mqtt
     username: admin
@@ -89,7 +89,7 @@ url:
 oss:
   enable: true
   provider: minio
-  endpoint: http://192.168.31.52:9000
+  endpoint: http://${PUBLIC_HOST:192.168.31.52}:9000
   access-key: minioadmin
   secret-key: minioadmin
   bucket: dam
@@ -124,7 +124,7 @@ livestream:
 
     # RTMP
     rtmp:
-      url: rtmp://192.168.31.52:1936/live/
+      url: rtmp://${PUBLIC_HOST:192.168.31.52}:1936/live/
     # RTSP
     rtsp:
       username: ""

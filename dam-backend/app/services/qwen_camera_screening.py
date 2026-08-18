@@ -23,6 +23,7 @@ from app.models.actor_library import ActorLibrary, ActorPromptStage
 from app.models.camera import Camera
 from app.services.camera_source import camera_source_from_row
 from app.services.camera_snapshot import camera_snapshot_service
+from app.services.camera_zone_store import get_camera_zone_store
 from app.services.minio_service import minio_service
 from app.services.vision_detector import vision_detector
 
@@ -114,6 +115,22 @@ CAMERA_SCREENING_ACTOR_NAME = "摄像头初筛专家"
 CAMERA_SCREENING_STAGE_CODE = "camera_screening"
 CAMERA_SCREENING_MODEL_SCOPE = "qwen4b"
 PROMPT_CACHE_SECONDS = 60.0
+
+
+def _region_from_zone(zone: Optional[Dict[str, Any]]) -> Optional[Dict[str, float]]:
+    points = zone.get("polygon_points") if isinstance(zone, dict) else None
+    if not isinstance(points, list) or len(points) < 3:
+        return None
+    xs = [float(point.get("x")) for point in points if isinstance(point, dict) and point.get("x") is not None]
+    ys = [float(point.get("y")) for point in points if isinstance(point, dict) and point.get("y") is not None]
+    if not xs or not ys:
+        return None
+    return {
+        "x1": round(max(0.0, min(xs)), 6),
+        "y1": round(max(0.0, min(ys)), 6),
+        "x2": round(min(1.0, max(xs)), 6),
+        "y2": round(min(1.0, max(ys)), 6),
+    }
 
 
 class QwenCameraScreeningService:
@@ -235,6 +252,10 @@ class QwenCameraScreeningService:
         window_seconds: Optional[float] = None,
         evidence_video_path: Optional[str] = None,
         supplemental_context: Optional[Dict[str, Any]] = None,
+        zone_id: Optional[str] = None,
+        zone_name: Optional[str] = None,
+        zone_type: Optional[str] = None,
+        detection_region: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Screen an explicit frame window and dispatch the result to camera ECA."""
         if not frames:
@@ -246,7 +267,7 @@ class QwenCameraScreeningService:
         )
         async with self._inference_lock:
             batch_ts = int(time.time() * 1000)
-            model_frames = self._augment_screening_frames(frames)
+            model_frames = self._augment_screening_frames(frames, detection_region)
             image_urls, model_image_urls = await self._upload_frames(camera_id, model_frames, batch_ts)
             if evidence_video_path:
                 video_url, video_object_name = await self._upload_source_video(
@@ -263,10 +284,11 @@ class QwenCameraScreeningService:
                 )
             result, raw_response, prompt_config = await self._call_qwen(
                 camera_id,
-                frames,
+                model_frames,
                 image_urls,
                 model_image_urls,
                 effective_window,
+                detection_region=detection_region,
                 original_frame_count=len(frames),
             )
         if not result:
@@ -281,6 +303,15 @@ class QwenCameraScreeningService:
         result["system_prompt_source"] = prompt_config.get("source")
         result["prompt_version"] = prompt_config.get("prompt_version")
         result["image_urls"] = image_urls
+        if detection_region:
+            result["detection_region"] = detection_region
+            result["detection_region_coordinate_system"] = "normalized_0_1"
+        if zone_id:
+            result["zone_id"] = zone_id
+        if zone_name:
+            result["zone_name"] = zone_name
+        if zone_type:
+            result["zone_type"] = zone_type
         if supplemental_context:
             result["supplemental_context"] = supplemental_context
         if video_url:
@@ -311,6 +342,7 @@ class QwenCameraScreeningService:
         input_source: str = "simulation_video",
         window_seconds: Optional[float] = None,
         supplemental_context: Optional[Dict[str, Any]] = None,
+        zone_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Screen a local video file by sampling frames server-side."""
         frames, duration_seconds = await asyncio.to_thread(
@@ -320,6 +352,22 @@ class QwenCameraScreeningService:
         )
         if not frames:
             return None
+        zone = None
+        detection_region = None
+        zone_name = None
+        zone_type = None
+        if zone_id:
+            zone = next(
+                (
+                    item for item in get_camera_zone_store().get(str(camera_id))
+                    if str(item.get("zone_id") or item.get("id")) == str(zone_id)
+                ),
+                None,
+            )
+            detection_region = _region_from_zone(zone)
+            if zone:
+                zone_name = zone.get("zone_name") or zone.get("name")
+                zone_type = zone.get("zone_type") or zone.get("type")
         return await self.screen_frames(
             camera_id,
             frames,
@@ -327,11 +375,54 @@ class QwenCameraScreeningService:
             window_seconds=duration_seconds or window_seconds,
             evidence_video_path=video_path,
             supplemental_context=supplemental_context,
+            zone_id=zone_id,
+            zone_name=zone_name,
+            zone_type=zone_type,
+            detection_region=detection_region,
         )
 
-    def _augment_screening_frames(self, frames: List[tuple[float, bytes]]) -> List[tuple[float, bytes]]:
-        """Keep 4B screening scene-neutral: only use evenly sampled full frames."""
-        return list(frames)
+    def _augment_screening_frames(
+        self,
+        frames: List[tuple[float, bytes]],
+        detection_region: Optional[Dict[str, Any]] = None,
+    ) -> List[tuple[float, bytes]]:
+        """Draw the selected ROI on frames so the multimodal model can judge containment."""
+        if not detection_region:
+            return list(frames)
+        try:
+            x1 = max(0.0, min(float(detection_region["x1"]), 1.0))
+            y1 = max(0.0, min(float(detection_region["y1"]), 1.0))
+            x2 = max(x1, min(float(detection_region["x2"]), 1.0))
+            y2 = max(y1, min(float(detection_region["y2"]), 1.0))
+        except (KeyError, TypeError, ValueError):
+            return list(frames)
+        augmented: List[tuple[float, bytes]] = []
+        for timestamp, data in frames:
+            image = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+            if image is None:
+                augmented.append((timestamp, data))
+                continue
+            height, width = image.shape[:2]
+            cv2.rectangle(
+                image,
+                (round(x1 * width), round(y1 * height)),
+                (round(x2 * width), round(y2 * height)),
+                (0, 205, 255),
+                max(2, round(min(width, height) / 480)),
+            )
+            cv2.putText(
+                image,
+                "DETECTION REGION",
+                (round(x1 * width) + 6, max(24, round(y1 * height) + 24)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                max(0.55, min(width, height) / 1000),
+                (0, 205, 255),
+                2,
+                cv2.LINE_AA,
+            )
+            ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 88])
+            augmented.append((timestamp, encoded.tobytes() if ok else data))
+        return augmented
 
     def _extract_video_frames(
         self,
@@ -632,6 +723,7 @@ class QwenCameraScreeningService:
         model_image_urls: List[str],
         window_seconds: float,
         *,
+        detection_region: Optional[Dict[str, Any]] = None,
         original_frame_count: Optional[int] = None,
     ) -> tuple[Optional[Dict[str, Any]], str, Dict[str, Any]]:
         prompt_config = await asyncio.to_thread(self._get_camera_screening_prompt)
@@ -653,6 +745,11 @@ class QwenCameraScreeningService:
                     "image_url": {"url": f"data:image/jpeg;base64,{encoded}"},
                 })
 
+        region_instruction = (
+            "画面中的黄色矩形是本次检测区域。人员、船只、渔船或捕鱼线索只有在目标主体/锚点位于矩形内部时才计入事件；矩形外目标一律视为背景，不得用于触发。"
+            if detection_region else
+            "本次没有指定检测区域，按整幅画面判断。"
+        )
         messages = [
             {"role": "system", "content": prompt_config["prompt"]},
             {
@@ -662,6 +759,7 @@ class QwenCameraScreeningService:
                         "type": "text",
                         "text": (
                             f"{len(frames)}张连续全景采样帧，覆盖视频起止过程。"
+                            f"{region_instruction}"
                             "重点做疑似初筛：逐帧比较同一位置附近的变化，远处小人形、滩涂连续活动点、水面小暗斑或细长移动目标都要保留为疑似；"
                             "只有画面明确包含水域/岸线/滩涂/坝体环境时，远处小人形/连续活动点才作为疑似人员线索；"
                             "室内、墙面、设备近景、遮挡或无水域岸线画面必须全0；"

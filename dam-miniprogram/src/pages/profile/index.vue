@@ -16,22 +16,12 @@
           <view v-else class="avatar">{{ avatarText }}</view>
           <view class="profile-main">
             <view>{{ staff.display_name || '现场处置员' }}</view>
-            <text>{{ staff.group_name || '大藤峡安全巡查' }}</text>
-          </view>
-        </view>
-
-        <view class="info-grid">
-          <view>
-            <text>人员ID</text>
             <text>{{ staff.staff_no || '--' }}</text>
           </view>
-          <view>
-            <text>所属组别</text>
-            <text>{{ staff.group_name || '--' }}</text>
-          </view>
+          <view class="group-tag">{{ staff.group_name || '--' }}</view>
         </view>
 
-        <button class="ghost-btn logout-btn" @tap="handleLogout">退出登录</button>
+        <button class="danger-btn logout-btn" @tap="handleLogout">退出登录</button>
       </view>
 
       <view class="filter-panel">
@@ -73,13 +63,7 @@
           </view>
         </view>
 
-        <button
-          v-if="hasMore && !loading"
-          class="ghost-btn load-more"
-          @tap="loadMore"
-        >
-          加载更多
-        </button>
+        <pager :page="page" :total-pages="totalPages" @change="goPage" />
       </view>
     </template>
   </view>
@@ -90,10 +74,15 @@ import { request } from '../../utils/request'
 import { formatDateTime, riskClass } from '../../utils/format'
 import { readCache, writeCache } from '../../utils/cache'
 import { isLoggedIn, scanQrLogin, logout } from '../../utils/auth'
+import Pager from '../../components/pager/pager.vue'
 
 const PAGE_SIZE = 10
 
 export default {
+  components: {
+    Pager
+  },
+
   data() {
     return {
       staff: {},
@@ -122,6 +111,11 @@ export default {
 
     pointFilterLabel() {
       return this.cameraOptions[this.selectedPointIndex] || '全部点位'
+    },
+
+    // 总页数，每页 10 条
+    totalPages() {
+      return Math.max(1, Math.ceil(this.total / PAGE_SIZE))
     }
   },
 
@@ -213,10 +207,13 @@ export default {
       return this.loadHandledEvents(false)
     },
 
-    loadMore() {
-      if (!this.hasMore || this.loading) return
-      this.page += 1
-      this.loadHandledEvents(true)
+    // 切换分页：直接加载指定页码，每页 10 条
+    goPage(target) {
+      if (target === this.page || this.loading) return
+      this.page = target
+      this.loadHandledEvents(false).then(() => {
+        uni.pageScrollTo({ scrollTop: 0, duration: 200 })
+      })
     },
 
     loadHandledEvents(append) {
@@ -321,9 +318,10 @@ export default {
 
 .logout-btn {
   margin-top: 22rpx;
-  height: 72rpx;
-  line-height: 72rpx;
-  font-size: 26rpx;
+  height: 80rpx;
+  line-height: 80rpx;
+  font-size: 28rpx;
+  font-weight: 700;
 }
 
 .profile-panel,
@@ -350,7 +348,7 @@ export default {
 
 .profile-top {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 18rpx;
   margin-bottom: 22rpx;
 }
@@ -375,6 +373,7 @@ export default {
 
 .profile-main {
   min-width: 0;
+  flex: 1;
 }
 
 .profile-main view {
@@ -389,35 +388,14 @@ export default {
   font-size: 24rpx;
 }
 
-.info-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12rpx;
-}
-
-.info-grid view {
-  min-height: 92rpx;
-  padding: 14rpx 18rpx;
+.group-tag {
+  flex-shrink: 0;
+  padding: 6rpx 16rpx;
   border-radius: 8rpx;
-  background: #f2f6f7;
-  box-sizing: border-box;
-}
-
-.info-grid text {
-  display: block;
-}
-
-.info-grid text:first-child {
-  color: #6c7a80;
-  font-size: 24rpx;
-  margin-bottom: 6rpx;
-}
-
-.info-grid text:last-child {
-  color: #172026;
-  font-size: 28rpx;
+  background: #eaf3f5;
+  color: #0f4c5c;
+  font-size: 22rpx;
   font-weight: 700;
-  word-break: break-all;
 }
 
 .filter-select {
@@ -553,10 +531,4 @@ export default {
   margin-bottom: 4rpx;
 }
 
-.load-more {
-  margin-top: 18rpx;
-  height: 70rpx;
-  line-height: 70rpx;
-  font-size: 26rpx;
-}
 </style>

@@ -2982,6 +2982,7 @@ class DamEventReportService:
         # markers from the selected node, and resolve them against the complete
         # retrieved source list; never use edge-only citations here.
         text_parts: list[str] = []
+        rendered_fields: dict[str, list[str]] = {}
         for key in (
             "detailed_scene_analysis",
             "risk_reasoning",
@@ -2993,7 +2994,9 @@ class DamEventReportService:
         ):
             value = self.find_in_selected(selected, key)
             if value not in (None, "", []):
-                text_parts.append(str(value))
+                value_text = str(value)
+                text_parts.append(value_text)
+                rendered_fields.setdefault(key, []).append(value_text)
         # ``selected.text`` may be a transport summary containing nested
         # template_data/handling_summary content that is not rendered as a
         # report paragraph. Only use it when no formal report field exists.
@@ -3005,12 +3008,12 @@ class DamEventReportService:
             for match in re.finditer(r"\bK\d+\b", text)
         }
         # A structured sentence_citations entry is not enough by itself. The
-        # final report must visibly cite the same evidence; otherwise the
-        # knowledge section would list clauses that readers cannot find in the
-        # report body. This also filters model output where a second citation
-        # is present in JSON but its sentence has no [K...] marker.
+        # final report must visibly indicate the knowledge basis in the same
+        # rendered field. The wording may paraphrase the source clause; it
+        # does not need to quote the knowledge-base text verbatim.
         citations = []
         selected_ids: set[str] = set(selected_text_ids)
+        provenance_terms = ("知识库", "知识依据", "条款", "依据", "规定", "规范")
         for citation in raw_citations:
             evidence_ids = {
                 str(evidence_id).strip()
@@ -3021,7 +3024,24 @@ class DamEventReportService:
                 match.group(0)
                 for match in re.finditer(r"\bK\d+\b", str(citation.get("sentence") or ""))
             }
-            visible_ids = evidence_ids & sentence_ids & selected_text_ids
+            citation_sentence = str(citation.get("sentence") or "").strip()
+            field_name = str(citation.get("field") or "").strip()
+            candidate_texts = rendered_fields.get(field_name) or text_parts
+            normalized_sentence = re.sub(r"\s+", "", citation_sentence)
+            sentence_visible = bool(normalized_sentence) and any(
+                normalized_sentence in re.sub(r"\s+", "", text)
+                for text in candidate_texts
+            )
+            # With an explicit [K...] marker, the marker must also be present
+            # in the rendered text. Without it, accept a paraphrased citation
+            # only when the citation sentence explicitly identifies the source
+            # as a knowledge-base rule/requirement.
+            if sentence_ids:
+                visible_ids = evidence_ids & sentence_ids & selected_text_ids if sentence_visible else set()
+            elif sentence_visible and any(term in citation_sentence for term in provenance_terms):
+                visible_ids = evidence_ids
+            else:
+                visible_ids = set()
             if not visible_ids:
                 continue
             citations.append(citation)
@@ -3101,7 +3121,7 @@ class DamEventReportService:
                 section_text = section_text[len(title_text) + 3:]
             line = f"[{source_count}] 《{title_text}》："
             if section_text:
-                line += section_text
+                line += f"章节 {section_text}"
             if clause:
                 line += f"{'，' if section_text else ''}条款 {str(clause).strip()}"
             lines.append(line)

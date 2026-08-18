@@ -92,6 +92,7 @@ export function simulateCameraScreening(cameraId, frames, options = {}) {
 export function simulateCameraVideoScreening(cameraId, file, options = {}) {
   const formData = new FormData()
   formData.append('file', file)
+  if (options.zoneId) formData.append('zone_id', options.zoneId)
   if (options.supplementalContext) {
     formData.append('supplemental_context', JSON.stringify(options.supplementalContext))
   }
