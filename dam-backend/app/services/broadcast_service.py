@@ -623,11 +623,12 @@ class BroadcastService:
             "PERSON_LOW": ("人员低风险提醒", "LOW", "PERSON", "您已进入安全警戒区域，请立即远离水边危险区域。"),
             "PERSON_MEDIUM": ("人员中风险警告", "MEDIUM", "PERSON", "警告，请立即停止亲水活动并离开危险区域。"),
             "PERSON_HIGH": ("人员高风险紧急警告", "HIGH", "PERSON", "紧急警告，当前区域存在重大安全风险，请立即撤离。"),
-            "FISHING": ("非法捕鱼提醒", None, "FISHING", "当前水域禁止非法捕鱼，请立即驶离。"),
+            "FISHING": ("非法捕鱼提醒", "MULTI", "FISHING", "当前水域禁止非法捕鱼，请立即驶离。"),
         }
         changed = False
         for template_id, (name, risk, scene, content) in templates.items():
-            if not db.query(BroadcastTemplate).filter(BroadcastTemplate.id == template_id).first():
+            row = db.query(BroadcastTemplate).filter(BroadcastTemplate.id == template_id).first()
+            if not row:
                 db.add(BroadcastTemplate(
                     id=template_id,
                     name=name,
@@ -636,6 +637,9 @@ class BroadcastService:
                     content=content,
                     enabled=True,
                 ))
+                changed = True
+            elif template_id == "FISHING" and row.risk_level != risk:
+                row.risk_level = risk
                 changed = True
         local_device = db.query(BroadcastDevice).filter(
             BroadcastDevice.device_code == "local_audio_default"

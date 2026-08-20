@@ -2,7 +2,11 @@ import unittest
 from unittest.mock import patch
 
 from app.core.config import settings
-from app.services.camera_live_relay import CameraLiveRelayManager, camera_preview_source
+from app.services.camera_live_relay import (
+    CameraLiveRelayManager,
+    camera_preview_source,
+    camera_web_preview_source,
+)
 
 
 class FakeProcess:
@@ -31,6 +35,16 @@ class CameraLiveRelayTest(unittest.TestCase):
             hikvision = "rtsp://user:secret@192.0.2.2/Streaming/Channels/101"
             self.assertIn("subtype=1", camera_preview_source(dahua))
             self.assertTrue(camera_preview_source(hikvision).endswith("/Streaming/Channels/102"))
+
+    def test_web_preview_uses_primary_stream_by_default(self):
+        source = "rtsp://user:secret@192.0.2.2/Streaming/Channels/101"
+        with patch.object(settings, "CAMERA_WEB_LIVE_USE_SUBSTREAM", False):
+            self.assertEqual(camera_web_preview_source(source), source)
+        with (
+            patch.object(settings, "CAMERA_WEB_LIVE_USE_SUBSTREAM", True),
+            patch.object(settings, "MINIPROGRAM_LIVE_USE_SUBSTREAM", True),
+        ):
+            self.assertTrue(camera_web_preview_source(source).endswith("/Streaming/Channels/102"))
 
     def test_relay_reuses_process_and_exposes_public_url(self):
         manager = CameraLiveRelayManager()

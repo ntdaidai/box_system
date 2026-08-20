@@ -65,7 +65,7 @@
             popper-class="broadcast-filter-popper"
             placeholder="启用状态"
           >
-            <el-option label="全部" value="all" />
+            <el-option label="全部状态" value="all" />
             <el-option label="启用" value="enabled" />
             <el-option label="未启用" value="disabled" />
           </el-select>
@@ -130,7 +130,7 @@
             <div class="col-template-scene">适用场景</div>
             <div class="col-template-risk">风险等级</div>
             <div class="col-template-content">播报内容</div>
-            <div class="col-template-enabled">启用状态</div>
+            <div class="col-template-enabled">是否启用</div>
             <div class="col-template-actions">操作</div>
           </div>
           <article v-for="row in pagedBroadcastTemplates" :key="row.id" class="template-row">
@@ -214,12 +214,12 @@
         </el-form-item>
         <div class="form-grid two">
           <el-form-item label="适用场景" prop="scene_type">
-            <el-select v-model="templateForm.scene_type" placeholder="请选择场景">
+            <el-select v-model="templateForm.scene_type" popper-class="broadcast-filter-popper" placeholder="请选择场景">
               <el-option v-for="item in sceneOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
           </el-form-item>
           <el-form-item label="风险等级" prop="risk_level">
-            <el-select v-model="templateForm.risk_level" placeholder="请选择风险等级">
+            <el-select v-model="templateForm.risk_level" popper-class="broadcast-filter-popper" placeholder="请选择风险等级">
               <el-option v-for="item in riskOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
           </el-form-item>
@@ -350,6 +350,7 @@ const riskOptions = [
   { label: '低风险', value: 'LOW' },
   { label: '中风险', value: 'MEDIUM' },
   { label: '高风险', value: 'HIGH' },
+  { label: '多风险适用', value: 'MULTI' },
 ]
 
 const sceneOptions = [
@@ -429,9 +430,10 @@ async function loadBroadcast() {
   }
 }
 
-function showTemplates() {
+async function showTemplates() {
   viewMode.value = 'templates'
   templatePage.value = 1
+  if (!broadcastTemplates.value.length) await loadBroadcast()
 }
 
 function showDevices() {
@@ -480,12 +482,11 @@ async function toggleDeviceEnabled(row, enabled) {
   deviceEnableLoading.value = { ...deviceEnableLoading.value, [row.id]: true }
   row.enabled = enabled
   try {
-    const res = await updateBroadcastDevice(row.id, {
+    await updateBroadcastDevice(row.id, {
       name: row.name,
       description: row.description || null,
       enabled,
     })
-    ElMessage.success(res.message || (enabled ? '广播设备已启用' : '广播设备已停用'))
     await loadBroadcast()
   } catch (error) {
     row.enabled = previous
@@ -594,14 +595,13 @@ async function toggleTemplateEnabled(row, enabled) {
   templateEnableLoading.value = { ...templateEnableLoading.value, [row.id]: true }
   row.enabled = enabled
   try {
-    const res = await updateBroadcastTemplate(row.id, {
+    await updateBroadcastTemplate(row.id, {
       name: row.name,
       scene_type: row.scene_type,
       risk_level: row.risk_level,
       content: row.content,
       enabled,
     })
-    ElMessage.success(res.message || (enabled ? '播报模板已启用' : '播报模板已停用'))
     await loadBroadcast()
   } catch (error) {
     row.enabled = previous
@@ -691,7 +691,7 @@ onMounted(refreshCurrent)
 .metric .dot { width: 8px; height: 8px; flex: 0 0 auto; align-self: center; border-radius: 50%; background: #8db2c8; }
 .metric .dot.total { box-shadow: 0 0 8px rgba(141, 178, 200, .75); }
 .metric .dot.online { background: #48e6bf; box-shadow: 0 0 8px rgba(72, 230, 191, .75); }
-.metric .dot.offline { background: #8494a3; }
+.metric .dot.offline { background: #ff5b68; box-shadow: 0 0 8px rgba(255, 91, 104, .72); }
 .metric-num { color: #f2fbff; font-size: 22px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
 .metric-label { color: #8db2c8; font-size: 12px; }
 .page-header h2,

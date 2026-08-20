@@ -9,11 +9,10 @@ from app.services.qwen_camera_screening import QwenCameraScreeningService
 SERVICE = QwenCameraScreeningService()
 
 
-def build_payload(scene, confidence, risk_level="LOW"):
+def build_payload(scene, confidence):
     return json.dumps({
         "scene": scene,
         "confidence": confidence,
-        "risk_level": risk_level,
         "summary": "河道滩涂水边疑似人员或船只活动待复核",
         "evidence": ["画面包含水域、岸线、滩涂和活动目标"],
         "uncertainties": [],
@@ -23,24 +22,24 @@ def build_payload(scene, confidence, risk_level="LOW"):
 class QwenCameraScreeningParseTests(unittest.TestCase):
     """三级置信带：确认(>=0.65) / 疑似(0.3~0.65) / 无(<0.3)，仅人员/船只。"""
 
-    def test_high_confidence_person_is_confirmed_and_medium_risk(self):
+    def test_high_confidence_person_is_confirmed_without_risk_output(self):
         result = SERVICE._parse_result(build_payload(
             {"person_present": 1, "boat_present": 0},
             {"person_confidence": 0.75, "boat_confidence": 0.1},
         ))
         self.assertEqual(result["scene"]["person_present"], 1)
         self.assertEqual(result["scene"]["possible_person"], 0)
-        self.assertEqual(result["risk_level"], "MEDIUM")
+        self.assertNotIn("risk_level", result)
 
-    def test_mid_confidence_person_is_suspect_with_low_risk(self):
+    def test_mid_confidence_person_is_suspect_without_risk_output(self):
         result = SERVICE._parse_result(build_payload(
             {"person_present": 1, "boat_present": 0},
             {"person_confidence": 0.5, "boat_confidence": 0.1},
         ))
-        # 低置信确认位归零，但疑似位保留，风险不抬升
+        # 低置信确认位归零，但疑似位保留；初筛不输出风险等级
         self.assertEqual(result["scene"]["person_present"], 0)
         self.assertEqual(result["scene"]["possible_person"], 1)
-        self.assertEqual(result["risk_level"], "LOW")
+        self.assertNotIn("risk_level", result)
 
     def test_low_confidence_person_is_nothing(self):
         result = SERVICE._parse_result(build_payload(
@@ -58,9 +57,9 @@ class QwenCameraScreeningParseTests(unittest.TestCase):
         self.assertEqual(result["scene"]["boat_present"], 1)
         self.assertEqual(result["scene"]["person_present"], 0)
         self.assertEqual(result["scene"]["possible_person"], 1)
-        self.assertEqual(result["risk_level"], "MEDIUM")
+        self.assertNotIn("risk_level", result)
 
-    def test_natural_disaster_keeps_strict_and_high_risk(self):
+    def test_natural_disaster_keeps_strict_without_risk_output(self):
         result = SERVICE._parse_result(build_payload(
             {"mudslide_detected": 1},
             {"mudslide_confidence": 0.8},
@@ -68,7 +67,7 @@ class QwenCameraScreeningParseTests(unittest.TestCase):
         self.assertEqual(result["scene"]["mudslide_detected"], 1)
         self.assertEqual(result["scene"].get("possible_person", 0), 0)
         self.assertEqual(result["scene"].get("possible_boat", 0), 0)
-        self.assertEqual(result["risk_level"], "HIGH")
+        self.assertNotIn("risk_level", result)
 
     def test_boundary_suspect_lower_bound_is_inclusive(self):
         result = SERVICE._parse_result(build_payload(
@@ -104,7 +103,6 @@ class QwenCameraScreeningParseTests(unittest.TestCase):
         payload = {
             "scene": {"boat_present": 0},
             "confidence": {"boat_confidence": 0.0},
-            "risk_level": "LOW",
             "summary": "夜间水面有细长移动目标，疑似船只/捕鱼待复核",
             "evidence": ["水面连续帧出现细长移动目标", "移动目标后方伴随扰动水纹"],
             "uncertainties": ["目标距离远、尺度小，无法确认船体结构"],

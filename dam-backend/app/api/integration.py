@@ -44,6 +44,7 @@ ACTION_LABELS = {
     "camera_snapshot": "摄像头抓拍",
     "broadcast": "自动广播",
     "drone_dispatch": "无人机派飞取证驱离",
+    "machine_dog_dispatch": "机器狗巡检",
     "staff_task": "生成人工处置任务",
 }
 EVENT_CATEGORY_LABELS = {
@@ -84,6 +85,7 @@ class ActionConfigUpdate(BaseModel):
     template_id: Optional[str] = Field(None, max_length=64)
     drone_id: Optional[str] = Field(None, max_length=64)
     route_id: Optional[str] = Field(None, max_length=64)
+    config_json: Optional[dict[str, Any]] = None
     repeat_interval_seconds: Optional[int] = Field(None, ge=0, le=86400)
     max_executions: Optional[int] = Field(None, ge=1, le=100)
 
@@ -467,6 +469,7 @@ def get_integration_config(
                 "template_name": templates.get(config.template_id).name if templates.get(config.template_id) else None,
                 "drone_id": config.drone_id,
                 "route_id": config.route_id,
+                "config_json": config.config_json,
                 "repeat_interval_seconds": config.repeat_interval_seconds,
                 "max_executions": config.max_executions,
                 "enabled": bool(config.is_activate),
@@ -548,7 +551,7 @@ def update_action_config(
     for field in (
         "step_order", "action_type", "action_name", "timeout_seconds", "failure_strategy",
         "retry_count", "broadcast_device_id", "template_id", "drone_id", "route_id",
-        "repeat_interval_seconds", "max_executions",
+        "config_json", "repeat_interval_seconds", "max_executions",
     ):
         if field in data:
             setattr(row, field, data[field])
@@ -562,6 +565,10 @@ def update_action_config(
     if will_be_enabled and action_type == "drone_dispatch":
         if not row.drone_id or not row.route_id:
             raise HTTPException(status_code=400, detail="无人机派飞必须配置无人机和航线")
+    if will_be_enabled and action_type == "machine_dog_dispatch":
+        action_config = row.config_json if isinstance(row.config_json, dict) else {}
+        if not action_config.get("machine_dog_id") or not row.route_id:
+            raise HTTPException(status_code=400, detail="机器狗巡检必须配置机器狗型号和巡检路线")
     db.commit()
     return {"code": 200, "message": "动作配置已保存"}
 
@@ -578,6 +585,10 @@ def create_action_config(
     if payload.action_type not in ACTION_LABELS:
         raise HTTPException(status_code=400, detail="动作类型不支持")
     data = payload.model_dump(exclude_unset=True)
+    if payload.enabled is not False and payload.action_type == "machine_dog_dispatch":
+        action_config = data.get("config_json") if isinstance(data.get("config_json"), dict) else {}
+        if not action_config.get("machine_dog_id") or not data.get("route_id"):
+            raise HTTPException(status_code=400, detail="机器狗巡检必须配置机器狗型号和巡检路线")
     row = EventActionConfig(
         event_id=payload.event_id,
         step_order=payload.step_order,
@@ -590,6 +601,7 @@ def create_action_config(
         template_id=data.get("template_id"),
         drone_id=data.get("drone_id"),
         route_id=data.get("route_id"),
+        config_json=data.get("config_json"),
         repeat_interval_seconds=data.get("repeat_interval_seconds") or 60,
         max_executions=data.get("max_executions") or 1,
         is_activate=data.get("enabled", True),

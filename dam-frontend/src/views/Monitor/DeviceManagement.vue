@@ -613,7 +613,7 @@ onMounted(loadCurrent)
 .metric .dot { width: 8px; height: 8px; flex: 0 0 auto; align-self: center; border-radius: 50%; background: #8db2c8; }
 .metric .dot.total { box-shadow: 0 0 8px rgba(141, 178, 200, .75); }
 .metric .dot.online { background: #48e6bf; box-shadow: 0 0 8px rgba(72, 230, 191, .75); }
-.metric .dot.offline { background: #8494a3; }
+.metric .dot.offline { background: #ff5b68; box-shadow: 0 0 8px rgba(255, 91, 104, .72); }
 .metric-num { color: #f2fbff; font-size: 22px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
 .metric-label { color: #8db2c8; font-size: 12px; }
 .title-block {

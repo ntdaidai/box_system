@@ -11,19 +11,37 @@
 }
 
 .el-select-dropdown__item {
-  color: #c8dce8 !important;
+  color: #9aafbb !important;
   background: transparent !important;
 
   &.hover,
   &:hover {
     background: rgba(72, 216, 255, 0.1) !important;
-    color: #e9f7ff !important;
+    color: #bfd1d9 !important;
   }
 
   &.selected {
     color: #48d8ff !important;
     font-weight: 700;
   }
+}
+
+// 检测工作台下拉项：降低发白感，保留清晰的蓝灰层次
+.video-detection-select-popper .el-select-dropdown__item,
+.sensor-event-select-popper .el-select-dropdown__item {
+  color: #9aafbb !important;
+}
+
+.video-detection-select-popper .el-select-dropdown__item:hover,
+.sensor-event-select-popper .el-select-dropdown__item:hover {
+  color: #bfd1d9 !important;
+}
+
+.video-detection-select-popper .el-select-dropdown__item.selected,
+.sensor-event-select-popper .el-select-dropdown__item.selected,
+.video-detection-select-popper .el-select-dropdown__item.is-selected,
+.sensor-event-select-popper .el-select-dropdown__item.is-selected {
+  color: #48b9d2 !important;
 }
 
 .el-select-dropdown__empty {

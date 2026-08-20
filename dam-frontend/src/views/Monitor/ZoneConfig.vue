@@ -10,33 +10,42 @@
         <div class="metric"><i class="dot online"></i><strong class="metric-num">{{ zoneOnlineCount }}</strong><span class="metric-label">在线</span></div>
         <div class="metric"><i class="dot offline"></i><strong class="metric-num">{{ zoneOfflineCount }}</strong><span class="metric-label">离线</span></div>
       </div>
-      <el-button :icon="Refresh" @click="refreshZones">刷新</el-button>
     </header>
 
     <section class="zone-toolbar-card">
-      <div class="list-heading">
-        <div>
-          <span>区域列表</span>
-        </div>
-        <div class="header-actions">
-          <el-button class="tool-button new-zone-action" @click="startNewZone">
-            <el-icon><EditPen /></el-icon>新增区域
-          </el-button>
-          <el-select
-            v-model="currentCameraId"
-            class="camera-select zone-config-select"
-            popper-class="zone-config-select-popper"
-            placeholder="选择摄像头"
-            @change="activateCamera"
-          >
-            <el-option
-              v-for="camera in cameras"
-              :key="camera.id"
-              :label="camera.name"
-              :value="camera.id"
-            />
-          </el-select>
-        </div>
+      <div class="zone-filter-toolbar">
+        <el-select
+          v-model="zonePointFilter"
+          class="zone-filter-select point-filter"
+          popper-class="zone-config-select-popper"
+          placeholder="全部点位"
+        >
+          <el-option label="全部点位" value="all" />
+          <el-option v-for="camera in cameras" :key="camera.id" :label="camera.name" :value="camera.id" />
+        </el-select>
+        <el-select
+          v-model="zoneStatusFilter"
+          class="zone-filter-select"
+          popper-class="zone-config-select-popper"
+          placeholder="全部状态"
+        >
+          <el-option label="全部状态" value="all" />
+          <el-option label="已启用" value="enabled" />
+          <el-option label="已停用" value="disabled" />
+        </el-select>
+        <el-select
+          v-model="zoneTypeFilter"
+          class="zone-filter-select"
+          popper-class="zone-config-select-popper"
+          placeholder="全部类型"
+        >
+          <el-option label="全部类型" value="all" />
+          <el-option v-for="option in zoneTypeOptions" :key="option.value" :label="option.label" :value="option.value" />
+        </el-select>
+        <el-button class="new-point-action" @click="startNewZone">
+          <el-icon><EditPen /></el-icon>
+          <span>新增区域</span>
+        </el-button>
       </div>
     </section>
 
@@ -74,16 +83,19 @@
             <button type="button" class="row-edit" @click.stop="openZoneEditor(zone.id)">
               编辑
             </button>
+            <button type="button" class="row-delete" @click.stop="deleteZone(zone.id)">
+              删除
+            </button>
           </div>
         </div>
-        <div v-if="!zones.length" class="zone-table-empty">暂无区域配置</div>
+        <div v-if="!filteredZones.length" class="zone-table-empty">暂无符合筛选条件的区域</div>
       </div>
       <el-pagination
-        v-if="zones.length"
+        v-if="filteredZones.length"
         v-model:current-page="zonePage"
         class="list-pagination"
         :page-size="pageSize"
-        :total="zones.length"
+        :total="filteredZones.length"
         layout="prev, pager, next"
       />
     </section>
@@ -91,12 +103,12 @@
     <el-dialog
       v-model="drawDialogVisible"
       append-to-body
-      class="zone-draw-dialog"
+      :class="['zone-draw-dialog', { 'is-view-mode': editorMode === 'view' }]"
       :title="drawDialogTitle"
-      width="1320px"
+      :width="editorMode === 'view' ? '1240px' : '1320px'"
       @closed="handleDrawDialogClosed"
     >
-      <section class="config-workspace">
+      <section class="config-workspace" :class="{ 'is-view-mode': editorMode === 'view' }">
         <article class="video-editor">
           <div class="editor-stage">
             <img
@@ -110,6 +122,7 @@
             />
             <svg
               class="zone-editor-overlay"
+              :class="{ 'is-view-overlay': editorMode === 'view' }"
               :viewBox="`0 0 ${overlayWidth} ${overlayHeight}`"
               preserveAspectRatio="xMidYMid meet"
               @click="handleOverlayClick"
@@ -125,7 +138,7 @@
                 @click.stop="handleZoneClick(zone.id, $event)"
               >
                 <polygon
-                  v-if="zone.polygon_points.length >= 3"
+                  v-if="zone.polygon_points.length >= 2"
                   :points="zonePolygonPoints(zone)"
                   :stroke="zoneColor(zone)"
                   :fill="zoneFill(zone)"
@@ -202,17 +215,21 @@
               <el-icon class="is-loading"><Loading /></el-icon>
               <span>正在获取摄像头画面</span>
             </div>
-            <div v-if="drawing" class="draw-tip">{{ drawTipText }}</div>
           </div>
           <div class="editor-toolbar">
-            <span class="toolbar-note">{{ currentCameraName }}</span>
+            <div v-if="editorMode === 'view'" class="view-zone-meta">
+              <span>{{ zoneTypeText(selectedZone?.zone_type) }}</span>
+              <i aria-hidden="true"></i>
+              <strong>{{ currentCameraName }}</strong>
+            </div>
+            <span v-else-if="drawing" class="draw-tip">{{ drawTipText }}</span>
+            <span v-if="editorMode !== 'view'" class="toolbar-note">{{ currentCameraName }}</span>
           </div>
         </article>
 
-        <aside class="zone-side-editor">
+        <aside v-if="editorMode !== 'view'" class="zone-side-editor">
           <div class="side-editor-title">
             <strong>{{ editorMode === 'view' ? '查看区域' : '编辑点位' }}</strong>
-            <span>{{ selectedZone ? `顶点 ${selectedZone.polygon_points.length}` : '未选择区域' }}</span>
           </div>
           <el-form v-if="selectedZone" label-position="top" class="zone-form">
           <el-form-item v-if="editorMode === 'create'" label="选择摄像头">
@@ -233,7 +250,7 @@
             </el-select>
           </el-form-item>
           <el-form-item label="区域名称">
-            <el-input v-model="selectedZone.zone_name" maxlength="80" placeholder="请输入区域名称" :disabled="editorMode === 'view'" />
+            <el-input v-model="selectedZone.zone_name" class="zone-config-input" maxlength="80" placeholder="请输入区域名称" :disabled="editorMode === 'view'" />
           </el-form-item>
           <el-form-item label="区域类型">
             <el-select
@@ -243,16 +260,16 @@
               :disabled="editorMode === 'view'"
               @change="applyTypeDefaults"
             >
-              <el-option label="人员低风险区" value="PERSON_LOW" />
-              <el-option label="人员中风险区" value="PERSON_MEDIUM" />
-              <el-option label="人员高风险区" value="PERSON_HIGH" />
-              <el-option label="捕鱼区" value="FISHING" />
+              <el-option label="禁闯入区" value="PERSON_LOW" />
+              <el-option label="禁亲水区" value="PERSON_MEDIUM" />
+              <el-option label="禁涉水区" value="PERSON_HIGH" />
+              <el-option label="禁捕区" value="FISHING" />
             </el-select>
           </el-form-item>
-          <section class="ros-panel">
+          <section v-if="editorMode !== 'create' || selectedZone.polygon_points.length" class="ros-panel">
             <div class="ros-heading">
               <strong>区域顶点</strong>
-              <b>顶点 {{ selectedZone.polygon_points.length }}</b>
+              <b>定位点 {{ selectedZone.polygon_points.length }}</b>
             </div>
             <div class="ros-unit">
               <i></i>
@@ -260,7 +277,7 @@
             </div>
             <div class="point-table">
               <div class="point-head">
-                <span>序号</span>
+                <span>定位点</span>
                 <span>X</span>
                 <span>Y</span>
                 <span>操作</span>
@@ -270,7 +287,7 @@
                 :key="`${selectedZone.id}-point-${index}`"
                 class="point-row"
               >
-                <strong>#{{ index + 1 }}</strong>
+                <strong>{{ pointLabel(index) }}</strong>
                 <div class="coordinate-field">
                   <el-input-number
                     :model-value="pointCoordinateX(point)"
@@ -297,7 +314,7 @@
                 </div>
                 <button v-if="editorMode !== 'view'" type="button" class="point-delete" @click="deletePoint(index)">删除</button>
               </div>
-              <div v-if="!selectedZone.polygon_points.length" class="point-empty">暂无顶点</div>
+              <div v-if="!selectedZone.polygon_points.length" class="point-empty">暂无定位点</div>
             </div>
             <!-- 旧多边形画法入口：矩形画法下隐藏，代码保留以便回退 -->
             <button
@@ -310,6 +327,7 @@
               <el-icon><Plus /></el-icon>新增顶点
             </button>
           </section>
+          <div v-else class="point-empty create-point-hint">完成画框后显示左上角和右下角两个定位点</div>
           </el-form>
           <div v-else class="panel-empty">请选择一个区域进行编辑。</div>
           <div class="side-editor-actions">
@@ -332,7 +350,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Check, EditPen, Loading, Plus, Refresh,
+  Check, EditPen, Loading, Plus,
 } from '@element-plus/icons-vue'
 import {
   createStreamTicket, getCameraList, getCameraZones, saveCameraZones,
@@ -360,7 +378,17 @@ const editorMode = ref('')
 const draftZone = ref(null)
 const zonePage = ref(1)
 const zoneEnableLoading = ref({})
+const zonePointFilter = ref('all')
+const zoneStatusFilter = ref('all')
+const zoneTypeFilter = ref('all')
 const pageSize = 10
+
+const zoneTypeOptions = [
+  { value: 'PERSON_LOW', label: '禁闯入区' },
+  { value: 'PERSON_MEDIUM', label: '禁亲水区' },
+  { value: 'PERSON_HIGH', label: '禁涉水区' },
+  { value: 'FISHING', label: '禁捕区' },
+]
 
 const overlayWidth = computed(() => Number(stageImageRef.value?.naturalWidth) || 1920)
 const overlayHeight = computed(() => Number(stageImageRef.value?.naturalHeight) || 1080)
@@ -388,17 +416,29 @@ const rectPreviewRect = computed(() => {
   const height = Math.abs(rectFirstPoint.value.y - rectPreview.value.y) * overlayHeight.value
   return { x, y, width, height }
 })
+const filteredZones = computed(() => zones.value.filter((zone) => {
+  const pointMatched = zonePointFilter.value === 'all'
+    || String(zone.camera_id || zone.cameraId || '') === String(zonePointFilter.value)
+  const statusMatched = zoneStatusFilter.value === 'all'
+    || (zoneStatusFilter.value === 'enabled' ? zone.enabled !== false : zone.enabled === false)
+  const typeMatched = zoneTypeFilter.value === 'all' || zone.zone_type === zoneTypeFilter.value
+  return pointMatched && statusMatched && typeMatched
+}))
 const pagedZones = computed(() => {
   const start = (zonePage.value - 1) * pageSize
-  return zones.value.slice(start, start + pageSize)
+  return filteredZones.value.slice(start, start + pageSize)
 })
 // 区域没有独立连接状态，统计卡片按启用/停用状态映射为在线/离线。
 const zoneOnlineCount = computed(() => zones.value.filter((zone) => zone.enabled !== false).length)
 const zoneOfflineCount = computed(() => zones.value.length - zoneOnlineCount.value)
 
-watch(zones, (items) => {
+watch(filteredZones, (items) => {
   const maxPage = Math.max(1, Math.ceil(items.length / pageSize))
   if (zonePage.value > maxPage) zonePage.value = maxPage
+})
+
+watch([zonePointFilter, zoneStatusFilter, zoneTypeFilter], () => {
+  zonePage.value = 1
 })
 
 function formatZoneTime(zone) {
@@ -417,11 +457,50 @@ function formatZoneTime(zone) {
 
 function zoneTypeText(type) {
   return ({
-    PERSON_LOW: '人员低风险区',
-    PERSON_MEDIUM: '人员中风险区',
-    PERSON_HIGH: '人员高风险区',
-    FISHING: '捕鱼区',
+    PERSON_LOW: '禁闯入区',
+    PERSON_MEDIUM: '禁亲水区',
+    PERSON_HIGH: '禁涉水区',
+    FISHING: '禁捕区',
   })[type] || zoneTypeLabel(type)
+}
+
+function migratedZoneName(name, zoneType) {
+  const value = String(name || '')
+  const legacyNames = {
+    PERSON_LOW: ["人员低风险区", "低风险区"],
+    PERSON_MEDIUM: ["人员中风险区", "中风险区"],
+    PERSON_HIGH: ["人员高风险区", "高风险区"],
+    FISHING: ["捕鱼区"],
+  }
+  return (legacyNames[zoneType] || []).reduce(
+    (result, legacyName) => result.replaceAll(legacyName, zoneTypeText(zoneType)),
+    value,
+  )
+}
+
+function compactRectanglePoints(points = []) {
+  if (points.length < 2) return clonePoints(points)
+  const xs = points.map((point) => Number(point.x))
+  const ys = points.map((point) => Number(point.y))
+  const minX = Math.min(...xs)
+  const maxX = Math.max(...xs)
+  const minY = Math.min(...ys)
+  const maxY = Math.max(...ys)
+  return [{ x: minX, y: minY }, { x: maxX, y: maxY }]
+}
+
+function normalizeZoneList(payload, camera = null) {
+  return normalizeZones(payload).map((zone) => {
+    const zoneName = migratedZoneName(zone.zone_name, zone.zone_type) || zoneTypeText(zone.zone_type)
+    return {
+      ...zone,
+      zone_name: zoneName,
+      name: zoneName,
+      camera_id: String(camera?.id || zone.camera_id || zone.cameraId || currentCameraId.value || ''),
+      camera_name: camera?.name || zone.camera_name || zone.cameraName || currentCameraName.value,
+      polygon_points: compactRectanglePoints(zone.polygon_points),
+    }
+  })
 }
 
 function zoneCameraName(zone) {
@@ -434,8 +513,24 @@ async function loadCameras() {
   currentCameraId.value = String(route.query.camera_id || cameras.value[0]?.id || '')
 }
 
+async function loadAllZones() {
+  if (!cameras.value.length) {
+    zones.value = []
+    return
+  }
+  const results = await Promise.all(cameras.value.map(async (camera) => {
+    try {
+      const response = await getCameraZones(camera.id)
+      return normalizeZoneList(response.data, camera)
+    } catch {
+      return []
+    }
+  }))
+  zones.value = results.flat()
+  selectedZoneId.value = zones.value[0]?.id || ''
+}
+
 async function activateCamera() {
-  zones.value = []
   selectedZoneId.value = ''
   zonePage.value = 1
   drawing.value = false
@@ -445,21 +540,19 @@ async function activateCamera() {
   rectFirstPoint.value = null
   rectPreview.value = null
   streamUrl.value = ''
-  await loadZones()
+  if (currentCameraId.value) await refreshStream()
 }
 
 async function loadZones() {
   if (!currentCameraId.value) return
   const response = await getCameraZones(currentCameraId.value)
-  zones.value = normalizeZones(response.data)
-  selectedZoneId.value = zones.value[0]?.id || ''
-}
-
-async function refreshZones() {
-  if (!currentCameraId.value) {
-    await loadCameras()
-  }
-  await loadZones()
+  const camera = cameras.value.find((item) => String(item.id) === String(currentCameraId.value))
+  const currentZones = normalizeZoneList(response.data, camera)
+  zones.value = [
+    ...zones.value.filter((zone) => String(zone.camera_id) !== String(currentCameraId.value)),
+    ...currentZones,
+  ]
+  selectedZoneId.value = currentZones[0]?.id || ''
 }
 
 async function refreshStream() {
@@ -507,19 +600,31 @@ function handleOverlayClick(event) {
     rectFirstPoint.value = point
     return
   }
-  // 第二点：由两个角点生成矩形 4 顶点，完成画框
+  // 第二点：只保存左上角和右下角两个定位点，后端/画面展示时再展开矩形。
   selectedZone.value.polygon_points = rectPointsFromCorners(rectFirstPoint.value, point)
   rectFirstPoint.value = null
   rectPreview.value = null
   drawing.value = false
 }
 
-// 由两个角点（任意顺序）生成顺时针 4 点多边形，供 polygon_points 存储
+// 由两个角点（任意顺序）生成左上角、右下角两个定位点。
 function rectPointsFromCorners(first, second) {
   const minX = Math.min(first.x, second.x)
   const maxX = Math.max(first.x, second.x)
   const minY = Math.min(first.y, second.y)
   const maxY = Math.max(first.y, second.y)
+  return [
+    { x: minX, y: minY },
+    { x: maxX, y: maxY },
+  ]
+}
+
+function rectanglePolygonPoints(points = []) {
+  if (points.length !== 2) return points
+  const minX = Math.min(points[0].x, points[1].x)
+  const maxX = Math.max(points[0].x, points[1].x)
+  const minY = Math.min(points[0].y, points[1].y)
+  const maxY = Math.max(points[0].y, points[1].y)
   return [
     { x: minX, y: minY },
     { x: maxX, y: minY },
@@ -555,12 +660,15 @@ function handleZoneClick(zoneId, event) {
 function createZone() {
   const zoneType = 'PERSON_LOW'
   const id = `${zoneType}_${Date.now()}`
+  const camera = cameras.value.find((item) => String(item.id) === String(currentCameraId.value))
   const zone = {
     id,
-    zone_name: `人员低风险区 ${zones.value.length + 1}`,
-    name: `人员低风险区 ${zones.value.length + 1}`,
+    zone_name: `禁闯入区 ${zones.value.length + 1}`,
+    name: `禁闯入区 ${zones.value.length + 1}`,
     zone_type: zoneType,
     type: zoneType,
+    camera_id: String(currentCameraId.value || ''),
+    camera_name: camera?.name || currentCameraName.value,
     polygon_points: [],
     enabled: true,
   }
@@ -568,10 +676,14 @@ function createZone() {
 }
 
 function startNewZone() {
-  if (!currentCameraId.value) {
+  const targetCameraId = zonePointFilter.value !== 'all'
+    ? zonePointFilter.value
+    : currentCameraId.value || cameras.value[0]?.id
+  if (!targetCameraId) {
     ElMessage.warning('请先选择摄像头')
     return
   }
+  currentCameraId.value = String(targetCameraId)
   draftZone.value = createZone()
   selectedZoneId.value = draftZone.value.id
   editorMode.value = 'create'
@@ -585,10 +697,11 @@ function startNewZone() {
 async function switchCreateCamera() {
   if (editorMode.value !== 'create' || !draftZone.value || draftZone.value.polygon_points.length) return
   const draftId = draftZone.value.id
-  zones.value = []
   selectedZoneId.value = ''
   streamUrl.value = ''
-  await loadZones()
+  const camera = cameras.value.find((item) => String(item.id) === String(currentCameraId.value))
+  draftZone.value.camera_id = String(currentCameraId.value)
+  draftZone.value.camera_name = camera?.name || currentCameraName.value
   selectedZoneId.value = draftId
   await refreshStream()
 }
@@ -613,6 +726,7 @@ function selectZone(zoneId) {
 function openZoneEditor(zoneId) {
   const source = zones.value.find((zone) => zone.id === zoneId)
   if (!source) return
+  currentCameraId.value = String(source.camera_id || currentCameraId.value)
   draftZone.value = cloneZone(source)
   selectedZoneId.value = draftZone.value.id
   editorMode.value = 'edit'
@@ -620,12 +734,14 @@ function openZoneEditor(zoneId) {
   drawDialogVisible.value = true
   rectFirstPoint.value = null
   rectPreview.value = null
-  if (!streamUrl.value) refreshStream()
+  streamUrl.value = ''
+  refreshStream()
 }
 
 function openZoneViewer(zoneId) {
   const source = zones.value.find((zone) => zone.id === zoneId)
   if (!source) return
+  currentCameraId.value = String(source.camera_id || currentCameraId.value)
   draftZone.value = cloneZone(source)
   selectedZoneId.value = draftZone.value.id
   editorMode.value = 'view'
@@ -633,7 +749,8 @@ function openZoneViewer(zoneId) {
   drawDialogVisible.value = true
   rectFirstPoint.value = null
   rectPreview.value = null
-  if (!streamUrl.value) refreshStream()
+  streamUrl.value = ''
+  refreshStream()
 }
 
 function handleDrawDialogClosed() {
@@ -646,6 +763,7 @@ function handleDrawDialogClosed() {
 }
 
 function showZoneAnchors(zone) {
+  if (editorMode.value === 'view') return false
   return zone.id === selectedZoneId.value || (drawing.value && zone.polygon_points.length > 0)
 }
 
@@ -678,6 +796,7 @@ async function deleteZone(zoneId) {
   } catch {
     return
   }
+  currentCameraId.value = String(target.camera_id || currentCameraId.value)
   const previousZones = cloneZones(zones.value)
   zones.value = zones.value.filter((zone) => zone.id !== zoneId)
   selectedZoneId.value = zones.value[0]?.id || ''
@@ -715,7 +834,13 @@ function applyTypeDefaults(zoneType) {
 }
 
 function zonePolygonPoints(zone) {
-  return zone.polygon_points.map((point) => `${point.x * overlayWidth.value},${point.y * overlayHeight.value}`).join(' ')
+  return rectanglePolygonPoints(zone.polygon_points)
+    .map((point) => `${point.x * overlayWidth.value},${point.y * overlayHeight.value}`)
+    .join(' ')
+}
+
+function pointLabel(index) {
+  return index === 0 ? '左上角' : '右下角'
 }
 
 function pointCoordinateX(point) {
@@ -739,7 +864,7 @@ function updatePointCoordinate(index, axis, value) {
 }
 
 function zoneLabelPoint(zone) {
-  const point = polygonCenterPoint(zone.polygon_points)
+  const point = polygonCenterPoint(rectanglePolygonPoints(zone.polygon_points))
   return {
     x: point.x * overlayWidth.value,
     y: point.y * overlayHeight.value,
@@ -816,10 +941,10 @@ async function persistZones(options = {}) {
   const { includeDraft = true, closeOnSuccess = false } = options
   if (!currentCameraId.value) return false
   const zonesToSave = buildZonesForSave(includeDraft)
-  const invalidZone = zonesToSave.find((zone) => zone.polygon_points.length < 3 || zone.polygon_points.length > 15)
+  const invalidZone = zonesToSave.find((zone) => zone.polygon_points.length < 2 || zone.polygon_points.length > 15)
   if (invalidZone) {
     selectedZoneId.value = invalidZone.id
-    ElMessage.warning('区域尚未完成画框：请点击两个点确定矩形，区域至少需要 3 个顶点')
+    ElMessage.warning('区域尚未完成画框：请点击左上角和右下角两个点确定矩形')
     return false
   }
   saving.value = true
@@ -831,9 +956,14 @@ async function persistZones(options = {}) {
       polygon_points: zone.polygon_points,
       enabled: zone.enabled,
     }))
+    const camera = cameras.value.find((item) => String(item.id) === String(currentCameraId.value))
     const response = await saveCameraZones(currentCameraId.value, payload)
-    zones.value = normalizeZones(response.data)
-    selectedZoneId.value = zones.value.find((zone) => zone.id === selectedZoneId.value)?.id || zones.value[0]?.id || ''
+    const savedZones = normalizeZoneList(response.data, camera)
+    zones.value = [
+      ...zones.value.filter((zone) => String(zone.camera_id) !== String(currentCameraId.value)),
+      ...savedZones,
+    ]
+    selectedZoneId.value = savedZones.find((zone) => zone.id === selectedZoneId.value)?.id || savedZones[0]?.id || ''
     if (includeDraft && draftZone.value) {
       draftZone.value = null
       editorMode.value = ''
@@ -851,13 +981,18 @@ async function persistZones(options = {}) {
 }
 
 function buildZonesForSave(includeDraft) {
-  if (!includeDraft || !draftZone.value) return cloneZones(zones.value)
-  const draft = normalizeDraftZone(draftZone.value)
+  const currentZones = zones.value.filter((zone) => String(zone.camera_id) === String(currentCameraId.value))
+  if (!includeDraft || !draftZone.value) return cloneZones(currentZones)
+  const draft = normalizeDraftZone({
+    ...draftZone.value,
+    camera_id: String(currentCameraId.value),
+    camera_name: currentCameraName.value,
+  })
   if (editorMode.value === 'edit') {
-    const replaced = zones.value.map((zone) => (zone.id === draft.id ? draft : zone))
+    const replaced = currentZones.map((zone) => (zone.id === draft.id ? draft : zone))
     return replaced.some((zone) => zone.id === draft.id) ? replaced : [...replaced, draft]
   }
-  return [...zones.value, draft]
+  return [...currentZones, draft]
 }
 
 function normalizeDraftZone(zone) {
@@ -900,6 +1035,7 @@ async function toggleZoneEnabled(zone, enabled) {
 
 onMounted(async () => {
   await loadCameras()
+  await loadAllZones()
   if (currentCameraId.value) await activateCamera()
 })
 </script>
@@ -930,7 +1066,7 @@ onMounted(async () => {
 .metric .dot { width: 8px; height: 8px; flex: 0 0 auto; align-self: center; border-radius: 50%; background: #8db2c8; }
 .metric .dot.total { box-shadow: 0 0 8px rgba(141, 178, 200, .75); }
 .metric .dot.online { background: #48e6bf; box-shadow: 0 0 8px rgba(72, 230, 191, .75); }
-.metric .dot.offline { background: #8494a3; }
+.metric .dot.offline { background: #ff5b68; box-shadow: 0 0 8px rgba(255, 91, 104, .72); }
 .metric-num { color: #f2fbff; font-size: 22px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
 .metric-label { color: #8db2c8; font-size: 12px; }
 
@@ -995,9 +1131,12 @@ onMounted(async () => {
 }
 .config-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 400px;
+  grid-template-columns: minmax(0, 1fr) 320px;
   gap: 14px;
   align-items: stretch;
+}
+.config-workspace.is-view-mode {
+  grid-template-columns: minmax(0, 1fr);
 }
 .video-editor,
 .zone-side-editor,
@@ -1012,10 +1151,11 @@ onMounted(async () => {
 }
 .editor-stage {
   position: relative;
-  min-height: 560px;
+  aspect-ratio: 16 / 9;
+  min-height: 0;
   overflow: hidden;
   border-radius: 8px 8px 0 0;
-  background: #020a11;
+  background: #0b1d30;
 }
 .video-stream,
 .zone-editor-overlay {
@@ -1024,8 +1164,13 @@ onMounted(async () => {
   width: 100%;
   height: 100%;
 }
-.video-stream { object-fit: cover; }
+.video-stream {
+  object-fit: contain;
+  object-position: center;
+  background: #0b1d30;
+}
 .zone-editor-overlay { z-index: 2; cursor: crosshair; }
+.zone-editor-overlay.is-view-overlay { cursor: default; }
 .zone-editor-overlay,
 .zone-name,
 .vertex-index {
@@ -1093,22 +1238,48 @@ onMounted(async () => {
   pointer-events: none;
 }
 .draw-tip {
-  position: absolute;
-  z-index: 4;
-  left: 14px;
-  bottom: 14px;
-  padding: 8px 11px;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  padding: 0;
   color: #d7edf6;
-  border: 1px solid rgba(245, 251, 255, 0.22);
-  border-radius: 7px;
-  background: rgba(4, 16, 25, 0.82);
+  font-size: 16px;
+  font-weight: 700;
   pointer-events: none;
 }
 .editor-toolbar {
+  min-height: 52px;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px;
+  padding: 8px 14px;
+  border-top: 1px solid rgba(104, 161, 200, 0.16);
+  background: #081b2d;
+}
+.view-zone-meta {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: #d8edf7;
+  font-size: 14px;
+  font-weight: 800;
+}
+.view-zone-meta span {
+  color: #51e6be;
+}
+.view-zone-meta i {
+  width: 4px;
+  height: 4px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #6f9bb0;
+}
+.view-zone-meta strong {
+  overflow: hidden;
+  color: #c6dce8;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .tool-button {
   min-height: 40px;
@@ -1126,7 +1297,7 @@ onMounted(async () => {
   border-color: rgba(255, 93, 108, 0.42);
   background: rgba(96, 24, 34, 0.56);
 }
-.toolbar-note { margin-left: auto; color: #69889a; font-size: 12px; }
+.toolbar-note { margin-left: auto; color: #8aa9bd; font-size: 16px; font-weight: 700; }
 .zone-list-section {
   margin-top: 16px;
   min-width: 0;
@@ -1141,6 +1312,72 @@ onMounted(async () => {
   border: 1px solid rgba(104, 161, 200, 0.18);
   border-radius: 8px;
   background: #0b1d30;
+}
+.zone-filter-toolbar {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 190px 160px 160px auto;
+  align-items: center;
+  gap: 12px;
+}
+.zone-filter-select {
+  width: 100%;
+}
+.zone-filter-select :deep(.el-select__wrapper) {
+  min-height: 44px;
+  border: 1px solid rgba(60, 150, 214, .46);
+  border-radius: 6px;
+  background: rgba(6, 25, 42, .82);
+  box-shadow: inset 0 0 0 1px rgba(8, 27, 45, .3) !important;
+}
+.zone-filter-select :deep(.el-select__wrapper:hover),
+.zone-filter-select :deep(.el-select__wrapper.is-focused),
+.zone-filter-select :deep(.el-select__wrapper.is-focus) {
+  border-color: rgba(87, 190, 255, .82);
+  box-shadow: inset 0 0 0 1px rgba(87, 190, 255, .42), 0 0 0 2px rgba(72, 216, 255, .08) !important;
+}
+.zone-filter-select :deep(.el-select__selected-item),
+.zone-filter-select :deep(.el-select__placeholder) {
+  color: #d9edf8;
+  font-size: 14px;
+  font-weight: 700;
+}
+.zone-filter-select :deep(.el-select__caret) {
+  color: #8ddcf0;
+}
+.new-point-action {
+  min-width: 150px;
+  justify-self: end;
+  margin-left: auto;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 18px;
+  border: 1px solid rgba(72, 216, 255, .58);
+  border-radius: 6px;
+  color: #e8faff;
+  background: linear-gradient(135deg, rgba(23, 116, 155, .88), rgba(10, 59, 88, .86));
+  font-size: 17px;
+  font-weight: 800;
+  box-shadow: inset 0 1px 0 rgba(213, 247, 255, .1), 0 0 18px rgba(72, 216, 255, .16);
+}
+.new-point-action:hover,
+.new-point-action:focus-visible {
+  border-color: rgba(126, 238, 255, .82);
+  color: #fff;
+  background: linear-gradient(135deg, rgba(30, 136, 181, .96), rgba(12, 72, 108, .92));
+}
+.new-point-action .el-icon {
+  width: 27px;
+  height: 27px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 5px;
+  color: #031825;
+  background: #48d8ff;
+  font-size: 18px;
 }
 .list-heading {
   display: flex;
@@ -1223,13 +1460,18 @@ onMounted(async () => {
 }
 .row-actions {
   display: flex;
+  flex-direction: row !important;
   align-items: center;
   justify-content: center;
+  flex-wrap: nowrap;
   gap: 10px;
+  white-space: nowrap;
 }
 .row-view,
 .row-edit,
 .row-delete {
+  flex: 0 0 auto;
+  white-space: nowrap;
   min-width: auto;
   height: 32px;
   padding: 0 12px;
@@ -1241,9 +1483,9 @@ onMounted(async () => {
   cursor: pointer;
 }
 .row-view {
-  border-color: rgba(72, 216, 255, 0.5);
-  color: #c7f0ff;
-  background: rgba(20, 102, 137, 0.62);
+  border-color: rgba(82, 178, 143, 0.46);
+  color: #b9f1d8;
+  background: rgba(30, 103, 78, 0.38);
 }
 .row-edit {
   border-color: rgba(66, 164, 224, 0.5);
@@ -1259,8 +1501,9 @@ onMounted(async () => {
   color: #c7f0ff;
 }
 .row-view:hover {
-  color: #ffffff;
-  border-color: rgba(126, 238, 255, 0.82);
+  color: #e3fff1;
+  border-color: rgba(82, 178, 143, 0.70);
+  background: rgba(36, 123, 92, 0.52);
 }
 .row-delete:hover {
   color: #ffd5d9;
@@ -1341,6 +1584,19 @@ onMounted(async () => {
 }
 .zone-form :deep(.el-form-item__label) { color: #8fb0c2; font-size: 12px; }
 .zone-form .zone-config-select { width: 100%; }
+.zone-config-input :deep(.el-input__wrapper) {
+  min-height: 44px;
+  border-radius: 6px;
+  background: rgba(6, 25, 42, 0.82);
+  box-shadow: inset 0 0 0 1px rgba(60, 150, 214, 0.46) !important;
+}
+.zone-config-input :deep(.el-input__wrapper:hover),
+.zone-config-input :deep(.el-input__wrapper.is-focus),
+.zone-config-input :deep(.el-input__wrapper.is-focused) {
+  box-shadow: inset 0 0 0 1px rgba(87, 190, 255, 0.82), 0 0 0 2px rgba(72, 216, 255, 0.08) !important;
+}
+.zone-config-input :deep(.el-input__inner) { color: #e6f7ff; font-weight: 700; }
+.zone-config-input :deep(.el-input__inner::placeholder) { color: #8fb0c2; font-weight: 500; }
 .ros-panel {
   margin-top: 4px;
   padding: 12px;
@@ -1519,6 +1775,16 @@ onMounted(async () => {
   background: #061a28;
   box-shadow: 0 26px 70px rgba(0, 7, 18, 0.62);
 }
+:global(.zone-draw-dialog.el-dialog) {
+  width: min(1320px, calc(100vw - 48px)) !important;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 48px);
+  margin: 24px auto !important;
+  overflow: hidden;
+}
+:global(.zone-draw-dialog.is-view-mode.el-dialog) {
+  width: min(1240px, calc(100vw - 48px)) !important;
+}
 :global(.zone-draw-dialog .el-dialog__header) {
   margin: 0;
   padding: 18px 20px 12px;
@@ -1544,8 +1810,19 @@ onMounted(async () => {
   .header-actions { align-items: stretch; flex-direction: column; }
   .camera-select { width: 100%; }
   .config-workspace { grid-template-columns: 1fr; }
+  .zone-filter-toolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .new-point-action {
+    width: 100%;
+  }
   .list-heading,
   .header-actions { align-items: stretch; flex-direction: column; }
   .list-heading { align-items: stretch; }
+}
+@media (max-width: 620px) {
+  .zone-filter-toolbar {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

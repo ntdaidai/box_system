@@ -85,10 +85,10 @@ export function normalizeZoneType(type) {
 
 export function zoneTypeLabel(type) {
   return ({
-    PERSON_LOW: '低风险区',
-    PERSON_MEDIUM: '中风险区',
-    PERSON_HIGH: '高风险区',
-    FISHING: '捕鱼区',
+    PERSON_LOW: '禁闯入区',
+    PERSON_MEDIUM: '禁亲水区',
+    PERSON_HIGH: '禁涉水区',
+    FISHING: '禁捕区',
   })[normalizeZoneType(type)] || '检测区域'
 }
 
@@ -105,7 +105,7 @@ export function defaultTriggerSeconds(type) {
 }
 
 export function polygonBounds(points) {
-  if (!Array.isArray(points) || points.length < 3) return null
+  if (!Array.isArray(points) || points.length < 2) return null
   const xs = points.map((point) => point.x)
   const ys = points.map((point) => point.y)
   const x = Math.min(...xs)
@@ -122,7 +122,7 @@ export function normalizeZones(payload) {
       .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
     const bounds = polygonBounds(polygonPoints)
     const zoneId = zone?.id === undefined || zone?.id === null ? '' : String(zone.id)
-    if (!zoneId || !bounds || polygonPoints.length > 15 || ![...personZoneTypes(), 'FISHING'].includes(zoneType)) return null
+    if (!zoneId || !bounds || polygonPoints.length < 2 || polygonPoints.length > 15 || ![...personZoneTypes(), 'FISHING'].includes(zoneType)) return null
     const zoneName = zone?.zone_name || zone?.name || zoneTypeLabel(zoneType)
     return {
       ...zone,

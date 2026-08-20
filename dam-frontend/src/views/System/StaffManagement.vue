@@ -30,9 +30,31 @@
           <h3>人员列表</h3>
         </div>
         <div class="tab-actions panel-toolbar">
-          <el-button type="primary" :icon="Plus" @click="openStaffDialog()">新增人员</el-button>
-          <el-select v-model="filters.group" class="group-filter-select" placeholder="所属组别" clearable @change="applyFilters">
+          <button type="button" class="toolbar-template-entry add-staff-action" @click="openStaffDialog()">
+            <el-icon><User /></el-icon>
+            <span>新增人员</span>
+          </button>
+          <el-select
+            v-model="filters.group"
+            class="group-filter-select"
+            popper-class="staff-filter-popper"
+            placeholder="所属组别"
+            clearable
+            @change="applyFilters"
+          >
             <el-option v-for="item in allGroups" :key="item" :label="item" :value="item" />
+          </el-select>
+          <el-select
+            v-model="filters.status"
+            class="enabled-filter-select"
+            popper-class="staff-filter-popper"
+            placeholder="启用状态"
+            clearable
+            @change="applyFilters"
+          >
+            <el-option label="全部状态" value="all" />
+            <el-option label="已启用" value="ACTIVE" />
+            <el-option label="未启用" value="INACTIVE" />
           </el-select>
         </div>
       </header>
@@ -183,7 +205,7 @@
 <script setup>
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Minus, Plus } from '@element-plus/icons-vue'
+import { Minus, Plus, User } from '@element-plus/icons-vue'
 import {
   createStaff,
   deleteStaff,
@@ -224,7 +246,7 @@ const serverGroups = ref([])
 const filters = reactive({
   keyword: '',
   group: '',
-  online: '',
+  status: 'all',
 })
 
 const staffRows = computed(() => rows.value)
@@ -242,7 +264,7 @@ async function loadStaff() {
       page_size: pageSize,
       keyword: filters.keyword || undefined,
       group: filters.group || undefined,
-      online: filters.online || undefined,
+      status: filters.status || 'all',
     })
     rows.value = data.data?.items || data.items || []
     total.value = Number(data.data?.total ?? data.total ?? 0)
@@ -262,8 +284,7 @@ async function createGroup() {
     const { value } = await ElMessageBox.prompt('请输入组别名称', '新增组别', {
       confirmButtonText: '添加',
       cancelButtonText: '取消',
-      inputPattern: /\\S+/,
-      inputErrorMessage: '组别名称不能为空',
+      inputValidator: (value) => value?.trim() ? true : '组别名称不能为空',
     })
     const groupName = value.trim()
     if (allGroups.value.includes(groupName)) {
@@ -527,7 +548,7 @@ function closeQrDialog() {
 }
 
 .metric .dot.online { background: #48e6bf; box-shadow: 0 0 8px rgba(72, 230, 191, .75); }
-.metric .dot.offline { background: #8494a3; box-shadow: none; }
+.metric .dot.offline { background: #ff5b68; box-shadow: 0 0 8px rgba(255, 91, 104, .72); }
 
 .metric-num {
   color: #f2fbff;
@@ -625,8 +646,44 @@ function closeQrDialog() {
   background: #1b6a9c;
 }
 
+:global(.staff-page .add-staff-action) {
+  height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 18px 0 12px;
+  border: 1px solid rgba(72, 216, 255, .58);
+  border-radius: 6px;
+  color: #e8faff;
+  background: linear-gradient(135deg, rgba(23, 116, 155, .78), rgba(10, 59, 88, .78));
+  font: inherit;
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(213, 247, 255, .10), 0 0 16px rgba(72, 216, 255, .14);
+  transition: border-color .18s ease, background .18s ease, color .18s ease;
+}
+
+:global(.staff-page .add-staff-action .el-icon) {
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 5px;
+  color: #031825;
+  background: #48d8ff;
+  font-size: 18px;
+}
+
+:global(.staff-page .add-staff-action:hover) {
+  border-color: rgba(126, 238, 255, .82);
+  color: #ffffff;
+  background: linear-gradient(135deg, rgba(30, 136, 181, .9), rgba(12, 72, 108, .9));
+}
+
 .group-filter-select {
-  width: 180px;
+  width: 150px;
 }
 
 .group-filter-select :deep(.el-select__wrapper) {
@@ -640,6 +697,45 @@ function closeQrDialog() {
 .group-filter-select :deep(.el-select__placeholder) {
   color: #d7edf6;
   font-weight: 700;
+}
+
+.enabled-filter-select {
+  width: 116px;
+}
+
+.enabled-filter-select :deep(.el-select__wrapper) {
+  min-height: 34px;
+  border-radius: 6px;
+  background: #0d2740;
+  box-shadow: 0 0 0 1px rgba(84, 148, 193, .36) inset;
+}
+
+.enabled-filter-select :deep(.el-select__selected-item),
+.enabled-filter-select :deep(.el-select__placeholder) {
+  color: #d7edf6;
+  font-weight: 700;
+}
+
+:global(.staff-filter-popper.el-select__popper) {
+  border: 1px solid rgba(72, 216, 255, .28);
+  background: #082033;
+  box-shadow: 0 16px 36px rgba(0, 7, 18, .38);
+}
+
+:global(.staff-filter-popper .el-select-dropdown__item) {
+  color: #aecdde;
+}
+
+:global(.staff-filter-popper .el-select-dropdown__item.is-hovering),
+:global(.staff-filter-popper .el-select-dropdown__item:hover) {
+  color: #e9fbff;
+  background: rgba(72, 216, 255, .12);
+}
+
+:global(.staff-filter-popper .el-select-dropdown__item.is-selected),
+:global(.staff-filter-popper .el-select-dropdown__item.selected) {
+  color: #50e1d0;
+  font-weight: 800;
 }
 
 .staff-list-card {

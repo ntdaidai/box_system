@@ -1,0 +1,13 @@
+[Unit]
+Description=Jetson Camera Web Console socat 12345 -> 192.168.1.64:80
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/socat TCP-LISTEN:12345,fork,reuseaddr,bind=0.0.0.0 TCP:192.168.1.64:80
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

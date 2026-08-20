@@ -16,6 +16,7 @@ from app.models.event_library import EventLibrary
 from app.models.event_condition import EventCondition
 from app.models.event_action import EventActionConfig
 from app.models.data_source import DataSource
+from app.models.broadcast import BroadcastDevice
 from app.models.model_library import ModelLibrary
 from app.models.camera import Camera
 from app.models.safety_integration import (
@@ -843,10 +844,10 @@ class ECAEngine:
                 event_id, sensor_data, db, event, event_instance=instance
             )
 
-            flow_actions = (action_result.get("actions") or {}) if isinstance(action_result, dict) else {}
+            flow_actions = action_result if isinstance(action_result, dict) else {}
             flow_resource = flow_actions.get("resource_info") or {}
             flow_steps = flow_actions.get("steps") or []
-            flow_step_count = int(flow_resource.get("executed_steps_count") or 0)
+            flow_step_count = int(flow_resource.get("executed_steps_count") or len(flow_steps))
             flow_skipped = int(flow_resource.get("skipped_steps_count") or 0)
             flow_plan = int(flow_resource.get("original_steps_count") or 0)
             flow_failed = sum(1 for s in flow_steps if not bool(s.get("success")))
@@ -856,9 +857,9 @@ class ECAEngine:
                 action_key=f"eca-flow-result:{instance.instance_no}",
                 log_type="ACTION",
                 trigger_type="AUTO",
-                status="SUCCESS",
+                status="SUCCESS" if flow_failed == 0 else "FAILED",
                 message=(
-                    f"事件联动动作执行完成：共执行 {flow_step_count} 个动作步骤"
+                    f"事件联动动作{'执行失败' if flow_failed else '执行完成'}：共执行 {flow_step_count} 个动作步骤"
                     f"（计划 {flow_plan} 个、跳过 {flow_skipped} 个）"
                     + (f"，失败 {flow_failed} 个" if flow_failed else "")
                 ),
@@ -1231,7 +1232,7 @@ class ECAEngine:
         visual = sensor_data.get("visual") if isinstance(sensor_data.get("visual"), dict) else {}
         screening = visual.get("screening") if isinstance(visual.get("screening"), dict) else sensor_data
         event_name = getattr(event, "event_name", None) or instance.summary or "安全事件"
-        risk = str(instance.max_risk_level or instance.risk_level or screening.get("risk_level") or "LOW").upper()
+        risk = str(instance.max_risk_level or instance.risk_level or "LOW").upper()
         risk_label = {"HIGH": "高风险", "MEDIUM": "中风险", "LOW": "低风险"}.get(risk, "待确认")
         summary = (
             screening.get("summary")
@@ -1466,6 +1467,35 @@ class ECAEngine:
                 },
             )
 
+    def _get_action_device_name(self, step: EventActionConfig, db: Session) -> Optional[str]:
+        """Resolve the configured linkage device name for the timeline log."""
+        if step.broadcast_device_id:
+            device = db.query(BroadcastDevice).filter(
+                BroadcastDevice.id == step.broadcast_device_id,
+            ).first()
+            if device and device.name:
+                return device.name
+
+        config = step.config_json if isinstance(step.config_json, dict) else {}
+        if not config and step.parameter:
+            try:
+                parsed = json.loads(step.parameter)
+                config = parsed if isinstance(parsed, dict) else {}
+            except (TypeError, json.JSONDecodeError):
+                config = {}
+
+        for key in (
+            "device_name",
+            "broadcast_device_name",
+            "drone_name",
+            "robot_name",
+            "machine_dog_name",
+        ):
+            value = config.get(key)
+            if value:
+                return str(value)
+        return None
+
     async def execute_configured_actions(
         self,
         event_id: int,
@@ -1517,6 +1547,7 @@ class ECAEngine:
 
         results = []
         for step in steps:
+            action_device_name = self._get_action_device_name(step, db)
             try:
                 # 执行步骤
                 step_result = await self.execute_step(
@@ -1532,6 +1563,7 @@ class ECAEngine:
                     "step_id": step.id,
                     "step_name": step.step_name,
                     "action_type": step.action_type,
+                    "device_name": action_device_name,
                     "success": True,
                     "result": step_result
                 })
@@ -1553,6 +1585,7 @@ class ECAEngine:
                             "action_type": step.action_type,
                             "action_label": action_label(step.action_type),
                             "step_name": step.step_name,
+                            "device_name": action_device_name,
                             "result": step_result,
                         },
                     )
@@ -1563,6 +1596,7 @@ class ECAEngine:
                     "step_id": step.id,
                     "step_name": step.step_name,
                     "action_type": step.action_type,
+                    "device_name": action_device_name,
                     "success": False,
                     "error": str(e)
                 })
@@ -1581,6 +1615,7 @@ class ECAEngine:
                             "action_type": step.action_type,
                             "action_label": action_label(step.action_type),
                             "step_name": step.step_name,
+                            "device_name": action_device_name,
                             "error": str(e),
                         },
                     )
@@ -1591,13 +1626,13 @@ class ECAEngine:
                     break
 
         return {
-            "success": True,
+            "success": not any(not bool(result.get("success")) for result in results),
             "steps": results,
             "resource_info": {
                 "gpu_status": gpu_status,
                 "original_steps_count": original_count,
-                "executed_steps_count": len(steps),
-                "skipped_steps_count": original_count - len(steps),
+                "executed_steps_count": len(results),
+                "skipped_steps_count": original_count - len(results),
             }
         }
 
@@ -1648,6 +1683,8 @@ class ECAEngine:
             return await self.execute_broadcast_step(step, sensor_data, db)
         elif action_type == "staff_task":
             return await self.execute_staff_task_step(step, sensor_data, db)
+        elif action_type == "machine_dog_dispatch":
+            return await self.execute_machine_dog_step(step, sensor_data, db)
         else:
             raise ValueError(f"未知的动作类型: {step.action_type}")
 
@@ -1725,6 +1762,22 @@ class ECAEngine:
             "message": "人工处置任务已生成",
             "task_id": task.id,
             "task_status": task.task_status,
+            "action_type": step.action_type,
+        }
+
+    async def execute_machine_dog_step(
+        self,
+        step: EventActionConfig,
+        sensor_data: Dict[str, Any],
+        db: Session,
+    ) -> Dict[str, Any]:
+        """Register a machine-dog inspection task for the configured route."""
+        config = step.config_json if isinstance(step.config_json, dict) else {}
+        return {
+            "status": "registered",
+            "message": "机器狗巡检任务已登记，等待设备执行",
+            "machine_dog_id": config.get("machine_dog_id"),
+            "route_id": step.route_id,
             "action_type": step.action_type,
         }
 
@@ -2193,7 +2246,6 @@ class ECAEngine:
             screening = details.get("screening") or {}
             if screening:
                 camera_data["qwen_summary"] = screening.get("summary")
-                camera_data["qwen_risk_level"] = screening.get("risk_level")
                 camera_data["input_source"] = screening.get("input_source")
                 camera_data["window_seconds"] = screening.get("window_seconds")
                 supplemental_context = screening.get("supplemental_context")
@@ -2203,6 +2255,7 @@ class ECAEngine:
                     "zone_id",
                     "zone_name",
                     "zone_type",
+                    "screening_mode",
                     "detection_region",
                     "detection_region_coordinate_system",
                 ):
@@ -2318,9 +2371,6 @@ class ECAEngine:
             observation["suspected"] = True
             observation["suspected_label"] = "疑似人员/船只待复核"
             observation["screening_note"] = "4B 初筛低置信命中，已进入 4B/35B 复核确认"
-        if self._special_context_requires_high_risk(observation):
-            risk = "HIGH"
-            observation["special_context_risk_hint"] = "特殊工况叠加人员/滩涂活动线索，按高风险进入工作流复核"
         camera = db.query(Camera).filter(Camera.id == source.device_id).first() if source.device_id else None
         observation["visual"] = {
             **dict(observation.get("visual") or {}),
@@ -2403,26 +2453,6 @@ class ECAEngine:
 
         self._dispatch_async_event_actions(event.id, instance.id, observation)
         return instance
-
-    @staticmethod
-    def _special_context_requires_high_risk(observation: Dict[str, Any]) -> bool:
-        context = observation.get("supplemental_context")
-        if not isinstance(context, dict) or not bool(context.get("active", True)):
-            return False
-        context_text = " ".join(
-            str(context.get(key) or "")
-            for key in ("context_type", "label", "affected_area", "note", "severity_hint")
-        )
-        dangerous = any(
-            keyword in context_text
-            for keyword in ("DAM_DISCHARGE", "GATE_OPEN", "DOWNSTREAM_RESTRICTED", "泄洪", "开闸", "闸门开启", "下游禁入", "水位上涨")
-        )
-        person_signal = (
-            int(observation.get("person_present") or 0) == 1
-            or int(observation.get("possible_person") or 0) == 1
-            or any(keyword in str(observation.get("qwen_summary") or "") for keyword in ("人员", "滩涂", "亲水", "涉水"))
-        )
-        return dangerous and person_signal
 
     @staticmethod
     def _strip_transient_screening_frames(data: Dict[str, Any]) -> Dict[str, Any]:

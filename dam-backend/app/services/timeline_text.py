@@ -75,6 +75,7 @@ def action_label(action_type) -> str:
         "llm": "大模型分析",
         "broadcast": "自动广播",
         "drone_dispatch": "无人机派飞取证驱离",
+        "machine_dog_dispatch": "机器狗巡检",
         "staff_task": "生成人工处置任务",
         "camera_snapshot": "摄像头抓拍",
         # 广播服务

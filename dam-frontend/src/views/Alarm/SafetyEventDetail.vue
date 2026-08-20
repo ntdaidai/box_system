@@ -2,32 +2,38 @@
   <div class="event-workbench" v-loading="loading">
     <template v-if="event">
       <section class="major-flow" :class="{ 'is-resolved': isResolved }">
-        <button type="button" class="flow-back-button" @click="goBack">
-          <el-icon><ArrowLeft /></el-icon>
-          <span>返回列表</span>
-        </button>
-        <ol class="flow-rail">
-          <li
-            v-for="(step, index) in mainFlowSteps"
-            :key="step.key"
-            :class="[step.state, { current: step.current }]"
-            :title="step.detail"
-          >
-            <div class="flow-node">
-              <el-icon><component :is="step.icon" /></el-icon>
-            </div>
-            <div class="flow-text">
-              <strong>{{ step.title }}</strong>
-              <span>{{ step.statusText }}</span>
-              <time>{{ step.time }}</time>
-            </div>
-            <svg v-if="index < mainFlowSteps.length - 1" class="flow-connector" viewBox="0 0 220 28" aria-hidden="true">
-              <path class="connector-base" d="M4 14 H216" />
-              <path v-if="step.state === 'done' || step.state === 'running'" class="connector-fill" d="M4 14 H216" />
-              <path d="M216 14 L204 7 M216 14 L204 21" />
-            </svg>
-          </li>
-        </ol>
+        <header class="flow-header">
+          <button type="button" class="flow-back-button" @click="goBack">
+            <el-icon><ArrowLeft /></el-icon>
+            <span>返回列表</span>
+          </button>
+          <span class="flow-header-divider" aria-hidden="true"></span>
+          <h2 class="flow-heading">事件处理流程</h2>
+        </header>
+        <div class="flow-main">
+          <ol class="flow-rail">
+            <li
+              v-for="(step, index) in mainFlowSteps"
+              :key="step.key"
+              :class="[step.state, { current: step.current }]"
+              :title="step.detail"
+            >
+              <div class="flow-node">
+                <el-icon><component :is="step.icon" /></el-icon>
+              </div>
+              <div class="flow-text">
+                <strong>{{ step.title }}</strong>
+                <span>{{ step.statusText }}</span>
+                <time>{{ step.time }}</time>
+              </div>
+              <svg v-if="index < mainFlowSteps.length - 1" class="flow-connector" viewBox="0 0 220 28" aria-hidden="true">
+                <path class="connector-base" d="M4 14 H216" />
+                <path v-if="step.state === 'done' || step.state === 'running'" class="connector-fill" d="M4 14 H216" />
+                <path class="connector-arrow" d="M216 14 L208 9 M216 14 L208 19" />
+              </svg>
+            </li>
+          </ol>
+        </div>
       </section>
 
       <section class="workspace-grid" :class="{ 'no-linkage': !showRightRail }">
@@ -145,9 +151,22 @@
                           :marker-end="`url(#dag-arrow-${entry.item.id})`"
                         />
                         <g v-for="node in entry.dag.nodes" :key="node.id" class="workflow-dag-node" :class="node.tone">
-                          <title>{{ node.fullLabel }}</title>
+                          <title>{{ node.fullLabel }}{{ node.modelFullLabel }}</title>
                           <rect :x="node.x" :y="node.y" :width="node.width" :height="node.height" rx="6" />
-                          <text :x="node.x + node.width / 2" :y="node.y + 22" text-anchor="middle">{{ node.label }}</text>
+                          <text
+                            :x="node.x + node.width / 2"
+                            :y="node.y + (node.modelLabel ? 19 : node.height / 2)"
+                            text-anchor="middle"
+                            dominant-baseline="middle"
+                          >{{ node.label }}</text>
+                          <text
+                            v-if="node.modelLabel"
+                            class="workflow-dag-model"
+                            :x="node.x + node.width / 2"
+                            :y="node.y + 39"
+                            text-anchor="middle"
+                            dominant-baseline="middle"
+                          >{{ node.modelLabel }}</text>
                         </g>
                       </svg>
                     </div>
@@ -184,7 +203,11 @@
             </header>
 
             <div class="linkage-list">
-              <article v-for="module in actionModules" :key="module.key" :class="[module.state, `linkage-${module.key}`]">
+              <article
+                v-for="module in actionModules"
+                :key="module.key"
+                :class="[module.state, `linkage-${module.key}`, `linkage-meta-${module.meta.length}`]"
+              >
                 <div class="linkage-body">
                   <header>
                     <strong>{{ module.title }}</strong>
@@ -1038,7 +1061,7 @@ function logTitle(item) {
     }
     if (status === 'RUNNING') return '联动动作执行中'
     if (status === 'FAILED') return '联动动作执行异常'
-    return '联动动作已完成'
+    return '所有联动动作已完成'
   }
   if (type === 'MANUAL') return status === 'FAILED' ? '人工处置异常' : '人工处置已记录'
   if (type === 'RESOLVE') return '事件已完成闭环'
@@ -1110,7 +1133,7 @@ function workflowStatusTitle(label, status) {
 
 function workflowSizeText(payload) {
   if (payload?.node_count == null) return ''
-  return `${payload.node_count}个节点、${payload.edge_count ?? 0}条连接`
+  return `${payload.node_count}个节点、${payload.edge_count ?? 0}条边`
 }
 
 function isWorkflowPlanning(item) {
@@ -1166,6 +1189,30 @@ function actionTaskLabel(payload) {
     || payload?.action_label
     || (payload?.action_type ? actionTypeLabel(payload.action_type) : ''),
   )
+}
+
+function actionDeviceNames(payload) {
+  const names = []
+  const add = (value) => {
+    if (value === undefined || value === null || String(value).trim() === '') return
+    const name = localizeText(value).trim()
+    if (name && !names.includes(name)) names.push(name)
+  }
+  const addList = (items) => {
+    if (!Array.isArray(items)) return
+    items.forEach((item) => {
+      if (typeof item === 'string') add(item)
+      else add(item?.device_name || item?.name || item?.device_id)
+    })
+  }
+
+  add(payload?.device_name || payload?.broadcast_device_name)
+  addList(payload?.device_names)
+  addList(payload?.devices)
+  addList(payload?.actions?.steps)
+  add(payload?.result?.device_name)
+  addList(payload?.result?.devices)
+  return names.join('、')
 }
 
 // 模型库工作流执行状态 -> 中文
@@ -1225,12 +1272,28 @@ function logDetailFields(item) {
     }
   } else if (type === 'ACTION') {
     const devices = actionDeviceNames(p)
-    if (devices) push('联动设备', devices)
+    // 汇总动作只展示总体结果，具体任务节点才展示对应设备。
+    if (devices && actionTaskLabel(p)) push('联动设备', devices)
     if (p.total_count != null) {
       const failedText = p.failed_devices?.length ? `，失败：${p.failed_devices.join('、')}` : ''
       push('广播结果', `${p.success_count ?? 0}/${p.total_count} 台成功${failedText}`)
     }
-    if (p.step_count != null) push('执行统计', `执行 ${p.step_count} / 跳过 ${p.skipped_count ?? 0} / 失败 ${p.failure_count ?? 0}`)
+    const nestedAction = p.actions && typeof p.actions === 'object' ? p.actions : p
+    const nestedSteps = Array.isArray(nestedAction.steps) ? nestedAction.steps : []
+    const resourceInfo = nestedAction.resource_info && typeof nestedAction.resource_info === 'object'
+      ? nestedAction.resource_info
+      : {}
+    const nestedFailed = nestedSteps.filter((step) => step && step.success === false).length
+    const stepCount = nestedSteps.length
+      ? (resourceInfo.executed_steps_count ?? nestedSteps.length)
+      : p.step_count
+    const skippedCount = nestedSteps.length || Object.keys(resourceInfo).length
+      ? (resourceInfo.skipped_steps_count ?? p.skipped_count ?? 0)
+      : p.skipped_count
+    const failureCount = nestedSteps.length
+      ? Math.max(nestedFailed, resourceInfo.failure_count ?? 0)
+      : p.failure_count
+    if (stepCount != null) push('执行统计', `成功 ${stepCount} / 跳过 ${skippedCount ?? 0} / 失败 ${failureCount ?? 0}`)
     if (p.channels?.length) push('通知渠道', p.channels.join('、'))
     push('失败原因', p.error)
   } else if (type === 'SUPPLEMENTAL_CONTEXT') {
@@ -1263,15 +1326,6 @@ function logDetailFields(item) {
     push('备注', p.remark)
   }
   return fields
-}
-
-function reportSourceLabel(payload) {
-  const source = String(payload?.llm_source || '').toLowerCase()
-  const label = String(payload?.llm_source_label || '').toLowerCase()
-  if (source.includes('qwen35') || source.includes('cloud') || label.includes('云端')) return '云端增强分析'
-  if (source.includes('qwen4b') || source.includes('local') || label.includes('本地')) return '本地场景理解'
-  if (payload?.fallback_used === true) return '备用分析路径'
-  return '智能分析'
 }
 
 function workflowDag(item) {
@@ -1343,7 +1397,7 @@ function workflowDag(item) {
   }
 
   const nodeWidth = 124
-  const nodeHeight = 36
+  const nodeHeight = 54
   const levelGap = 28
   const rowGap = 14
   const sidePadding = 16
@@ -1358,6 +1412,8 @@ function workflowDag(item) {
     const y = topPadding + rowIndex * (nodeHeight + rowGap)
     const fullLabel = dagNodeLabel(raw, id, nodeIds.indexOf(id) + 1)
     const label = fullLabel.length > 10 ? `${fullLabel.slice(0, 9)}…` : fullLabel
+    const modelLabel = dagModelLabel(raw, id)
+    const modelFullLabel = dagModelFullLabel(raw, id)
     const node = {
       id,
       x,
@@ -1366,6 +1422,8 @@ function workflowDag(item) {
       height: nodeHeight,
       label,
       fullLabel,
+      modelLabel,
+      modelFullLabel,
       tone: dagNodeTone(raw.node_class || raw.node_type),
     }
     positions.set(id, node)
@@ -1400,10 +1458,10 @@ function dagNodeTone(value) {
 
 function dagNodeLabel(node, nodeId, index) {
   const fixedLabels = {
-    action_reasoning: '端侧场景理解',
-    action_report: '云端结果复合',
-    local_llm_0: '端侧场景理解',
-    cloud_llm_0: '云端结果复合',
+    action_reasoning: '边端场景理解',
+    action_report: '云端结果复核',
+    local_llm_0: '边端场景理解',
+    cloud_llm_0: '云端结果复核',
   }
   if (fixedLabels[nodeId]) return fixedLabels[nodeId]
 
@@ -1424,6 +1482,28 @@ function dagNodeLabel(node, nodeId, index) {
   ]
   const matched = aliases.find(([pattern]) => pattern.test(text))
   return matched ? matched[1] : `处置步骤${index}`
+}
+
+function dagModelFullLabel(node, nodeId) {
+  const rawModel = String(node?.model_name || node?.model_label || node?.model_family || '').trim()
+  if (rawModel) {
+    return `（${localizeText(rawModel)}）`
+  }
+
+  const category = String(node?.model_category || '').toLowerCase()
+  if (category === 'local_llm' || /reasoning|understanding|risk/.test(String(node?.model_task || '').toLowerCase())) {
+    return '（端侧模型）'
+  }
+  if (category === 'cloud_llm' || /report|final|review/.test(String(node?.model_task || '').toLowerCase())) {
+    return '（云端模型）'
+  }
+  if (String(nodeId).includes('classify') || String(nodeId).includes('detect')) return '（专用模型）'
+  return ''
+}
+
+function dagModelLabel(node, nodeId) {
+  const fullLabel = dagModelFullLabel(node, nodeId)
+  return fullLabel.length > 12 ? `${fullLabel.slice(0, 11)}…）` : fullLabel
 }
 
 function targetLabel(value) {
@@ -1622,16 +1702,20 @@ loadDetail()
   min-height: 132px;
   padding: 20px 26px 22px;
   overflow: hidden;
+  border: 1px solid rgba(51, 151, 204, .12);
   border-radius: 8px;
-  display: grid;
-  grid-template-columns: 132px minmax(0, 1fr);
-  gap: 24px;
-  align-items: center;
+  display: block;
   background:
-    linear-gradient(180deg, rgba(12, 35, 55, .86), rgba(7, 22, 36, .96)),
+    linear-gradient(180deg, rgba(7, 28, 47, .82), rgba(4, 19, 34, .96)),
     rgba(8, 23, 39, .96);
   backdrop-filter: blur(12px);
   box-shadow: inset 0 1px 0 rgba(143, 200, 242, .08), 0 18px 38px rgba(0, 0, 0, .28);
+}
+.flow-header {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
 }
 .flow-back-button {
   position: relative;
@@ -1642,23 +1726,43 @@ loadDetail()
   align-items: center;
   gap: 6px;
   padding: 0 15px 0 13px;
-  border: 1px solid rgba(104, 161, 200, .2);
+  border: 1px solid rgba(104, 161, 200, .26);
   border-radius: 999px;
-  color: #9fc0d5;
+  color: #b4d0df;
+  font-size: 14px;
   background: rgba(4, 16, 27, .34);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .03);
   cursor: pointer;
 }
 .flow-back-button:hover {
   color: #eff9ff;
   border-color: rgba(105, 216, 255, .42);
   background: rgba(10, 38, 60, .72);
+  box-shadow: 0 0 18px rgba(72, 216, 255, .08), inset 0 1px 0 rgba(255, 255, 255, .05);
 }
 .flow-back-button .el-icon {
   font-size: 15px;
 }
+.flow-header-divider {
+  width: 1px;
+  height: 30px;
+  flex: 0 0 1px;
+  background: rgba(142, 190, 215, .42);
+}
+.flow-main {
+  min-width: 0;
+}
+.flow-heading {
+  margin: 0;
+  color: #f5fbff;
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: .01em;
+}
 .flow-rail {
   position: relative;
-  margin: 0;
+  margin: 25px 0 0;
   padding: 0;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1668,8 +1772,11 @@ loadDetail()
 .flow-rail li {
   position: relative;
   min-width: 0;
-  display: block;
-  padding-right: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0;
+  text-align: center;
 }
 .flow-node {
   position: relative;
@@ -1678,13 +1785,14 @@ loadDetail()
   height: 54px;
   display: grid;
   place-items: center;
-  border: 1px solid rgba(110, 160, 194, .28);
+  border: 1px solid rgba(110, 160, 194, .34);
   border-radius: 12px;
   color: #93afc3;
   background: rgba(8, 25, 42, .9);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, .06),
-    0 10px 18px rgba(0, 0, 0, .18);
+    0 8px 18px rgba(0, 0, 0, .18);
+  transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
 }
 .flow-node::before {
   content: "";
@@ -1707,6 +1815,9 @@ loadDetail()
   z-index: 2;
   margin-top: 10px;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 .flow-text strong,
 .flow-text span,
@@ -1723,14 +1834,28 @@ loadDetail()
   margin-top: 7px;
   padding: 3px 8px;
   border-radius: 999px;
-  color: #8fb2c9;
+  border: 1px solid rgba(36, 226, 175, .28);
+  color: #29f0bc;
   font-size: 13px;
-  background: rgba(126, 171, 202, .1);
+  line-height: normal;
+  background: rgba(11, 93, 78, .22);
+  box-shadow: inset 0 0 10px rgba(21, 201, 159, .07);
+}
+.flow-text span::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  vertical-align: 1px;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
 }
 .flow-text time {
   margin-top: 5px;
   min-height: 17px;
-  color: #7898ad;
+  color: #9fb7c8;
   font-size: 12px;
 }
 .flow-rail li.done .flow-node {
@@ -1739,7 +1864,7 @@ loadDetail()
   background: rgba(20, 74, 61, .34);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, .08),
-    0 10px 18px rgba(0, 0, 0, .18);
+    0 8px 18px rgba(0, 0, 0, .18);
 }
 .flow-rail li.running .flow-node {
   border-color: rgba(72, 216, 255, .58);
@@ -1775,26 +1900,55 @@ loadDetail()
 }
 .flow-rail li.done .flow-text span,
 .major-flow.is-resolved .flow-text span {
-  color: #a9e9d4;
+  color: #29f0bc;
+  border-color: rgba(36, 226, 175, .28);
+  background: rgba(11, 93, 78, .22);
+}
+.flow-rail li.running .flow-text span {
+  color: #69d8ff;
+  border-color: rgba(105, 216, 255, .28);
+  background: rgba(21, 79, 105, .2);
+}
+.flow-rail li.failed .flow-text span {
+  color: #ff8c98;
+  border-color: rgba(255, 107, 118, .28);
+  background: rgba(110, 34, 47, .22);
+}
+.flow-rail li.skipped .flow-text span,
+.flow-rail li.pending .flow-text span {
+  color: #8faabd;
+  border-color: rgba(120, 152, 173, .2);
+  background: rgba(126, 171, 202, .08);
 }
 .flow-connector {
   position: absolute;
-  left: 66px;
-  top: 14px;
-  width: calc(100% - 84px);
+  left: calc(50% + 27px);
+  top: 13px;
+  width: calc(100% - 54px);
   height: 28px;
   overflow: visible;
+  pointer-events: none;
 }
 .flow-connector path {
   fill: none;
   stroke: rgba(120, 152, 173, .3);
-  stroke-width: 2;
+  stroke-width: 1.5;
   stroke-linecap: round;
 }
 .connector-fill {
   stroke: #7ee2bd;
+  stroke-width: 1.7 !important;
   stroke-dasharray: none;
   animation: none;
+  filter: drop-shadow(0 0 2px rgba(126, 226, 189, .45));
+}
+.connector-arrow {
+  stroke: rgba(142, 188, 207, .55) !important;
+  stroke-width: 1.4 !important;
+}
+.flow-rail li.done .connector-arrow,
+.flow-rail li.running .connector-arrow {
+  stroke: rgba(126, 226, 189, .82) !important;
 }
 .major-flow.is-resolved .connector-fill {
   stroke-dasharray: none;
@@ -2126,6 +2280,7 @@ dd {
   font-size: 24px;
 }
 .linkage-list {
+  min-width: 0;
   margin-top: 16px;
   display: grid;
   gap: 12px;
@@ -2144,9 +2299,10 @@ dd {
   font-weight: 700;
 }
 .linkage-list article {
-  min-height: 158px;
+  min-width: 0;
+  min-height: 0;
   display: block;
-  padding: 20px 22px;
+  padding: 18px 20px;
   border-radius: 8px;
   background: rgba(4, 13, 22, .38);
   box-shadow: inset 0 1px 0 rgba(143, 200, 242, .05);
@@ -2173,6 +2329,10 @@ dd {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  flex-wrap: wrap;
+}
+.linkage-body {
+  min-width: 0;
 }
 .linkage-body strong {
   color: #f4f9fd;
@@ -2198,19 +2358,20 @@ dd {
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
+  flex-wrap: wrap;
 }
 .linkage-body strong {
   font-size: 19px;
   line-height: 1.35;
 }
 .linkage-body dl {
-  margin: 20px 0 0;
+  margin: 16px 0 0;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px 16px;
 }
-.linkage-manual .linkage-body dl {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.linkage-body dd {
+  overflow-wrap: anywhere;
 }
 .linkage-body p {
   margin: 12px 0 0;
@@ -2423,6 +2584,11 @@ dd {
   fill: #d9effb;
   font-size: 12px;
   font-weight: 600;
+}
+.workflow-dag-node .workflow-dag-model {
+  fill: #8eb6cc;
+  font-size: 9px;
+  font-weight: 400;
 }
 .workflow-dag-node.is-start rect {
   fill: rgba(17, 61, 76, .94);
@@ -3114,11 +3280,16 @@ dd {
   .major-flow {
     padding: 22px;
     min-height: 0;
-    grid-template-columns: 1fr;
+  }
+  .flow-header {
+    min-height: 0;
     gap: 16px;
   }
-  .flow-back-button {
-    width: fit-content;
+  .flow-header-divider {
+    height: 36px;
+  }
+  .flow-heading {
+    font-size: 24px;
   }
   .detail-hero {
     grid-template-columns: 1fr;
@@ -3129,7 +3300,8 @@ dd {
   }
   .flow-rail {
     grid-template-columns: 1fr;
-    gap: 16px;
+    gap: 18px;
+    margin-top: 32px;
   }
   .flow-rail li {
     display: grid;
@@ -3144,6 +3316,20 @@ dd {
   }
   .flow-text {
     margin-top: 0;
+    align-items: flex-start;
+    text-align: left;
+  }
+  .flow-text strong {
+    font-size: 20px;
+    white-space: normal;
+  }
+  .flow-text span {
+    margin-top: 6px;
+    font-size: 13px;
+  }
+  .flow-text time {
+    margin-top: 5px;
+    font-size: 13px;
   }
   .flow-connector {
     display: none;
@@ -3177,11 +3363,8 @@ dd {
     grid-template-columns: 1fr;
   }
   .linkage-body dl {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
     gap: 8px;
-  }
-  .linkage-manual .linkage-body dl {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .linkage-body dd {
     font-size: 14px;

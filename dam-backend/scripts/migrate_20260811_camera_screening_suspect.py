@@ -67,7 +67,6 @@ CAMERA_SCREENING_PROMPT = """你是库坝与河道摄像头安全初筛模型。
     "person_confidence": 0.0,
     "boat_confidence": 0.0
   },
-  "risk_level": "LOW",
   "summary": "一句话概括",
   "evidence": ["判断依据"],
   "uncertainties": ["不确定因素"]

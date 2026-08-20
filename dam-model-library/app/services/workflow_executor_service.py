@@ -93,6 +93,20 @@ class WorkflowExecutorService:
                 max_frames=max_frames,
                 fallback_to_frames=fallback_to_frames,
             )
+            if self._should_skip_target_detector(node, inputs):
+                output = {
+                    "skipped": True,
+                    "reason": "自然灾害场景不需要人员/船只区域目标检测",
+                    "pass_through": True,
+                    "inputs": inputs,
+                    "images": inputs.get("images") if isinstance(inputs.get("images"), list) else [],
+                    "videos": inputs.get("videos") if isinstance(inputs.get("videos"), list) else [],
+                    "media_objects": inputs.get("media_objects") if isinstance(inputs.get("media_objects"), list) else [],
+                    "screening_mode": inputs.get("screening_mode"),
+                }
+                context[node_id] = output
+                node_results.append(self._node_result(node, "skipped", output, request_data=None))
+                continue
             model_id = self._node_model_id(node)
             if not model_id:
                 node_text = f"{node_id} {node.get('node_type') or ''}".lower()
@@ -243,6 +257,7 @@ class WorkflowExecutorService:
             "zone_id",
             "zone_name",
             "zone_type",
+            "screening_mode",
             "detection_region",
             "detection_region_coordinate_system",
         ):
@@ -393,6 +408,7 @@ class WorkflowExecutorService:
                 "zone_id",
                 "zone_name",
                 "zone_type",
+                "screening_mode",
                 "detection_region",
                 "detection_region_coordinate_system",
             ):
@@ -714,12 +730,12 @@ class WorkflowExecutorService:
             "instance_no",
             "risk_level",
             "qwen_summary",
-            "qwen_risk_level",
             "camera_id",
             "camera_name",
             "zone_id",
             "zone_name",
             "zone_type",
+            "screening_mode",
             "detection_region",
             "detection_region_coordinate_system",
             "started_at",
@@ -840,7 +856,6 @@ class WorkflowExecutorService:
                 "event_code",
                 "risk_level",
                 "qwen_summary",
-                "qwen_risk_level",
                 "summary",
                 "class",
                 "class_name",
@@ -935,6 +950,26 @@ class WorkflowExecutorService:
             return int(model_id) if model_id is not None else None
         except (TypeError, ValueError):
             return None
+
+    @classmethod
+    def _should_skip_target_detector(cls, node: Dict[str, Any], inputs: Dict[str, Any]) -> bool:
+        """Skip the people/boat detector when the input explicitly targets disasters."""
+        mode = str(inputs.get("screening_mode") or "").strip().upper()
+        if mode not in {"NATURAL", "DISASTER", "NATURAL_DISASTER"}:
+            return False
+        node_text = " ".join(
+            str(node.get(key) or "")
+            for key in ("node_id", "node_type", "model_name", "model_task", "model_family")
+        ).lower()
+        model_id = cls._node_model_id(node)
+        if model_id == 20:
+            return True
+        if any(token in node_text for token in ("分类", "classify", "classification")):
+            return False
+        return any(
+            token in node_text
+            for token in ("目标检测", "object_detection", "object-detection", "yolo-od", "人员检测", "船只检测")
+        )
 
     @staticmethod
     def _normalize_output(output: Dict[str, Any]) -> Dict[str, Any]:

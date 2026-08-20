@@ -2178,7 +2178,7 @@ def build_workflow_prompt(
                 for key, value in (request.inputs or {}).items()
                 if key in {
                     "event_name", "event_type", "summary", "sensor_data", "source_name", "camera_name",
-                    "camera_id", "zone_id", "zone_name", "zone_type", "detection_region",
+                    "camera_id", "zone_id", "zone_name", "zone_type", "screening_mode", "detection_region",
                 }
             },
         }
@@ -2223,6 +2223,7 @@ def build_workflow_prompt(
         "仅检测到船只不能直接认定有人操控、非法捕鱼或电鱼设备，必须分别核对人员、器具、强光、涉水和位置证据。"
         "如果输入中提供了 detection_region，视频上的检测区域矩形是本次事件的判定边界；"
         "人员、船只、渔船或捕鱼线索只有主体锚点位于矩形内部时才可作为触发证据，矩形外目标必须明确排除。"
+        "如果 screening_mode 为 NATURAL_DISASTER，则按整幅画面分析自然灾害，不使用人员安全检测区域，也不要输出区域约束。"
         "请先逐条阅读知识库检索结果，判断每条规则对当前事件是适用、部分适用还是不适用；"
         "不要因为检索分数高就默认引用，也不要为了凑数量引用不适用条款。"
         "高风险条款只有在其触发条件被视频或运行状态明确满足时才可采用；"

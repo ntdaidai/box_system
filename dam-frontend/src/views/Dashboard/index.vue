@@ -3075,10 +3075,22 @@ onBeforeUnmount(() => {
   .today-card.category > .metric-compare {
     width: auto;
     min-width: 0;
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: flex-end;
+    gap: 3px;
   }
 
   .today-card.category > .metric-compare > span {
-    display: none;
+    display: inline-flex;
+    font-size: 10px;
+    line-height: 1;
+  }
+
+  .today-card.category > .metric-compare i {
+    min-width: 0;
+    gap: 2px;
+    font-size: 16px;
   }
 
   .today-card.handling {

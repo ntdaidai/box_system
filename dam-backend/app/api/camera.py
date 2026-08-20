@@ -37,7 +37,11 @@ from app.models.event_library import EventLibrary
 from app.models.safety_integration import SafetyEventInstance
 from app.models.user import User
 from app.services.camera_stream import CameraStream, camera_manager
-from app.services.camera_live_relay import camera_live_relay_manager, camera_preview_source
+from app.services.camera_live_relay import (
+    camera_live_relay_manager,
+    camera_preview_source,
+    camera_web_preview_source,
+)
 from app.services.camera_snapshot import camera_snapshot_service
 from app.services.camera_source import camera_rtsp_path, camera_source_from_row
 from app.services.camera_web_proxy import camera_web_proxy_manager
@@ -53,6 +57,7 @@ router = APIRouter()
 AnalysisTask = Literal["detect", "classify"]
 CameraBrand = Literal["dahua", "hikvision"]
 LOGICAL_CAMERA_DESCRIPTION_PREFIX = "测试逻辑点位，复用同一台物理摄像头视频源"
+PRIMARY_CAMERA_NAME = "9号监测点"
 
 
 class CameraDevicePayload(BaseModel):
@@ -123,7 +128,7 @@ class DetectionZoneRequest(BaseModel):
     zone_name: str = Field("", max_length=80)
     type: Optional[Literal["PERSON_LOW", "PERSON_MEDIUM", "PERSON_HIGH", "FISHING"]] = None
     zone_type: Optional[Literal["PERSON_LOW", "PERSON_MEDIUM", "PERSON_HIGH", "FISHING"]] = None
-    polygon_points: List[DetectionZonePoint] = Field(..., min_length=3, max_length=15)
+    polygon_points: List[DetectionZonePoint] = Field(..., min_length=2, max_length=15)
     trigger_seconds: Optional[float] = Field(None, ge=0.0, le=3600.0)
     condition_durations: Optional[Dict[str, int]] = None
     enabled: bool = True
@@ -137,8 +142,8 @@ class DetectionZoneRequest(BaseModel):
                 if value < 0 or value > 3600:
                     raise ValueError("触发时间必须在 0 到 3600 秒之间")
         unique_points = {(round(point.x, 6), round(point.y, 6)) for point in self.polygon_points}
-        if len(unique_points) < 3:
-            raise ValueError("多边形区域必须至少包含 3 个不同顶点")
+        if len(unique_points) < 2:
+            raise ValueError("矩形区域必须包含左上角和右下角两个不同定位点")
         return self
 
 
@@ -173,6 +178,22 @@ class DetectResponse(BaseModel):
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 PEER_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{8,80}$")
+SAFETY_SCREENING_MODE = "SAFETY_TARGET"
+NATURAL_DISASTER_SCREENING_MODE = "NATURAL_DISASTER"
+
+
+def _normalize_screening_mode(value: Optional[str]) -> str:
+    normalized = str(value or SAFETY_SCREENING_MODE).strip().upper()
+    aliases = {
+        "SAFETY": SAFETY_SCREENING_MODE,
+        "PERSON_SAFETY": SAFETY_SCREENING_MODE,
+        "NATURAL": NATURAL_DISASTER_SCREENING_MODE,
+        "DISASTER": NATURAL_DISASTER_SCREENING_MODE,
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in {SAFETY_SCREENING_MODE, NATURAL_DISASTER_SCREENING_MODE}:
+        raise HTTPException(status_code=400, detail="不支持的分析场景")
+    return normalized
 
 
 def _owner_id(user: User) -> str:
@@ -374,11 +395,25 @@ def _camera_web_console_url(row: Camera) -> str:
 
 
 def _camera_web_proxy_url(row: Camera) -> str:
-    if not row.web_proxy_port:
-        return ""
-    if not camera_web_proxy_manager.status(str(row.id)):
-        return ""
-    return camera_web_proxy_manager.public_url(int(row.web_proxy_port))
+    if settings.CAMERA_WEB_PROXY_EXTERNAL and (
+        row.camera_name == PRIMARY_CAMERA_NAME or is_logical_camera(row)
+    ):
+        return camera_web_proxy_manager.public_url(settings.CAMERA_WEB_PROXY_PRIMARY_PORT)
+    status = camera_web_proxy_manager.status(str(row.id))
+    if not status and is_logical_camera(row):
+        status = camera_web_proxy_manager.status_for_target(
+            row.ip_address,
+            row.web_port or 80,
+        )
+    return status["url"] if status else ""
+
+
+def is_logical_camera(row: Camera) -> bool:
+    return str(getattr(row, "description", "") or "").startswith(LOGICAL_CAMERA_DESCRIPTION_PREFIX)
+
+
+def _camera_web_proxy_running(row: Camera) -> bool:
+    return bool(_camera_web_proxy_url(row))
 
 
 def _camera_reserved_proxy_ports(db: Session, camera_device_id: Optional[int] = None) -> set[int]:
@@ -445,6 +480,14 @@ async def _wait_latest_camera_event(
         row = query.order_by(SafetyEventInstance.id.desc()).first()
         if row:
             instance, event = row
+            try:
+                event_library_risk = {
+                    1: "LOW",
+                    2: "MEDIUM",
+                    3: "HIGH",
+                }.get(int(event.risk_level or 1), "LOW")
+            except (TypeError, ValueError):
+                event_library_risk = "LOW"
             return {
                 "event_instance_id": instance.id,
                 "instance_no": instance.instance_no,
@@ -452,6 +495,13 @@ async def _wait_latest_camera_event(
                 "event_name": event.event_name if event else instance.summary,
                 "event_status": instance.status,
                 "event_state": instance.state,
+                # The event-library level is the initial display value. The
+                # report/workflow may promote the instance later after review.
+                "risk_level": event_library_risk,
+                "max_risk_level": event_library_risk,
+                "event_library_risk_level": event_library_risk,
+                "current_risk_level": instance.risk_level,
+                "current_max_risk_level": instance.max_risk_level,
                 "analysis_report_id": instance.analysis_report_id,
             }
         await asyncio.sleep(0.2)
@@ -546,7 +596,7 @@ def _camera_row_response(
         "web_console_url": _camera_web_proxy_url(row) or _camera_web_console_url(row),
         "web_console_direct_url": _camera_web_console_url(row),
         "web_proxy_url": _camera_web_proxy_url(row),
-        "web_proxy_running": bool(camera_web_proxy_manager.status(str(row.id))),
+        "web_proxy_running": _camera_web_proxy_running(row),
         "configured": True,
         "running": bool(status.get("running")) or bool(row.enabled),
         "connected": bool(status.get("connected")) or bool(row.enabled),
@@ -592,6 +642,27 @@ def _sync_camera_runtime(row: Camera, *, auto_start: bool = False) -> Optional[d
 
 def _sync_camera_web_proxy(row: Camera, db: Session) -> Optional[dict]:
     runtime_id = str(row.id)
+    if settings.CAMERA_WEB_PROXY_EXTERNAL:
+        camera_web_proxy_manager.stop_proxy(runtime_id)
+        row.web_proxy_port = (
+            settings.CAMERA_WEB_PROXY_PRIMARY_PORT
+            if row.camera_name == PRIMARY_CAMERA_NAME
+            else None
+        )
+        return {
+            "camera_id": runtime_id,
+            "listen_port": settings.CAMERA_WEB_PROXY_PRIMARY_PORT,
+            "url": _camera_web_proxy_url(row),
+            "running": True,
+        } if row.camera_name == PRIMARY_CAMERA_NAME or is_logical_camera(row) else None
+    if is_logical_camera(row):
+        # 逻辑点位复用 9 号真实摄像头的控制台，不再创建独立监听端口。
+        camera_web_proxy_manager.stop_proxy(runtime_id)
+        row.web_proxy_port = None
+        source_row = db.query(Camera).filter(Camera.camera_name == PRIMARY_CAMERA_NAME).first()
+        if source_row and source_row.id != row.id:
+            return camera_web_proxy_manager.status(str(source_row.id))
+        return None
     if not row.enabled or not settings.CAMERA_WEB_PROXY_ENABLED:
         camera_web_proxy_manager.stop_proxy(runtime_id)
         row.web_proxy_port = None
@@ -601,7 +672,11 @@ def _sync_camera_web_proxy(row: Camera, db: Session) -> Optional[dict]:
             camera_id=runtime_id,
             target_host=row.ip_address,
             target_port=row.web_port or 80,
-            preferred_port=row.web_proxy_port,
+            preferred_port=(
+                settings.CAMERA_WEB_PROXY_PRIMARY_PORT
+                if row.camera_name == PRIMARY_CAMERA_NAME
+                else row.web_proxy_port
+            ),
             reserved_ports=_camera_reserved_proxy_ports(db, row.id),
         )
         row.web_proxy_port = int(proxy["listen_port"])
@@ -614,7 +689,7 @@ def _sync_camera_web_proxy(row: Camera, db: Session) -> Optional[dict]:
 
 def _sync_logical_camera_config(source_row: Camera, db: Session) -> list[Camera]:
     """Keep seeded logical points aligned with the 9号 physical camera."""
-    if source_row.camera_name != "9号监测点":
+    if source_row.camera_name != PRIMARY_CAMERA_NAME:
         return []
     logical_rows = (
         db.query(Camera)
@@ -1188,6 +1263,7 @@ async def simulate_camera_screening_video(
     file: UploadFile = File(...),
     supplemental_context: Optional[str] = Form(None),
     zone_id: Optional[str] = Form(None, description="本次模拟使用的摄像头检测区域ID"),
+    screening_mode: str = Form(SAFETY_SCREENING_MODE, description="分析场景：人员/船只安全或自然灾害"),
     window_seconds: float = Query(10.0, ge=1.0, le=60.0),
     db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
@@ -1197,19 +1273,25 @@ async def simulate_camera_screening_video(
         raise HTTPException(status_code=404, detail="摄像头设备不存在")
     if not row.enabled:
         raise HTTPException(status_code=409, detail="摄像头设备未启用")
-    if not zone_id:
-        raise HTTPException(status_code=400, detail="请先选择摄像头检测区域")
-    selected_zone = next(
-        (
-            zone for zone in get_camera_zone_store().get(str(row.id))
-            if str(zone.get("zone_id") or zone.get("id")) == str(zone_id)
-        ),
-        None,
-    )
-    if not selected_zone:
-        raise HTTPException(status_code=404, detail="所选检测区域不存在")
-    if selected_zone.get("enabled") is False:
-        raise HTTPException(status_code=409, detail="所选检测区域已停用")
+    screening_mode = _normalize_screening_mode(screening_mode)
+    if screening_mode == SAFETY_SCREENING_MODE:
+        if not zone_id:
+            raise HTTPException(status_code=400, detail="人员/船只安全场景请先选择检测区域")
+        selected_zone = next(
+            (
+                zone for zone in get_camera_zone_store().get(str(row.id))
+                if str(zone.get("zone_id") or zone.get("id")) == str(zone_id)
+            ),
+            None,
+        )
+        if not selected_zone:
+            raise HTTPException(status_code=404, detail="所选检测区域不存在")
+        if selected_zone.get("enabled") is False:
+            raise HTTPException(status_code=409, detail="所选检测区域已停用")
+    else:
+        # Natural-disaster analysis is full-frame; a stale browser zone must
+        # never constrain the event or the downstream detector.
+        zone_id = None
 
     filename = file.filename or "simulation.mp4"
     suffix = Path(filename).suffix.lower()
@@ -1241,7 +1323,8 @@ async def simulate_camera_screening_video(
             input_source="simulation_video",
             window_seconds=window_seconds,
             supplemental_context=supplemental_payload,
-            zone_id=str(zone_id),
+            zone_id=zone_id,
+            screening_mode=screening_mode,
         )
     finally:
         await file.close()
@@ -1433,7 +1516,7 @@ async def create_webrtc_session(
     params = {
         "peerid": payload.peer_id,
         # 只在后端到本机回环服务的请求中携带 RTSP 地址；API 响应不回传。
-        "url": camera_preview_source(camera_source_from_row(row)),
+        "url": camera_web_preview_source(camera_source_from_row(row)),
     }
     if settings.WEBRTC_STREAM_OPTIONS:
         params["options"] = settings.WEBRTC_STREAM_OPTIONS

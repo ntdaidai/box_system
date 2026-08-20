@@ -130,7 +130,16 @@ test('normalizes virtual zones and matches detector anchors inside areas', () =>
   }
 
   assert.equal(zones.length, 1)
-  assert.equal(zoneTypeLabel(zones[0].type), '捕鱼区')
+  assert.equal(zoneTypeLabel(zones[0].type), '禁捕区')
+  const twoPointZones = normalizeZones({
+    zones: [{
+      id: 'two_point_area',
+      type: 'PERSON_LOW',
+      polygon_points: [{ x: 0.2, y: 0.2 }, { x: 0.8, y: 0.8 }],
+    }],
+  })
+  assert.equal(twoPointZones.length, 1)
+  assert.equal(twoPointZones[0].polygon_points.length, 2)
   assert.equal(detectionInZone(boat, zones[0], 1000, 1000), true)
   assert.equal(detectionInZone(person, zones[0], 1000, 1000), false)
   assert.equal(

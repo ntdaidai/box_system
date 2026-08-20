@@ -44,7 +44,7 @@ class BroadcastDevicePayload(BaseModel):
 class BroadcastTemplatePayload(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     scene_type: str = Field(..., min_length=1, max_length=64)
-    risk_level: Literal["LOW", "MEDIUM", "HIGH"]
+    risk_level: Literal["LOW", "MEDIUM", "HIGH", "MULTI"]
     content: str = Field(..., min_length=1, max_length=500)
     enabled: bool = True
 
@@ -88,6 +88,8 @@ async def list_templates(
     db: Session = Depends(get_db),
     _user: User = Depends(require_auth),
 ):
+    # 模板页既要展示停用模板，也要确保内置模板（尤其非法捕鱼的多风险模板）已完成补齐。
+    broadcast_service.ensure_defaults(db)
     rows = db.query(BroadcastTemplate).order_by(BroadcastTemplate.create_time.asc()).all()
     return Result.success([_template_dict(row) for row in rows])
 
@@ -165,11 +167,13 @@ async def update_template(template_id: str, payload: BroadcastTemplatePayload, d
     duplicate = db.query(BroadcastTemplate.id).filter(BroadcastTemplate.name == payload.name, BroadcastTemplate.id != template_id).first()
     if duplicate:
         raise HTTPException(status_code=409, detail="广播模板名称已存在")
+    content_changed = payload.content != row.content
     try:
         for key, value in payload.model_dump().items():
             setattr(row, key, value)
         db.flush()
-        broadcast_service.refresh_template_audio(row)
+        if content_changed:
+            broadcast_service.refresh_template_audio(row)
         db.commit()
         db.refresh(row)
     except BroadcastException as exc:

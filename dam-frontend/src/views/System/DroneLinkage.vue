@@ -20,7 +20,7 @@
         <div class="tab-actions">
           <button type="button" class="toolbar-map-entry" @click="openWaylineMap">
             <el-icon><MapLocation /></el-icon>
-            <span>查看航线 {{ waylineRoutes.length }}</span>
+            <span>查看航线</span>
           </button>
           <el-select
             v-model="deviceFilters.status"
@@ -65,7 +65,8 @@
           </div>
           <div class="col-runtime device-runtime">
             <strong :class="batteryClass(row.battery)">{{ row.battery }}%</strong>
-            <span>{{ row.remainFlightTime }} min</span>
+            <i>/</i>
+            <span :class="batteryClass(row.battery)">{{ row.remainFlightTime }} min</span>
           </div>
           <div class="col-status">
             <span class="status-pill" :class="row.online ? 'is-online' : 'is-offline'">
@@ -214,9 +215,7 @@
             <button
               type="button"
               class="wayline-landmark airport"
-              :class="{ active: selectedWaylineLandmark === 'airport' || selectedWaylineRouteName }"
               style="left: 94.9%; top: 24.9%;"
-              @click.stop="selectWaylineLandmark('airport')"
             >
               <span class="wayline-landmark-mark" aria-hidden="true"></span>
               <span>机场点</span>
@@ -224,9 +223,7 @@
             <button
               type="button"
               class="wayline-landmark"
-              :class="{ active: selectedWaylineLandmark === 'fishing' }"
               style="left: 47.4%; top: 58.1%;"
-              @click.stop="selectWaylineLandmark('fishing')"
             >
               <span class="wayline-landmark-mark" aria-hidden="true"></span>
               <span>禁渔点</span>
@@ -234,9 +231,7 @@
             <button
               type="button"
               class="wayline-landmark"
-              :class="{ active: selectedWaylineLandmark === 'wading' }"
               style="left: 96.3%; top: 54.3%;"
-              @click.stop="selectWaylineLandmark('wading')"
             >
               <span class="wayline-landmark-mark" aria-hidden="true"></span>
               <span>禁涉水点</span>
@@ -270,7 +265,6 @@
                 <strong>请选择航线</strong>
                 <span>选择航线后点击开始，播放对应的巡检演示视频</span>
               </div>
-              <div class="scan-grid"></div>
             </div>
           </div>
         </div>
@@ -370,9 +364,7 @@
         <button
           type="button"
           class="wayline-landmark airport"
-          :class="{ active: selectedWaylineLandmark === 'airport' || selectedWaylineRouteName }"
           style="left: 94.9%; top: 24.9%;"
-          @click.stop="selectWaylineLandmark('airport')"
         >
           <span class="wayline-landmark-mark" aria-hidden="true"></span>
           <span>机场点</span>
@@ -380,9 +372,7 @@
         <button
           type="button"
           class="wayline-landmark"
-          :class="{ active: selectedWaylineLandmark === 'fishing' }"
           style="left: 47.4%; top: 58.1%;"
-          @click.stop="selectWaylineLandmark('fishing')"
         >
           <span class="wayline-landmark-mark" aria-hidden="true"></span>
           <span>禁渔点</span>
@@ -390,9 +380,7 @@
         <button
           type="button"
           class="wayline-landmark"
-          :class="{ active: selectedWaylineLandmark === 'wading' }"
           style="left: 96.3%; top: 54.3%;"
-          @click.stop="selectWaylineLandmark('wading')"
         >
           <span class="wayline-landmark-mark" aria-hidden="true"></span>
           <span>禁涉水点</span>
@@ -411,11 +399,11 @@
       v-model="editDialogVisible"
       title="编辑无人机设备"
       width="520px"
-      class="drone-edit-dialog"
+      class="broadcast-config-dialog drone-edit-dialog"
       destroy-on-close
     >
       <el-form label-position="top" @submit.prevent>
-        <el-form-item label="设备名称">
+        <el-form-item label="设备名称" required>
           <el-input v-model.trim="editForm.device_name" maxlength="64" placeholder="请输入设备名称" />
         </el-form-item>
         <el-form-item label="描述">
@@ -497,7 +485,7 @@ const waylineCameraRegionPaths = {
 const MOCK_DRONES = [
   { device_sn: 'mock-drone-001', device_name: '御3行业版-1号', device_desc: 'P3 机场起降，负责禁渔区常态化巡检', device_model: 'M30T', dockName: 'P3 机场', status: 'online', battery: 86, remainFlightTime: 32 },
   { device_sn: 'mock-drone-002', device_name: 'M350 RTK-2号', device_desc: 'P2 机场起降，负责禁涉水区重点巡查', device_model: 'M350', dockName: 'P2 机场', status: 'online', battery: 64, remainFlightTime: 24 },
-  { device_sn: 'mock-drone-003', device_name: '精灵4 RTK-3号', device_desc: 'P1 机场起降，应急巡检备用机', device_model: 'P4RTK', dockName: 'P1 机场', status: 'offline', enabled: false, battery: 28, remainFlightTime: 9 },
+  { device_sn: 'mock-drone-003', device_name: '精灵4 RTK-3号', device_desc: 'P1 机场起降，应急巡检备用机', device_model: 'P4RTK', dockName: 'P1 机场', status: 'online', enabled: true, battery: 28, remainFlightTime: 9 },
 ]
 
 const MOCK_DEVICE_RUNTIME = {
@@ -582,16 +570,69 @@ const batteryClass = (battery) => {
 const droneOnlineCount = computed(() => devices.value.filter((device) => device.online).length)
 const droneOfflineCount = computed(() => devices.value.length - droneOnlineCount.value)
 
-// 从拓扑中解析飞行器绑定的机场名称（示例数据自带 dockName 时优先使用）
+// DJI 拓扑的字段在不同版本中有 child_device_sn、child_sn、parent_sn 等差异，
+// 这里统一从机场节点和飞行器节点两侧解析，避免列表出现空白的“绑定机场”。
+function isDockDevice(device) {
+  const domain = String(device?.domain ?? device?.device_domain ?? '').toLowerCase()
+  const type = String(device?.device_type ?? device?.type ?? '').toLowerCase()
+  return domain === '1' || type === '1' || ['dock', 'dock_station', 'airport'].includes(type)
+}
+
+function isAircraftDevice(device) {
+  const domain = String(device?.domain ?? device?.device_domain ?? '').toLowerCase()
+  const type = String(device?.device_type ?? device?.type ?? '').toLowerCase()
+  return domain === '0' || type === '0' || ['aircraft', 'drone', 'uav'].includes(type)
+}
+
+function deviceSn(device) {
+  return device?.device_sn || device?.sn || device?.deviceSn || ''
+}
+
+function dockDisplayName(dock) {
+  return dock?.nickname
+    || dock?.device_name
+    || dock?.deviceName
+    || dock?.deviceCallsign
+    || dock?.device_sn
+    || dock?.sn
+    || '机场'
+}
+
 function bindDockName(drone) {
   if (drone.dockName) return drone.dockName
-  if (drone.parent_name) return drone.parent_name
-  // 通过机场节点的 child_device_sn 反向匹配
-  const dock = rawTopology.value.find(
-    (n) => (n.domain === 1 || n.device_type === 1) && (n.child_device_sn === drone.device_sn)
+  const explicitName = drone.parent_name || drone.parent_device_name || drone.dock_name || drone.dockName
+  if (explicitName) return explicitName
+
+  const droneSn = String(deviceSn(drone))
+  const parentSn = String(
+    drone.parent_sn
+      || drone.parent_device_sn
+      || drone.dock_sn
+      || drone.dockSn
+      || '',
   )
-  if (dock) return dock.nickname || dock.device_name || dock.device_sn
-  return '--'
+  const dock = docks.value.find((item) => parentSn && String(deviceSn(item)) === parentSn)
+    || docks.value.find((item) => {
+      const childSns = [
+        item.child_device_sn,
+        item.child_sn,
+        item.sub_device_sn,
+        item.aircraft_sn,
+        item.drone_sn,
+      ].filter(Boolean).map(String)
+      return childSns.includes(droneSn)
+    })
+    || rawTopology.value.find((item) => isDockDevice(item) && [
+      item.child_device_sn,
+      item.child_sn,
+      item.sub_device_sn,
+      item.aircraft_sn,
+      item.drone_sn,
+    ].filter(Boolean).map(String).includes(droneSn))
+
+  if (dock) return dockDisplayName(dock)
+  const demo = MOCK_DRONES.find((item) => item.device_sn === droneSn)
+  return demo?.dockName || '未绑定机场'
 }
 
 // ========== 测试弹窗 ==========
@@ -688,7 +729,7 @@ async function loadDjiTopology() {
     const res = await getDroneDevices(workspaceId || '0')
     const topology = (res.data?.list || res.data || []).map(normalizeDevice)
     rawTopology.value = topology
-    docks.value = topology.filter((d) => d.domain === 1)
+    docks.value = topology.filter(isDockDevice)
 
     // 2. 飞行器：bound 分页接口（返回真实设备：nickname、device_desc、status 等）
     let drones = []
@@ -699,7 +740,7 @@ async function loadDjiTopology() {
       console.warn('[无人机] bound 接口获取飞行器失败:', err)
     }
     // 3. 兜底一：拓扑中本身就是飞行器的节点
-    if (!drones.length) drones = topology.filter((d) => d.domain === 0)
+    if (!drones.length) drones = topology.filter(isAircraftDevice)
     // 4. 兜底二：由遥控器节点 child_device_sn 构造飞行器
     if (!drones.length) {
       for (const node of topology) {
@@ -895,6 +936,10 @@ function openEditDialog(row) {
 
 function saveEdit() {
   if (!editingDevice.value) return
+  if (!editForm.device_name) {
+    ElMessage.warning('请输入设备名称')
+    return
+  }
   const idx = djiDrones.value.findIndex((d) => d.device_sn === editingDevice.value.device_sn)
   if (idx >= 0) {
     djiDrones.value[idx] = {
@@ -1014,7 +1059,7 @@ async function refreshCurrent() {
 .metric .dot { width: 8px; height: 8px; flex: 0 0 auto; align-self: center; border-radius: 50%; background: #8db2c8; }
 .metric .dot.total { box-shadow: 0 0 8px rgba(141, 178, 200, .75); }
 .metric .dot.online { background: #48e6bf; box-shadow: 0 0 8px rgba(72, 230, 191, .75); }
-.metric .dot.offline { background: #8494a3; }
+.metric .dot.offline { background: #ff5b68; box-shadow: 0 0 8px rgba(255, 91, 104, .72); }
 .metric-num { color: #f2fbff; font-size: 22px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
 .metric-label { color: #8db2c8; font-size: 12px; }
 .page-header h2 { margin: 0; color: #f3f8fd; font-size: 25px; }
@@ -1124,8 +1169,24 @@ async function refreshCurrent() {
   justify-items: center;
   text-align: center;
 }
-.device-runtime strong { font-size: 14px; }
-.device-runtime span { color: #8daabd; font-size: 12px; }
+.device-runtime {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.device-runtime strong,
+.device-runtime span {
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1;
+}
+.device-runtime i { color: #5f839d; font-size: 13px; font-style: normal; }
+.device-runtime span { color: inherit; }
+.device-runtime span.battery-ok { color: #81efad; }
+.device-runtime span.battery-warning { color: #ffd27a; }
+.device-runtime span.battery-danger { color: #ff9ca8; }
 .battery-ok { color: #81efad; }
 .battery-warning { color: #ffd27a; }
 .battery-danger { color: #ff9ca8; }
@@ -1423,15 +1484,6 @@ async function refreshCurrent() {
 }
 .video-placeholder strong { color: #c8e9ff; font-size: 16px; }
 .video-placeholder span { font-size: 12px; }
-.scan-grid {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image: linear-gradient(rgba(72, 216, 255, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(72, 216, 255, 0.05) 1px, transparent 1px);
-  background-size: 24px 24px;
-}
-
 /* ===== 航线大图弹窗（对标感知源“查看点位图”的图片方式） ===== */
 :global(.wayline-map-dialog.el-dialog) {
   border: 1px solid rgba(72, 216, 255, 0.24);
@@ -1612,6 +1664,21 @@ async function refreshCurrent() {
   cursor: pointer;
   transition: transform .2s ease, background .2s ease, box-shadow .2s ease, border-color .2s ease;
 }
+.wayline-landmark::before {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  top: 10px;
+  left: 50%;
+  width: 58px;
+  height: 22px;
+  transform: translateX(-50%);
+  border: 1px solid rgba(112, 229, 255, .48);
+  border-radius: 50%;
+  background: rgba(7, 36, 49, .78);
+  box-shadow: inset 0 0 0 1px rgba(112, 229, 255, .10), 0 0 13px rgba(72, 216, 255, .36);
+}
+.wayline-landmark > * { position: relative; z-index: 1; }
 .wayline-landmark-mark {
   position: relative;
   width: 23px;
@@ -1660,6 +1727,10 @@ async function refreshCurrent() {
   border-color: #fff0b0;
   background: linear-gradient(145deg, #ffe184, #bd7710);
   box-shadow: 0 0 10px rgba(255, 209, 102, .82), 0 2px 5px rgba(0, 0, 0, .72);
+}
+.wayline-landmark.airport::before {
+  border-color: rgba(255, 218, 133, .52);
+  box-shadow: inset 0 0 0 1px rgba(255, 218, 133, .10), 0 0 13px rgba(255, 209, 102, .34);
 }
 .wayline-landmark.airport .wayline-landmark-mark::after { background: #6b4308; }
 .wayline-landmark.airport:hover .wayline-landmark-mark,
@@ -1729,19 +1800,20 @@ async function refreshCurrent() {
 
 /* ===== 编辑无人机弹窗 ===== */
 .drone-edit-dialog :deep(.el-dialog) {
-  background: #0a1c2e;
-  border: 1px solid rgba(93, 184, 225, 0.25);
-  border-radius: 12px;
+  background: #1d426a;
+  border: 1px solid rgba(97, 167, 214, .40);
+  border-radius: 10px;
 }
-.drone-edit-dialog :deep(.el-dialog__title) { color: #f3f8fd; font-weight: 800; }
-.drone-edit-dialog :deep(.el-form-item__label) { color: #a9c7de; }
+.drone-edit-dialog :deep(.el-dialog__title) { color: #eef7ff; font-size: 22px; font-weight: 800; }
+.drone-edit-dialog :deep(.el-form-item__label) { color: #e2f0fb !important; font-weight: 700; }
 .drone-edit-dialog :deep(.el-input__wrapper),
 .drone-edit-dialog :deep(.el-textarea__inner) {
-  background: #0d2740;
-  box-shadow: 0 0 0 1px rgba(84, 148, 193, 0.36) inset;
-  color: #d7e8f8;
+  background: #092034;
+  box-shadow: inset 0 0 0 1px rgba(36, 128, 176, .46);
+  color: #f4fbff;
 }
-.drone-edit-dialog :deep(.el-input__inner) { color: #d7e8f8; }
+.drone-edit-dialog :deep(.el-input__inner),
+.drone-edit-dialog :deep(.el-textarea__inner) { color: #f4fbff; }
 
 /* 响应式 */
 @media (max-width: 1280px) {

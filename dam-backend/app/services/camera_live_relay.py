@@ -33,6 +33,13 @@ def camera_preview_source(source: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, path, query, parts.fragment))
 
 
+def camera_web_preview_source(source: str) -> str:
+    """Return the Web monitoring source without coupling it to mini-program settings."""
+    if not settings.CAMERA_WEB_LIVE_USE_SUBSTREAM:
+        return source
+    return camera_preview_source(source)
+
+
 @dataclass
 class RelayEntry:
     source: str

@@ -87,13 +87,30 @@
               </div>
             </el-tooltip>
 
-            <div class="assist-setting-row">
-              <strong>显示辅助框</strong>
-              <el-switch
-                :model-value="assistOverlayVisible"
-                size="small"
-                @change="toggleAssistOverlay"
-              />
+            <div class="assist-setting">
+              <div class="assist-setting-row">
+                <strong>显示辅助框</strong>
+                <el-switch
+                  :model-value="assistOverlayVisible"
+                  size="small"
+                  @change="toggleAssistOverlay"
+                />
+              </div>
+              <el-select
+                v-if="assistOverlayVisible"
+                v-model="assistZoneId"
+                class="assist-zone-select"
+                :disabled="!assistZoneOptions.length"
+                :placeholder="assistZoneOptions.length ? '请选择辅助框' : '当前摄像头未配置辅助框'"
+                popper-class="vision-select-popper"
+              >
+                <el-option
+                  v-for="zone in assistZoneOptions"
+                  :key="zone.id"
+                  :label="zone.zone_name || zone.name || zoneTypeLabel(zone.type)"
+                  :value="zone.id"
+                />
+              </el-select>
             </div>
           </section>
         </aside>
@@ -143,7 +160,7 @@
                   :viewBox="`0 0 ${gridOverlaySize(slot.camera.id).width} ${gridOverlaySize(slot.camera.id).height}`"
                   preserveAspectRatio="xMidYMid meet"
                 >
-                  <g v-for="zone in gridZonesForCamera(slot.camera.id)" :key="zone.id">
+                  <g v-for="zone in gridAssistZonesForCamera(slot.camera.id)" :key="zone.id">
                     <polygon
                       class="ops-zone-polygon"
                       :points="zonePolygonPointsForSize(zone, gridOverlaySize(slot.camera.id).width, gridOverlaySize(slot.camera.id).height)"
@@ -262,7 +279,7 @@
               @mouseleave="endConfigVertexDrag"
             >
               <g
-                v-for="zone in zonesForOverlay"
+                v-for="zone in visibleZonesForOverlay"
                 :key="zone.id"
                 class="editable-zone"
                 :class="{ selected: zone.id === selectedZoneId, disabled: !zone.enabled }"
@@ -883,10 +900,10 @@ const reportLoading = ref(false)
 const reportSaving = ref(false)
 const patrolReport = ref(null)
 const zoneOptions = [
-  { label: '低风险区', value: 'PERSON_LOW' },
-  { label: '中风险区', value: 'PERSON_MEDIUM' },
-  { label: '高风险区', value: 'PERSON_HIGH' },
-  { label: '捕鱼区', value: 'FISHING' },
+  { label: '禁闯入区', value: 'PERSON_LOW' },
+  { label: '禁亲水区', value: 'PERSON_MEDIUM' },
+  { label: '禁涉水区', value: 'PERSON_HIGH' },
+  { label: '禁捕区', value: 'FISHING' },
 ]
 const activeZoneType = ref('PERSON_LOW')
 const zoneDrawing = ref(false)
@@ -908,6 +925,7 @@ const activeGridSlotIndex = ref(0)
 const gridCameraZones = ref({})
 const gridImageMetrics = ref({})
 const assistOverlayVisible = ref(false)
+const assistZoneId = ref('')
 const singleCameraHidden = ref(false)
 const cameraPointDefinitions = [
   { no: 1, x: 17.3410, y: 40.8304 },
@@ -978,7 +996,18 @@ const liveAlerts = computed(() => Array.isArray(latestDetection.value.alerts) ? 
 const liveAlertZoneIds = computed(() => new Set(liveAlerts.value.map((alert) => alert.zone_id)))
 const zonesForOverlay = computed(() => detectionZones.value)
 const showZoneOverlay = computed(() => zoneDrawing.value || detectionZones.value.length > 0)
-const streamZoneOverlayVisible = computed(() => assistOverlayVisible.value && zonesForOverlay.value.length > 0)
+const assistZoneOptions = computed(() => {
+  if (!isMultiCameraMode.value) return zonesForOverlay.value
+  const activeCameraId = gridSlots.value[activeGridSlotIndex.value]?.camera?.id || currentCameraId.value
+  return activeCameraId ? gridZonesForCamera(activeCameraId) : []
+})
+const assistZonesForOverlay = computed(() => (
+  assistZoneOptions.value.filter((zone) => zone.id === assistZoneId.value)
+))
+const visibleZonesForOverlay = computed(() => (
+  zoneConfigVisible.value || zoneDrawing.value ? zonesForOverlay.value : assistZonesForOverlay.value
+))
+const streamZoneOverlayVisible = computed(() => assistOverlayVisible.value && assistZonesForOverlay.value.length > 0)
 const editableZoneOverlayVisible = computed(() => (
   zoneConfigVisible.value
   || zoneDrawing.value
@@ -1373,9 +1402,9 @@ function openEmergencyBroadcast() {
 
 async function toggleAssistOverlay(value) {
   assistOverlayVisible.value = Boolean(value)
-  if (!assistOverlayVisible.value || !isMultiCameraMode.value) return
-  const activeSlot = gridSlots.value[activeGridSlotIndex.value]
-  if (activeSlot?.camera?.id) await ensureGridCameraZones(activeSlot.camera.id)
+  if (!assistOverlayVisible.value) return
+  await ensureAssistZoneOptions()
+  syncAssistZoneSelection()
 }
 
 async function openPatrolReport(persist = false) {
@@ -1578,6 +1607,7 @@ async function fetchCameraZones(cameraId = currentCameraId.value) {
   if (cameraId === currentCameraId.value) {
     detectionZones.value = zones
     selectedZoneId.value = zones.find((zone) => zone.id === selectedZoneId.value)?.id || zones[0]?.id || ''
+    syncAssistZoneSelection(zones)
   }
 }
 
@@ -1685,6 +1715,26 @@ function gridZonesForCamera(cameraId) {
   return Array.isArray(zones) ? zones : []
 }
 
+function gridAssistZonesForCamera(cameraId) {
+  const activeCameraId = gridSlots.value[activeGridSlotIndex.value]?.camera?.id || currentCameraId.value
+  if (cameraId !== activeCameraId) return []
+  return gridZonesForCamera(cameraId).filter((zone) => zone.id === assistZoneId.value)
+}
+
+function syncAssistZoneSelection(zones = assistZoneOptions.value) {
+  const availableZones = Array.isArray(zones) ? zones : []
+  assistZoneId.value = availableZones.find((zone) => zone.id === assistZoneId.value)?.id || ''
+}
+
+async function ensureAssistZoneOptions() {
+  if (isMultiCameraMode.value) {
+    const activeCameraId = gridSlots.value[activeGridSlotIndex.value]?.camera?.id || currentCameraId.value
+    if (activeCameraId) await ensureGridCameraZones(activeCameraId)
+    return
+  }
+  if (currentCameraId.value && !detectionZones.value.length) await fetchCameraZones(currentCameraId.value)
+}
+
 function gridZoneOverlayVisible(slot) {
   const camera = slot?.camera
   return Boolean(
@@ -1692,7 +1742,7 @@ function gridZoneOverlayVisible(slot) {
     && slot?.index === activeGridSlotIndex.value
     && camera?.id
     && gridSlotHasStream({ camera })
-    && gridZonesForCamera(camera.id).length,
+    && gridAssistZonesForCamera(camera.id).length,
   )
 }
 
@@ -1895,6 +1945,7 @@ async function activateCamera(cameraId) {
   detections.value = []
   latestDetection.value = { detections: [], count: 0 }
   detectionZones.value = []
+  assistZoneId.value = ''
   zoneDrawing.value = false
   selectedZoneId.value = ''
   zoneVertexDragging.value = null
@@ -1905,6 +1956,7 @@ async function activateCamera(cameraId) {
   await fetchCameraZones(cameraId).catch(() => {
     const zones = normalizeZones({ zones: currentCamera.value?.detection_zones || [] })
     detectionZones.value = zones
+    syncAssistZoneSelection(zones)
     if (cameraId) {
       gridCameraZones.value = {
         ...gridCameraZones.value,
@@ -2001,6 +2053,7 @@ async function setCameraViewMode(mode) {
     stopLiveStream()
     stopDetectionSubscription()
     await refreshGridStreams(true)
+    syncAssistZoneSelection()
   }
 }
 
@@ -2107,6 +2160,7 @@ async function setGridSlotCamera(slotIndex, cameraId) {
       : null
   }
   await refreshGridStreams(true)
+  syncAssistZoneSelection()
 }
 
 async function activateGridCamera(cameraId) {
@@ -2121,6 +2175,7 @@ async function activateGridSlot(slot) {
   if (!slot.camera) return
   await activateGridCamera(slot.camera.id)
   await ensureGridCameraZones(slot.camera.id)
+  syncAssistZoneSelection(gridZonesForCamera(slot.camera.id))
 }
 
 function isActiveGridSlot(slot) {
@@ -2790,7 +2845,12 @@ h1, h2, h3, p { margin-top: 0; }
 
 .video-stage, .video-empty { position: relative; height: min(760px, calc(100vh - 132px)); min-height: 520px; overflow: hidden; border: 0; border-radius: 8px; background: #030b12; }
 .video-stream, .box-overlay, .zone-overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
-.video-stream { object-fit: contain; background: #030b12; }
+.video-stream {
+  /* Keep the camera's native aspect ratio; never stretch a 4:3/16:9 feed to the stage. */
+  object-fit: contain !important;
+  object-position: center;
+  background: #030b12;
+}
 .video-stream::-webkit-media-controls,
 .video-stream::-webkit-media-controls-enclosure,
 .video-stream::-webkit-media-controls-panel,
@@ -3487,6 +3547,27 @@ h1, h2, h3, p { margin-top: 0; }
   min-width: 42px;
   height: 22px;
 }
+.assist-setting {
+  display: grid;
+  gap: 8px;
+}
+.assist-zone-select {
+  width: 100%;
+}
+.assist-zone-select :deep(.el-select__wrapper) {
+  min-height: 38px;
+  border-radius: 8px;
+  background: rgba(4, 20, 28, 0.62);
+  box-shadow: 0 0 0 1px rgba(137, 174, 184, 0.16) inset;
+}
+.assist-zone-select :deep(.el-select__selected-item) {
+  color: #c6dce6;
+  font-size: 13px;
+  font-weight: 700;
+}
+.assist-zone-select :deep(.el-select__caret) {
+  color: #8ddcf0;
+}
 .map-nav-entry {
   width: 100%;
   min-height: 88px;
@@ -3621,6 +3702,7 @@ h1, h2, h3, p { margin-top: 0; }
   width: 100%;
   height: 100%;
   object-fit: contain;
+  object-position: center;
   display: block;
 }
 .tile-zone-overlay {

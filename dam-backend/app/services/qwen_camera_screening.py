@@ -54,8 +54,7 @@ SYSTEM_PROMPT = """你是库坝、河道、库区摄像头的本地 qwen4B 初�
     "person_confidence": 0.0,
     "boat_confidence": 0.0
   },
-  "risk_level": "LOW",
-  "summary": "一句话概括最主要风险或无异常原因",
+  "summary": "一句话概括命中的事件或无事件原因",
   "evidence": ["列出可见证据，最多8条"],
   "uncertainties": ["列出不确定原因，最多8条"]
 }
@@ -71,10 +70,10 @@ SYSTEM_PROMPT = """你是库坝、河道、库区摄像头的本地 qwen4B 初�
 
 有效画面判断：
 - 有效库坝/河道画面包括：水面、岸线、滩涂、河滩、消落带、坝体、泄洪通道、桥下河床、库区道路、堤坡、近水平台。
-- 无效画面包括：室内、墙面、设备近景、天空/地面局部、严重遮挡、过曝/全黑、没有水域/岸线/滩涂/坝体上下文。无效画面必须所有 scene=0、所有 confidence=0、risk_level=LOW，summary 写“非库坝河道有效画面”或“画面无有效水域岸线线索”。
+- 无效画面包括：室内、墙面、设备近景、天空/地面局部、严重遮挡、过曝/全黑、没有水域/岸线/滩涂/坝体上下文。无效画面必须所有 scene=0、所有 confidence=0，summary 写“非库坝河道有效画面”或“画面无有效水域岸线线索”。
 
 自然灾害判定：
-- 洪水 flood_detected=1 的强证据：浑浊急流、水位明显暴涨、漫堤/漫路、道路或桥下被水淹没、泄洪水流、桥下异常大水、持续湍急冲刷、河床被异常大流量覆盖。confidence 通常 0.80~0.98，risk_level=HIGH。
+- 洪水 flood_detected=1 的强证据：浑浊急流、水位明显暴涨、漫堤/漫路、道路或桥下被水淹没、泄洪水流、桥下异常大水、持续湍急冲刷、河床被异常大流量覆盖。confidence 通常 0.80~0.98。
 - 普通平静水面、正常河道、雨后浅积水，不要报洪水。
 - 泥石流/滑坡需要看到坡体流动、塌方、新鲜土石堆积、坡面大面积破坏等明确证据；只有浑浊水流时优先判洪水，不判泥石流/滑坡。
 - 地震只能在画面出现明显震动破坏、结构开裂坍塌、摄像头剧烈晃动且有破坏后果时判定；普通抖动或模糊不能判地震。
@@ -82,14 +81,14 @@ SYSTEM_PROMPT = """你是库坝、河道、库区摄像头的本地 qwen4B 初�
 
 人员/滩涂游玩判定：
 - 只有在没有明显自然灾害，且画面包含水域/岸线/滩涂/坝体等有效环境时，才评估人员。
-- confirmed 人员：清晰看到人形目标进入滩涂、河滩、消落带、水边危险区、堤坡或亲水区域活动，person_present=1，person_confidence>=0.65，risk_level 至少 MEDIUM。
+- confirmed 人员：清晰看到人形目标进入滩涂、河滩、消落带、水边危险区、堤坡或亲水区域活动，person_present=1，person_confidence>=0.65。
 - suspect 人员：连续帧中在滩涂/河滩/水边出现远距离小人形、移动小黑点、活动点、疑似站立/行走轮廓，但目标小、模糊或被遮挡，person_present=0，person_confidence=0.35~0.60，summary 写“疑似人员亲水/滩涂活动待复核”。
 - 滩涂游玩测试重点：宽幅河道画面中，远岸滩涂/消落带上的黑色小点、浅色小点、竖向小轮廓，如果在连续帧中有轻微位移或成组分布，不要按噪声忽略；即使不能确认人，也要按 suspect 人员输出 person_confidence=0.35~0.60，并写明“远距离尺度小，待复核”。
 - 不能作为人员疑似的内容：墙面纹理、反光、树影、浪花、设备边缘、栏杆、污点、静止石块、纯噪声。
 
 船只/电鱼捕鱼判定：
 - 只有画面包含明确水面/岸线/河道上下文时，才评估船只或捕鱼。
-- confirmed 船只：清晰看到船体、皮划艇、渔船、漂浮作业平台或人在船上活动，boat_present=1，boat_confidence>=0.65，risk_level 至少 MEDIUM。
+- confirmed 船只：清晰看到船体、皮划艇、渔船、漂浮作业平台或人在船上活动，boat_present=1，boat_confidence>=0.65。
 - suspect 船只/捕鱼：连续帧中出现以下任一弱线索时，boat_present=0，boat_confidence=0.35~0.60，summary 写“疑似船只/捕鱼待复核”：
   1. 水面细长移动目标、移动暗斑、疑似船头/船尾轮廓；
   2. 船后尾迹、V形水纹、局部扰动水纹，且位置随帧变化；
@@ -99,11 +98,9 @@ SYSTEM_PROMPT = """你是库坝、河道、库区摄像头的本地 qwen4B 初�
 - 电鱼捕鱼测试重点：夜间红外河面中，远处细长黑影、缓慢移动的小暗斑、贴近水面的微弱亮点、局部水纹扰动，只要跨帧持续存在或位置变化，就按 suspect 船只/捕鱼保留；不要因为看不清船体而输出 boat_confidence=0。
 - 如果只是普通水面、远岸、滩涂纹理、固定灯光倒影、静止石块、桥梁阴影，boat_confidence=0。
 
-风险等级：
-- 任一自然灾害 confirmed => risk_level=HIGH。
-- 人员或船只 confirmed => risk_level=MEDIUM；若靠近湍急水流、夜间捕鱼、电鱼强光明显，可为 HIGH。
-- 只有 suspect 人员/船只且没有自然灾害 => risk_level=LOW 或 MEDIUM 均可，但 summary 必须说明“疑似...待复核”；不要写无异常。
-- 全部无证据或无效画面 => risk_level=LOW，summary 写清楚为什么无异常。
+事件事实边界：
+- 初筛只输出事件是否命中、置信度、可见证据和不确定因素，不输出风险等级。
+- 风险初始值由事件库配置；特殊工况、知识库和视频证据造成的风险变化交给智能路由及后续4B/35B复核。
 
 输出质量要求：
 - evidence 写画面事实，例如“桥下浑浊急流覆盖河床”“连续帧水面有移动暗斑和扰动水纹”“滩涂远处有小人形活动点”。
@@ -115,6 +112,20 @@ CAMERA_SCREENING_ACTOR_NAME = "摄像头初筛专家"
 CAMERA_SCREENING_STAGE_CODE = "camera_screening"
 CAMERA_SCREENING_MODEL_SCOPE = "qwen4b"
 PROMPT_CACHE_SECONDS = 60.0
+SAFETY_SCREENING_MODE = "SAFETY_TARGET"
+NATURAL_DISASTER_SCREENING_MODE = "NATURAL_DISASTER"
+
+
+def _effective_screening_mode(
+    value: Optional[str],
+    detection_region: Optional[Dict[str, Any]],
+) -> str:
+    normalized = str(value or "").strip().upper()
+    if normalized in {"SAFETY", "PERSON_SAFETY", SAFETY_SCREENING_MODE}:
+        return SAFETY_SCREENING_MODE
+    if normalized in {"NATURAL", "DISASTER", NATURAL_DISASTER_SCREENING_MODE}:
+        return NATURAL_DISASTER_SCREENING_MODE
+    return SAFETY_SCREENING_MODE if detection_region else NATURAL_DISASTER_SCREENING_MODE
 
 
 def _region_from_zone(zone: Optional[Dict[str, Any]]) -> Optional[Dict[str, float]]:
@@ -256,10 +267,17 @@ class QwenCameraScreeningService:
         zone_name: Optional[str] = None,
         zone_type: Optional[str] = None,
         detection_region: Optional[Dict[str, Any]] = None,
+        screening_mode: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Screen an explicit frame window and dispatch the result to camera ECA."""
         if not frames:
             return None
+        effective_screening_mode = _effective_screening_mode(screening_mode, detection_region)
+        if effective_screening_mode == NATURAL_DISASTER_SCREENING_MODE:
+            zone_id = None
+            zone_name = None
+            zone_type = None
+            detection_region = None
         effective_window = (
             max(1.0, float(window_seconds))
             if window_seconds is not None
@@ -290,6 +308,7 @@ class QwenCameraScreeningService:
                 effective_window,
                 detection_region=detection_region,
                 zone_type=zone_type,
+                screening_mode=effective_screening_mode,
                 original_frame_count=len(frames),
             )
         if not result:
@@ -299,6 +318,7 @@ class QwenCameraScreeningService:
         result["timestamp"] = time.time()
         result["window_seconds"] = effective_window
         result["input_source"] = input_source
+        result["screening_mode"] = effective_screening_mode
         result["actor_name"] = prompt_config.get("actor_name")
         result["stage_code"] = prompt_config.get("stage_code")
         result["system_prompt_source"] = prompt_config.get("source")
@@ -344,6 +364,7 @@ class QwenCameraScreeningService:
         window_seconds: Optional[float] = None,
         supplemental_context: Optional[Dict[str, Any]] = None,
         zone_id: Optional[str] = None,
+        screening_mode: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Screen a local video file by sampling frames server-side."""
         frames, duration_seconds = await asyncio.to_thread(
@@ -353,11 +374,12 @@ class QwenCameraScreeningService:
         )
         if not frames:
             return None
+        effective_screening_mode = _effective_screening_mode(screening_mode, None if screening_mode == NATURAL_DISASTER_SCREENING_MODE else zone_id)
         zone = None
         detection_region = None
         zone_name = None
         zone_type = None
-        if zone_id:
+        if zone_id and effective_screening_mode == SAFETY_SCREENING_MODE:
             zone = next(
                 (
                     item for item in get_camera_zone_store().get(str(camera_id))
@@ -380,6 +402,7 @@ class QwenCameraScreeningService:
             zone_name=zone_name,
             zone_type=zone_type,
             detection_region=detection_region,
+            screening_mode=effective_screening_mode,
         )
 
     def _augment_screening_frames(
@@ -726,6 +749,7 @@ class QwenCameraScreeningService:
         *,
         detection_region: Optional[Dict[str, Any]] = None,
         zone_type: Optional[str] = None,
+        screening_mode: Optional[str] = None,
         original_frame_count: Optional[int] = None,
     ) -> tuple[Optional[Dict[str, Any]], str, Dict[str, Any]]:
         prompt_config = await asyncio.to_thread(self._get_camera_screening_prompt)
@@ -754,14 +778,20 @@ class QwenCameraScreeningService:
             if zone_type else
             ""
         )
-        region_instruction = (
+        if screening_mode == NATURAL_DISASTER_SCREENING_MODE:
+            region_instruction = (
+                "当前为自然灾害场景，按整幅画面分析洪水、泥石流、滑坡、地震等灾害证据；"
+                "不使用人员安全检测区域，也不要因为目标位于画面边缘而排除自然灾害证据。"
+            )
+        else:
+            region_instruction = (
             "画面中的黄色矩形是本次检测区域，归一化边界为 "
             f"({detection_region.get('x1')},{detection_region.get('y1')})-({detection_region.get('x2')},{detection_region.get('y2')})。"
             f"{target_instruction}"
             "人员、船只、渔船或捕鱼线索只有在目标主体/锚点位于矩形内部时才计入事件；矩形外目标一律视为背景，不得用于触发。"
             if detection_region else
             "本次没有指定检测区域，按整幅画面判断。"
-        )
+            )
         system_prompt = str(prompt_config["prompt"] or "")
         if detection_region:
             system_prompt += f"\n\n区域判定补充：{region_instruction}"
@@ -912,7 +942,7 @@ class QwenCameraScreeningService:
             self._suppress_person_boat_when_natural_disaster(scene, confidence)
 
             # 疑似档派生：人员/船只低置信(0.3~0.65)不归零，另置 possible_* 位。
-            # 注意 possible_* 不进 scene_keys，避免下方 risk 抬升把纯疑似误判为 MEDIUM。
+            # 注意 possible_* 不进 scene_keys，避免把纯疑似误判为确认事件。
             suspect_min = max(0.0, min(settings.QWEN_CAMERA_SCREENING_SUSPECT_MIN_CONFIDENCE, 1.0))
             for confirmed_key, possible_key, conf_key in (
                 ("person_present", "possible_person", "person_confidence"),
@@ -928,15 +958,9 @@ class QwenCameraScreeningService:
             self._suppress_person_boat_when_natural_disaster(scene, confidence)
             self._derive_illegal_fishing_suspect(data, scene, confidence)
             self._normalize_suspect_summary(data, scene)
-            data["risk_level"] = str(data.get("risk_level") or "LOW").upper()
-            if data["risk_level"] not in {"LOW", "MEDIUM", "HIGH"}:
-                data["risk_level"] = "LOW"
-            natural_disaster = any(scene[key] == 1 for key in scene_keys[:4])
-            person_or_boat = any(scene[key] == 1 for key in scene_keys[4:])
-            if natural_disaster:
-                data["risk_level"] = "HIGH"
-            elif person_or_boat and data["risk_level"] == "LOW":
-                data["risk_level"] = "MEDIUM"
+            # Camera screening is an event fact extractor. Any model-emitted
+            # risk value is discarded and cannot influence ECA or routing.
+            data.pop("risk_level", None)
             data["evidence"] = [
                 str(item)[:200]
                 for item in (data.get("evidence") or [])
@@ -990,7 +1014,6 @@ class QwenCameraScreeningService:
         confidence = parse_named_object("confidence")
         if not scene and not confidence:
             return None
-        risk_match = re.search(r'"risk_level"\s*:\s*"([^"]+)"', text)
         summary_match = re.search(r'"summary"\s*:\s*"([^"\n\r]*)', text)
         evidence = []
         if any(token in text for token in ("夜间", "水面", "尾迹", "扰动", "强光", "船")):
@@ -1000,7 +1023,6 @@ class QwenCameraScreeningService:
         return {
             "scene": scene,
             "confidence": confidence,
-            "risk_level": (risk_match.group(1) if risk_match else "LOW"),
             "summary": summary_match.group(1) if summary_match else "摄像头初筛输出不完整，已提取结构化置信度进入复核",
             "evidence": evidence,
             "uncertainties": ["4B 初筛 JSON 输出被截断，已按已返回的 scene/confidence 字段保留疑似线索"],
@@ -1191,7 +1213,6 @@ class QwenCameraScreeningService:
         if any(term in text for term in flood_terms) and not any(term in text for term in normal_water_terms):
             scene["flood_detected"] = 1
             confidence["flood_confidence"] = max(float(confidence.get("flood_confidence", 0.0) or 0.0), 0.72)
-            data["risk_level"] = "HIGH"
 
     @staticmethod
     def _suppress_person_boat_when_natural_disaster(

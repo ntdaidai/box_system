@@ -28,10 +28,16 @@ ZONE_TYPES = {
     "FISHING",
 }
 ZONE_LABELS = {
-    "PERSON_LOW": "低风险区域人员进入",
-    "PERSON_MEDIUM": "中风险区域人员进入",
-    "PERSON_HIGH": "高风险区域人员进入",
-    "FISHING": "捕鱼区域船只进入",
+    "PERSON_LOW": "禁闯入区",
+    "PERSON_MEDIUM": "禁亲水区",
+    "PERSON_HIGH": "禁涉水区",
+    "FISHING": "禁捕区",
+}
+ZONE_NAME_REPLACEMENTS = {
+    "PERSON_LOW": (("人员低风险区", "禁闯入区"), ("低风险区", "禁闯入区")),
+    "PERSON_MEDIUM": (("人员中风险区", "禁亲水区"), ("中风险区", "禁亲水区")),
+    "PERSON_HIGH": (("人员高风险区", "禁涉水区"), ("高风险区", "禁涉水区")),
+    "FISHING": (("捕鱼区", "禁捕区"),),
 }
 PERSON_ZONE_TYPES = {
     "PERSON_LOW", "PERSON_MEDIUM", "PERSON_HIGH",
@@ -104,6 +110,13 @@ def normalize_zone_type(zone_type: Any) -> str:
     return raw
 
 
+def normalize_zone_name(name: Any, zone_type: str) -> str:
+    value = str(name or ZONE_LABELS[zone_type])[:80]
+    for source, target in ZONE_NAME_REPLACEMENTS.get(zone_type, ()):
+        value = value.replace(source, target)
+    return value
+
+
 def _normalize_point(point: Any) -> Dict[str, float]:
     if isinstance(point, dict):
         x = point.get("x")
@@ -141,18 +154,37 @@ def normalize_detection_zone(zone: Dict[str, Any], fallback_id: str = "") -> Dic
         if key not in seen_points:
             polygon_points.append(point)
             seen_points.add(key)
-    if not 3 <= len(polygon_points) <= 15:
-        raise ValueError("多边形区域必须包含 3 到 15 个顶点")
+    if not 2 <= len(polygon_points) <= 15:
+        raise ValueError("矩形区域必须包含左上角和右下角两个定位点")
+
+    if len(polygon_points) == 2:
+        first, second = polygon_points
+        min_x, max_x = min(first["x"], second["x"]), max(first["x"], second["x"])
+        min_y, max_y = min(first["y"], second["y"]), max(first["y"], second["y"])
+        polygon_points = [
+            {"x": min_x, "y": min_y},
+            {"x": max_x, "y": min_y},
+            {"x": max_x, "y": max_y},
+            {"x": min_x, "y": max_y},
+        ]
 
     rect = _polygon_bounds(polygon_points)
     if rect["width"] <= 0.001 or rect["height"] <= 0.001:
         raise ValueError("多边形区域面积过小")
 
+    # 区域统一按矩形处理：用户只维护左上角和右下角，检测运行时使用完整四角。
+    polygon_points = [
+        {"x": rect["x"], "y": rect["y"]},
+        {"x": round(rect["x"] + rect["width"], 6), "y": rect["y"]},
+        {"x": round(rect["x"] + rect["width"], 6), "y": round(rect["y"] + rect["height"], 6)},
+        {"x": rect["x"], "y": round(rect["y"] + rect["height"], 6)},
+    ]
+
     zone_id = str(zone.get("id") or fallback_id or f"{zone_type}_{time.time_ns()}")
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", zone_id):
         raise ValueError("区域 ID 只能包含字母、数字、下划线和短横线")
 
-    name = str(zone.get("zone_name") or zone.get("name") or ZONE_LABELS[zone_type])[:80]
+    name = normalize_zone_name(zone.get("zone_name") or zone.get("name"), zone_type)
     risk_level = DEFAULT_ZONE_RISK[zone_type]
     try:
         trigger_seconds = max(0.0, float(zone.get("trigger_seconds", DEFAULT_ZONE_TRIGGER_SECONDS[zone_type])))

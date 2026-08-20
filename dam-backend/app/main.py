@@ -104,15 +104,33 @@ async def lifespan(app: FastAPI):
 
         rows = db.query(Camera).filter(Camera.enabled == True).all()  # noqa: E712
         proxy_count = 0
-        if settings.CAMERA_WEB_PROXY_ENABLED:
+        if settings.CAMERA_WEB_PROXY_EXTERNAL:
+            for row in rows:
+                camera_web_proxy_manager.stop_proxy(str(row.id))
+                row.web_proxy_port = (
+                    settings.CAMERA_WEB_PROXY_PRIMARY_PORT
+                    if row.camera_name == camera.PRIMARY_CAMERA_NAME
+                    else None
+                )
+                if row.camera_name == camera.PRIMARY_CAMERA_NAME:
+                    proxy_count = 1
+        elif settings.CAMERA_WEB_PROXY_ENABLED:
             for row in rows:
                 runtime_id = str(row.id)
+                if camera.is_logical_camera(row):
+                    # 逻辑点位与 9 号真实摄像头共用同一个 Web 控制台，不单独占用端口。
+                    row.web_proxy_port = None
+                    continue
                 try:
                     proxy = camera_web_proxy_manager.start_proxy(
                         camera_id=runtime_id,
                         target_host=row.ip_address,
                         target_port=row.web_port or 80,
-                        preferred_port=row.web_proxy_port,
+                        preferred_port=(
+                            settings.CAMERA_WEB_PROXY_PRIMARY_PORT
+                            if row.camera_name == camera.PRIMARY_CAMERA_NAME
+                            else row.web_proxy_port
+                        ),
                     )
                     row.web_proxy_port = int(proxy["listen_port"])
                     proxy_count += 1

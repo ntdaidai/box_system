@@ -232,7 +232,6 @@ class VisionDetector:
                     "confidence": max(0.0, min(score, 1.0)),
                     "details": {
                         "summary": screening.get("summary"),
-                        "risk_level": screening.get("risk_level"),
                         "evidence": screening.get("evidence") or [],
                         "uncertainties": screening.get("uncertainties") or [],
                         "window_seconds": screening.get("window_seconds"),
@@ -268,6 +267,9 @@ class VisionDetector:
     @staticmethod
     def _normalize_screening_for_eca(screening: Dict[str, Any]) -> Dict[str, Any]:
         normalized = dict(screening or {})
+        # Qwen camera screening reports event facts only. Risk belongs to the
+        # event library and the downstream 4B/35B review.
+        normalized.pop("risk_level", None)
         scene = dict(normalized.get("scene") or {})
         confidence = dict(normalized.get("confidence") or {})
         normalized["scene"] = scene
@@ -335,7 +337,6 @@ class VisionDetector:
                 scene[key] = 0
             confidence["person_confidence"] = 0.0
             confidence["boat_confidence"] = 0.0
-            normalized["risk_level"] = "HIGH"
             return normalized
         try:
             person_score = float(confidence.get("person_confidence", 0.0) or 0.0)

@@ -235,8 +235,8 @@ class SqlCameraZoneStore:
                         if key not in seen_points:
                             points.append(normalized)
                             seen_points.add(key)
-                    if not 3 <= len(points) <= 15:
-                        raise ValueError("每个区域必须包含 3 到 15 个多边形顶点")
+                    if not 2 <= len(points) <= 15:
+                        raise ValueError("每个区域必须包含左上角和右下角两个定位点")
                     zone_type = str(zone.get("zone_type") or zone.get("type") or "PERSON_LOW")[:32]
                     if zone_type not in {"PERSON_LOW", "PERSON_MEDIUM", "PERSON_HIGH", "FISHING"}:
                         raise ValueError("区域类型无效")
@@ -286,9 +286,10 @@ class SqlCameraZoneStore:
         from app.models.condition_library import ConditionLibrary
         from app.models.event_condition import EventCondition
         from app.models.event_library import EventLibrary
+        from app.services.camera_stream import normalize_zone_name
 
         points = row.polygon_points or []
-        if not isinstance(points, list) or not 3 <= len(points) <= 15:
+        if not isinstance(points, list) or not 2 <= len(points) <= 15:
             raise ValueError(f"区域 {row.id} 的 polygon_points 不合法")
         event_codes = [definition[0] for definition in VISUAL_ZONE_EVENT_DEFINITIONS.get(row.zone_type, ())]
         duration_rows = (
@@ -314,10 +315,11 @@ class SqlCameraZoneStore:
             if key not in seen_points:
                 normalized_points.append(normalized)
                 seen_points.add(key)
+        zone_name = normalize_zone_name(row.zone_name, row.zone_type)
         return {
             "id": str(row.id),
-            "name": row.zone_name,
-            "zone_name": row.zone_name,
+            "name": zone_name,
+            "zone_name": zone_name,
             "type": row.zone_type,
             "zone_type": row.zone_type,
             "enabled": bool(row.enabled),

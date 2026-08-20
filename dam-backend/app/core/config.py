@@ -297,6 +297,10 @@ class Settings:
     MINIPROGRAM_LIVE_USE_SUBSTREAM: bool = _get_env(
         "MINIPROGRAM_LIVE_USE_SUBSTREAM", "true"
     ).lower() == "true"
+    # Web 端监控页默认使用主码流，与摄像头控制台保持相同画幅；小程序仍可独立使用子码流。
+    CAMERA_WEB_LIVE_USE_SUBSTREAM: bool = _get_env(
+        "CAMERA_WEB_LIVE_USE_SUBSTREAM", "false"
+    ).lower() == "true"
     MINIPROGRAM_LIVE_PUBLISH_BASE_URL: str = _get_env(
         "MINIPROGRAM_LIVE_PUBLISH_BASE_URL", "rtmp://127.0.0.1:1936"
     ).rstrip("/")
@@ -311,8 +315,13 @@ class Settings:
     CAMERA_WEB_PROXY_ENABLED: bool = (
         _get_env("CAMERA_WEB_PROXY_ENABLED", "true").lower() == "true"
     )
+    # Web 控制台由 Jetson 主机级 systemd/socat 提供，后端不再占用监听端口。
+    CAMERA_WEB_PROXY_EXTERNAL: bool = (
+        _get_env("CAMERA_WEB_PROXY_EXTERNAL", "true").lower() == "true"
+    )
     CAMERA_WEB_PROXY_BIND_HOST: str = _get_env("CAMERA_WEB_PROXY_BIND_HOST", "0.0.0.0")
     CAMERA_WEB_PROXY_PUBLIC_HOST: str = _get_env("CAMERA_WEB_PROXY_PUBLIC_HOST", PUBLIC_HOST)
+    CAMERA_WEB_PROXY_PRIMARY_PORT: int = int(_get_env("CAMERA_WEB_PROXY_PRIMARY_PORT", "12345"))
     CAMERA_WEB_PROXY_PORT_START: int = int(_get_env("CAMERA_WEB_PROXY_PORT_START", "12345"))
     CAMERA_WEB_PROXY_PORT_END: int = int(_get_env("CAMERA_WEB_PROXY_PORT_END", "12444"))
     CAMERA_WEB_PROXY_TIMEOUT_SECONDS: float = float(

@@ -87,6 +87,21 @@ class CameraWebProxyManager:
                 "running": True,
             }
 
+    def status_for_target(self, target_host: str, target_port: int) -> Optional[dict]:
+        """Return the shared proxy for a target camera origin, if it exists."""
+        with self._lock:
+            for entry in self._entries.values():
+                if entry.target_host == target_host and entry.target_port == int(target_port):
+                    return {
+                        "camera_id": entry.camera_id,
+                        "target_host": entry.target_host,
+                        "target_port": entry.target_port,
+                        "listen_port": entry.listen_port,
+                        "url": self.public_url(entry.listen_port),
+                        "running": True,
+                    }
+        return None
+
     def active_ports(self) -> Set[int]:
         with self._lock:
             return {entry.listen_port for entry in self._entries.values()}

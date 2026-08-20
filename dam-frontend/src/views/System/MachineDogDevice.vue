@@ -6,42 +6,79 @@
         <p>选择机器狗进入测试，查看实时监控与巡检任务</p>
       </div>
       <div class="status-summary compact-summary" aria-label="机器狗设备统计">
-        <div class="metric"><i class="dot total"></i><strong>{{ machineDogs.length }}</strong><span>总数</span></div>
-        <div class="metric"><i class="dot online"></i><strong>{{ dogOnlineCount }}</strong><span>在线</span></div>
-        <div class="metric"><i class="dot offline"></i><strong>{{ dogOfflineCount }}</strong><span>离线</span></div>
+        <div class="metric"><i class="dot total"></i><strong class="metric-num">{{ machineDogs.length }}</strong><span class="metric-label">总数</span></div>
+        <div class="metric"><i class="dot online"></i><strong class="metric-num">{{ dogOnlineCount }}</strong><span class="metric-label">在线</span></div>
+        <div class="metric"><i class="dot offline"></i><strong class="metric-num">{{ dogOfflineCount }}</strong><span class="metric-label">离线</span></div>
       </div>
     </header>
 
-    <section class="resource-list-card dog-resource-card">
+    <section class="resource-control-card dog-control-card">
       <header class="tab-header">
         <h3>机器狗列表</h3>
+        <div class="tab-actions">
+          <button type="button" class="toolbar-map-entry" @click="openRouteMap">
+            <el-icon><MapLocation /></el-icon>
+            <span>查看路线</span>
+          </button>
+          <el-select v-model="deviceFilter" class="status-filter-select" popper-class="drone-filter-popper" placeholder="设备状态">
+            <el-option v-for="option in deviceFilterOptions" :key="option.value" :label="option.label" :value="option.value" />
+          </el-select>
+        </div>
       </header>
+    </section>
+
+    <section class="resource-list-card dog-resource-card">
       <div class="device-list">
         <div class="device-list-header-row">
           <div class="col-name">设备名称</div>
-          <div class="col-desc">设备型号</div>
-          <div class="col-dock">当前位置</div>
+          <div class="col-desc">设备描述</div>
           <div class="col-runtime">电量</div>
           <div class="col-status">状态</div>
           <div class="col-actions">操作</div>
         </div>
-        <article v-for="dog in machineDogs" :key="dog.id" class="device-row" :class="dog.status === 'offline' ? 'is-offline' : 'is-online'">
+        <article v-for="dog in filteredDogs" :key="dog.id" class="device-row" :class="dog.status === 'offline' ? 'is-offline' : 'is-online'">
           <div class="col-name device-name-cell"><strong>{{ dog.name }}</strong></div>
-          <div class="col-desc device-description"><span>{{ dog.model }}</span></div>
-          <div class="col-dock"><span>{{ dog.location }}</span></div>
+          <div class="col-desc device-description"><span>{{ dog.description }}</span></div>
           <div class="col-runtime device-runtime"><strong>{{ dog.battery }}%</strong></div>
-          <div class="col-status"><span class="status-pill" :class="dog.status === 'offline' ? 'is-offline' : 'is-online'">{{ dogStatusMeta[dog.status].text }}</span></div>
+          <div class="col-status"><span class="status-pill" :class="dog.status === 'offline' ? 'is-offline' : 'is-online'">{{ dog.status === 'offline' ? '离线' : '在线' }}</span></div>
           <div class="col-actions list-actions">
             <el-button class="test-action" @click="openTestDialog(dog)">测试</el-button>
           </div>
         </article>
+        <div v-if="!filteredDogs.length" class="empty-list">暂无匹配的机器狗设备</div>
       </div>
     </section>
+
+    <el-dialog v-model="routeMapVisible" title="巡检路线" width="92%" align-center class="dog-route-dialog">
+      <div class="route-map-toolbar">
+        <span>选择路线</span>
+        <el-select v-model="routeMapRouteId" class="route-map-select">
+          <el-option v-for="route in presetRoutes" :key="route.id" :label="route.name" :value="route.id" />
+        </el-select>
+      </div>
+      <div class="route-map-stage">
+        <img src="/9point.png" alt="巡检路线图" draggable="false" />
+        <svg class="route-map-overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+          <polyline :points="routeMapPolyline" />
+        </svg>
+        <span
+          v-for="(point, index) in routeMapPoints"
+          :key="point.id"
+          class="route-map-point"
+          :style="{ left: `${point.x}%`, top: `${point.y}%` }"
+        >
+          <b>{{ index + 1 }}</b>
+          <em>{{ point.name }}</em>
+        </span>
+        <span class="route-map-charge" :style="{ left: `${chargeZone.x}%`, top: `${chargeZone.y}%` }">充电区</span>
+      </div>
+    </el-dialog>
 
     <!-- 测试弹窗：原调度工作台移入此处，视频作为主要内容展示 -->
     <el-dialog v-model="testDialogVisible" :title="`${testingDog?.name || '机器狗'} · 测试`" width="94%" align-center class="dog-test-dialog" destroy-on-close :close-on-click-modal="false">
 
     <section class="command-panel">
+      <div class="task-command-section">
       <div class="route-builder">
         <div class="panel-heading">
           <div>
@@ -124,41 +161,6 @@
           <div :style="{ width: `${taskProgress}%` }"></div>
         </div>
       </div>
-
-      <div class="machine-status">
-        <div class="panel-heading compact">
-          <div>
-            <span class="panel-kicker">设备状态</span>
-            <h3>{{ selectedDog?.name || '未选择设备' }}</h3>
-          </div>
-          <span v-if="selectedDog" class="live-badge">{{ dogStatusMeta[selectedDog.status].text }}</span>
-        </div>
-        <div v-if="selectedDog" class="status-grid">
-          <div class="status-cell">
-            <span class="status-label">移动速度</span>
-            <strong :class="{ moving: selectedDog.speed > 0 }">
-              {{ selectedDog.speed.toFixed(1) }} <em>m/s</em>
-            </strong>
-          </div>
-          <div class="status-cell">
-            <span class="status-label">当前位置</span>
-            <strong class="status-loc" :title="selectedDog.location">{{ selectedDog.location }}</strong>
-          </div>
-          <div class="status-cell">
-            <span class="status-label">当前任务</span>
-            <strong class="status-task" :title="selectedDog.task || '待命'">{{ selectedDog.task || '待命' }}</strong>
-          </div>
-          <div class="status-cell">
-            <span class="status-label">电量</span>
-            <div class="status-meter">
-              <div class="meter-track" :class="{ low: selectedDog.battery < 30 }">
-                <div class="meter-fill battery" :style="{ width: `${selectedDog.battery}%` }"></div>
-              </div>
-              <b>{{ selectedDog.battery }}%</b>
-            </div>
-          </div>
-        </div>
-        <div v-else class="status-empty">请先在左侧选择设备</div>
       </div>
     </section>
 
@@ -475,6 +477,7 @@ const machineDogs = ref([
     id: 'dog-01',
     name: '绝影 Lite 3',
     model: 'Unitree Lite 3',
+    description: '四足巡检机器狗，支持路线巡检与实时视频回传',
     status: 'idle',
     battery: 92,
     signal: 95,
@@ -513,14 +516,14 @@ const displayWaypoints = computed(() =>
 const displayChargeZone = computed(() => toDisplay(chargeZone))
 
 const deviceFilterOptions = [
-  { label: '全部', value: 'all' },
-  { label: '空闲', value: 'idle' },
-  { label: '巡检中', value: 'running' },
-  { label: '异常', value: 'warning' },
+  { label: '全部状态', value: 'all' },
+  { label: '在线', value: 'online' },
+  { label: '离线', value: 'offline' },
 ]
 
 const deviceDrawerVisible = ref(false)
 const testDialogVisible = ref(false)
+const routeMapVisible = ref(false)
 const testingDog = ref(null)
 const selectedDeviceId = ref('dog-01')
 const selectedPresetRouteId = ref(
@@ -532,6 +535,7 @@ const selectedPresetRouteId = ref(
 )
 const selectedWaypointIds = ref([...presetRoutes.value[0].points])
 const deviceFilter = ref('all')
+const routeMapRouteId = ref(presetRoutes.value[0]?.id || '')
 const videoUrl = ref('')
 // 初始无巡检任务，机器狗停在充电区待命，点击"开始巡检"后从充电区出发巡检
 const activeTask = ref(null)
@@ -664,8 +668,14 @@ const taskProgress = computed(() => {
 })
 const filteredDogs = computed(() => {
   if (deviceFilter.value === 'all') return machineDogs.value
-  return machineDogs.value.filter((dog) => dog.status === deviceFilter.value)
+  if (deviceFilter.value === 'online') return machineDogs.value.filter((dog) => dog.status !== 'offline')
+  return machineDogs.value.filter((dog) => dog.status === 'offline')
 })
+const routeMapRoute = computed(() => presetRoutes.value.find((route) => route.id === routeMapRouteId.value) || presetRoutes.value[0])
+const routeMapPoints = computed(() =>
+  (routeMapRoute.value?.points || []).map((id) => waypoints.find((point) => point.id === id)).filter(Boolean)
+)
+const routeMapPolyline = computed(() => pointsToPolyline(routeMapPoints.value))
 const summaryCards = computed(() => {
   const counts = machineDogs.value.reduce((acc, dog) => {
     acc[dog.status] = (acc[dog.status] || 0) + 1
@@ -870,6 +880,11 @@ function openTestDialog(dog) {
   testingDog.value = dog
   selectedDeviceId.value = dog.id
   testDialogVisible.value = true
+}
+
+function openRouteMap() {
+  routeMapRouteId.value = selectedPresetRouteId.value || presetRoutes.value[0]?.id || ''
+  routeMapVisible.value = true
 }
 
 onMounted(() => {
@@ -1590,7 +1605,7 @@ onBeforeUnmount(() => {
 .compact-summary .metric strong { color: #f2fbff; font-size: 22px; line-height: 1; }
 .compact-summary .dot { width: 9px; height: 9px; grid-row: 1 / span 2; border-radius: 50%; background: #43d9ff; }
 .compact-summary .dot.online { background: #43e6b8; }
-.compact-summary .dot.offline { background: #8293a0; }
+.compact-summary .dot.offline { background: #ff5b68; box-shadow: 0 0 8px rgba(255, 91, 104, .72); }
 
 .dog-resource-card {
   margin-top: 14px;
@@ -2139,5 +2154,305 @@ onBeforeUnmount(() => {
   .map-area {
     height: 280px;
   }
+}
+
+/* 设备列表字段统一对齐 */
+.dog-control-card {
+  min-height: 82px;
+  display: flex;
+  align-items: center;
+  margin-bottom: 0;
+  padding: 18px 20px;
+  border: 1px solid rgba(96, 151, 191, .18);
+  border-radius: 8px;
+  background: #0b1d30;
+}
+.dog-control-card .tab-header { width: 100%; }
+.dog-control-card .tab-header h3 { margin: 0; color: #f3f8fd; font-size: 18px; }
+.dog-control-card .tab-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.dog-resource-card {
+  margin-top: 16px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid rgba(96, 151, 191, .18);
+  border-radius: 8px;
+  background: #0b1d30;
+}
+.dog-resource-card .device-list { min-width: 0; }
+.dog-resource-card .tab-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dog-resource-card .device-list-header-row,
+.dog-resource-card .device-row {
+  grid-template-columns: minmax(180px, 1.15fr) minmax(300px, 2fr) 110px 110px 120px;
+}
+
+.dog-resource-card .device-list-header-row > div,
+.dog-resource-card .device-row > div {
+  min-width: 0;
+  text-align: center;
+}
+.dog-resource-card .device-description { display: grid; justify-items: center; }
+.dog-resource-card .device-description span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dog-resource-card .device-name-cell { display: grid; justify-items: center; }
+.dog-resource-card .device-runtime {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  text-align: center;
+}
+.dog-resource-card .device-runtime strong { display: block; min-width: 48px; text-align: center; }
+
+/* 直接复用无人机设备页的工具框视觉 */
+.dog-control-card .toolbar-map-entry {
+  flex: 0 0 auto;
+  height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 18px 0 12px;
+  border: 1px solid rgba(72, 216, 255, .58);
+  border-radius: 6px;
+  color: #e8faff;
+  background: linear-gradient(135deg, rgba(23, 116, 155, .88), rgba(10, 59, 88, .86));
+  font: inherit;
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(213, 247, 255, .10), 0 0 18px rgba(72, 216, 255, .16);
+}
+.dog-control-card .toolbar-map-entry:hover {
+  border-color: rgba(126, 238, 255, .82);
+  color: #fff;
+  background: linear-gradient(135deg, rgba(30, 136, 181, .96), rgba(12, 72, 108, .92));
+}
+.dog-control-card .toolbar-map-entry .el-icon {
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 5px;
+  color: #031825;
+  background: #48d8ff;
+  font-size: 18px;
+}
+.dog-control-card .status-filter-select { width: 116px; flex: 0 0 auto; }
+.dog-control-card .status-filter-select :deep(.el-select__wrapper) {
+  min-height: 34px;
+  border-radius: 6px;
+  background: #0d2740;
+  box-shadow: 0 0 0 1px rgba(84, 148, 193, .36) inset;
+}
+
+.dog-resource-card .col-runtime,
+.dog-resource-card .col-status,
+.dog-resource-card .col-actions {
+  justify-items: center;
+  text-align: center;
+}
+
+.route-map-entry {
+  height: 36px;
+  border: 1px solid rgba(72, 216, 255, .58);
+  border-radius: 6px;
+  color: #e8faff;
+  background: linear-gradient(135deg, rgba(23, 116, 155, .88), rgba(10, 59, 88, .86));
+  font-weight: 800;
+}
+
+.status-filter-select { width: 116px; }
+.status-filter-select :deep(.el-select__wrapper) {
+  min-height: 36px;
+  border-radius: 6px;
+  background: #0d2740;
+  box-shadow: 0 0 0 1px rgba(84, 148, 193, .36) inset;
+}
+.status-filter-select :deep(.el-select__selected-item),
+.status-filter-select :deep(.el-select__placeholder) { color: #d7edf6; font-weight: 700; }
+
+.dog-route-dialog :deep(.el-dialog) {
+  border: 1px solid rgba(93, 184, 225, .25);
+  border-radius: 12px;
+  background: #0a1c2e;
+}
+.dog-route-dialog :deep(.el-dialog__header) { border-bottom: 1px solid rgba(93, 184, 225, .15); }
+.route-map-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; color: #a9c7de; font-size: 13px; font-weight: 700; }
+.route-map-select { width: 260px; }
+.route-map-stage {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  aspect-ratio: 3072 / 1344;
+  border: 1px solid rgba(93, 184, 225, .17);
+  border-radius: 8px;
+  background: #030b12;
+}
+.route-map-stage > img { width: 100%; height: 100%; display: block; object-fit: fill; }
+.route-map-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.route-map-overlay polyline { fill: none; stroke: #48d8ff; stroke-width: .7; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 2.2 1.2; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 5px rgba(72, 216, 255, .75)); }
+.route-map-point,
+.route-map-charge { position: absolute; z-index: 2; transform: translate(-50%, -50%); display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.route-map-point b { width: 24px; height: 24px; display: grid; place-items: center; border: 2px solid #fff; border-radius: 50%; color: #06212e; background: #48d8ff; box-shadow: 0 0 12px rgba(72, 216, 255, .82); }
+.route-map-point em,
+.route-map-charge { padding: 4px 8px; border: 1px solid rgba(72, 216, 255, .38); border-radius: 4px; color: #e8faff; background: rgba(4, 22, 36, .82); font-size: 12px; font-style: normal; }
+.route-map-charge { z-index: 3; color: #f6dcff; border-color: rgba(213, 123, 255, .5); background: rgba(72, 25, 90, .78); }
+
+@media (max-width: 900px) {
+  .dog-resource-card .tab-actions { width: 100%; justify-content: flex-end; }
+  .route-map-toolbar { flex-wrap: wrap; }
+}
+
+/* 主页面与 System/DroneLinkage.vue 保持同一套布局与视觉规范 */
+.machine-dog-page {
+  min-height: 100%;
+  padding: 22px;
+  color: #d9e8f8;
+  background: #071422;
+}
+.machine-dog-page .page-header,
+.machine-dog-page .tab-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.machine-dog-page .page-header {
+  min-height: 62px;
+  margin-bottom: 14px;
+  padding: 16px 20px;
+  border: 1px solid rgba(96, 151, 191, .22);
+  border-radius: 8px;
+  background: linear-gradient(90deg, rgba(14, 48, 76, .82) 0%, rgba(9, 29, 48, .72) 58%, rgba(7, 20, 34, .46) 100%);
+  box-shadow: inset 0 1px 0 rgba(147, 206, 241, .08);
+}
+.machine-dog-page .page-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.machine-dog-page .status-summary { display: flex; justify-content: flex-end; align-items: center; }
+.machine-dog-page .metric { min-width: 96px; display: inline-flex; align-items: baseline; gap: 8px; padding: 8px 18px; white-space: nowrap; }
+.machine-dog-page .metric + .metric { border-left: 1px solid rgba(96, 151, 191, .18); }
+.machine-dog-page .metric .dot { width: 8px; height: 8px; flex: 0 0 auto; align-self: center; border-radius: 50%; background: #8db2c8; }
+.machine-dog-page .metric .dot.total { box-shadow: 0 0 8px rgba(141, 178, 200, .75); }
+.machine-dog-page .metric .dot.online { background: #48e6bf; box-shadow: 0 0 8px rgba(72, 230, 191, .75); }
+.machine-dog-page .metric .dot.offline { background: #8494a3; }
+.machine-dog-page .metric-num { color: #f2fbff; font-size: 22px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+.machine-dog-page .metric-label { color: #8db2c8; font-size: 12px; }
+.machine-dog-page .page-header h2 { margin: 0; color: #f3f8fd; font-size: 25px; }
+.machine-dog-page .page-header p { margin: 7px 0 0; color: #87a5bb; font-size: 13px; }
+.machine-dog-page .tab-header h3 { margin: 0; color: #f3f8fd; font-size: 18px; }
+
+.machine-dog-page .dog-control-card,
+.machine-dog-page .dog-resource-card {
+  border: 1px solid rgba(96, 151, 191, .18);
+  border-radius: 8px;
+  background: #0b1d30;
+}
+.machine-dog-page .dog-control-card {
+  min-height: 82px;
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 18px 20px;
+}
+.machine-dog-page .dog-resource-card { margin-top: 16px; overflow: hidden; }
+.machine-dog-page .dog-control-card .tab-header { width: 100%; }
+.machine-dog-page .dog-control-card .tab-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: nowrap; }
+.machine-dog-page .dog-resource-card .device-list { min-width: 0; overflow: hidden; background: #081b2d; }
+.machine-dog-page .dog-resource-card .device-list-header-row,
+.machine-dog-page .dog-resource-card .device-row {
+  display: grid;
+  align-items: center;
+  gap: 14px;
+  grid-template-columns: minmax(190px, 1.05fr) minmax(300px, 1.35fr) 150px 100px 120px;
+}
+.machine-dog-page .dog-resource-card .device-list-header-row {
+  min-height: 48px;
+  padding: 0 20px;
+  color: #a9c7de;
+  font-size: 14px;
+  font-weight: 800;
+  text-align: center;
+  background: #15314d;
+}
+.machine-dog-page .dog-resource-card .device-row {
+  min-height: 68px;
+  padding: 10px 20px;
+  border-top: 1px solid rgba(149, 190, 220, .10);
+  color: #d7e8f8;
+  background: #092034;
+  transition: background .18s ease;
+}
+.machine-dog-page .dog-resource-card .device-row:hover { background: #102940; }
+.machine-dog-page .dog-resource-card .device-row > div,
+.machine-dog-page .dog-resource-card .device-list-header-row > div { min-width: 0; text-align: center; }
+.machine-dog-page .dog-resource-card .device-name-cell { display: grid; justify-items: center; text-align: center; }
+.machine-dog-page .dog-resource-card .device-name-cell strong { display: block; overflow: hidden; max-width: 100%; color: #f3f8fd; font-size: 15px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+.machine-dog-page .dog-resource-card .device-description { display: grid; justify-items: center; text-align: center; }
+.machine-dog-page .dog-resource-card .device-description span { display: -webkit-box; overflow: hidden; color: #a9c0d2; font-size: 14px; line-height: 1.45; text-overflow: ellipsis; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.machine-dog-page .dog-resource-card .device-runtime { display: grid; gap: 5px; justify-items: center; text-align: center; }
+.machine-dog-page .dog-resource-card .device-runtime strong { min-width: 48px; font-size: 14px; text-align: center; }
+.machine-dog-page .dog-resource-card .col-status { display: grid; justify-items: center; text-align: center; }
+.machine-dog-page .dog-resource-card .status-pill { display: inline-flex; align-items: center; justify-content: center; height: 24px; padding: 0 10px; border: 1px solid rgba(235, 124, 133, .34); border-radius: 4px; font-size: 13px; font-weight: 600; line-height: 1; }
+.machine-dog-page .dog-resource-card .status-pill.is-online { border-color: rgba(92, 215, 154, .34); color: #81efad; background: rgba(48, 154, 118, .18); }
+.machine-dog-page .dog-resource-card .status-pill.is-offline { border-color: rgba(235, 124, 133, .34); color: #ffabb5; background: rgba(142, 48, 62, .18); }
+.machine-dog-page .dog-resource-card .list-actions { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: nowrap; }
+.machine-dog-page .dog-resource-card .list-actions :deep(.el-button) { width: auto; height: 34px; min-height: 34px; margin: 0; padding: 0 16px; border-radius: 5px; font-size: 13px; font-weight: 800; }
+.machine-dog-page .dog-resource-card .list-actions :deep(.test-action) { border-color: rgba(82, 178, 143, .54); color: #b9f1d8; background: rgba(30, 103, 78, .42); }
+
+/* 测试页：上方任务合并为一个区块，下方地图与实时画面对半 */
+.dog-test-dialog .command-panel {
+  display: block;
+  padding: 10px;
+}
+.dog-test-dialog .task-command-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(300px, .85fr);
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid rgba(78, 151, 188, .18);
+  border-radius: 8px;
+  background: rgba(7, 22, 35, .55);
+}
+.dog-test-dialog .task-command-section .route-builder,
+.dog-test-dialog .task-command-section .task-current {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.dog-test-dialog .task-command-section .task-current { border-left: 1px solid rgba(96, 151, 191, .16); padding-left: 14px; }
+.dog-test-dialog .workspace {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  min-height: 420px;
+  margin-top: 10px;
+  padding: 10px;
+}
+.dog-test-dialog .map-area,
+.dog-test-dialog .video-stage { height: 390px; }
+
+@media (max-width: 900px) {
+  .dog-test-dialog .task-command-section,
+  .dog-test-dialog .workspace { grid-template-columns: 1fr; }
+  .dog-test-dialog .task-command-section .task-current { border-left: 0; border-top: 1px solid rgba(96, 151, 191, .16); padding-top: 14px; padding-left: 0; }
+}
+
+@media (max-width: 900px) {
+  .machine-dog-page .page-header { display: flex; align-items: flex-start; flex-direction: column; }
+  .machine-dog-page .status-summary { width: 100%; justify-content: space-between; }
+  .machine-dog-page .dog-resource-card .device-list-header-row { display: none; }
+  .machine-dog-page .dog-resource-card .device-row { grid-template-columns: 1fr auto; gap: 8px 14px; }
+  .machine-dog-page .dog-resource-card .device-row > :not(.col-name):not(.col-actions) { display: none; }
 }
 </style>

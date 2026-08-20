@@ -1,17 +1,36 @@
 <template>
   <div class="sensor-test-page">
     <header class="page-header admin-header">
-      <div class="title-block">
-        <h2>传感器测试</h2>
-        <p>模拟传感器数据触发 ECA，联动事件处置与报告归档</p>
+      <div class="page-header-copy">
+        <span class="page-kicker"><i class="kicker-dot"></i>CONTROL ROOM / SENSOR SIGNAL</span>
+        <div class="title-block">
+          <h2>传感器事件测试</h2>
+          <p>模拟现场传感器信号，验证 ECA 规则与后续联动处置链路</p>
+        </div>
+      </div>
+      <div class="page-header-meta">
+        <div class="header-metric">
+          <span>当前摄像头</span>
+          <strong>{{ cameras.find(camera => String(camera.id) === String(cameraId))?.name || '未选择' }}</strong>
+        </div>
+        <div class="header-live-state">
+          <i :class="{ live: submitting || detailEvent }"></i>
+          <span>{{ submitting ? '触发中' : detailEvent ? '事件处理中' : '等待输入' }}</span>
+        </div>
       </div>
     </header>
 
     <section class="workspace">
       <div class="control-panel">
-        <header class="panel-header">
+        <header class="panel-header control-panel-header">
           <div><span class="section-index">01</span><div><small>SENSOR</small><h3>触发参数</h3></div></div>
-          <el-select v-model="cameraId" class="camera-picker" :disabled="submitting" placeholder="选择摄像头">
+          <el-select
+            v-model="cameraId"
+            class="camera-picker"
+            :disabled="submitting"
+            placeholder="选择摄像头"
+            popper-class="sensor-event-select-popper"
+          >
             <el-option
               v-for="camera in cameras"
               :key="camera.id"
@@ -71,12 +90,23 @@
       </div>
 
       <aside class="result-panel">
-        <header class="panel-header">
+        <header class="panel-header process-panel-header">
           <div><span class="section-index">02</span><div><small>ECA</small><h3>处理链路</h3></div></div>
-          <el-tag :type="statusTag">{{ detailEvent?.status || '待触发' }}</el-tag>
+          <el-tag :type="statusTag" effect="dark">{{ detailEvent?.status || '待触发' }}</el-tag>
         </header>
 
-        <div class="result-content">
+        <div class="result-content detail-result">
+          <div v-if="!hasTask" class="alarm-idle flow-idle-visual">
+            <div class="idle-orbit">
+              <span></span>
+              <i></i>
+            </div>
+            <div class="idle-copy">
+              <strong>链路监听中</strong>
+              <span>风险事件触发后将在此同步处置进度</span>
+            </div>
+          </div>
+
           <!-- 处理链路流程时间线（始终渲染；无任务时灰显待机） -->
           <ol class="progress-timeline flow-timeline" :class="{ idle: !hasTask }">
             <li
@@ -571,11 +601,18 @@ onMounted(loadCameras)
   --amber: #f2b75c;
   --red: #ff6b78;
   min-height: 100%;
-  padding: 20px;
+  position: relative;
+  isolation: isolate;
+  padding: 24px;
   color: var(--text);
-  background: #07131f;
+  background:
+    radial-gradient(circle at 86% -8%, rgba(37, 132, 180, .24), transparent 30%),
+    radial-gradient(circle at -5% 86%, rgba(35, 126, 113, .12), transparent 32%),
+    linear-gradient(135deg, #06111c 0%, #091b2a 52%, #07131f 100%);
 }
 .page-header,
+.page-header-copy,
+.page-header-meta,
 .source-control,
 .panel-header,
 .panel-header > div:first-child,
@@ -585,15 +622,103 @@ onMounted(loadCameras)
 }
 /* 页头（参考「数据源管理」admin-header 设计：标题块 + 操作入口，无冗余面包屑） */
 .page-header {
-  min-height: 74px;
-  padding: 16px 20px;
+  position: relative;
+  min-height: 96px;
+  padding: 18px 22px;
   justify-content: space-between;
   gap: 18px;
-  border: 1px solid rgba(96, 151, 191, .22);
-  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(112, 181, 215, .24);
+  border-radius: 16px;
   background:
-    linear-gradient(90deg, rgba(14, 48, 76, .82) 0%, rgba(9, 29, 48, .72) 58%, rgba(7, 20, 34, .46) 100%);
-  box-shadow: inset 0 1px 0 rgba(147, 206, 241, .08);
+    linear-gradient(105deg, rgba(16, 62, 92, .88) 0%, rgba(10, 35, 55, .86) 52%, rgba(7, 20, 34, .66) 100%);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, .18), inset 0 1px 0 rgba(177, 231, 255, .12);
+}
+.page-header::after {
+  content: "";
+  position: absolute;
+  right: -70px;
+  bottom: -94px;
+  width: 300px;
+  height: 170px;
+  border: 1px solid rgba(79, 208, 232, .22);
+  border-radius: 50%;
+  box-shadow: 0 0 0 18px rgba(79, 208, 232, .035), 0 0 0 38px rgba(79, 208, 232, .022);
+  pointer-events: none;
+}
+.page-header-copy {
+  min-width: 0;
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 10px;
+}
+.page-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #7dcce5;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .16em;
+}
+.kicker-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #42c6a6;
+  box-shadow: 0 0 0 4px rgba(66, 198, 166, .12), 0 0 12px rgba(66, 198, 166, .5);
+}
+.page-header-meta {
+  position: relative;
+  z-index: 1;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+.header-metric {
+  display: grid;
+  gap: 5px;
+  min-width: 128px;
+  padding: 9px 12px;
+  border: 1px solid rgba(129, 193, 220, .16);
+  border-radius: 10px;
+  background: rgba(2, 19, 33, .28);
+}
+.header-metric span {
+  color: #7f9eb3;
+  font-size: 10px;
+}
+.header-metric strong {
+  max-width: 150px;
+  overflow: hidden;
+  color: #e6f7ff;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.header-live-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid rgba(66, 198, 166, .24);
+  border-radius: 10px;
+  color: #a9ddcf;
+  background: rgba(22, 100, 88, .16);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.header-live-state i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #61798c;
+}
+.header-live-state i.live {
+  background: var(--green);
+  box-shadow: 0 0 0 5px rgba(66, 198, 166, .12), 0 0 12px rgba(66, 198, 166, .48);
 }
 .title-block {
   min-width: 0;
@@ -613,8 +738,9 @@ h3 {
   letter-spacing: 0;
 }
 h2 {
-  font-size: 24px;
-  font-weight: 700;
+  font-size: 28px;
+  font-weight: 760;
+  letter-spacing: -.02em;
 }
 h3 {
   font-size: 16px;
@@ -627,74 +753,97 @@ h3 {
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(420px, .85fr);
-  gap: 16px;
-  margin-top: 16px;
+  gap: 18px;
+  margin-top: 18px;
 }
 .control-panel,
 .result-panel {
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel);
+  border-radius: 16px;
+  background: linear-gradient(145deg, rgba(14, 34, 53, .96), rgba(8, 23, 37, .98));
+  box-shadow: 0 16px 36px rgba(0, 0, 0, .16), inset 0 1px 0 rgba(180, 228, 248, .055);
+}
+.result-panel {
+  min-height: 620px;
+  background: linear-gradient(145deg, rgba(13, 35, 52, .98), rgba(7, 21, 35, .99));
 }
 .panel-header {
-  min-height: 64px;
+  min-height: 76px;
   justify-content: space-between;
   gap: 14px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--line);
-  background: var(--panel-soft);
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(127, 168, 198, .16);
+  background: linear-gradient(180deg, rgba(18, 47, 71, .74), rgba(12, 31, 49, .46));
 }
+.control-panel-header { align-items: center; }
+.process-panel-header { align-items: center; }
 .camera-picker {
-  width: 170px;
+  width: 180px;
   margin-left: auto;
-  margin-right: 10px;
+  margin-right: 2px;
+}
+.camera-picker :deep(.el-select__selected-item) {
+  color: #ffffff !important;
+  font-weight: 600;
+}
+.camera-picker :deep(.el-select__placeholder) {
+  color: #718895 !important;
 }
 .panel-header > div:first-child {
   gap: 11px;
 }
 .panel-header small {
   display: block;
-  margin-bottom: 2px;
-  color: #6d8ba2;
-  font-size: 11px;
+  margin-bottom: 3px;
+  color: #718da2;
+  font-size: 10px;
+  font-weight: 700;
 }
 .section-index {
   display: inline-grid;
-  width: 32px;
-  height: 32px;
+  width: 38px;
+  height: 38px;
   place-items: center;
   border: 1px solid rgba(79, 208, 232, .42);
-  border-radius: 50%;
-  color: var(--cyan);
+  border-radius: 12px;
+  color: #7de0f1;
+  background: linear-gradient(145deg, rgba(79, 208, 232, .14), rgba(79, 208, 232, .035));
+  font-size: 14px;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 .preset-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  padding: 16px;
+  gap: 12px;
+  padding: 18px;
 }
 .preset-card {
+  position: relative;
   min-width: 0;
-  min-height: 112px;
-  padding: 12px;
+  min-height: 124px;
+  padding: 15px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 14px;
   color: var(--text);
   text-align: left;
-  background: #0a1d2f;
+  background: linear-gradient(145deg, rgba(12, 39, 59, .88), rgba(7, 25, 42, .96));
   cursor: pointer;
+  transition: transform .2s ease, border-color .2s ease, background .2s ease, box-shadow .2s ease;
 }
 .preset-card:hover,
 .preset-card:focus-visible {
   outline: none;
   border-color: rgba(79, 208, 232, .55);
-  background: #0d273b;
+  background: linear-gradient(145deg, rgba(18, 60, 84, .96), rgba(8, 31, 49, .98));
+  box-shadow: 0 10px 22px rgba(0, 0, 0, .15);
+  transform: translateY(-2px);
 }
 .preset-card.active {
   border-color: rgba(79, 208, 232, .85);
-  background: #0e3146;
+  background: linear-gradient(145deg, rgba(16, 73, 94, .98), rgba(7, 39, 59, .98));
+  box-shadow: 0 0 0 1px rgba(79, 208, 232, .16), 0 12px 28px rgba(0, 0, 0, .2), inset 0 1px 0 rgba(176, 241, 255, .12);
 }
 .preset-card span {
   color: var(--cyan);
@@ -722,10 +871,12 @@ h3 {
 .video-stage {
   position: relative;
   height: clamp(220px, 30vw, 420px);
-  margin: 0 16px 16px;
+  margin: 0 18px 18px;
   overflow: hidden;
-  border-radius: 8px;
+  border: 1px solid rgba(85, 148, 180, .3);
+  border-radius: 14px;
   background: #02070d;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, .22), inset 0 0 0 1px rgba(255, 255, 255, .025);
 }
 .hidden-file-input {
   position: absolute;
@@ -774,13 +925,19 @@ h3 {
   font-size: 12px;
 }
 .submit-hint {
-  margin: -4px 16px 16px;
+  margin: -4px 18px 18px;
+  padding: 9px 12px;
+  border-left: 2px solid rgba(127, 168, 198, .3);
+  border-radius: 0 8px 8px 0;
   color: #8fa8ba;
+  background: rgba(3, 18, 31, .38);
   font-size: 13px;
   line-height: 1.4;
 }
 .submit-hint.ready {
   color: var(--green);
+  border-left-color: var(--green);
+  background: rgba(66, 198, 166, .08);
 }
 .result-actions {
   justify-content: flex-end;
@@ -789,6 +946,103 @@ h3 {
 }
 .result-content {
   padding: 16px;
+}
+.detail-result {
+  display: grid;
+  gap: 14px;
+}
+.alarm-idle {
+  display: grid;
+  grid-template-columns: 74px 1fr;
+  gap: 14px;
+  align-items: center;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid rgba(67, 200, 255, .16);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 36px 40px, rgba(56, 213, 156, .13), transparent 58px),
+    rgba(5, 24, 43, .46);
+}
+.flow-idle-visual {
+  flex: 0 0 auto;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px 13px;
+  border-color: rgba(67, 200, 255, .14);
+  background:
+    radial-gradient(circle at 34px 36px, rgba(56, 213, 156, .12), transparent 54px),
+    linear-gradient(135deg, rgba(7, 40, 65, .5), rgba(3, 18, 33, .38));
+}
+.flow-idle-visual .idle-orbit {
+  width: 54px;
+  height: 54px;
+}
+.flow-idle-visual .idle-copy strong {
+  font-size: 15px;
+}
+.flow-idle-visual .idle-copy span {
+  font-size: 12px;
+}
+.idle-orbit {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border: 1px solid rgba(67, 200, 255, .22);
+  border-radius: 50%;
+  background: rgba(3, 18, 33, .58);
+}
+.idle-orbit::before,
+.idle-orbit::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+}
+.idle-orbit::before {
+  inset: 15px;
+  border: 2px solid rgba(56, 213, 156, .72);
+}
+.idle-orbit::after {
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  transform: translate(-50%, -50%);
+  background: #38d59c;
+  box-shadow: 0 0 12px rgba(56, 213, 156, .72);
+}
+.idle-orbit span {
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  border-top: 2px solid rgba(67, 200, 255, .72);
+  border-right: 2px solid transparent;
+  animation: idleSpin 3.8s linear infinite;
+}
+.idle-orbit i {
+  position: absolute;
+  right: 8px;
+  top: 12px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #43c8ff;
+}
+.idle-copy {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+.idle-copy strong {
+  color: #e9f8ff;
+  font-size: 16px;
+  line-height: 1;
+}
+.idle-copy span {
+  color: #8fc8f2;
+  font-size: 12px;
+  line-height: 1.35;
 }
 /* ========== 处理链路流程时间线（移植自 Dashboard「实时告警进度」） ========== */
 .progress-timeline {
@@ -849,8 +1103,9 @@ h3 {
   min-width: 0;
   padding: 10px 11px;
   border: 1px solid rgba(67, 200, 255, .14);
-  border-radius: 8px;
+  border-radius: 12px;
   background: rgba(4, 20, 36, .48);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, .1), inset 0 1px 0 rgba(174, 229, 250, .035);
 }
 .progress-timeline li.active article {
   border-color: rgba(255, 91, 104, .32);
@@ -1067,6 +1322,9 @@ h3 {
   background: rgba(255, 91, 104, .13);
 }
 /* 关键帧动画 */
+@keyframes idleSpin {
+  to { transform: rotate(360deg); }
+}
 @keyframes flowNodePulse {
   0%, 100% {
     box-shadow: 0 0 0 0 rgba(100, 223, 255, .18);
@@ -1123,8 +1381,26 @@ h3 {
     flex-direction: column;
     gap: 12px;
   }
+  .page-header-meta {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .header-metric {
+    flex: 1 1 120px;
+  }
+  .header-live-state {
+    flex: 1 1 120px;
+    justify-content: center;
+  }
   .preset-grid {
     grid-template-columns: 1fr;
+  }
+  .camera-picker {
+    width: 100%;
+    margin: 0;
+  }
+  .control-panel-header .el-button {
+    width: 100%;
   }
 }
 </style>

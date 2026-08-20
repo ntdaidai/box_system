@@ -55,7 +55,6 @@ SELECT `id`, 'camera_screening', 'qwen0_8b',
     "person_confidence": 0.0,
     "boat_confidence": 0.0
   },
-  "risk_level": "LOW",
   "summary": "一句话概括",
   "evidence": ["判断依据"],
   "uncertainties": ["不确定因素"]

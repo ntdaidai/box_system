@@ -1,29 +1,43 @@
 <template>
   <div class="screening-page">
     <header class="page-header admin-header">
-      <div class="title-block">
-        <h2>视频测试</h2>
-        <p>上传视频进行画面分析，联动触发事件处置与报告归档</p>
+      <div class="page-header-copy">
+        <span class="page-kicker"><i class="kicker-dot"></i>CONTROL ROOM / VIDEO ANALYSIS</span>
+        <div class="title-block">
+          <h2>视频检测工作台</h2>
+          <p>上传现场视频，预览检测区域并追踪风险事件的完整处置链路</p>
+        </div>
+      </div>
+      <div class="page-header-meta">
+        <div class="header-metric">
+          <span>当前摄像头</span>
+          <strong>{{ selectedCameraName }}</strong>
+        </div>
+        <div class="header-metric">
+          <span>检测模式</span>
+          <strong>{{ isSafetyScreening ? '人员安全' : '自然灾害' }}</strong>
+        </div>
+        <div class="header-live-state">
+          <i :class="{ live: simulationActive || screening }"></i>
+          <span>{{ mediaStatus }}</span>
+        </div>
       </div>
     </header>
 
     <section class="workspace">
       <div class="media-panel">
-        <header class="panel-header">
+        <header class="panel-header media-panel-header">
           <div>
             <span class="section-index">01</span>
             <div><small>VIDEO</small><h3>摄像头画面模拟</h3></div>
           </div>
           <div class="media-tools">
-            <div class="runtime-state">
-              <i :class="{ live: simulationActive }"></i>
-              {{ mediaStatus }}
-            </div>
             <el-select
               v-model="cameraId"
               class="camera-picker"
               :disabled="simulationActive || screening"
               placeholder="选择摄像头"
+              popper-class="video-detection-select-popper"
               @change="loadZonesForCamera"
             >
               <el-option
@@ -33,13 +47,27 @@
                 :value="String(camera.id)"
               />
             </el-select>
+            <el-select
+              v-model="screeningMode"
+              class="screening-mode-picker"
+              :disabled="simulationActive || screening"
+              popper-class="video-detection-select-popper"
+              @change="handleScreeningModeChange"
+            >
+              <el-option label="人员安全" value="SAFETY_TARGET" />
+              <el-option label="自然灾害场景" value="NATURAL_DISASTER" />
+            </el-select>
             <el-button
+              v-if="isSafetyScreening"
               plain
               :disabled="simulationActive || screening || !cameraId"
               @click="openZoneDialog"
             >
               {{ selectedZone ? `检测区域：${selectedZone.zone_name}` : '选择检测区域' }}
             </el-button>
+            <el-tag v-else type="info" effect="plain" class="full-frame-indicator">
+              自然灾害：全画面
+            </el-tag>
             <el-button
               type="warning"
               plain
@@ -78,7 +106,7 @@
               @pause="handleNativePause"
             />
             <div
-              v-if="detectionRegion"
+              v-if="detectionRegion && isSafetyScreening"
               class="detection-region-overlay"
               :style="detectionRegionStyle"
             >
@@ -112,7 +140,7 @@
       </div>
 
       <aside class="result-panel">
-        <header class="panel-header">
+        <header class="panel-header process-panel-header">
           <div>
             <span class="section-index">02</span>
             <div><small>PROCESS</small><h3>处理链路</h3></div>
@@ -259,11 +287,14 @@ const FRAME_COUNT = 8
 const WINDOW_SECONDS = 10
 const DEFAULT_CAMERA_ID = 1
 const DEFAULT_CAMERA_NAME = '9号监测点'
+const SAFETY_SCREENING_MODE = 'SAFETY_TARGET'
+const NATURAL_DISASTER_SCREENING_MODE = 'NATURAL_DISASTER'
 const router = useRouter()
 const cameraId = ref(String(DEFAULT_CAMERA_ID))
 const cameras = ref([])
 const zones = ref([])
 const selectedZoneId = ref('')
+const screeningMode = ref(SAFETY_SCREENING_MODE)
 const zoneDialogVisible = ref(false)
 const videoAspectRatio = ref(16 / 9)
 const fileInputRef = ref(null)
@@ -288,8 +319,10 @@ const supplementForm = ref(defaultSupplementForm())
 const selectedSupplementContext = ref(null)
 
 const selectedCameraName = computed(() => cameras.value.find(item => String(item.id) === String(cameraId.value))?.name || DEFAULT_CAMERA_NAME)
+const isSafetyScreening = computed(() => screeningMode.value === SAFETY_SCREENING_MODE)
 const selectedZone = computed(() => zones.value.find(item => String(item.id) === String(selectedZoneId.value)) || null)
 const detectionRegion = computed(() => {
+  if (!isSafetyScreening.value) return null
   const points = selectedZone.value?.polygon_points || []
   if (points.length < 3) return null
   const xs = points.map(point => Number(point.x)).filter(Number.isFinite)
@@ -539,8 +572,8 @@ async function toggleSimulation() {
     stopSimulation(true)
     return
   }
-  if (!cameraId.value || !videoFile.value || !selectedZone.value) {
-    ElMessage.warning('请先选择摄像头、检测区域和现场视频')
+  if (!cameraId.value || !videoFile.value || (isSafetyScreening.value && !selectedZone.value)) {
+    ElMessage.warning(isSafetyScreening.value ? '请先选择摄像头、检测区域和现场视频' : '请先选择摄像头和现场视频')
     return
   }
   lastError.value = ''
@@ -572,7 +605,8 @@ async function submitVideoFile() {
       videoFile.value,
       {
         windowSeconds: WINDOW_SECONDS,
-        zoneId: selectedZoneId.value,
+        zoneId: isSafetyScreening.value ? selectedZoneId.value : undefined,
+        screeningMode: screeningMode.value,
         supplementalContext: selectedSupplementContext.value,
       },
     )
@@ -615,9 +649,22 @@ async function loadZonesForCamera() {
   try {
     const response = await getCameraZones(cameraId.value, { silentError: true })
     zones.value = normalizeZones(response.data)
-    selectedZoneId.value = zones.value.find(zone => zone.enabled !== false)?.id || ''
+    selectedZoneId.value = isSafetyScreening.value
+      ? zones.value.find(zone => zone.enabled !== false)?.id || ''
+      : ''
   } catch (error) {
     lastError.value = error?.response?.data?.detail || error?.message || '检测区域加载失败'
+  }
+}
+
+function handleScreeningModeChange(mode) {
+  zoneDialogVisible.value = false
+  if (mode === NATURAL_DISASTER_SCREENING_MODE) {
+    selectedZoneId.value = ''
+    return
+  }
+  if (!selectedZoneId.value) {
+    selectedZoneId.value = zones.value.find(zone => zone.enabled !== false)?.id || ''
   }
 }
 
@@ -627,10 +674,10 @@ function openZoneDialog() {
 
 function zoneTypeLabel(type) {
   return ({
-    PERSON_LOW: '人员低风险区',
-    PERSON_MEDIUM: '人员中风险区',
-    PERSON_HIGH: '人员高风险区',
-    FISHING: '捕鱼区',
+    PERSON_LOW: '禁闯入区',
+    PERSON_MEDIUM: '禁亲水区',
+    PERSON_HIGH: '禁涉水区',
+    FISHING: '禁捕区',
   })[type] || '检测区域'
 }
 
@@ -977,11 +1024,18 @@ onMounted(loadCameras)
   --red: #ff6b78;
   --amber: #f2b75c;
   min-height: 100%;
-  padding: 20px;
+  position: relative;
+  isolation: isolate;
+  padding: 24px;
   color: var(--text);
-  background: #07131f;
+  background:
+    radial-gradient(circle at 86% -8%, rgba(37, 132, 180, .24), transparent 30%),
+    radial-gradient(circle at -5% 86%, rgba(35, 126, 113, .12), transparent 32%),
+    linear-gradient(135deg, #06111c 0%, #091b2a 52%, #07131f 100%);
 }
 .page-header,
+.page-header-copy,
+.page-header-meta,
 .media-tools,
 .panel-header,
 .panel-header > div:first-child,
@@ -992,15 +1046,103 @@ onMounted(loadCameras)
 }
 /* 页头（参考「数据源管理」admin-header 设计：标题块 + 操作入口，无冗余面包屑） */
 .page-header {
-  min-height: 74px;
-  padding: 16px 20px;
+  position: relative;
+  min-height: 96px;
+  padding: 18px 22px;
   justify-content: space-between;
   gap: 18px;
-  border: 1px solid rgba(96, 151, 191, .22);
-  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(112, 181, 215, .24);
+  border-radius: 16px;
   background:
-    linear-gradient(90deg, rgba(14, 48, 76, .82) 0%, rgba(9, 29, 48, .72) 58%, rgba(7, 20, 34, .46) 100%);
-  box-shadow: inset 0 1px 0 rgba(147, 206, 241, .08);
+    linear-gradient(105deg, rgba(16, 62, 92, .88) 0%, rgba(10, 35, 55, .86) 52%, rgba(7, 20, 34, .66) 100%);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, .18), inset 0 1px 0 rgba(177, 231, 255, .12);
+}
+.page-header::after {
+  content: "";
+  position: absolute;
+  right: -70px;
+  bottom: -94px;
+  width: 300px;
+  height: 170px;
+  border: 1px solid rgba(79, 208, 232, .22);
+  border-radius: 50%;
+  box-shadow: 0 0 0 18px rgba(79, 208, 232, .035), 0 0 0 38px rgba(79, 208, 232, .022);
+  pointer-events: none;
+}
+.page-header-copy {
+  min-width: 0;
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 10px;
+}
+.page-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #7dcce5;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .16em;
+}
+.kicker-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #42c6a6;
+  box-shadow: 0 0 0 4px rgba(66, 198, 166, .12), 0 0 12px rgba(66, 198, 166, .5);
+}
+.page-header-meta {
+  position: relative;
+  z-index: 1;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+.header-metric {
+  display: grid;
+  gap: 5px;
+  min-width: 128px;
+  padding: 9px 12px;
+  border: 1px solid rgba(129, 193, 220, .16);
+  border-radius: 10px;
+  background: rgba(2, 19, 33, .28);
+}
+.header-metric span {
+  color: #7f9eb3;
+  font-size: 10px;
+}
+.header-metric strong {
+  max-width: 150px;
+  overflow: hidden;
+  color: #e6f7ff;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.header-live-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid rgba(66, 198, 166, .24);
+  border-radius: 10px;
+  color: #a9ddcf;
+  background: rgba(22, 100, 88, .16);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.header-live-state i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #61798c;
+}
+.header-live-state i.live {
+  background: var(--green);
+  box-shadow: 0 0 0 5px rgba(66, 198, 166, .12), 0 0 12px rgba(66, 198, 166, .48);
 }
 .title-block {
   min-width: 0;
@@ -1020,8 +1162,9 @@ h3 {
   letter-spacing: 0;
 }
 h2 {
-  font-size: 24px;
-  font-weight: 700;
+  font-size: 28px;
+  font-weight: 760;
+  letter-spacing: -.02em;
 }
 h3 {
   font-size: 16px;
@@ -1029,24 +1172,30 @@ h3 {
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(380px, .9fr);
-  gap: 16px;
-  margin-top: 16px;
+  gap: 18px;
+  margin-top: 18px;
 }
 .media-panel,
 .result-panel {
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel);
+  border-radius: 16px;
+  background: linear-gradient(145deg, rgba(14, 34, 53, .96), rgba(8, 23, 37, .98));
+  box-shadow: 0 16px 36px rgba(0, 0, 0, .16), inset 0 1px 0 rgba(180, 228, 248, .055);
 }
 .panel-header {
-  min-height: 64px;
+  min-height: 76px;
   justify-content: space-between;
   gap: 14px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--line);
-  background: var(--panel-soft);
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(127, 168, 198, .16);
+  background: linear-gradient(180deg, rgba(18, 47, 71, .74), rgba(12, 31, 49, .46));
 }
+.media-panel-header {
+  align-items: flex-start;
+  flex-wrap: nowrap;
+}
+.process-panel-header { align-items: center; }
 .panel-title {
   gap: 11px;
 }
@@ -1061,18 +1210,47 @@ h3 {
   font-weight: 700;
 }
 .section-index {
-  color: #547791;
-  font-size: 22px;
+  display: inline-grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid rgba(79, 208, 232, .42);
+  border-radius: 12px;
+  color: #7de0f1;
+  background: linear-gradient(145deg, rgba(79, 208, 232, .14), rgba(79, 208, 232, .035));
+  font-size: 14px;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
 }
 .media-tools {
   gap: 10px;
-  flex-wrap: wrap;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-wrap: nowrap;
   justify-content: flex-end;
+  max-width: none;
+}
+.media-tools :deep(.el-select__selected-item) {
+  color: #ffffff !important;
+  font-weight: 600;
+}
+.media-tools :deep(.el-select__placeholder) {
+  color: #718895 !important;
 }
 .camera-picker {
   width: 150px;
+}
+.screening-mode-picker {
+  width: 154px;
+}
+.full-frame-indicator {
+  min-height: 32px;
+  line-height: 30px;
+  padding: 0 12px;
+  border-color: rgba(79, 208, 232, .34) !important;
+  border-radius: 8px;
+  color: #b8d5e1 !important;
+  background: rgba(18, 49, 75, .88) !important;
 }
 .video-frame {
   position: relative;
@@ -1081,6 +1259,7 @@ h3 {
   max-height: 100%;
   margin: 0 auto;
   overflow: hidden;
+  border-radius: 13px;
   background: #02070d;
 }
 .runtime-state {
@@ -1088,9 +1267,9 @@ h3 {
   min-height: 32px;
   padding: 0 10px;
   border: 1px solid rgba(127,168,198,.18);
-  border-radius: 6px;
+  border-radius: 9px;
   color: #9cb4c6;
-  background: #0a1928;
+  background: rgba(4, 20, 34, .72);
   font-size: 12px;
 }
 .runtime-state i {
@@ -1106,8 +1285,12 @@ h3 {
 .video-stage {
   position: relative;
   height: clamp(380px, 43vw, 620px);
+  margin: 18px;
   overflow: hidden;
+  border: 1px solid rgba(85, 148, 180, .3);
+  border-radius: 14px;
   background: #02070d;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, .22), inset 0 0 0 1px rgba(255, 255, 255, .025);
 }
 .hidden-file-input {
   position: absolute;
@@ -1135,6 +1318,7 @@ h3 {
   left: -2px;
   top: -27px;
   padding: 5px 8px;
+  border-radius: 0 0 7px 0;
   color: #101923;
   background: #ffcb57;
   font-size: 12px;
@@ -1198,9 +1382,9 @@ h3 {
   font-size: 12px;
 }
 .evidence-strip {
-  padding: 14px 16px 16px;
-  border-top: 1px solid var(--line);
-  background: #081827;
+  padding: 16px 18px 18px;
+  border-top: 1px solid rgba(127, 168, 198, .16);
+  background: linear-gradient(180deg, rgba(7, 25, 41, .82), rgba(5, 18, 31, .72));
 }
 .strip-title {
   display: flex;
@@ -1226,8 +1410,8 @@ h3 {
 .frame-slot {
   flex: 0 0 clamp(190px, 22vw, 280px);
   aspect-ratio: 16 / 9;
-  border: 1px solid #284962;
-  border-radius: 6px;
+  border: 1px solid rgba(77, 132, 161, .42);
+  border-radius: 10px;
   scroll-snap-align: start;
 }
 .frame-strip figure {
@@ -1236,6 +1420,7 @@ h3 {
   margin: 0;
   overflow: hidden;
   background: #02070d;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, .16);
 }
 .frame-strip img {
   width: 100%;
@@ -1267,7 +1452,7 @@ h3 {
   align-content: center;
   gap: 6px;
   color: #3c5b70;
-  background: #0b2032;
+  background: linear-gradient(145deg, rgba(12, 42, 63, .76), rgba(8, 25, 41, .84));
 }
 .frame-slot b {
   font-size: 18px;
@@ -1280,6 +1465,7 @@ h3 {
 }
 .result-panel {
   min-height: 620px;
+  background: linear-gradient(145deg, rgba(13, 35, 52, .98), rgba(7, 21, 35, .99));
 }
 .result-content {
   padding: 16px;
@@ -1347,8 +1533,9 @@ h3 {
   min-width: 0;
   padding: 10px 11px;
   border: 1px solid rgba(67, 200, 255, .14);
-  border-radius: 8px;
+  border-radius: 12px;
   background: rgba(4, 20, 36, .48);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, .1), inset 0 1px 0 rgba(174, 229, 250, .035);
 }
 .progress-timeline li.active article {
   border-color: rgba(255, 91, 104, .32);
@@ -1719,11 +1906,26 @@ h3 {
     padding-top: 12px;
     padding-bottom: 12px;
   }
-  .media-tools {
+  .page-header-meta {
+    width: 100%;
     flex-wrap: wrap;
+  }
+  .header-metric {
+    flex: 1 1 120px;
+  }
+  .header-live-state {
+    flex: 1 1 120px;
+    justify-content: center;
+  }
+  .media-tools {
+    width: 100%;
+    max-width: none;
+    flex-wrap: wrap;
+    justify-content: flex-start;
   }
   .video-stage {
     height: 340px;
+    margin: 12px;
   }
   .frame-strip figure,
   .frame-slot {

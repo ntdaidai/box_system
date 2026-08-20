@@ -5,12 +5,36 @@
         <h2>事件配置</h2>
         <p>统一维护系统预置事件、触发参数和联动流程</p>
       </div>
-      <el-button :icon="Refresh" :loading="loading" @click="loadConfig">刷新</el-button>
+      <div class="status-summary" aria-label="事件配置统计">
+        <div class="metric">
+          <i class="dot total"></i>
+          <strong class="metric-num">{{ events.length }}</strong>
+          <span class="metric-label">总数</span>
+        </div>
+        <div class="metric">
+          <i class="dot online"></i>
+          <strong class="metric-num">{{ eventOnlineCount }}</strong>
+          <span class="metric-label">在线</span>
+        </div>
+        <div class="metric">
+          <i class="dot offline"></i>
+          <strong class="metric-num">{{ eventOfflineCount }}</strong>
+          <span class="metric-label">离线</span>
+        </div>
+      </div>
     </header>
 
-    <section class="filter-bar">
+    <section class="filter-bar" :class="{ 'with-visual-category': sourceFilter === 'camera' }">
       <el-select v-model="sourceFilter" class="event-filter-select" placeholder="事件类型">
         <el-option v-for="item in sourceOptions" :key="item.value" :label="item.label" :value="item.value" />
+      </el-select>
+      <el-select
+        v-if="sourceFilter === 'camera'"
+        v-model="visualCategoryFilter"
+        class="event-filter-select visual-category-filter"
+        placeholder="视觉事件分类"
+      >
+        <el-option v-for="item in visualCategoryOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
       <el-select v-model="riskFilter" class="event-filter-select" placeholder="风险等级">
         <el-option v-for="item in riskOptions" :key="item.value" :label="item.label" :value="item.value" />
@@ -46,7 +70,7 @@
               <el-icon><QuestionFilled /></el-icon>
             </el-tooltip>
           </span>
-          <span>状态</span>
+          <span>是否启用</span>
           <span>操作</span>
         </div>
 
@@ -164,7 +188,7 @@
             <el-button :icon="Plus" type="primary" plain @click="addNodeDialogVisible = true">添加动作</el-button>
             <el-button :icon="RefreshRight" plain @click="autoLayoutDraft">自动布局</el-button>
             <el-button plain @click="cancelFlowEdit">取消</el-button>
-            <el-button type="primary" :loading="savingFlow" @click="saveFlow">保存流程</el-button>
+            <el-button class="flow-save-action" type="primary" :loading="savingFlow" @click="saveFlow">保存流程</el-button>
           </div>
         </div>
       </template>
@@ -208,7 +232,6 @@
               :class="[node.kind, node.role, { selected: selectedNodeId === node.id, disabled: node.disabled, editable: flowEditMode }]"
               :style="nodeStyle(node)"
               @click.stop="selectNode(node)"
-              @dblclick.stop="openNodeConfig(node)"
               @pointerdown.stop="startNodeDrag(node, $event)"
             >
               <button
@@ -221,9 +244,9 @@
               ></button>
               <el-icon class="node-main-icon"><component :is="node.icon" /></el-icon>
               <div class="node-copy">
-                <strong>{{ node.title }}</strong>
-                <span>{{ node.subtitle }}</span>
-                <em v-if="flowEditMode && node.detail">{{ node.detail }}</em>
+                <strong :title="node.title">{{ node.title }}</strong>
+                <span :title="node.subtitle">{{ node.subtitle }}</span>
+                <em v-if="flowEditMode && node.detail" :title="node.detail">{{ node.detail }}</em>
               </div>
               <div v-if="node.configurable || (flowEditMode && node.kind === 'action' && !node.locked)" class="node-tools">
                 <button
@@ -262,18 +285,22 @@
         <aside v-if="editingNode?.action" class="action-inspector">
           <header class="action-inspector-header">
             <div class="inspector-title">
-              <span>{{ flowEditMode ? '配置动作' : '动作详情' }}</span>
+              <span>{{ inspectorMode === 'edit' ? '配置动作' : '动作详情' }}</span>
               <strong>{{ actionBusinessLabel(editingNode.action) }}</strong>
               <small>{{ actionBusinessSummary(editingNode.action) }}</small>
             </div>
-            <button type="button" @click="editingNode = null">×</button>
+            <button type="button" @click="closeInspector">×</button>
           </header>
 
-          <div v-if="!flowEditMode" class="action-readonly">
-            <span>资源</span>
-            <strong>{{ actionBusinessSummary(editingNode.action) }}</strong>
-            <span v-if="actionBusinessDetail(editingNode.action)">执行</span>
-            <strong v-if="actionBusinessDetail(editingNode.action)">{{ actionBusinessDetail(editingNode.action) }}</strong>
+          <div v-if="inspectorMode === 'view'" class="action-readonly">
+            <div class="readonly-caption">当前联动动作配置</div>
+            <div v-for="field in actionReadonlyFields(editingNode.action)" :key="field.label" class="readonly-field">
+              <span>{{ field.label }}</span>
+              <strong :title="field.value">{{ field.value }}</strong>
+            </div>
+            <div v-if="actionBusinessDetail(editingNode.action)" class="readonly-summary">
+              {{ actionBusinessDetail(editingNode.action) }}
+            </div>
           </div>
 
           <el-form v-else class="inspector-form" label-position="top">
@@ -324,14 +351,33 @@
                   <strong>无人机任务</strong>
                   <span>设置响应事件的设备与巡查航线</span>
                 </div>
-                <el-form-item label="无人机">
-                  <el-select v-model="actionForm.drone_id" filterable allow-create default-first-option placeholder="选择或输入无人机">
-                    <el-option v-for="item in droneOptions" :key="item" :label="item" :value="item" />
+                <el-form-item label="无人机型号">
+                  <el-select v-model="actionForm.drone_id" filterable allow-create default-first-option placeholder="选择无人机型号">
+                    <el-option v-for="item in droneOptions" :key="item.value" :label="item.label" :value="item.value" />
                   </el-select>
                 </el-form-item>
                 <el-form-item label="航线">
                   <el-select v-model="actionForm.route_id" filterable allow-create default-first-option placeholder="选择或输入航线">
-                    <el-option v-for="item in routeOptions" :key="item" :label="item" :value="item" />
+                    <el-option v-for="item in routeOptions" :key="item.value" :label="item.label" :value="item.value" />
+                  </el-select>
+                </el-form-item>
+              </section>
+            </template>
+
+            <template v-else-if="editingNode.action.action_type === 'machine_dog_dispatch'">
+              <section class="inspector-section">
+                <div class="section-heading">
+                  <strong>机器狗任务</strong>
+                  <span>设置响应事件的机器狗型号与巡检路线</span>
+                </div>
+                <el-form-item label="机器狗型号" required>
+                  <el-select v-model="actionForm.machine_dog_id" placeholder="请选择机器狗型号" clearable>
+                    <el-option v-for="item in machineDogOptions" :key="item.value" :label="item.label" :value="item.value" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="巡检路线" required>
+                  <el-select v-model="actionForm.route_id" placeholder="请选择巡检路线" clearable>
+                    <el-option v-for="item in machineDogRouteOptions" :key="item.value" :label="item.label" :value="item.value" />
                   </el-select>
                 </el-form-item>
               </section>
@@ -360,7 +406,7 @@
               >
                 删除动作
               </el-button>
-              <el-button plain @click="editingNode = null">取消</el-button>
+              <el-button plain @click="closeInspector">取消</el-button>
               <el-button class="apply-action" @click="saveNodeConfig">应用到流程</el-button>
             </div>
           </el-form>
@@ -384,6 +430,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
+  Aim,
   Bell,
   Camera,
   Connection,
@@ -393,7 +440,6 @@ import {
   Plus,
   Promotion,
   QuestionFilled,
-  Refresh,
   RefreshRight,
   Search,
   Setting,
@@ -410,6 +456,26 @@ import {
   updateConditionConfig,
   updateEventConfig,
 } from '@/api/integration'
+import {
+  dijLogin,
+  getBoundDevices,
+  getCurrentWorkspace,
+  getDroneDevices,
+  getWaylineFiles,
+} from '@/api/drone'
+import { getStaffList } from '@/api/staff'
+
+const DIJ_USERNAME = 'adminPC'
+const DIJ_PASSWORD = 'adminPC'
+const FALLBACK_DRONE_OPTIONS = [
+  { value: 'mock-drone-001', label: 'M30T · 御3行业版-1号' },
+  { value: 'mock-drone-002', label: 'M350 · M350 RTK-2号' },
+  { value: 'mock-drone-003', label: 'P4RTK · 精灵4 RTK-3号' },
+]
+const FALLBACK_DRONE_ROUTE_OPTIONS = [
+  { value: '禁渔航线', label: '禁渔航线' },
+  { value: '禁涉水航线', label: '禁涉水航线' },
+]
 
 const FLOW_STAGE_WIDTH = 1180
 const FLOW_STAGE_PADDING = 54
@@ -426,6 +492,7 @@ const savingFlow = ref(false)
 const savingEventId = ref(null)
 const keyword = ref('')
 const sourceFilter = ref('all')
+const visualCategoryFilter = ref('all')
 const riskFilter = ref('all')
 const enabledFilter = ref('all')
 const sortFilter = ref('risk')
@@ -440,6 +507,7 @@ const selectedNodeId = ref('')
 const selectedEdgeId = ref('')
 const connectingFromId = ref('')
 const editingNode = ref(null)
+const inspectorMode = ref('view')
 const dragging = ref(null)
 const deletedActionIds = ref([])
 const flowLayoutVersion = ref(0)
@@ -453,6 +521,10 @@ const config = reactive({
   broadcast_devices: [],
   broadcast_templates: [],
 })
+
+const configuredDroneOptions = ref([...FALLBACK_DRONE_OPTIONS])
+const configuredDroneRouteOptions = ref([...FALLBACK_DRONE_ROUTE_OPTIONS])
+const configuredStaffGroups = ref([])
 
 const ruleForm = reactive({
   threshold: '',
@@ -470,6 +542,7 @@ const actionForm = reactive({
   max_executions: 1,
   drone_id: '',
   route_id: '',
+  machine_dog_id: '',
   staff_group: '',
 })
 
@@ -482,6 +555,13 @@ const sourceOptions = [
   { label: '全部事件类型', value: 'all' },
   { label: '视觉事件', value: 'camera' },
   { label: '传感器事件', value: 'sensor' },
+]
+
+const visualCategoryOptions = [
+  { label: '全部视觉事件', value: 'all' },
+  { label: '禁涉水事件', value: 'wading' },
+  { label: '禁渔事件', value: 'fishing' },
+  { label: '自然灾害事件', value: 'natural_disaster' },
 ]
 
 const riskOptions = [
@@ -527,6 +607,7 @@ const actionIconMap = {
   camera_snapshot: Camera,
   broadcast: Bell,
   drone_dispatch: Promotion,
+  machine_dog_dispatch: Aim,
   staff_task: User,
   report: Finished,
 }
@@ -535,21 +616,38 @@ const actionLabelMap = {
   camera_snapshot: '摄像头抓拍',
   broadcast: '广播驱离',
   drone_dispatch: '无人机巡查',
+  machine_dog_dispatch: '机器狗任务',
   staff_task: '人工处置',
 }
 
 const addActionOptions = [
-  { label: '摄像头抓拍', type: 'camera_snapshot', icon: Camera },
   { label: '广播任务', type: 'broadcast', icon: Bell },
   { label: '无人机任务', type: 'drone_dispatch', icon: Promotion },
+  { label: '机器狗任务', type: 'machine_dog_dispatch', icon: Aim },
   { label: '人工处置', type: 'staff_task', icon: User },
 ]
 
+const machineDogOptions = [
+  { value: 'dog-01', label: 'Unitree Lite 3' },
+]
+
+const machineDogRouteOptions = [
+  { value: 'route-a', label: '岸线由西向东巡检' },
+  { value: 'route-b', label: '岸线由东向西巡检' },
+]
+
 const events = computed(() => config.events)
+const eventOnlineCount = computed(() => events.value.filter((event) => event.enabled !== false).length)
+const eventOfflineCount = computed(() => events.value.length - eventOnlineCount.value)
 const filteredEvents = computed(() => {
   const text = keyword.value.toLowerCase()
   const list = events.value.filter((event) => {
     if (sourceFilter.value !== 'all' && event.source_type !== sourceFilter.value) return false
+    if (
+      sourceFilter.value === 'camera'
+      && visualCategoryFilter.value !== 'all'
+      && visualEventCategory(event) !== visualCategoryFilter.value
+    ) return false
     if (riskFilter.value !== 'all' && riskKey(event) !== riskFilter.value) return false
     if (enabledFilter.value === 'enabled' && !event.enabled) return false
     if (enabledFilter.value === 'disabled' && event.enabled) return false
@@ -581,14 +679,27 @@ const parsedCondition = computed(() => parseCondition(primaryCondition.value))
 const defaultSourceName = computed(() => isVisualEvent(currentEvent.value) ? '摄像头视觉识别' : '传感器数据源')
 const enabledBroadcastDevices = computed(() => config.broadcast_devices.filter((item) => item.enabled !== false))
 const enabledBroadcastTemplates = computed(() => config.broadcast_templates.filter((item) => item.enabled !== false))
-const droneOptions = computed(() => uniqueActionValues('drone_id'))
-const routeOptions = computed(() => uniqueActionValues('route_id'))
-const staffGroupOptions = computed(() => {
-  const values = config.action_configs
-    .filter((item) => item.action_type === 'staff_task')
+const droneOptions = computed(() => mergeConfiguredOptions(
+  configuredDroneOptions.value,
+  uniqueActionValues('drone_id').map((value) => ({ value, label: value })),
+))
+const routeOptions = computed(() => mergeConfiguredOptions(
+  configuredDroneRouteOptions.value,
+  config.action_configs
+    .filter((item) => item.action_type === 'drone_dispatch')
     .map((item) => item.route_id)
     .filter(Boolean)
-  return Array.from(new Set(['安全巡查组', '现场处置组', '应急值守组', ...values]))
+    .map((value) => ({ value, label: value })),
+))
+const staffGroupOptions = computed(() => {
+  const values = [
+    ...configuredStaffGroups.value,
+    ...config.action_configs
+    .filter((item) => item.action_type === 'staff_task')
+    .map((item) => item.route_id)
+    .filter(Boolean),
+  ]
+  return Array.from(new Set(values))
 })
 const canDeleteInspectorNode = computed(() => {
   if (!flowEditMode.value || !editingNode.value) return false
@@ -646,7 +757,11 @@ watch(filteredEvents, (list) => {
   if (!list.some((event) => event.id === selectedEventId.value)) selectEvent(list[0].id)
 })
 
-watch([keyword, sourceFilter, riskFilter, enabledFilter, sortFilter], () => {
+watch(sourceFilter, (value) => {
+  if (value !== 'camera') visualCategoryFilter.value = 'all'
+})
+
+watch([keyword, sourceFilter, visualCategoryFilter, riskFilter, enabledFilter, sortFilter], () => {
   eventPage.value = 1
 })
 
@@ -682,6 +797,66 @@ async function loadConfig() {
   }
 }
 
+async function loadStaffGroups() {
+  try {
+    const res = await getStaffList({ page: 1, page_size: 100 })
+    const groups = res.data?.groups || res.groups || []
+    if (Array.isArray(groups)) configuredStaffGroups.value = groups.filter(Boolean)
+  } catch {
+    // 组别加载失败时保留已有动作中的组别，避免覆盖当前配置。
+  }
+}
+
+async function loadDroneLinkageOptions() {
+  try {
+    const loginRes = await dijLogin(DIJ_USERNAME, DIJ_PASSWORD)
+    const token = loginRes.data?.access_token
+    if (token) localStorage.setItem('dij_token', token)
+    const workspaceRes = await getCurrentWorkspace()
+    const workspaceId = workspaceRes.data?.workspace_id || workspaceRes.data?.id || '0'
+
+    const topologyRes = await getDroneDevices(workspaceId)
+    const topology = (topologyRes.data?.list || topologyRes.data || []).map((item) => ({
+      ...item,
+      device_sn: item.device_sn || item.sn || item.device_id,
+    }))
+    let devices = []
+    try {
+      const boundRes = await getBoundDevices(workspaceId, { page: 1, page_size: 100, domain: 0 })
+      devices = (boundRes.data?.list || boundRes.data?.items || []).map((item) => ({
+        ...item,
+        device_sn: item.device_sn || item.sn || item.device_id,
+      }))
+    } catch {
+      devices = topology.filter((item) => item.domain === 0 || item.device_type === 0)
+    }
+    const deviceOptions = devices
+      .filter((item) => item.device_sn)
+      .map((item) => {
+        const model = item.device_model || item.model || item.product_name || item.device_sn
+        const name = item.nickname || item.device_name || item.deviceCallsign || item.device_sn
+        return { value: item.device_sn, label: model === name ? model : `${model} · ${name}` }
+      })
+    if (deviceOptions.length) configuredDroneOptions.value = mergeConfiguredOptions(deviceOptions)
+
+    try {
+      const waylineRes = await getWaylineFiles(workspaceId, { page: 1, page_size: 100 })
+      const waylines = waylineRes.data?.list || waylineRes.data?.items || waylineRes.data || []
+      const routeOptions = waylines
+        .map((item) => {
+          const name = item.name || item.filename || item.file_name || item.wayline_name
+          return name ? { value: item.id || item.wayline_id || name, label: name } : null
+        })
+        .filter(Boolean)
+      if (routeOptions.length) configuredDroneRouteOptions.value = mergeConfiguredOptions(routeOptions)
+    } catch {
+      // DJI 航线接口不可用时使用无人机页面的预设航线。
+    }
+  } catch {
+    // DJI 服务不可用时使用与无人机页面一致的演示选项。
+  }
+}
+
 function normalizeEvent(row) {
   const conditions = Array.isArray(row.conditions) ? row.conditions : []
   const primary = conditions[0] || {}
@@ -699,6 +874,14 @@ function inferSourceType(row) {
   return 'sensor'
 }
 
+function visualEventCategory(event) {
+  const code = String(event?.code || '').toUpperCase()
+  const name = String(event?.name || '')
+  if (code.startsWith('PERSON_') || /^人员/.test(name)) return 'wading'
+  if (code.startsWith('BOAT_') || /^船只/.test(name)) return 'fishing'
+  return 'natural_disaster'
+}
+
 function ensureSelectedEvent() {
   const routeEventId = Number(route.query.eventId)
   const storedEventId = Number(localStorage.getItem(LAST_EVENT_KEY))
@@ -713,6 +896,8 @@ function selectEvent(id, options = {}) {
   selectedEventId.value = id
   selectedNodeId.value = ''
   selectedEdgeId.value = ''
+  editingNode.value = null
+  inspectorMode.value = 'view'
   resetRuleForm()
   localStorage.setItem(LAST_EVENT_KEY, String(id))
   if (options.replaceQuery === false) return
@@ -728,7 +913,7 @@ async function openFlowWorkspace(event) {
     }
     editingEventId.value = null
   }
-  selectedEventId.value = event.id
+  selectEvent(event.id)
   resetRuleForm()
   flowDialogVisible.value = true
   flowEditMode.value = false
@@ -744,6 +929,7 @@ async function openFlowWorkspace(event) {
 function closeFlowWorkspace() {
   if (flowEditMode.value) cancelFlowEdit()
   editingNode.value = null
+  inspectorMode.value = 'view'
   selectedNodeId.value = ''
   selectedEdgeId.value = ''
   connectingFromId.value = ''
@@ -1090,6 +1276,8 @@ function enterFlowEdit() {
   const model = cloneFlowModel(flowDisplayModel.value)
   flowDraft.nodes = model.nodes
   flowDraft.edges = model.edges
+  editingNode.value = null
+  inspectorMode.value = 'view'
   deletedActionIds.value = []
   flowEditMode.value = true
   selectedNodeId.value = ''
@@ -1103,6 +1291,8 @@ function cancelFlowEdit() {
   selectedNodeId.value = ''
   selectedEdgeId.value = ''
   connectingFromId.value = ''
+  editingNode.value = null
+  inspectorMode.value = 'view'
   deletedActionIds.value = []
   flowDraft.nodes = []
   flowDraft.edges = []
@@ -1117,9 +1307,14 @@ function cloneFlowModel(model) {
 }
 
 function selectNode(node) {
+  if (!node) return
+  if (!flowEditMode.value && node.action && node.configurable && editingNode.value?.id === node.id) {
+    closeInspector()
+    return
+  }
   selectedNodeId.value = node.id
   selectedEdgeId.value = ''
-  if (!flowEditMode.value && node.configurable) openNodeConfig(node)
+  if (!flowEditMode.value && node.action && node.configurable) openNodeViewer(node)
 }
 
 function selectEdge(id) {
@@ -1132,7 +1327,7 @@ function clearFlowSelection() {
   selectedNodeId.value = ''
   selectedEdgeId.value = ''
   connectingFromId.value = ''
-  editingNode.value = null
+  closeInspector()
 }
 
 function startNodeDrag(node, event) {
@@ -1188,7 +1383,7 @@ function deleteFlowNode(node) {
   if (!node || node.locked || node.kind !== 'action') return
   selectedNodeId.value = node.id
   deleteSelectedNode()
-  if (editingNode.value?.id === node.id) editingNode.value = null
+  if (editingNode.value?.id === node.id) closeInspector()
 }
 
 function autoLayoutDraft() {
@@ -1297,6 +1492,12 @@ function defaultAction(type, tempId) {
 
 function openNodeConfig(node) {
   if (!node?.configurable) return
+  if (!flowEditMode.value) {
+    enterFlowEdit()
+    node = flowDraft.nodes.find((item) => item.id === node.id) || node
+  }
+  selectedNodeId.value = node.id
+  inspectorMode.value = 'edit'
   editingNode.value = node
   const action = node.action
   actionForm.broadcast_device_id = action.broadcast_device_id ?? null
@@ -1306,7 +1507,51 @@ function openNodeConfig(node) {
   actionForm.max_executions = Math.max(1, Number(action.max_executions || 1))
   actionForm.drone_id = action.drone_id || ''
   actionForm.route_id = action.route_id || ''
-  actionForm.staff_group = action.action_type === 'staff_task' ? (action.route_id || '安全巡查组') : ''
+  actionForm.machine_dog_id = action.config_json?.machine_dog_id || ''
+  actionForm.staff_group = action.action_type === 'staff_task'
+    ? (action.route_id || staffGroupOptions.value[0] || '')
+    : ''
+}
+
+function openNodeViewer(node) {
+  if (!node?.action || !node.configurable) return
+  selectedNodeId.value = node.id
+  selectedEdgeId.value = ''
+  inspectorMode.value = 'view'
+  editingNode.value = node
+}
+
+function closeInspector() {
+  editingNode.value = null
+  inspectorMode.value = 'view'
+  if (!flowEditMode.value) selectedNodeId.value = ''
+}
+
+function actionReadonlyFields(action) {
+  if (!action) return []
+  if (action.action_type === 'broadcast') {
+    return [
+      { label: '广播设备', value: findBroadcastDevice(action.broadcast_device_id)?.name || '未选择广播设备' },
+      { label: '播报模板', value: findBroadcastTemplate(action.template_id)?.name || '未选择播报模板' },
+      { label: '执行方式', value: Number(action.max_executions || 1) > 1 ? `周期 · ${action.repeat_interval_seconds || 60} 秒 × ${action.max_executions} 次` : '单次播报' },
+    ]
+  }
+  if (action.action_type === 'drone_dispatch') {
+    return [
+      { label: '无人机型号', value: findConfiguredOption(droneOptions.value, action.drone_id)?.label || action.drone_id || '未选择无人机型号' },
+      { label: '航线', value: findConfiguredOption(routeOptions.value, action.route_id)?.label || action.route_id || '未选择航线' },
+    ]
+  }
+  if (action.action_type === 'machine_dog_dispatch') {
+    return [
+      { label: '机器狗型号', value: findMachineDog(action.config_json?.machine_dog_id)?.label || '未选择机器狗型号' },
+      { label: '巡检路线', value: findMachineDogRoute(action.route_id)?.label || action.route_id || '未选择巡检路线' },
+    ]
+  }
+  if (action.action_type === 'staff_task') {
+    return [{ label: '处置工作组', value: action.route_id || '未选择处置组' }]
+  }
+  return []
 }
 
 function saveNodeConfig() {
@@ -1324,6 +1569,12 @@ function saveNodeConfig() {
   } else if (action.action_type === 'drone_dispatch') {
     action.drone_id = actionForm.drone_id || null
     action.route_id = actionForm.route_id || null
+  } else if (action.action_type === 'machine_dog_dispatch') {
+    action.route_id = actionForm.route_id || null
+    action.config_json = {
+      ...(action.config_json || {}),
+      machine_dog_id: actionForm.machine_dog_id || null,
+    }
   } else if (action.action_type === 'staff_task') {
     action.route_id = actionForm.staff_group || '安全巡查组'
   }
@@ -1337,7 +1588,7 @@ function deleteInspectorNode() {
   if (!canDeleteInspectorNode.value) return
   selectedNodeId.value = editingNode.value.id
   deleteSelectedNode()
-  editingNode.value = null
+  closeInspector()
 }
 
 async function saveFlow() {
@@ -1370,6 +1621,7 @@ async function saveFlow() {
     writeFlowLayout(flowDraft.nodes, flowDraft.edges)
     ElMessage.success('联动流程已保存')
     flowEditMode.value = false
+    closeInspector()
     await loadConfig()
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '保存失败')
@@ -1390,6 +1642,17 @@ function validateFlowDraft() {
     ElMessage.warning('请完善广播动作的设备和播报模板')
     return false
   }
+  const invalidMachineDog = flowDraft.nodes.find((node) => (
+    node.kind === 'action'
+    && node.action?.action_type === 'machine_dog_dispatch'
+    && (!node.action?.config_json?.machine_dog_id || !node.action?.route_id)
+  ))
+  if (invalidMachineDog) {
+    selectedNodeId.value = invalidMachineDog.id
+    openNodeConfig(invalidMachineDog)
+    ElMessage.warning('请完善机器狗任务的型号和巡检路线')
+    return false
+  }
   return true
 }
 
@@ -1407,6 +1670,7 @@ function actionPayloadForSave(action, stepOrder) {
     template_id: action.template_id || null,
     drone_id: action.drone_id || null,
     route_id: action.route_id || null,
+    config_json: action.config_json || null,
     repeat_interval_seconds: action.repeat_interval_seconds || 60,
     max_executions: action.max_executions || 1,
   }
@@ -1432,8 +1696,13 @@ function actionBusinessSummary(action) {
     const device = findBroadcastDevice(action.broadcast_device_id)
     return device?.name || '未选择广播设备'
   }
-  if (action.action_type === 'drone_dispatch') return action.drone_id || '未选择无人机'
-  if (action.action_type === 'staff_task') return action.route_id || '安全巡查组'
+  if (action.action_type === 'drone_dispatch') {
+    return findConfiguredOption(droneOptions.value, action.drone_id)?.label || action.drone_id || '未选择无人机型号'
+  }
+  if (action.action_type === 'machine_dog_dispatch') {
+    return findMachineDog(action.config_json?.machine_dog_id)?.label || '未选择机器狗型号'
+  }
+  if (action.action_type === 'staff_task') return action.route_id || '未选择处置组'
   if (action.action_type === 'camera_snapshot') return '自动抓拍留证'
   return action.action_name || '业务动作'
 }
@@ -1447,12 +1716,17 @@ function actionBusinessDetail(action) {
       ? `${templateText} · ${action.repeat_interval_seconds || 60}s × ${action.max_executions}`
       : `${templateText} · 单次`
   }
-  if (action.action_type === 'drone_dispatch') return action.route_id || '未选择航线'
+  if (action.action_type === 'drone_dispatch') {
+    return findConfiguredOption(routeOptions.value, action.route_id)?.label || action.route_id || '未选择航线'
+  }
+  if (action.action_type === 'machine_dog_dispatch') {
+    return findMachineDogRoute(action.route_id)?.label || '未选择巡检路线'
+  }
   return ''
 }
 
 function isConfigurableAction(action) {
-  return ['broadcast', 'drone_dispatch', 'staff_task'].includes(action?.action_type)
+  return ['broadcast', 'drone_dispatch', 'machine_dog_dispatch', 'staff_task'].includes(action?.action_type)
 }
 
 function findBroadcastDevice(id) {
@@ -1463,8 +1737,34 @@ function findBroadcastTemplate(id) {
   return config.broadcast_templates.find((item) => item.id === id)
 }
 
+function findMachineDog(id) {
+  return machineDogOptions.find((item) => item.value === id)
+}
+
+function findMachineDogRoute(id) {
+  return machineDogRouteOptions.find((item) => item.value === id)
+}
+
 function uniqueActionValues(field) {
   return Array.from(new Set(config.action_configs.map((item) => item[field]).filter(Boolean)))
+}
+
+function mergeConfiguredOptions(...lists) {
+  const options = []
+  const seen = new Set()
+  for (const list of lists) {
+    for (const item of list || []) {
+      const option = typeof item === 'string' ? { value: item, label: item } : item
+      if (!option?.value || seen.has(option.value)) continue
+      seen.add(option.value)
+      options.push({ value: option.value, label: option.label || option.value })
+    }
+  }
+  return options
+}
+
+function findConfiguredOption(options, value) {
+  return options.find((item) => item.value === value)
 }
 
 function edgePathForRender(edgeItem) {
@@ -1597,7 +1897,7 @@ function clampFloat(value, min, max) {
 }
 
 onMounted(async () => {
-  await loadConfig()
+  await Promise.all([loadConfig(), loadStaffGroups(), loadDroneLinkageOptions()])
   await nextTick()
   setupCanvasObserver()
   fitFlowView()
@@ -1633,6 +1933,16 @@ onBeforeUnmount(() => {
   background: linear-gradient(90deg, rgba(14, 48, 76, .82) 0%, rgba(9, 29, 48, .72) 58%, rgba(7, 20, 34, .46) 100%);
   box-shadow: inset 0 1px 0 rgba(147, 206, 241, .08);
 }
+
+.status-summary { display: flex; justify-content: flex-end; align-items: center; }
+.metric { min-width: 96px; display: inline-flex; align-items: baseline; gap: 8px; padding: 8px 18px; white-space: nowrap; }
+.metric + .metric { border-left: 1px solid rgba(96, 151, 191, .18); }
+.metric .dot { width: 8px; height: 8px; flex: 0 0 auto; align-self: center; border-radius: 50%; background: #8db2c8; }
+.metric .dot.total { box-shadow: 0 0 8px rgba(141, 178, 200, .75); }
+.metric .dot.online { background: #48e6bf; box-shadow: 0 0 8px rgba(72, 230, 191, .75); }
+.metric .dot.offline { background: #ff5b68; box-shadow: 0 0 8px rgba(255, 91, 104, .72); }
+.metric-num { color: #f2fbff; font-size: 22px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+.metric-label { color: #8db2c8; font-size: 12px; }
 
 .title-block {
   min-width: 0;
@@ -2060,6 +2370,10 @@ onBeforeUnmount(() => {
   background: #0b1d30;
 }
 
+.filter-bar.with-visual-category {
+  grid-template-columns: 180px 180px 180px 180px minmax(260px, 1fr);
+}
+
 .filter-bar .event-search :deep(.el-input__wrapper),
 .filter-bar .event-filter-select :deep(.el-select__wrapper) {
   min-height: 44px;
@@ -2403,6 +2717,18 @@ onBeforeUnmount(() => {
   background: rgba(28, 112, 102, .52) !important;
 }
 
+.flow-dialog-actions :deep(.flow-save-action) {
+  border-color: rgba(111, 232, 255, .92) !important;
+  color: #041522 !important;
+  background: linear-gradient(135deg, #5ce5ff 0%, #2bc9c0 100%) !important;
+  box-shadow: 0 0 0 1px rgba(111, 232, 255, .22), 0 8px 20px rgba(31, 196, 205, .20);
+}
+
+.flow-dialog-actions :deep(.flow-save-action:hover) {
+  border-color: #b8f5ff !important;
+  background: linear-gradient(135deg, #8ceeff 0%, #55e0ce 100%) !important;
+}
+
 .flow-workspace-body {
   height: 100%;
   min-height: 0;
@@ -2490,20 +2816,52 @@ onBeforeUnmount(() => {
 }
 
 .action-readonly {
+  flex: 1;
+  min-height: 0;
   display: grid;
-  gap: 8px;
-  padding: 20px 22px;
+  align-content: start;
+  gap: 0;
+  padding: 22px;
+  overflow: auto;
 }
 
-.action-readonly span {
+.readonly-caption {
+  margin-bottom: 14px;
+  color: #789bb4;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.readonly-field {
+  display: grid;
+  gap: 7px;
+  padding: 14px 0;
+  border-bottom: 1px solid rgba(112, 157, 190, .14);
+}
+
+.readonly-field span {
   color: #789bb4;
   font-size: 12px;
 }
 
-.action-readonly strong {
+.readonly-field strong {
+  overflow: hidden;
   color: #eaf6ff;
   font-size: 14px;
   line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.readonly-summary {
+  margin-top: 18px;
+  padding: 12px 14px;
+  border: 1px solid rgba(83, 153, 197, .18);
+  border-radius: 7px;
+  color: #8fb5ca;
+  background: rgba(7, 25, 42, .72);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .inspector-form :deep(.el-select),
@@ -2663,7 +3021,8 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 960px) {
-  .filter-bar {
+  .filter-bar,
+  .filter-bar.with-visual-category {
     height: auto;
     grid-template-columns: 1fr 1fr;
   }
