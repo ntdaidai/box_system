@@ -23,6 +23,11 @@ export function deleteStaff(id) {
   return request.delete(`/miniprogram/v1/staff/${id}`)
 }
 
+// 删除空组别（组内仍有人员时由后端拒绝，避免误改人员归属）
+export function deleteStaffGroup(groupName) {
+  return request.delete(`/miniprogram/v1/staff/groups/${encodeURIComponent(groupName)}`)
+}
+
 // 启用 / 停用人员
 export function updateStaffEnabled(id, enabled) {
   return request.put(`/miniprogram/v1/staff/${id}/enabled`, { enabled })

@@ -95,32 +95,74 @@
                 <span>处理日志</span>
                 <h2>记录流</h2>
               </div>
-              <small>{{ timeline.length }} 条</small>
+              <small>{{ displayedTimeline.length }} 条</small>
             </header>
 
-            <div v-if="timeline.length" class="log-stream">
-              <article v-for="item in timeline" :key="item.id" :class="timelineTone(item)">
-                <span class="log-type">{{ logTypeLabel(item.log_type) }}</span>
+            <div v-if="displayedTimeline.length" class="log-stream">
+              <article
+                v-for="entry in timelineEntries"
+                :key="entry.item.id"
+                :class="[timelineTone(entry.item), timelineNodeClass(entry.item)]"
+              >
+                <span class="log-type">{{ logTypeLabel(entry.item.log_type) }}</span>
                 <div class="log-body">
-                  <strong>{{ logTitle(item) }}</strong>
-                  <p v-if="logMessage(item)">{{ logMessage(item) }}</p>
-                  <dl v-if="logDetailFields(item).length" class="log-fields">
-                    <div v-for="field in logDetailFields(item)" :key="field.label">
+                  <strong>{{ logTitle(entry.item) }}</strong>
+                  <p v-if="logMessage(entry.item)">{{ logMessage(entry.item) }}</p>
+                  <dl v-if="logDetailFields(entry.item).length" class="log-fields">
+                    <div v-for="field in logDetailFields(entry.item)" :key="field.label">
                       <dt>{{ field.label }}</dt>
                       <dd>{{ field.value }}</dd>
                     </div>
                   </dl>
+                  <div v-if="entry.dag" class="workflow-dag-block">
+                    <div class="workflow-dag-heading">
+                      <strong>处置流程图</strong>
+                      <span>流程节点</span>
+                    </div>
+                    <div class="workflow-dag-canvas">
+                      <svg
+                        :viewBox="`0 0 ${entry.dag.width} ${entry.dag.height}`"
+                        role="img"
+                        aria-label="事件处置流程图"
+                      >
+                        <defs>
+                          <marker
+                            :id="`dag-arrow-${entry.item.id}`"
+                            markerWidth="7"
+                            markerHeight="7"
+                            refX="6"
+                            refY="3.5"
+                            orient="auto"
+                          >
+                            <path d="M0 0 L7 3.5 L0 7 Z" fill="#5c8dab" />
+                          </marker>
+                        </defs>
+                        <path
+                          v-for="edge in entry.dag.edges"
+                          :key="edge.key"
+                          class="workflow-dag-edge"
+                          :d="edge.path"
+                          :marker-end="`url(#dag-arrow-${entry.item.id})`"
+                        />
+                        <g v-for="node in entry.dag.nodes" :key="node.id" class="workflow-dag-node" :class="node.tone">
+                          <title>{{ node.fullLabel }}</title>
+                          <rect :x="node.x" :y="node.y" :width="node.width" :height="node.height" rx="6" />
+                          <text :x="node.x + node.width / 2" :y="node.y + 22" text-anchor="middle">{{ node.label }}</text>
+                        </g>
+                      </svg>
+                    </div>
+                  </div>
                 </div>
                 <div class="log-source">
-                  <span>{{ operatorLabel(item.operator) }}</span>
-                  <time>{{ formatTime(item.create_time || item.created_at) }}</time>
+                  <span>{{ operatorLabel(entry.item.operator) }}</span>
+                  <time>{{ formatTime(entry.item.create_time || entry.item.created_at) }}</time>
                 </div>
                 <el-button
-                  v-if="evidenceForLog(item.id).length"
+                  v-if="evidenceForLog(entry.item.id).length"
                   link
                   type="primary"
                   :icon="Picture"
-                  @click="openEvidence(item.id)"
+                  @click="openEvidence(entry.item.id)"
                 >
                   证据
                 </el-button>
@@ -136,21 +178,29 @@
           <section v-if="actionModules.length" class="work-card linkage-card">
             <header class="card-heading">
               <div>
-                <span>联动执行</span>
-                <h2>动作结果</h2>
+                <h2 class="linkage-heading-title">联动执行</h2>
               </div>
-              <small>{{ actionModules.length }} 项</small>
+              <small class="linkage-count">{{ actionModules.length }} 项</small>
             </header>
 
             <div class="linkage-list">
-              <article v-for="module in actionModules" :key="module.key" :class="module.state">
-                <div class="linkage-icon">
-                  <el-icon><component :is="module.icon" /></el-icon>
-                </div>
+              <article v-for="module in actionModules" :key="module.key" :class="[module.state, `linkage-${module.key}`]">
                 <div class="linkage-body">
                   <header>
                     <strong>{{ module.title }}</strong>
-                    <span>{{ module.statusText }}</span>
+                    <div class="linkage-card-actions">
+                      <el-button
+                        v-if="module.canInspect"
+                        class="linkage-process-button"
+                        plain
+                        size="small"
+                        :icon="VideoCamera"
+                        @click="openLinkageProcess(module)"
+                      >
+                        查看过程
+                      </el-button>
+                      <span>{{ module.statusText }}</span>
+                    </div>
                   </header>
                   <dl>
                     <div v-for="meta in module.meta" :key="meta.label">
@@ -158,7 +208,15 @@
                       <dd>{{ meta.value }}</dd>
                     </div>
                   </dl>
-                  <p>{{ module.summary }}</p>
+                  <el-button
+                    v-if="module.manualAction"
+                    class="linkage-complete-button"
+                    type="primary"
+                    size="small"
+                    @click="operate(module.manualAction)"
+                  >
+                    {{ module.manualActionLabel }}
+                  </el-button>
                   <p v-if="module.failureReason" class="failure-reason">失败原因：{{ module.failureReason }}</p>
                 </div>
               </article>
@@ -248,22 +306,101 @@
       </div>
       <div v-else class="compact-empty">当前节点暂无证据</div>
     </el-drawer>
+
+    <el-dialog
+      v-model="processDialogVisible"
+      class="linkage-process-dialog drone-test-dialog"
+      width="94%"
+      align-center
+      destroy-on-close
+      :close-on-click-modal="false"
+      :title="processDialogTitle"
+      @closed="stopLinkageProcess"
+    >
+      <div v-if="processModule" class="test-layout">
+        <div class="test-toolbar">
+          <div class="test-device">
+            <strong>{{ processModule.objectValue }}</strong>
+          </div>
+          <div class="test-wayline">
+            <span class="toolbar-label">选择航线</span>
+            <el-select
+              v-model="processRouteSelection"
+              class="wayline-select"
+              popper-class="drone-filter-popper"
+              filterable
+              clearable
+            >
+              <el-option v-for="name in processRouteOptions" :key="name" :label="name" :value="name" />
+            </el-select>
+            <el-button
+              v-if="!processRunning"
+              :icon="VideoCamera"
+              type="primary"
+              :disabled="!processRouteSelection"
+              @click="startLinkageProcess"
+            >开始</el-button>
+            <el-button v-else :icon="Close" @click="stopLinkageProcess">停止</el-button>
+          </div>
+        </div>
+
+        <div class="test-body">
+          <div class="test-map wayline-map-stage test-wayline-map-stage">
+            <img src="/dam.png" alt="大藤峡航线图" draggable="false" />
+            <svg v-if="processRoutePoints.length" class="wayline-map-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+              <polyline class="wayline-map-route route-glow tone-0" :points="processRoutePolyline" />
+              <polyline class="wayline-map-route tone-0" :points="processRoutePolyline" />
+              <circle
+                v-for="(point, index) in processRoutePoints"
+                :key="`process-point-${index}`"
+                class="wayline-map-point"
+                :class="{ endpoint: index === 0 || index === processRoutePoints.length - 1 }"
+                :cx="point.x"
+                :cy="point.y"
+                :r="index === 0 || index === processRoutePoints.length - 1 ? 2.2 : 1.7"
+              />
+            </svg>
+            <div class="process-wayline-landmark airport" style="left: 94.9%; top: 24.9%;">机场点</div>
+            <div class="process-wayline-landmark" style="left: 47.4%; top: 58.1%;">禁渔点</div>
+            <div class="process-wayline-landmark" style="left: 96.3%; top: 54.3%;">禁涉水点</div>
+            <div class="drone-marker process-unit-marker" :style="{ left: `${processMarkerPoint.x}%`, top: `${processMarkerPoint.y}%` }">
+              <div class="marker-pulse"></div>
+              <img :src="processModule.key === 'drone' ? '/drone-icon.png' : '/waypoint.png'" alt="执行设备" class="marker-icon" />
+            </div>
+            <div class="map-legend">
+              <span class="legend-item"><i class="legend-line"></i>执行航线</span>
+              <span class="legend-item process-current-position">● 当前位置</span>
+            </div>
+          </div>
+
+          <div class="test-video">
+            <div class="video-stage">
+              <video :key="processRouteSelection" :src="processVideoSrc" class="video-stream" autoplay muted loop playsinline></video>
+              <div class="process-video-label"><span>LIVE</span><strong>{{ processModule.objectValue }}</strong></div>
+              <div class="scan-grid"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { computed, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ArrowLeft,
   CircleCheckFilled,
+  Close,
   Connection,
   Document,
   Microphone,
   Picture,
   Promotion,
   User,
+  VideoCamera,
   WarningFilled,
 } from '@element-plus/icons-vue'
 import { getIntegrationConfig, getUnifiedSafetyEventDetail, operateUnifiedSafetyEvent } from '@/api/integration'
@@ -283,10 +420,54 @@ const detail = reactive({
   tasks: [],
 })
 const actionConfigs = ref([])
+const processDialogVisible = ref(false)
+const processModule = ref(null)
+const processRunning = ref(false)
+const processRouteSelection = ref('')
+const processProgress = ref(0)
+const processElapsed = ref(0)
+let processTimer = null
+
+const PROCESS_ROUTES = {
+  '禁渔航线': [
+    { x: 94.9, y: 24.9 }, { x: 47.4, y: 58.1 }, { x: 94.9, y: 24.9 },
+  ],
+  '禁涉水航线': [
+    { x: 94.9, y: 24.9 }, { x: 96.3, y: 54.3 }, { x: 94.9, y: 24.9 },
+  ],
+  machine_dog: [
+    { x: 82, y: 74 }, { x: 71, y: 65 }, { x: 61, y: 55 },
+    { x: 49, y: 62 }, { x: 37, y: 48 }, { x: 26, y: 57 },
+    { x: 17, y: 42 },
+  ],
+}
 
 const event = computed(() => detail.event)
 const visualDetail = computed(() => detail.visual_detail)
 const timeline = computed(() => detail.timeline)
+const displayedTimeline = computed(() => {
+  const latestByAction = new Map()
+  const order = []
+  timeline.value.forEach((item) => {
+    const key = item?.action_key || item?.action_id || `timeline:${item?.id}`
+    if (!latestByAction.has(key)) order.push(key)
+    latestByAction.set(key, item)
+  })
+  return order
+    .map((key) => latestByAction.get(key))
+    .filter(Boolean)
+    .sort((left, right) => {
+      const leftReport = String(left?.log_type || '').toUpperCase() === 'REPORT'
+      const rightReport = String(right?.log_type || '').toUpperCase() === 'REPORT'
+      if (leftReport !== rightReport) return leftReport ? 1 : -1
+      return new Date(left?.create_time || left?.created_at || 0).getTime()
+        - new Date(right?.create_time || right?.created_at || 0).getTime()
+    })
+})
+const timelineEntries = computed(() => displayedTimeline.value.map((item) => ({
+  item,
+  dag: workflowDag(item),
+})))
 const evidence = computed(() => detail.evidence)
 const reviewFrames = computed(() => {
   const frames = Array.isArray(detail.review_frames) ? detail.review_frames : []
@@ -303,6 +484,30 @@ const eventKind = computed(() => {
 })
 const eventKindLabel = computed(() => ({ vision: '视觉事件', sensor: '传感器事件', generic: '统一事件' })[eventKind.value])
 const showRightRail = computed(() => Boolean(event.value))
+const processRouteOptions = computed(() => {
+  const current = processModule.value?.routeLabel
+  const defaults = processModule.value?.key === 'machine_dog' ? ['巡检路线'] : ['禁渔航线', '禁涉水航线']
+  return [...new Set([current, ...defaults].filter((value) => value && !['未指定路线', '未记录'].includes(value)))]
+})
+const processRoutePoints = computed(() => {
+  return PROCESS_ROUTES[processRouteSelection.value]
+    || PROCESS_ROUTES[processModule.value?.key]
+    || PROCESS_ROUTES['禁渔航线']
+})
+const processRoutePolyline = computed(() => processRoutePoints.value.map((point) => `${point.x},${point.y}`).join(' '))
+const processMarkerPoint = computed(() => pointAtRoute(processRoutePoints.value, processProgress.value))
+const processDialogTitle = computed(() => processModule.value?.key === 'machine_dog' ? '机器狗测试 · 路线巡检' : '无人机测试 · 航线巡检')
+const processVideoSrc = computed(() => {
+  const text = `${processRouteSelection.value || ''} ${processModule.value?.routeLabel || ''} ${processModule.value?.objectValue || ''}`.toLowerCase()
+  return text.includes('涉水') || text.includes('wading') || processModule.value?.key === 'machine_dog'
+    ? '/demo/wading.mp4'
+    : '/demo/fishing.mp4'
+})
+const processElapsedText = computed(() => {
+  const minutes = Math.floor(processElapsed.value / 60)
+  const seconds = String(processElapsed.value % 60).padStart(2, '0')
+  return `${String(minutes).padStart(2, '0')}:${seconds}`
+})
 
 const eventDuration = computed(() => {
   if (!event.value?.started_at) return '--'
@@ -449,27 +654,45 @@ const actionModules = computed(() => {
   const modules = [
     buildActionModule({
       key: 'broadcast',
-      title: '广播',
+      title: '广播设备',
       types: ['broadcast'],
       icon: Microphone,
-      objectLabel: '设备',
-      objectValue: (config) => config?.broadcast_device_name,
+      meta: [
+        ['对象', (config, logs) => firstActionValue(config, logs, ['broadcast_device_name', 'device_name', 'object_name'])],
+        ['模板', (config, logs) => firstActionValue(config, logs, ['template_name', 'template', 'template_title'])],
+      ],
+      forceVisible: configsForModule(['broadcast']).length > 0,
     }),
     buildActionModule({
       key: 'drone',
-      title: '无人机',
-      types: ['drone_dispatch'],
+      title: '无人机设备',
+      types: ['drone_dispatch', 'drone', 'uav'],
       icon: Connection,
-      objectLabel: '航线 / 设备',
-      objectValue: (config) => config?.route_id ? `航线 ${config.route_id}` : config?.drone_id,
+      meta: [
+        ['对象', (config, logs) => firstActionValue(config, logs, ['drone_name', 'device_name', 'drone_id', 'object_name'])],
+        ['航线', (config, logs) => firstActionValue(config, logs, ['route_name', 'wayline_name', 'route_id', 'wayline_id'])],
+      ],
+      forceVisible: configsForModule(['drone_dispatch', 'drone', 'uav']).length > 0,
+    }),
+    buildActionModule({
+      key: 'machine_dog',
+      title: '机器狗设备',
+      types: ['machine_dog', 'dog_dispatch', 'robot_dog', 'robot_dispatch', 'quadruped'],
+      icon: Connection,
+      meta: [
+        ['对象', (config, logs) => firstActionValue(config, logs, ['machine_dog_name', 'dog_name', 'robot_name', 'device_name', 'dog_id', 'robot_id', 'object_name'])],
+        ['路线', (config, logs) => firstActionValue(config, logs, ['route_name', 'path_name', 'route_id', 'path_id'])],
+      ],
+      forceVisible: configsForModule(['machine_dog', 'dog_dispatch', 'robot_dog', 'robot_dispatch', 'quadruped']).length > 0,
     }),
     buildActionModule({
       key: 'manual',
       title: '人工处置',
       types: ['staff_task'],
       icon: User,
-      objectLabel: '责任人',
-      objectValue: () => latestTask.value?.assignee || latestTask.value?.dispatch_operator,
+      meta: [
+        ['对象', (_config, logs) => latestTask.value?.assignee || firstActionValue(null, logs, ['assignee', 'operator', 'operator_name']) || '系统'],
+      ],
       forceVisible: Boolean(latestTask.value || logsForModule('manual').length),
     }),
   ]
@@ -482,7 +705,7 @@ const primaryAction = computed(() => {
   }
   if (event.value.risk_level === 'HIGH') {
     if (latestTask.value?.status === 'ACCEPTED' || latestTask.value?.status === 'PROCESSING') {
-      return { title: '等待现场结果', hint: '完成现场确认后提交结果，事件将进入闭环。', label: '完成现场处置', action: 'COMPLETE_TASK' }
+      return { title: '人工处置进行中', hint: '请在联动执行卡片中完成处置，完成后事件将进入闭环。', label: '完成现场处置', action: null }
     }
     return { title: '需要人工接管', hint: '高风险事件需要先接受处置任务。', label: '接受处置', action: 'ACCEPT_TASK' }
   }
@@ -541,19 +764,52 @@ function buildActionModule(options) {
   const failed = logs.find((item) => isFailedStatus(item.status))
   const last = logs[logs.length - 1]
   const config = configsForModule(options.types)[0]
-  const state = failed ? 'failed' : event.value?.state === 'ACTIVE' && last ? 'running' : 'done'
-  const objectValue = options.objectValue(config) || '未记录'
+  const taskStatus = options.key === 'manual' ? String(latestTask.value?.status || '').toUpperCase() : ''
+  const isTaskRunning = ['ACCEPTED', 'PROCESSING'].includes(taskStatus)
+  const isTaskWaiting = ['WAITING_ACCEPT', 'DISPATCHED'].includes(taskStatus)
+  const isTaskDone = taskStatus === 'COMPLETED'
+  const logStatus = normalizedLogStatus(last)
+  const state = failed
+    ? 'failed'
+    : isTaskWaiting || isTaskRunning || logStatus === 'RUNNING'
+      ? 'running'
+      : isTaskDone || logStatus === 'DONE' || event.value?.state === 'RESOLVED'
+        ? 'done'
+        : last || (options.forceVisible && event.value?.state === 'ACTIVE')
+          ? 'running'
+          : 'done'
+  const values = (options.meta || []).map(([label, getter]) => ({
+    label,
+    value: getter(config, logs) || '未记录',
+  }))
+  const objectValue = values.find((item) => item.label === '对象')?.value || '未记录'
+  const routeLabel = values.find((item) => ['航线', '路线'].includes(item.label))?.value || '未指定路线'
+  const executionTime = options.key === 'manual'
+    ? (
+      latestTask.value?.accepted_at
+      || logs.find((item) => String(parsePayload(item?.payload)?.operation || '').toUpperCase() === 'ACCEPT_TASK')?.create_time
+      || latestTask.value?.completed_at
+      || last?.create_time
+      || last?.created_at
+    )
+    : (last?.create_time || last?.created_at)
   return {
     key: options.key,
     title: options.title,
     icon: options.icon,
     state,
-    statusText: state === 'failed' ? '失败' : state === 'running' ? '执行中' : '已完成',
-    summary: localizeText(failed?.message || last?.message || latestTask.value?.note || '已产生处置记录'),
+    statusText: state === 'failed' ? '失败' : state === 'running' ? '处理中' : '已完成',
+    objectValue,
+    routeLabel,
+    manualAction: options.key === 'manual' && (isTaskWaiting || isTaskRunning)
+      ? (isTaskRunning ? 'COMPLETE_TASK' : 'ACCEPT_TASK')
+      : null,
+    manualActionLabel: isTaskRunning ? '完成处置' : '开始处置',
+    canInspect: ['drone', 'machine_dog'].includes(options.key),
     failureReason: localizeText(failed?.message || ''),
     meta: [
-      { label: '对象', value: objectValue },
-      { label: '执行时间', value: formatTime(last?.create_time || last?.created_at || latestTask.value?.completed_at || latestTask.value?.accepted_at) },
+      ...values,
+      { label: '执行时间', value: formatTime(executionTime) },
     ].filter((item) => hasValue(item.value)),
   }
 }
@@ -566,12 +822,27 @@ function logsForModule(key) {
   const includes = {
     broadcast: ['broadcast', '广播', '喊话'],
     drone: ['drone', 'uav', '无人机', '派飞'],
+    machine_dog: ['machine_dog', 'dog_dispatch', 'robot_dog', 'robot', '机器狗', '四足'],
     manual: ['manual', '人工', '处置', '接单', '工作人员'],
   }[key] || []
   return timeline.value.filter((item) => {
-    const text = `${item.log_type || ''} ${item.title || ''} ${item.message || ''} ${item.action || ''}`.toLowerCase()
+    const payload = parsePayload(item.payload)
+    const text = `${item.log_type || ''} ${item.title || ''} ${item.message || ''} ${item.action || ''} ${JSON.stringify(payload)}`.toLowerCase()
     return includes.some((keyword) => text.includes(keyword))
   })
+}
+
+function firstActionValue(config, logs, keys) {
+  for (const key of keys) {
+    if (hasValue(config?.[key])) return localizeText(config[key])
+  }
+  for (const item of [...(logs || [])].reverse()) {
+    const payload = parsePayload(item?.payload)
+    for (const key of keys) {
+      if (hasValue(payload?.[key])) return localizeText(payload[key])
+    }
+  }
+  return ''
 }
 
 function firstLog(predicate) {
@@ -588,6 +859,58 @@ function stepStatusText(state) {
 
 function goBack() {
   router.push('/workspace/safety-events')
+}
+
+function pointAtRoute(points, progress) {
+  if (!points.length) return { x: 50, y: 50 }
+  if (points.length === 1) return points[0]
+  const segments = []
+  let total = 0
+  points.forEach((point, index) => {
+    if (!index) return
+    const previous = points[index - 1]
+    const length = Math.hypot(point.x - previous.x, point.y - previous.y)
+    segments.push({ previous, point, length })
+    total += length
+  })
+  let distance = Math.max(0, Math.min(1, progress)) * total
+  for (const segment of segments) {
+    if (distance <= segment.length) {
+      const ratio = segment.length ? distance / segment.length : 0
+      return {
+        x: segment.previous.x + (segment.point.x - segment.previous.x) * ratio,
+        y: segment.previous.y + (segment.point.y - segment.previous.y) * ratio,
+      }
+    }
+    distance -= segment.length
+  }
+  return points[points.length - 1]
+}
+
+function openLinkageProcess(module) {
+  processModule.value = module
+  processRouteSelection.value = module.routeLabel && !['未指定路线', '未记录'].includes(module.routeLabel)
+    ? module.routeLabel
+    : (module.key === 'machine_dog' ? '巡检路线' : '禁渔航线')
+  processProgress.value = 0
+  processElapsed.value = 0
+  processDialogVisible.value = true
+  startLinkageProcess()
+}
+
+function startLinkageProcess() {
+  processRunning.value = true
+  clearInterval(processTimer)
+  processTimer = setInterval(() => {
+    processProgress.value = (processProgress.value + 0.006) % 1
+    processElapsed.value += 1
+  }, 1000)
+}
+
+function stopLinkageProcess() {
+  processRunning.value = false
+  clearInterval(processTimer)
+  processTimer = null
 }
 
 function openReport() {
@@ -639,6 +962,8 @@ async function operate(action) {
   }
 }
 
+onBeforeUnmount(stopLinkageProcess)
+
 function isFailedStatus(value) {
   return ['FAILED', 'FAIL', 'ERROR'].includes(String(value || '').toUpperCase())
 }
@@ -682,22 +1007,128 @@ function statusClass(value) {
 }
 
 function logTypeLabel(value) {
-  return ({ TRIGGER: '事件触发', RECOVERY: '条件恢复', WORKFLOW: '工作流', DAM_WORKFLOW: '智能路由', ACTION: '联动动作', REPORT: '报告', MANUAL: '人工操作', RESOLVE: '闭环', SYSTEM: '系统记录', RISK_CHANGE: '风险变化' })[value] || localizeText(value) || '记录'
+  return ({ TRIGGER: '事件触发', RECOVERY: '条件恢复', WORKFLOW: '工作流', DAM_WORKFLOW: '智能路由', ACTION: '联动动作', REPORT: '闭环归档', MANUAL: '人工操作', RESOLVE: '闭环归档', SYSTEM: '系统记录', RISK_CHANGE: '风险变化' })[value] || localizeText(value) || '记录'
 }
 
 function logTitle(item) {
+  const type = String(item?.log_type || '').toUpperCase()
+  const status = normalizedLogStatus(item)
+  const p = parsePayload(item?.payload)
+
+  if (type === 'TRIGGER') {
+    const eventName = String(p.event_name || item?.title || '安全事件').trim()
+    const compactName = eventName.replace(/\s*[:：].*$/, '').replace(/\s*(已触发|触发完成)$/, '')
+    return `${compactName || '安全事件'}已触发`
+  }
+  if (type === 'DAM_WORKFLOW') {
+    if (isWorkflowPlanning(item)) return workflowStatusTitle('智能路由规划', status)
+    return workflowStatusTitle('模型工作流执行', status)
+  }
+  if (type === 'REPORT') {
+    if (status === 'RUNNING') return '事件处置报告生成中'
+    if (status === 'FAILED') return '事件处置报告生成异常'
+    return '事件处置报告已生成'
+  }
+  if (type === 'ACTION') {
+    const action = actionTaskLabel(p)
+    if (action) {
+      if (status === 'RUNNING') return `${action}执行中`
+      if (status === 'FAILED') return `${action}执行失败`
+      return `${action}已完成`
+    }
+    if (status === 'RUNNING') return '联动动作执行中'
+    if (status === 'FAILED') return '联动动作执行异常'
+    return '联动动作已完成'
+  }
+  if (type === 'MANUAL') return status === 'FAILED' ? '人工处置异常' : '人工处置已记录'
+  if (type === 'RESOLVE') return '事件已完成闭环'
   return localizeText(item?.title || item?.message || item?.action || '事件记录')
 }
 
 function logMessage(item) {
+  const type = String(item?.log_type || '').toUpperCase()
+  const status = normalizedLogStatus(item)
+  const p = parsePayload(item?.payload)
+
+  if (type === 'TRIGGER') {
+    const source = p.source_name || p.camera_name || (eventKind.value === 'sensor' ? sensorSourceName() : sourceLabel(event.value?.source_type))
+    const target = p.target_type ? targetLabel(p.target_type) : ''
+    const risk = p.risk_level ? riskLevelLabel(p.risk_level) : riskLevelLabel(event.value?.risk_level)
+    return `系统已从${source || '监测源'}识别${target ? `疑似${target}` : '异常情况'}，创建安全事件并评估为${risk}。`
+  }
+  if (type === 'DAM_WORKFLOW') {
+    if (isWorkflowPlanning(item)) {
+      const size = workflowSizeText(p)
+      return size ? `系统已根据事件信息生成处置流程，包含${size}。` : '系统正在根据事件信息生成处置流程。'
+    }
+    if (p.fallback_used === true) return '智能分析结果未完整返回，系统已切换到备用分析路径继续完成处置。'
+    if (status === 'RUNNING') return '系统正在执行已生成的处置流程，逐步完成分析任务。'
+    if (status === 'FAILED') return '处置流程执行未完成，请检查当前节点的执行情况。'
+    return '处置流程已执行完成，分析结果已交给后续报告环节。'
+  }
+  if (type === 'REPORT') {
+    if (status === 'RUNNING') return '系统正在整理事件信息和处置结果，生成可归档的事件报告。'
+    if (status === 'FAILED') return sanitizeLogText(item?.message) || '事件报告暂未生成，请检查报告生成过程。'
+    return '事件处置报告已生成并归档，可在右侧打开查看。'
+  }
+  if (type === 'ACTION') {
+    if (actionTaskLabel(p)) return ''
+  }
   if (!item?.title || !item?.message) return ''
-  const message = localizeText(item.message)
+  const message = sanitizeLogText(item.message)
   return message === logTitle(item) ? '' : message
 }
 
 function timelineTone(item) {
   if (isFailedStatus(item?.status)) return 'is-failed'
-  return ({ TRIGGER: 'is-trigger', DAM_WORKFLOW: 'is-action', WORKFLOW: 'is-action', RISK_CHANGE: 'is-warning', ACTION: 'is-action', RESOLVE: 'is-resolve', MANUAL: 'is-manual' })[item?.log_type] || 'is-system'
+  return ({ TRIGGER: 'is-trigger', DAM_WORKFLOW: 'is-action', WORKFLOW: 'is-action', RISK_CHANGE: 'is-warning', ACTION: 'is-action', REPORT: 'is-resolve', RESOLVE: 'is-resolve', MANUAL: 'is-manual' })[item?.log_type] || 'is-system'
+}
+
+function timelineNodeClass(item) {
+  const type = String(item?.log_type || '').toUpperCase()
+  if (type === 'TRIGGER') return 'node-trigger'
+  if (type === 'DAM_WORKFLOW' || type === 'WORKFLOW') return 'node-routing'
+  if (type === 'ACTION' || type === 'MANUAL') return 'node-linkage'
+  if (type === 'REPORT') return 'node-archive'
+  if (type === 'RESOLVE') return 'node-archive'
+  return 'node-system'
+}
+
+function normalizedLogStatus(item) {
+  const status = String(item?.status || '').toUpperCase()
+  if (['PROCESSING', 'RUNNING', 'PENDING'].includes(status)) return 'RUNNING'
+  if (['FAILED', 'FAIL', 'ERROR'].includes(status)) return 'FAILED'
+  if (['SUCCESS', 'COMPLETED', 'DONE'].includes(status)) return 'DONE'
+  return status
+}
+
+function workflowStatusTitle(label, status) {
+  if (status === 'RUNNING') return `${label}中`
+  if (status === 'FAILED') return `${label}异常`
+  return `${label}已完成`
+}
+
+function workflowSizeText(payload) {
+  if (payload?.node_count == null) return ''
+  return `${payload.node_count}个节点、${payload.edge_count ?? 0}条连接`
+}
+
+function isWorkflowPlanning(item) {
+  return String(item?.log_type || '').toUpperCase() === 'DAM_WORKFLOW'
+    && (/plan|规划/.test(`${item?.action_key || ''} ${item?.title || ''}`.toLowerCase()))
+}
+
+function sanitizeLogText(value) {
+  let text = localizeText(value)
+  text = text
+    .replace(/\s*[（(]\s*(成功|失败|success|failed)\s*[）)]/gi, '')
+    .replace(/\s*[（(]\s*报告编号\s*\d+\s*[）)]/g, '')
+    .replace(/\s*报告编号\s*[:：]?\s*\d+/g, '')
+    .replace(/\s*(Qwen[\w.-]*|云端增强分析|本地报告兜底)\s*/gi, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/[：:，,。]\s*[：:，,。]/g, '。')
+    .trim()
+  return text
 }
 
 // 动作类型 -> 中文（覆盖人工操作 operation 与后端 action_type 两种命名）
@@ -726,6 +1157,15 @@ function actionTypeLabel(value) {
     script: '脚本执行',
   }
   return labels[value] || localizeText(value) || ''
+}
+
+function actionTaskLabel(payload) {
+  return localizeText(
+    payload?.step_name
+    || payload?.action_name
+    || payload?.action_label
+    || (payload?.action_type ? actionTypeLabel(payload.action_type) : ''),
+  )
 }
 
 // 模型库工作流执行状态 -> 中文
@@ -771,30 +1211,27 @@ function logDetailFields(item) {
   if (type === 'TRIGGER') {
     push('来源', p.source_name || p.camera_name || sensorSourceName())
     push('事件编号', p.instance_no)
-    push('事件类型', p.event_category ? eventCategoryLabel(p.event_category) : '')
     push('初判风险', p.risk_level ? riskLevelLabel(p.risk_level) : '')
     push('目标类型', p.target_type ? targetLabel(p.target_type) : '')
     if (p.confidence != null) push('置信度', Number(p.confidence).toFixed(2))
-    if (p.suspected) push('疑似待复核', p.suspected_label || '是')
   } else if (type === 'DAM_WORKFLOW') {
-    push('事件类型', p.event_type)
-    if (p.node_count != null) push('工作流规模', `${p.node_count} 节点 / ${p.edge_count ?? 0} 边`)
-    if (p.visual_tasks?.length) push('视觉任务', `${p.visual_tasks.length} 项：${p.visual_tasks.join('、')}`)
-    if (p.visual_count != null) push('视觉任务', `${p.visual_count} 项`)
-    if (p.execution_status) push('执行状态', executionStatusLabel(p.execution_status))
-    if (p.fallback_used != null) push('是否兜底', p.fallback_used ? (p.fallback_reason || '是') : '否')
-    push('执行错误', p.execution_error || p.error)
+    if (!isWorkflowPlanning(item) && p.fallback_used != null) {
+      push(
+        '处置结果来源',
+        p.fallback_used
+          ? '智能分析结果未完整返回，系统已启用备用分析路径继续生成处置结果。'
+          : '已使用智能分析结果完成处置，未启用备用分析路径。',
+      )
+    }
   } else if (type === 'ACTION') {
-    push('动作名称', p.action_label || p.action_name || p.step_name)
-    push('动作类型', p.action_type ? actionTypeLabel(p.action_type) : '')
+    const devices = actionDeviceNames(p)
+    if (devices) push('联动设备', devices)
     if (p.total_count != null) {
       const failedText = p.failed_devices?.length ? `，失败：${p.failed_devices.join('、')}` : ''
       push('广播结果', `${p.success_count ?? 0}/${p.total_count} 台成功${failedText}`)
     }
-    if (p.step_count != null) push('步骤统计', `执行 ${p.step_count} / 跳过 ${p.skipped_count ?? 0} / 失败 ${p.failure_count ?? 0}`)
-    push('告警级别', p.level ? riskLevelLabel(p.level) : '')
+    if (p.step_count != null) push('执行统计', `执行 ${p.step_count} / 跳过 ${p.skipped_count ?? 0} / 失败 ${p.failure_count ?? 0}`)
     if (p.channels?.length) push('通知渠道', p.channels.join('、'))
-    push('执行结果', resultStatusText(p.result))
     push('失败原因', p.error)
   } else if (type === 'SUPPLEMENTAL_CONTEXT') {
     const sc = p.supplemental_context || {}
@@ -815,9 +1252,7 @@ function logDetailFields(item) {
     push('复核结论', p.risk_after ? `风险维持 ${riskLevelLabel(p.risk_after)}` : '风险维持原等级')
     if (p.knowledge_hit_count != null) push('命中条款数', `${p.knowledge_hit_count} 条`)
   } else if (type === 'REPORT') {
-    push('报告编号', p.analysis_report_id)
-    push('来源模型', p.llm_source_label)
-    push('失败原因', p.error)
+    if (p.error) push('生成说明', p.error)
   } else if (type === 'MANUAL' || type === 'RESOLVE') {
     push('处置动作', p.operation ? actionTypeLabel(p.operation) : (p.canonical_action_type ? actionTypeLabel(p.canonical_action_type) : ''))
     if (p.from_status && p.to_status) push('状态流转', `${statusLabel(p.from_status)} → ${statusLabel(p.to_status)}`)
@@ -828,6 +1263,167 @@ function logDetailFields(item) {
     push('备注', p.remark)
   }
   return fields
+}
+
+function reportSourceLabel(payload) {
+  const source = String(payload?.llm_source || '').toLowerCase()
+  const label = String(payload?.llm_source_label || '').toLowerCase()
+  if (source.includes('qwen35') || source.includes('cloud') || label.includes('云端')) return '云端增强分析'
+  if (source.includes('qwen4b') || source.includes('local') || label.includes('本地')) return '本地场景理解'
+  if (payload?.fallback_used === true) return '备用分析路径'
+  return '智能分析'
+}
+
+function workflowDag(item) {
+  // 只在智能路由规划完成后展示一次流程图，其余日志保留文字摘要即可。
+  if (!isWorkflowPlanning(item) || normalizedLogStatus(item) !== 'DONE') return null
+  const ownPayload = parsePayload(item?.payload)
+  const isWorkflowLog = ['DAM_WORKFLOW', 'WORKFLOW'].includes(String(item?.log_type || '').toUpperCase())
+  if (!isWorkflowLog) return null
+
+  let dag = ownPayload.final_dag || ownPayload.dag || ownPayload.workflow
+  if (!dag || !Array.isArray(dag.nodes) || !dag.nodes.length) {
+    const related = [...timeline.value].reverse().find((row) => {
+      if (!['DAM_WORKFLOW', 'WORKFLOW'].includes(String(row?.log_type || '').toUpperCase())) return false
+      const payload = parsePayload(row?.payload)
+      const candidate = payload.final_dag || payload.dag || payload.workflow
+      return Array.isArray(candidate?.nodes) && candidate.nodes.length
+    })
+    if (related) {
+      const payload = parsePayload(related.payload)
+      dag = payload.final_dag || payload.dag || payload.workflow
+    }
+  }
+  if (!dag || !Array.isArray(dag.nodes) || !dag.nodes.length) return null
+
+  const rawNodes = dag.nodes.filter((node) => node && (node.node_id || node.id || node.key))
+  const nodeIds = rawNodes.map((node) => String(node.node_id || node.id || node.key))
+  const nodeSet = new Set(nodeIds)
+  const rawEdges = Array.isArray(dag.edges) ? dag.edges : []
+  const edges = rawEdges
+    .map((edge, index) => ({
+      key: `${edge?.source || edge?.from || ''}-${edge?.target || edge?.to || ''}-${index}`,
+      source: String(edge?.source || edge?.from || ''),
+      target: String(edge?.target || edge?.to || ''),
+    }))
+    .filter((edge) => nodeSet.has(edge.source) && nodeSet.has(edge.target) && edge.source !== edge.target)
+
+  const incoming = new Map(nodeIds.map((id) => [id, 0]))
+  const outgoing = new Map(nodeIds.map((id) => [id, []]))
+  edges.forEach((edge) => {
+    incoming.set(edge.target, (incoming.get(edge.target) || 0) + 1)
+    outgoing.get(edge.source).push(edge.target)
+  })
+
+  const levels = []
+  const levelById = new Map()
+  let queue = nodeIds.filter((id) => incoming.get(id) === 0)
+  if (!queue.length) queue = nodeIds.slice(0, 1)
+  const visited = new Set()
+  while (queue.length) {
+    const current = queue.filter((id) => !visited.has(id))
+    if (!current.length) break
+    levels.push(current)
+    current.forEach((id) => {
+      visited.add(id)
+      levelById.set(id, levels.length - 1)
+    })
+    const next = []
+    current.forEach((id) => {
+      outgoing.get(id).forEach((target) => {
+        if (!visited.has(target) && !next.includes(target)) next.push(target)
+      })
+    })
+    queue = next
+  }
+  const remaining = nodeIds.filter((id) => !visited.has(id))
+  if (remaining.length) {
+    levels.push(remaining)
+    remaining.forEach((id) => levelById.set(id, levels.length - 1))
+  }
+
+  const nodeWidth = 124
+  const nodeHeight = 36
+  const levelGap = 28
+  const rowGap = 14
+  const sidePadding = 16
+  const topPadding = 18
+  const maxRows = Math.max(...levels.map((level) => level.length), 1)
+  const width = Math.max(430, sidePadding * 2 + levels.length * nodeWidth + Math.max(0, levels.length - 1) * levelGap)
+  const height = Math.max(86, topPadding * 2 + maxRows * nodeHeight + Math.max(0, maxRows - 1) * rowGap)
+  const positions = new Map()
+  const nodes = levels.flatMap((level, levelIndex) => level.map((id, rowIndex) => {
+    const raw = rawNodes.find((node) => String(node.node_id || node.id || node.key) === id) || {}
+    const x = sidePadding + levelIndex * (nodeWidth + levelGap)
+    const y = topPadding + rowIndex * (nodeHeight + rowGap)
+    const fullLabel = dagNodeLabel(raw, id, nodeIds.indexOf(id) + 1)
+    const label = fullLabel.length > 10 ? `${fullLabel.slice(0, 9)}…` : fullLabel
+    const node = {
+      id,
+      x,
+      y,
+      width: nodeWidth,
+      height: nodeHeight,
+      label,
+      fullLabel,
+      tone: dagNodeTone(raw.node_class || raw.node_type),
+    }
+    positions.set(id, node)
+    return node
+  }))
+
+  return {
+    width,
+    height,
+    nodes,
+    edges: edges.map((edge) => {
+      const source = positions.get(edge.source)
+      const target = positions.get(edge.target)
+      if (!source || !target) return null
+      const x1 = source.x + source.width
+      const y1 = source.y + source.height / 2
+      const x2 = target.x
+      const y2 = target.y + target.height / 2
+      const bend = Math.max(18, (x2 - x1) / 2)
+      return { ...edge, path: `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}` }
+    }).filter(Boolean),
+  }
+}
+
+function dagNodeTone(value) {
+  const type = String(value || '').toUpperCase()
+  if (type === 'START') return 'is-start'
+  if (type === 'END') return 'is-end'
+  if (type.includes('MODEL') || type.includes('LLM')) return 'is-model'
+  return 'is-task'
+}
+
+function dagNodeLabel(node, nodeId, index) {
+  const fixedLabels = {
+    action_reasoning: '端侧场景理解',
+    action_report: '云端结果复合',
+    local_llm_0: '端侧场景理解',
+    cloud_llm_0: '云端结果复合',
+  }
+  if (fixedLabels[nodeId]) return fixedLabels[nodeId]
+
+  const rawLabel = String(node?.node_name || node?.name || node?.title || node?.model_task || node?.node_type || '').trim()
+  if (/[\u4e00-\u9fff]/.test(rawLabel)) return rawLabel
+
+  const text = `${rawLabel} ${nodeId}`.toLowerCase()
+  const aliases = [
+    [/start|input|begin/, '开始处理'],
+    [/classif|classify/, '目标分类'],
+    [/scene|behavior|understand/, '场景理解'],
+    [/risk|fusion|assess/, '风险研判'],
+    [/review|final/, '结果复核'],
+    [/detect|detection|track/, '目标检测'],
+    [/report|generate|end/, '分析结果生成'],
+    [/local/, '本地分析'],
+    [/cloud|llm|model/, '智能分析'],
+  ]
+  const matched = aliases.find(([pattern]) => pattern.test(text))
+  return matched ? matched[1] : `处置步骤${index}`
 }
 
 function targetLabel(value) {
@@ -1214,7 +1810,7 @@ loadDetail()
 .workspace-grid {
   margin-top: 18px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 420px;
+  grid-template-columns: minmax(0, 1fr) 460px;
   gap: 16px;
   align-items: start;
 }
@@ -1325,6 +1921,9 @@ loadDetail()
   background:
     linear-gradient(180deg, rgba(11, 34, 54, .82), rgba(7, 22, 37, .86)),
     rgba(8, 25, 42, .88);
+}
+.linkage-card {
+  padding: 22px;
 }
 .detail-fields {
   position: relative;
@@ -1531,11 +2130,23 @@ dd {
   display: grid;
   gap: 12px;
 }
+.linkage-heading-title {
+  margin: 0;
+  color: #f4f9fd;
+  font-size: 24px;
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+.linkage-count {
+  padding-top: 2px;
+  color: #c4dce9;
+  font-size: 20px;
+  font-weight: 700;
+}
 .linkage-list article {
-  display: grid;
-  grid-template-columns: 46px minmax(0, 1fr);
-  gap: 12px;
-  padding: 14px;
+  min-height: 158px;
+  display: block;
+  padding: 20px 22px;
   border-radius: 8px;
   background: rgba(4, 13, 22, .38);
   box-shadow: inset 0 1px 0 rgba(143, 200, 242, .05);
@@ -1567,19 +2178,66 @@ dd {
   color: #f4f9fd;
 }
 .linkage-body header span {
-  color: #9eb9cb;
-  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  color: #a9e9d4;
+  font-size: 14px;
+  font-weight: 700;
+  background: rgba(126, 226, 189, .1);
+}
+.linkage-list article.running .linkage-body header span {
+  color: #8cddff;
+  background: rgba(105, 216, 255, .1);
+}
+.linkage-list article.failed .linkage-body header span {
+  color: #ffb8c1;
+  background: rgba(216, 86, 103, .12);
+}
+.linkage-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.linkage-body strong {
+  font-size: 19px;
+  line-height: 1.35;
 }
 .linkage-body dl {
-  margin: 12px 0 0;
+  margin: 20px 0 0;
   display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+.linkage-manual .linkage-body dl {
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
 }
 .linkage-body p {
   margin: 12px 0 0;
   color: #95b1c4;
   line-height: 1.5;
+}
+.linkage-complete-button,
+.linkage-process-button {
+  margin: 0;
+}
+.linkage-complete-button {
+  margin-top: 16px;
+}
+.linkage-complete-button {
+  font-weight: 700;
+}
+.linkage-process-button {
+  border-color: transparent !important;
+  color: #85bdd6 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.linkage-card-actions .linkage-process-button:hover,
+.linkage-card-actions .linkage-process-button:focus {
+  border-color: transparent !important;
+  color: #c9efff !important;
+  background: transparent !important;
 }
 .failure-reason {
   color: #ffb8c1;
@@ -1616,6 +2274,38 @@ dd {
 .log-stream article.is-failed {
   box-shadow: inset 3px 0 0 rgba(216, 86, 103, .6);
 }
+.log-stream article.node-trigger {
+  --log-node-color: #69d8ff;
+  box-shadow: inset 3px 0 0 rgba(105, 216, 255, .72);
+}
+.log-stream article.node-routing {
+  --log-node-color: #d6aa62;
+  box-shadow: inset 3px 0 0 rgba(214, 170, 98, .78);
+}
+.log-stream article.node-linkage {
+  --log-node-color: #63d6ad;
+  box-shadow: inset 3px 0 0 rgba(99, 214, 173, .72);
+}
+.log-stream article.node-report {
+  --log-node-color: #af9bff;
+  box-shadow: inset 3px 0 0 rgba(175, 155, 255, .72);
+}
+.log-stream article.node-archive {
+  --log-node-color: #7ea9c4;
+  box-shadow: inset 3px 0 0 rgba(126, 169, 196, .7);
+}
+.log-stream article.node-system {
+  --log-node-color: #93aebe;
+}
+.log-stream article.node-trigger .log-type,
+.log-stream article.node-routing .log-type,
+.log-stream article.node-linkage .log-type,
+.log-stream article.node-report .log-type,
+.log-stream article.node-archive .log-type,
+.log-stream article.node-system .log-type {
+  color: var(--log-node-color);
+  background: color-mix(in srgb, var(--log-node-color) 10%, transparent);
+}
 .log-type {
   width: 100%;
   max-width: 126px;
@@ -1643,6 +2333,12 @@ dd {
 .log-stream article.is-failed .log-type {
   color: #ffb8c1;
 }
+.log-stream article.node-trigger .log-type { color: #69d8ff; background: rgba(105, 216, 255, .1); }
+.log-stream article.node-routing .log-type { color: #f0c75d; background: rgba(240, 199, 93, .1); }
+.log-stream article.node-linkage .log-type { color: #7ee2bd; background: rgba(126, 226, 189, .1); }
+.log-stream article.node-report .log-type { color: #c2b3ff; background: rgba(175, 155, 255, .1); }
+.log-stream article.node-archive .log-type { color: #9bc9df; background: rgba(126, 169, 196, .1); }
+.log-stream article.node-system .log-type { color: #a8bfce; background: rgba(126, 171, 202, .1); }
 .log-body strong {
   display: block;
   min-width: 0;
@@ -1678,6 +2374,70 @@ dd {
   color: #c9dce9;
   font-size: 13px;
   line-height: 1.4;
+}
+.workflow-dag-block {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(126, 171, 202, .16);
+}
+.workflow-dag-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #c9e8fa;
+  font-size: 13px;
+}
+.workflow-dag-heading span {
+  padding: 2px 6px;
+  border: 1px solid rgba(105, 216, 255, .24);
+  border-radius: 4px;
+  color: #72c9ec;
+  font-size: 10px;
+  letter-spacing: .08em;
+}
+.workflow-dag-canvas {
+  margin-top: 8px;
+  overflow-x: auto;
+  padding: 8px 2px 4px;
+  border-radius: 7px;
+  background: rgba(2, 13, 24, .42);
+}
+.workflow-dag-canvas svg {
+  width: 100%;
+  min-width: 430px;
+  height: auto;
+  display: block;
+}
+.workflow-dag-edge {
+  fill: none;
+  stroke: #456a82;
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+}
+.workflow-dag-node rect {
+  fill: rgba(12, 39, 59, .92);
+  stroke: rgba(105, 216, 255, .38);
+  stroke-width: 1;
+}
+.workflow-dag-node text {
+  fill: #d9effb;
+  font-size: 12px;
+  font-weight: 600;
+}
+.workflow-dag-node.is-start rect {
+  fill: rgba(17, 61, 76, .94);
+  stroke: rgba(105, 216, 255, .72);
+}
+.workflow-dag-node.is-end rect {
+  fill: rgba(25, 63, 59, .94);
+  stroke: rgba(126, 226, 189, .68);
+}
+.workflow-dag-node.is-model rect {
+  fill: rgba(56, 46, 68, .92);
+  stroke: rgba(175, 155, 255, .62);
+}
+.workflow-dag-node.is-task rect {
+  stroke: rgba(214, 170, 98, .58);
 }
 .log-source {
   color: #7f9eb3;
@@ -1867,6 +2627,455 @@ dd {
   color: #85a3b8;
   font-size: 12px;
 }
+:global(.linkage-process-dialog.el-dialog) {
+  max-width: 1680px;
+  overflow: hidden;
+  border: 1px solid rgba(105, 216, 255, .35);
+  border-radius: 10px;
+  background: #102f50;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .45);
+}
+:global(.linkage-process-dialog .el-dialog__header) {
+  margin: 0;
+  padding: 18px 22px;
+  color: #edf8ff;
+  border-bottom: 1px solid rgba(150, 202, 235, .16);
+}
+:global(.linkage-process-dialog .el-dialog__title) {
+  color: #eaf6ff;
+  font-size: 20px;
+  font-weight: 700;
+}
+:global(.linkage-process-dialog .el-dialog__body) {
+  padding: 16px 20px 20px;
+}
+.linkage-process-content {
+  min-width: 0;
+}
+.process-dialog-toolbar,
+.process-panel > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.process-dialog-toolbar {
+  padding: 0 0 14px;
+  color: #cfe6f5;
+}
+.process-dialog-toolbar strong,
+.process-dialog-toolbar span {
+  display: block;
+}
+.process-dialog-toolbar strong {
+  color: #f3faff;
+  font-size: 17px;
+}
+.process-dialog-toolbar span {
+  margin-top: 5px;
+  color: #8fb5cd;
+  font-size: 13px;
+}
+.process-dialog-toolbar .process-runtime {
+  margin: 0;
+  color: #7ee2bd;
+  white-space: nowrap;
+}
+.process-view-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(360px, 1fr);
+  gap: 14px;
+}
+.process-panel {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(105, 216, 255, .18);
+  border-radius: 8px;
+  background: rgba(4, 18, 31, .72);
+}
+.process-panel > header {
+  padding: 0 2px 10px;
+}
+.process-panel > header span {
+  color: #e6f6ff;
+  font-size: 15px;
+  font-weight: 700;
+}
+.process-panel > header small {
+  color: #85acc4;
+  font-size: 12px;
+}
+.process-map-stage,
+.process-video-stage {
+  position: relative;
+  height: min(58vh, 560px);
+  overflow: hidden;
+  border: 1px solid rgba(105, 216, 255, .2);
+  border-radius: 8px;
+  background: #030d16;
+}
+.process-map-stage > img,
+.process-map-stage > svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.process-map-stage > img {
+  object-fit: cover;
+}
+.process-map-stage > svg {
+  z-index: 2;
+}
+.process-route-glow,
+.process-route-line {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.process-route-glow {
+  stroke: rgba(81, 225, 255, .28);
+  stroke-width: 2.6;
+  filter: blur(1.2px);
+}
+.process-route-line {
+  stroke: #55dcff;
+  stroke-width: .72;
+  stroke-dasharray: 2 1.4;
+  animation: flowMove 1.2s linear infinite;
+}
+.process-route-point {
+  fill: #fff;
+  stroke: #1ab8ed;
+  stroke-width: .45;
+}
+.process-unit-marker {
+  position: absolute;
+  z-index: 4;
+  width: 32px;
+  height: 32px;
+  transform: translate(-50%, -50%);
+  transition: left .95s linear, top .95s linear;
+  pointer-events: none;
+}
+.process-unit-marker span {
+  position: absolute;
+  inset: -7px;
+  border: 2px solid rgba(126, 226, 189, .75);
+  border-radius: 50%;
+  animation: processMarkerPulse 1.6s ease-out infinite;
+}
+.process-unit-marker img {
+  position: absolute;
+  inset: 3px;
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, .65));
+}
+.process-map-legend {
+  position: absolute;
+  z-index: 5;
+  left: 10px;
+  bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  color: #b8d7e8;
+  font-size: 12px;
+  background: rgba(3, 16, 27, .82);
+}
+.process-map-legend i {
+  width: 20px;
+  height: 2px;
+  background: #55dcff;
+}
+.process-map-legend span {
+  margin-left: 8px;
+  color: #7ee2bd;
+}
+.process-video-stage video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+.process-video-overlay {
+  position: absolute;
+  z-index: 3;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #f1fbff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .7);
+}
+.process-video-overlay span {
+  padding: 4px 7px;
+  border-radius: 4px;
+  color: #061927;
+  background: #7ee2bd;
+  font-size: 11px;
+  font-weight: 800;
+}
+.process-video-overlay strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.process-scan-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(rgba(72, 216, 255, .06) 1px, transparent 1px), linear-gradient(90deg, rgba(72, 216, 255, .06) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+:global(.drone-test-dialog.el-dialog) {
+  max-width: 1680px;
+  border: 1px solid rgba(72, 216, 255, .32);
+  border-radius: 10px;
+  background: #203f65;
+  box-shadow: 0 24px 60px rgba(0, 7, 18, .46);
+}
+:global(.drone-test-dialog .el-dialog__header) {
+  margin: 0;
+  padding: 18px 22px;
+  border-bottom: 1px solid rgba(137, 174, 184, .14);
+}
+:global(.drone-test-dialog .el-dialog__title) {
+  color: #e9f7ff;
+  font-size: 20px;
+  font-weight: 900;
+}
+:global(.drone-test-dialog .el-dialog__body) {
+  padding: 14px 22px 22px;
+}
+.test-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.test-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.test-device {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.test-device strong {
+  color: #f3f8fd;
+  font-size: 17px;
+}
+.test-wayline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.toolbar-label {
+  color: #a9c7de;
+  font-size: 13px;
+  font-weight: 700;
+}
+.wayline-select {
+  width: 240px;
+}
+.test-body {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  gap: 14px;
+  min-height: 520px;
+}
+.test-map {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(93, 184, 225, .17);
+  border-radius: 10px;
+  background: #030b12;
+}
+.wayline-map-stage {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  background: #02080d;
+}
+.test-wayline-map-stage {
+  min-height: 0;
+}
+.wayline-map-stage > img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  filter: saturate(1.08) contrast(1.06) brightness(.76);
+}
+.wayline-map-svg {
+  position: absolute;
+  inset: 0;
+  z-index: 16;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.wayline-map-route {
+  fill: none;
+  stroke: #48d8ff;
+  stroke-width: 1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 2.2 1.3;
+  vector-effect: non-scaling-stroke;
+}
+.wayline-map-route.route-glow {
+  stroke-width: 3.8;
+  stroke-dasharray: none;
+  opacity: .4;
+}
+.wayline-map-point {
+  fill: #eafcff;
+  stroke: #48d8ff;
+  stroke-width: .4;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 5px rgba(72, 216, 255, .75));
+}
+.process-wayline-landmark {
+  position: absolute;
+  z-index: 18;
+  transform: translate(-50%, -50%);
+  padding: 4px 7px;
+  border: 1px solid rgba(72, 216, 255, .65);
+  border-radius: 5px;
+  color: #e9f7ff;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+  background: rgba(5, 31, 48, .82);
+  box-shadow: 0 0 12px rgba(72, 216, 255, .26);
+}
+.process-wayline-landmark.airport {
+  border-color: rgba(255, 209, 102, .72);
+  color: #fff0bd;
+}
+.process-unit-marker {
+  position: absolute;
+  width: 32px;
+  height: 32px;
+  transform: translate(-50%, -50%);
+  transition: left .95s linear, top .95s linear;
+  z-index: 20;
+}
+.process-unit-marker .marker-pulse {
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  width: 36px;
+  height: 36px;
+  border: 2px solid rgba(126, 226, 189, .72);
+  border-radius: 50%;
+  background: transparent;
+  animation: processMarkerPulse 1.6s ease-out infinite;
+}
+.process-unit-marker .marker-icon {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 28px;
+  height: 28px;
+  transform: translate(-50%, -50%);
+  object-fit: contain;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, .6));
+}
+.process-current-position {
+  color: #7ee2bd;
+}
+.test-map .map-legend {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 22;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  color: #9fc3da;
+  font-size: 12px;
+  background: rgba(4, 16, 26, .78);
+}
+.test-map .legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.test-map .legend-line {
+  display: inline-block;
+  width: 20px;
+  height: 2px;
+  background: #48d8ff;
+}
+.test-video {
+  display: flex;
+  min-width: 0;
+}
+.video-stage {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid rgba(93, 184, 225, .17);
+  border-radius: 10px;
+  background: #040d16;
+}
+.video-stream {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+}
+.process-video-label {
+  position: absolute;
+  z-index: 2;
+  top: 14px;
+  left: 14px;
+  right: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #f3f8fd;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .75);
+}
+.process-video-label span {
+  padding: 4px 7px;
+  border-radius: 4px;
+  color: #062119;
+  background: #7ee2bd;
+  font-size: 11px;
+  font-weight: 900;
+}
+.process-video-label strong {
+  max-width: 65%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scan-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(rgba(72, 216, 255, .05) 1px, transparent 1px), linear-gradient(90deg, rgba(72, 216, 255, .05) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
 @keyframes subtlePulse {
   0%, 100% {
     box-shadow: 0 0 0 0 rgba(105, 216, 255, .28);
@@ -1874,6 +3083,10 @@ dd {
   50% {
     box-shadow: 0 0 0 9px rgba(105, 216, 255, 0);
   }
+}
+@keyframes processMarkerPulse {
+  0% { transform: scale(.72); opacity: .9; }
+  100% { transform: scale(1.5); opacity: 0; }
 }
 @keyframes flowMove {
   to {
@@ -1941,6 +3154,17 @@ dd {
   .log-source {
     text-align: left;
   }
+  .process-view-grid {
+    grid-template-columns: 1fr;
+  }
+  .test-body {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+  .process-map-stage,
+  .process-video-stage {
+    height: 360px;
+  }
 }
 @media (max-width: 640px) {
   .event-workbench {
@@ -1949,9 +3173,18 @@ dd {
   .detail-title-block h2 {
     font-size: 24px;
   }
-  .detail-fields,
-  .linkage-body dl {
+  .detail-fields {
     grid-template-columns: 1fr;
+  }
+  .linkage-body dl {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .linkage-manual .linkage-body dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .linkage-body dd {
+    font-size: 14px;
   }
   .evidence-grid,
   .evidence-grid.single {
@@ -1959,6 +3192,20 @@ dd {
   }
   .decision-actions .el-button {
     flex: 1;
+  }
+  .linkage-count {
+    font-size: 17px;
+  }
+  .process-dialog-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .process-dialog-toolbar .process-runtime {
+    margin-top: 0;
+  }
+  .process-map-stage,
+  .process-video-stage {
+    height: 260px;
   }
 }
 </style>

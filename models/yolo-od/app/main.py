@@ -77,7 +77,7 @@ async def detect_image(request: ImageRequest):
         suffix = _suffix_from_key(request.object_key, ".jpg")
         temp_path = minio_client.download_file(request.bucket, request.object_key, suffix=suffix)
         try:
-            result = detector_service.detect_image(temp_path)
+            result = detector_service.detect_image(temp_path, request.detection_region)
             return ImageResponse(**result)
         finally:
             minio_client.cleanup_temp_file(temp_path)
@@ -99,7 +99,12 @@ async def detect_video(request: VideoRequest):
         suffix = _suffix_from_key(request.object_key, ".mp4")
         temp_path = minio_client.download_file(request.bucket, request.object_key, suffix=suffix)
         try:
-            result = detector_service.detect_video(temp_path, request.frame_interval)
+            result = detector_service.detect_video(
+                temp_path,
+                request.frame_interval,
+                max_frames=request.max_frames,
+                detection_region=request.detection_region,
+            )
             return VideoResponse(**result)
         finally:
             minio_client.cleanup_temp_file(temp_path)
@@ -204,6 +209,8 @@ def _upload_detection_artifacts(raw: dict, *, bucket: str, object_key: str) -> d
                 "content_type": "video/mp4",
                 "frame_count": raw.get("processed_frames") or raw.get("total_frames"),
                 "duration_seconds": raw.get("duration_sec"),
+                "detection_region": raw.get("detection_region"),
+                "region_applied": raw.get("region_applied", False),
             }
         )
         raw["annotated_video"] = ref
@@ -358,14 +365,23 @@ async def workflow_infer(payload: dict = Body(...)):
     temp_path = minio_client.download_file(bucket, object_key, suffix=suffix)
     try:
         if is_video:
+            detection_region = payload.get("detection_region")
+            if detection_region is None:
+                sensor_data = payload.get("sensor_data") if isinstance(payload.get("sensor_data"), dict) else {}
+                detection_region = sensor_data.get("detection_region")
             result = detector_service.detect_video(
                 temp_path,
                 int(payload.get("frame_interval") or 30),
                 max_frames=payload.get("max_frames", 8),
+                detection_region=detection_region,
             )
             result.update(_upload_detection_artifacts(result, bucket=bucket, object_key=object_key))
             return _standard_output(result, media_type="video", media_ref=f"{bucket}/{object_key}")
-        result = detector_service.detect_image(temp_path)
+        detection_region = payload.get("detection_region")
+        if detection_region is None:
+            sensor_data = payload.get("sensor_data") if isinstance(payload.get("sensor_data"), dict) else {}
+            detection_region = sensor_data.get("detection_region")
+        result = detector_service.detect_image(temp_path, detection_region)
         result.update(_upload_detection_artifacts({"frames": [{"annotated_path": result.get("annotated_path"), "frame_id": 0}], **result}, bucket=bucket, object_key=object_key))
         return _standard_output(result, media_type="image", media_ref=f"{bucket}/{object_key}")
     finally:

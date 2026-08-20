@@ -814,6 +814,9 @@ def get_safety_event_detail(
             "id": row.id, "assignee": row.assignee, "dispatch_operator": row.dispatch_operator,
             "status": row.task_status, "note": row.task_note, "result_type": row.result_type,
             "result_remark": row.result_remark,
+            "dispatched_at": row.dispatched_at.isoformat() if row.dispatched_at else None,
+            "accepted_at": row.accepted_at.isoformat() if row.accepted_at else None,
+            "completed_at": row.completed_at.isoformat() if row.completed_at else None,
         } for row in tasks],
     }}
 

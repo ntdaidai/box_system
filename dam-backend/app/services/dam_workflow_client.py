@@ -287,6 +287,13 @@ class DamWorkflowClient:
             "boat_confidence",
             "possible_person",
             "possible_boat",
+            "camera_id",
+            "camera_name",
+            "zone_id",
+            "zone_name",
+            "zone_type",
+            "detection_region",
+            "detection_region_coordinate_system",
             "supplemental_context",
             "risk_escalation",
         }

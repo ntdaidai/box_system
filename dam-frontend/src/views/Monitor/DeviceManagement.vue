@@ -5,7 +5,11 @@
         <h2>感知源管理</h2>
         <p>统一维护系统感知源设备和运行状态</p>
       </div>
-      <el-button :icon="Refresh" :loading="loading" @click="loadCurrent">刷新</el-button>
+      <div class="status-summary" aria-label="感知源统计">
+        <div class="metric"><i class="dot total"></i><strong class="metric-num">{{ cameras.length }}</strong><span class="metric-label">总数</span></div>
+        <div class="metric"><i class="dot online"></i><strong class="metric-num">{{ cameraOnlineCount }}</strong><span class="metric-label">在线</span></div>
+        <div class="metric"><i class="dot offline"></i><strong class="metric-num">{{ cameraOfflineCount }}</strong><span class="metric-label">离线</span></div>
+      </div>
     </header>
 
     <section class="data-panel camera-toolbar-card">
@@ -229,7 +233,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Aim, Check, Connection, Hide, Plus, Refresh, View } from '@element-plus/icons-vue'
+import { Aim, Check, Connection, Hide, Plus, View } from '@element-plus/icons-vue'
 import { createCameraDevice, deleteCameraDevice, getCameraDevicePassword, getCameraDevices, testCameraDeviceConnection, updateCameraDevice } from '@/api/camera'
 
 const loading = ref(false)
@@ -263,6 +267,8 @@ const cameraForm = reactive({
   enabled: true,
 })
 const createButtonText = computed(() => '添加摄像头')
+const cameraOnlineCount = computed(() => cameras.value.filter((camera) => camera.connected).length)
+const cameraOfflineCount = computed(() => cameras.value.length - cameraOnlineCount.value)
 const connectionKey = computed(() => JSON.stringify([cameraForm.ip_address, cameraForm.rtsp_port, cameraForm.username, cameraForm.password]))
 const connectionVerified = computed(() => !needsTest.value || verifiedKey.value === connectionKey.value)
 const needsTest = computed(() => !editingCamera.value || connectionKey.value !== editingCamera.value.connectionKey)
@@ -279,6 +285,7 @@ const cameraPointDefinitions = [
 ]
 const cameraRegionPaths = {
   1: 'M371 317 L297 320 L259 324 L230 336 L191 363 L176 386 L179 425 L179 453 L181 487 L178 536 L200 549 L214 554 L231 554 L244 557 L262 556 L272 560 L295 557 L298 558 L327 560 L351 567 L372 570 L374 577 L383 583 L395 581 L408 578 L422 576 L436 571 L449 569 L463 561 L477 555 L489 552 L502 553 L511 546 L521 535 L524 521 L540 510 L538 492 L542 483 L539 466 L539 450 L538 433 L541 425 L542 406 L542 391 L539 380 L539 368 L537 358 L536 347 L531 340 L524 334 L514 332 L494 330 L470 339 L448 339 L427 343 L416 339 Z',
+  2: 'M105 161 L134 169 L189 180 L247 191 L286 196 L307 201 L312 213 L304 222 L300 231 L294 242 L276 260 L260 263 L222 264 L188 256 L162 252 L130 241 L121 236 L110 231 L98 228 L96 212 L84 208 L76 199 L78 191 L84 177 Z',
   3: 'M847 460 L831 450 L830 424 L972 423 L1032 430 L1051 456 L1047 477 L1044 504 L1030 518 L1024 525 L927 544 L856 533 L852 523 L844 524 Z',
   4: 'M844 255 L847 296 L831 304 L829 413 L867 415 L968 415 L1031 422 L1043 405 L1046 376 L1044 355 L1043 335 L1038 319 L1039 302 L1033 291 L1006 276 L952 262 L928 257 Z',
   5: 'M1058 300 L1053 328 L1054 339 L1054 360 L1053 376 L1053 395 L1051 413 L1066 428 L1089 437 L1136 439 L1226 447 L1256 442 L1258 435 L1266 416 L1274 393 L1276 379 L1276 364 L1272 358 L1221 351 L1194 346 L1159 337 Z',
@@ -595,14 +602,20 @@ onMounted(loadCurrent)
   background: linear-gradient(90deg, rgba(14, 48, 76, .82) 0%, rgba(9, 29, 48, .72) 58%, rgba(7, 20, 34, .46) 100%);
   box-shadow: inset 0 1px 0 rgba(147, 206, 241, .08);
 }
-.admin-header :deep(.el-button) {
-  min-width: 92px;
-  height: 36px;
-  border-color: #1b7fa5;
-  color: #dcefff;
-  background: #103954;
-  font-weight: 700;
+.admin-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
 }
+.status-summary { display: flex; justify-content: flex-end; align-items: center; }
+.metric { min-width: 96px; display: inline-flex; align-items: baseline; gap: 8px; padding: 8px 18px; white-space: nowrap; }
+.metric + .metric { border-left: 1px solid rgba(96, 151, 191, .18); }
+.metric .dot { width: 8px; height: 8px; flex: 0 0 auto; align-self: center; border-radius: 50%; background: #8db2c8; }
+.metric .dot.total { box-shadow: 0 0 8px rgba(141, 178, 200, .75); }
+.metric .dot.online { background: #48e6bf; box-shadow: 0 0 8px rgba(72, 230, 191, .75); }
+.metric .dot.offline { background: #8494a3; }
+.metric-num { color: #f2fbff; font-size: 22px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+.metric-label { color: #8db2c8; font-size: 12px; }
 .title-block {
   min-width: 0;
   display: grid;

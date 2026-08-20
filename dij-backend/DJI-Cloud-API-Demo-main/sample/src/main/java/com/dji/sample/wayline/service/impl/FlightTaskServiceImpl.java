@@ -261,11 +261,21 @@ public class FlightTaskServiceImpl extends AbstractWaylineService implements IFl
     }
 
     public HttpResultResponse publishOneFlightTask(WaylineJobDTO waylineJob) throws SQLException {
-        // 跳过设备在线检查和DJI SDK调用（模拟飞行不需要）
+        boolean isOnline = deviceRedisService.checkDeviceOnline(waylineJob.getDockSn());
+        if (!isOnline) {
+            throw new RuntimeException("Dock is offline.");
+        }
+
+        boolean isSuccess = this.prepareFlightTask(waylineJob);
+        if (!isSuccess) {
+            return HttpResultResponse.error("Failed to prepare job.");
+        }
 
         // Issue an immediate task execution command.
         if (TaskTypeEnum.IMMEDIATE == waylineJob.getTaskType()) {
-            // 模拟飞行不需要真正执行任务
+            if (!executeFlightTask(waylineJob.getWorkspaceId(), waylineJob.getJobId())) {
+                return HttpResultResponse.error("Failed to execute job.");
+            }
         }
 
         if (TaskTypeEnum.TIMED == waylineJob.getTaskType()) {

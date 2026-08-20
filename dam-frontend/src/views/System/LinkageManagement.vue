@@ -5,7 +5,23 @@
         <h2>广播设备</h2>
         <p>管理广播设备与播报模板，供事件联动策略调用</p>
       </div>
-      <el-button :icon="Refresh" :loading="loading" @click="refreshCurrent">刷新</el-button>
+      <div class="status-summary" aria-label="广播设备统计">
+        <div class="metric">
+          <i class="dot total"></i>
+          <strong class="metric-num">{{ broadcastDevices.length }}</strong>
+          <span class="metric-label">总数</span>
+        </div>
+        <div class="metric">
+          <i class="dot online"></i>
+          <strong class="metric-num">{{ broadcastOnlineCount }}</strong>
+          <span class="metric-label">在线</span>
+        </div>
+        <div class="metric">
+          <i class="dot offline"></i>
+          <strong class="metric-num">{{ broadcastOfflineCount }}</strong>
+          <span class="metric-label">离线</span>
+        </div>
+      </div>
     </header>
 
     <section class="resource-control-card" v-loading="loading">
@@ -262,7 +278,7 @@
 <script setup>
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, Plus, Refresh, Tickets } from '@element-plus/icons-vue'
+import { ArrowLeft, Plus, Tickets } from '@element-plus/icons-vue'
 import {
   createBroadcastDevice,
   createBroadcastTemplate,
@@ -346,6 +362,8 @@ const sceneOptions = [
 const deviceDialogTitle = computed(() => editingDeviceId.value ? '编辑广播设备' : '新增广播设备')
 const templateDialogTitle = computed(() => editingTemplateId.value ? '编辑播报模板' : '新增播报模板')
 const isTemplateView = computed(() => viewMode.value === 'templates')
+const broadcastOnlineCount = computed(() => broadcastDevices.value.filter((item) => item.status === 'ONLINE').length)
+const broadcastOfflineCount = computed(() => broadcastDevices.value.length - broadcastOnlineCount.value)
 const filteredBroadcastDevices = computed(() => {
   return broadcastDevices.value.filter((item) => {
     const status = item.status === 'ONLINE' ? 'online' : 'offline'
@@ -651,6 +669,31 @@ onMounted(refreshCurrent)
   background: linear-gradient(90deg, rgba(14, 48, 76, .82) 0%, rgba(9, 29, 48, .72) 58%, rgba(7, 20, 34, .46) 100%);
   box-shadow: inset 0 1px 0 rgba(147, 206, 241, .08);
 }
+.page-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+.status-summary {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+.metric {
+  min-width: 96px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 18px;
+  white-space: nowrap;
+}
+.metric + .metric { border-left: 1px solid rgba(96, 151, 191, .18); }
+.metric .dot { width: 8px; height: 8px; flex: 0 0 auto; align-self: center; border-radius: 50%; background: #8db2c8; }
+.metric .dot.total { box-shadow: 0 0 8px rgba(141, 178, 200, .75); }
+.metric .dot.online { background: #48e6bf; box-shadow: 0 0 8px rgba(72, 230, 191, .75); }
+.metric .dot.offline { background: #8494a3; }
+.metric-num { color: #f2fbff; font-size: 22px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+.metric-label { color: #8db2c8; font-size: 12px; }
 .page-header h2,
 .tab-header h3 {
   margin: 0;
@@ -666,14 +709,6 @@ onMounted(refreshCurrent)
   color: #87a5bb;
   font-size: 13px;
   line-height: 1.45;
-}
-.page-header :deep(.el-button) {
-  min-width: 92px;
-  height: 36px;
-  border-color: #1b7fa5;
-  color: #dcefff;
-  background: #103954;
-  font-weight: 700;
 }
 .tab-header {
   margin: 0;

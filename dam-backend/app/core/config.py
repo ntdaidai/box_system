@@ -141,6 +141,41 @@ class Settings:
     )
     VIDEO_DETECTION_FPS: float = float(_get_env("VIDEO_DETECTION_FPS", "2"))
 
+    # ── 无人机巡航动作 ────────────────────────────────────────
+    # simulation 使用 DJI Cloud API 自带的模拟飞行并从演示视频抽帧；
+    # real 使用 DJI 航线任务，并要求航线内/任务过程中产生四张照片。
+    DRONE_CRUISE_EXECUTOR: str = _get_env("DRONE_CRUISE_EXECUTOR", "simulation").lower()
+    DJI_CLOUD_API_BASE_URL: str = _get_env(
+        "DJI_CLOUD_API_BASE_URL", "http://127.0.0.1:6790"
+    ).rstrip("/")
+    DJI_CLOUD_API_USERNAME: str = _get_env("DJI_CLOUD_API_USERNAME", "adminPC")
+    DJI_CLOUD_API_PASSWORD: str = _get_env("DJI_CLOUD_API_PASSWORD", "adminPC")
+    DRONE_CRUISE_WORKSPACE_ID: str = _get_env("DRONE_CRUISE_WORKSPACE_ID", "").strip()
+    DRONE_CRUISE_DOCK_SN: str = _get_env("DRONE_CRUISE_DOCK_SN", "").strip()
+    DRONE_CRUISE_FISHING_FILE_ID: str = _get_env("DRONE_CRUISE_FISHING_FILE_ID", "").strip()
+    DRONE_CRUISE_WADING_FILE_ID: str = _get_env("DRONE_CRUISE_WADING_FILE_ID", "").strip()
+    DRONE_CRUISE_PAYLOAD_INDEX: str = _get_env("DRONE_CRUISE_PAYLOAD_INDEX", "88-0-0").strip()
+    DRONE_CRUISE_SIMULATION_DURATION_SECONDS: float = float(
+        _get_env("DRONE_CRUISE_SIMULATION_DURATION_SECONDS", "30")
+    )
+    DRONE_CRUISE_TIMEOUT_SECONDS: float = float(
+        _get_env("DRONE_CRUISE_TIMEOUT_SECONDS", "900")
+    )
+    DRONE_CRUISE_POLL_SECONDS: float = float(
+        _get_env("DRONE_CRUISE_POLL_SECONDS", "2")
+    )
+    DRONE_CRUISE_OBJECT_PREFIX: str = _get_env(
+        "DRONE_CRUISE_OBJECT_PREFIX", "drone-cruises"
+    ).strip("/")
+    DRONE_CRUISE_FISHING_VIDEO: str = _get_env(
+        "DRONE_CRUISE_FISHING_VIDEO",
+        "/home/jetson/box_system/dam-frontend/public/demo/fishing.mp4",
+    )
+    DRONE_CRUISE_WADING_VIDEO: str = _get_env(
+        "DRONE_CRUISE_WADING_VIDEO",
+        "/home/jetson/box_system/dam-frontend/public/demo/wading.mp4",
+    )
+
     # ── IoTDB ─────────────────────────────────────────────────
     IOTDB_HOST: str = _get_env("IOTDB_HOST", "127.0.0.1")
     IOTDB_PORT: int = int(_get_env("IOTDB_PORT", "6667"))

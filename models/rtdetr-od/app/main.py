@@ -6,10 +6,10 @@ from urllib.parse import urlparse
 
 from fastapi import Body, FastAPI, HTTPException
 
-from cp.service.rtdetr.app.config import load_config
-from cp.service.rtdetr.app.detector_service import DetectorService
-from cp.service.rtdetr.app.minio_client import MinIOClient
-from cp.service.rtdetr.app.models import (
+from config import load_config
+from detector_service import DetectorService
+from minio_client import MinIOClient
+from models import (
     HealthResponse,
     ImageRequest,
     ImageResponse,

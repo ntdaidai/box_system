@@ -1,19 +1,10 @@
-# 基础镜像（Jetson 优化）
-FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/dustynv/l4t-pytorch:r36.4.0-linuxarm64
+# 复用本机已经验证过的 RT-DETR Jetson 运行环境，避免重复安装大体积依赖。
+FROM dam-import/rtdetr-od-default:latest
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
-
 COPY app/ /app/
-
-RUN mkdir -p /app/models
+COPY rtdetr_3_best.pt /app/models/rtdetr_3_best.pt
 
 EXPOSE 8000
 

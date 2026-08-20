@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import shutil
 from typing import Any, Optional
@@ -21,6 +22,7 @@ router = APIRouter()
 
 STATUS_LABELS = {
     "running": "可用",
+    "building": "构建中",
     "starting": "启动中",
     "stopping": "停止中",
     "stopped": "未运行",
@@ -29,6 +31,7 @@ STATUS_LABELS = {
 
 STATUS_LEVELS = {
     "running": "success",
+    "building": "warning",
     "starting": "warning",
     "stopping": "warning",
     "stopped": "info",
@@ -36,6 +39,22 @@ STATUS_LEVELS = {
 }
 
 IMPORT_ROOT = Path("/app/data/model-imports")
+try:
+    IMPORT_OWNER_UID = int(os.getenv("MODEL_IMPORT_OWNER_UID", "1000"))
+    IMPORT_OWNER_GID = int(os.getenv("MODEL_IMPORT_OWNER_GID", "1000"))
+except ValueError:
+    IMPORT_OWNER_UID = 1000
+    IMPORT_OWNER_GID = 1000
+
+
+def _restore_import_ownership(target_dir: Path) -> None:
+    """让宿主机用户可以继续编辑通过容器导入的目录。"""
+    for root, directories, files in os.walk(target_dir):
+        for name in [root, *directories, *files]:
+            try:
+                os.chown(os.path.join(root, name) if name != root else root, IMPORT_OWNER_UID, IMPORT_OWNER_GID)
+            except (OSError, PermissionError) as exc:
+                logger.warning("导入文件权限修复失败: path={}, error={}", name, exc)
 
 
 def _safe_relative_path(filename: str) -> str:
@@ -72,6 +91,54 @@ def _extract_compose_port(text: str) -> tuple[Optional[int], Optional[int]]:
     if not matched:
         return None, None
     return int(matched.group(1)), int(matched.group(2))
+
+
+def _extract_compose_environment(text: str) -> dict[str, str]:
+    """解析 Compose 中常见的 environment 列表/映射写法。"""
+    matched = re.search(r"(?m)^(?P<indent>[ \t]*)environment:\s*$", text or "")
+    if not matched:
+        return {}
+
+    base_indent = len(matched.group("indent").expandtabs(2))
+    environment: dict[str, str] = {}
+    for line in text[matched.end():].splitlines():
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip(" \t"))
+        if indent <= base_indent:
+            break
+        value = line.strip()
+        if value.startswith("-"):
+            value = value[1:].strip()
+            if "=" not in value:
+                continue
+            key, item = value.split("=", 1)
+        elif ":" in value:
+            key, item = value.split(":", 1)
+        else:
+            continue
+        key = key.strip().strip("\"'")
+        item = item.strip().strip("\"'")
+        if key:
+            environment[key] = item
+    return environment
+
+
+def _extract_compose_network_name(text: str) -> str:
+    matched = re.search(
+        r"(?m)^networks:\s*\n[ \t]+(?P<name>[a-zA-Z0-9_.-]+):\s*$",
+        text or "",
+    )
+    return matched.group("name") if matched else "bridge"
+
+
+def _infer_health_check(paths: list[str], readme_text: str) -> str:
+    text = f"{' '.join(paths)} {readme_text}".lower()
+    if "/healthz" in text:
+        return "/healthz"
+    if "/health" in text:
+        return "/health"
+    return ""
 
 
 def _extract_service_name(text: str) -> str:
@@ -159,6 +226,9 @@ async def _read_import_manifest(files: list[UploadFile]) -> dict:
     weights = [path for path in paths if re.search(r"\.(pt|onnx|engine|safetensors|bin)$", path, re.I)]
     host_port, container_port = _extract_compose_port(compose_text)
     capability = _infer_import_capability(root, paths, compose_text, readme_text)
+    compose_environment = _extract_compose_environment(compose_text)
+    network_name = _extract_compose_network_name(compose_text)
+    health_check_url = _infer_health_check(paths, readme_text)
 
     errors: list[str] = []
     warnings: list[str] = []
@@ -212,6 +282,9 @@ async def _read_import_manifest(files: list[UploadFile]) -> dict:
             "architecture": _infer_import_architecture(root, paths, compose_text),
             "weights": weights,
             "endpoint": _infer_import_endpoint(paths, readme_text),
+            "health_check_url": health_check_url,
+            "environment": compose_environment,
+            "network_name": network_name,
             "model_size": _format_size(total_size),
             "description": description,
         },
@@ -266,7 +339,7 @@ def _infer_capability(model: dict) -> str:
 def _health_state(status: str, container_status: Optional[str] = None) -> str:
     if status == "running" and (container_status in (None, "running")):
         return "healthy"
-    if status in ("starting", "stopping"):
+    if status in ("building", "starting", "stopping"):
         return "checking"
     if status == "error":
         return "error"
@@ -371,12 +444,18 @@ async def _run_import_lifecycle(
     host_port: Optional[int],
     container_port: int,
     inference_path: str,
+    health_check_url: Optional[str],
+    network_name: str,
+    environment: Optional[dict[str, str]],
 ) -> None:
+    binding = None
     try:
+        logger.info("导入模型生命周期开始: model_id={}, stage=build", model_id)
         build = await dam_model_library_client.build_image(
             context_path=target_dir,
             image_name=image_name,
         )
+        logger.info("导入模型镜像构建完成: model_id={}, image={}", model_id, image_name)
         binding = await dam_model_library_client.bind_image(
             model_id,
             {
@@ -384,11 +463,18 @@ async def _run_import_lifecycle(
                 "host_port": host_port,
                 "container_port": container_port,
                 "inference_path": inference_path,
-                "health_check_url": None,
+                "health_check_url": health_check_url or None,
+                "extra_env": environment or None,
+                "container_config": {
+                    "network_mode": network_name or "bridge",
+                    "restart_policy": {"Name": "unless-stopped"},
+                },
                 "remark": f"imported from {target_dir}",
             },
         )
+        logger.info("导入模型绑定完成: model_id={}, stage=create-container", model_id)
         start = await dam_model_library_client.start_model(model_id)
+        logger.info("导入模型启动验证完成: model_id={}, stage=stop", model_id)
         stop = await dam_model_library_client.stop_model(model_id)
         logger.info(
             "导入模型后台构建与启停验证完成: model_id={}, image={}, build={}, binding={}, start={}, stop={}",
@@ -400,6 +486,16 @@ async def _run_import_lifecycle(
             stop.get("runtime_status"),
         )
     except Exception as exc:
+        if binding:
+            try:
+                await dam_model_library_client.stop_model(model_id)
+                logger.info("导入模型失败后已清理运行容器: model_id={}", model_id)
+            except Exception as cleanup_exc:
+                logger.warning("导入模型失败后清理容器失败: model_id={}, error={}", model_id, cleanup_exc)
+        try:
+            await dam_model_library_client.update_model(model_id, {"runtime_status": "error"})
+        except Exception as status_exc:
+            logger.warning("导入模型失败后更新状态失败: model_id={}, error={}", model_id, status_exc)
         logger.exception("导入模型后台构建或启停验证失败: model_id={}, image={}, error={}", model_id, image_name, exc)
 
 
@@ -475,6 +571,7 @@ async def register_model_import(
             target_file.parent.mkdir(parents=True, exist_ok=True)
             with target_file.open("wb") as output:
                 shutil.copyfileobj(file.file, output)
+        _restore_import_ownership(target_dir)
 
         tags = form_metadata.get("tags") if isinstance(form_metadata.get("tags"), list) else []
         tags.append("imported")
@@ -488,6 +585,7 @@ async def register_model_import(
             "architecture": form_metadata.get("architecture") or detected.get("architecture"),
             "model_type": form_metadata.get("capability") or detected.get("model_type"),
             "model_size": detected.get("model_size"),
+            "runtime_status": "building",
         }
         image_name = str(form_metadata.get("image_name") or detected.get("image_name") or _default_import_image_name(folder_name)).strip()
         host_port = _coerce_int(form_metadata.get("host_port")) or _coerce_int(detected.get("host_port"))
@@ -506,6 +604,9 @@ async def register_model_import(
             host_port=host_port,
             container_port=container_port,
             inference_path=inference_path,
+            health_check_url=detected.get("health_check_url"),
+            network_name=str(detected.get("network_name") or "bridge"),
+            environment=detected.get("environment") if isinstance(detected.get("environment"), dict) else None,
         )
         return {
             "code": 200,
@@ -514,7 +615,7 @@ async def register_model_import(
                 **model,
                 "import_path": str(target_dir),
                 "image_name": image_name,
-                "runtime_status": "stopped",
+                "runtime_status": "building",
                 "lifecycle": {"status": "submitted"},
             },
         }
@@ -592,11 +693,26 @@ async def get_model(model_id: int):
 async def update_model(model_id: int, payload: dict[str, Any] = Body(default={})):
     """Update editable model metadata."""
     try:
-        description = str(payload.get("description") or "")[:512]
-        result = await dam_model_library_client.update_model(model_id, {"description": description})
+        update_payload: dict[str, Any] = {}
+        if "name" in payload:
+            name = str(payload.get("name") or "").strip()
+            if not name:
+                raise HTTPException(status_code=400, detail="模型名称不能为空")
+            update_payload["name"] = name[:128]
+        if "description" in payload:
+            update_payload["description"] = str(payload.get("description") or "")[:512]
+        if "tags" in payload:
+            tags = payload.get("tags")
+            if not isinstance(tags, list):
+                raise HTTPException(status_code=400, detail="模型标签必须是数组")
+            update_payload["tags"] = [str(tag).strip() for tag in tags if str(tag).strip()]
+        if not update_payload:
+            raise HTTPException(status_code=400, detail="没有可更新的模型信息")
+
+        result = await dam_model_library_client.update_model(model_id, update_payload)
         return {
             "code": 200,
-            "message": "模型说明已更新",
+            "message": "模型信息已更新",
             "data": _normalize_model(result),
         }
     except httpx.HTTPError as exc:

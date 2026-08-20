@@ -6,7 +6,7 @@
 from typing import Optional
 import socket
 import docker
-from docker.errors import NotFound, APIError
+from docker.errors import NotFound, APIError, BuildError
 from loguru import logger
 
 
@@ -86,11 +86,20 @@ class DockerService:
     def build_image(self, context_path: str, image_name: str) -> dict:
         """Build a Docker image from a local context path."""
         try:
-            image, logs = self.client.images.build(
-                path=context_path,
-                tag=image_name,
-                rm=True,
-            )
+            build_kwargs = {
+                "path": context_path,
+                "tag": image_name,
+                "rm": True,
+                "pull": False,
+            }
+            # 同名镜像已经存在时显式复用本地层，避免重复安装依赖和提交大基础层。
+            try:
+                self.client.images.get(image_name)
+                build_kwargs["cache_from"] = [image_name]
+            except NotFound:
+                pass
+
+            image, logs = self.client.images.build(**build_kwargs)
             image_id = image.id
             short_id = image.short_id
             logger.info(f"镜像构建完成: {image_name} ({short_id})")
@@ -100,6 +109,8 @@ class DockerService:
                 "short_id": short_id,
                 "log_count": sum(1 for _ in logs),
             }
+        except BuildError as e:
+            raise ValueError(f"构建镜像失败: {e}")
         except APIError as e:
             raise ValueError(f"构建镜像失败: {e}")
 
@@ -166,8 +177,19 @@ class DockerService:
         """
         config = container_config or {}
 
-        # 网络模式
-        network_mode = config.get("network_mode", "host")
+        # 网络配置：host/bridge/none 等是 Docker 的 network_mode；
+        # Compose 中常见的自定义网络名（如 box_system_default）必须通过
+        # ``network`` 传入，不能直接当作 network_mode，否则 docker run 会失败。
+        network_setting = config.get("network_mode") or config.get("network") or "host"
+        network_mode = network_setting
+        network_name = None
+        if network_setting not in {"host", "bridge", "none"} and not str(network_setting).startswith(("container:", "service:")):
+            try:
+                self.client.networks.get(str(network_setting))
+            except NotFound as e:
+                raise ValueError(f"Docker网络不存在: {network_setting}") from e
+            network_name = str(network_setting)
+            network_mode = None
 
         # 端口映射（host 模式下不需要端口映射）
         ports = None
@@ -239,9 +261,19 @@ class DockerService:
             "ports": ports,
             "volumes": volumes,
             "environment": environment,
-            "network_mode": network_mode,
             "privileged": privileged,
+            # 显式使用可读取的 Docker 日志，避免宿主机或编辑器无法执行 docker logs。
+            # 限制轮转大小，防止长期运行模型无限占用磁盘。
+            "log_config": docker.types.LogConfig(
+                type="json-file",
+                config={"max-size": "10m", "max-file": "3"},
+            ),
         }
+
+        if network_mode:
+            run_kwargs["network_mode"] = network_mode
+        if network_name:
+            run_kwargs["network"] = network_name
 
         if device_requests:
             run_kwargs["device_requests"] = device_requests
@@ -311,6 +343,16 @@ class DockerService:
         except APIError as e:
             raise ValueError(f"删除容器失败: {e}")
 
+    def remove_image(self, image_name: str) -> None:
+        """删除镜像；镜像仍被其他容器使用时保留并抛出明确错误。"""
+        try:
+            self.client.images.remove(image=image_name, force=False, noprune=False)
+            logger.info(f"镜像已删除: {image_name}")
+        except NotFound:
+            logger.warning(f"镜像不存在，跳过删除: {image_name}")
+        except APIError as e:
+            raise ValueError(f"删除镜像失败: {e}")
+
     def get_container_logs(self, container_id: str, tail: int = 100, follow: bool = False):
         """获取容器日志
 
@@ -324,12 +366,20 @@ class DockerService:
         """
         try:
             container = self.client.containers.get(container_id)
+            log_driver = (container.attrs.get("HostConfig", {}).get("LogConfig", {}) or {}).get("Type")
+            if log_driver == "none":
+                return (
+                    "当前容器是镜像构建阶段的临时容器，Docker 未保留其 stdout/stderr；"
+                    "请通过模型库服务日志查看构建进度。"
+                )
             logs = container.logs(tail=tail, follow=follow, stream=follow, timestamps=True)
             if follow:
                 return logs
             return logs.decode("utf-8", errors="replace")
         except NotFound:
             raise ValueError(f"容器不存在: {container_id}")
+        except APIError as e:
+            raise ValueError(f"读取容器日志失败: {e}") from e
 
     def get_container_stats(self, container_id: str) -> dict:
         """获取容器资源使用快照"""

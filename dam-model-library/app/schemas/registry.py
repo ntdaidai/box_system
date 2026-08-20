@@ -1,7 +1,7 @@
 """模型注册请求/响应模型"""
 
 from pydantic import BaseModel, Field
-from typing import Optional, Any
+from typing import Optional, Any, Literal
 from datetime import datetime
 
 
@@ -14,6 +14,7 @@ class RegistryCreate(BaseModel):
     architecture: Optional[str] = Field(None, max_length=64, description="架构")
     model_type: Optional[str] = Field(None, max_length=64, description="模型类型")
     model_size: Optional[str] = Field(None, max_length=32, description="模型大小")
+    runtime_status: Optional[Literal["stopped", "building"]] = Field(None, description="初始运行状态")
     owner_id: Optional[int] = Field(None, description="所有者用户ID")
 
 
@@ -26,6 +27,7 @@ class RegistryUpdate(BaseModel):
     architecture: Optional[str] = Field(None, max_length=64, description="架构")
     model_type: Optional[str] = Field(None, max_length=64, description="模型类型")
     model_size: Optional[str] = Field(None, max_length=32, description="模型大小")
+    runtime_status: Optional[Literal["stopped", "building", "error"]] = Field(None, description="导入生命周期状态")
 
 
 class RegistryResponse(BaseModel):

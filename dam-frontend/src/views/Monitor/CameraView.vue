@@ -706,6 +706,7 @@
       title="摄像头点位图"
       width="92vw"
       top="5vh"
+      @open="syncMapRegionSelection"
     >
       <div class="expanded-map-stage">
         <img src="/dam.png" alt="大藤峡摄像头点位总览" />
@@ -758,7 +759,7 @@
           :class="{ active: point.no === selectedPointNo, offline: !point.camera?.connected, empty: !point.camera }"
           :style="cameraPointStyle(point)"
           :title="point.camera?.name || `${point.no}号监测点暂未接入`"
-          @click="selectPointFromPanel(point.no)"
+          @click="toggleMapPointRegion(point.no)"
         >
           <span>{{ point.no }}</span>
         </button>
@@ -862,6 +863,7 @@ const showLiveChrome = false
 const currentCameraId = ref('')
 const currentCamera = ref(null)
 const selectedPointNo = ref(9)
+const mapRegionPointNo = ref(9)
 const modelStatus = ref({ loaded: false, models: {} })
 const analysisTask = ref('detect')
 const detectionEnabled = ref(false)
@@ -925,6 +927,7 @@ const cameraViewModes = [
 ]
 const cameraRegionPaths = {
   1: 'M371 317 L297 320 L259 324 L230 336 L191 363 L176 386 L179 425 L179 453 L181 487 L178 536 L200 549 L214 554 L231 554 L244 557 L262 556 L272 560 L295 557 L298 558 L327 560 L351 567 L372 570 L374 577 L383 583 L395 581 L408 578 L422 576 L436 571 L449 569 L463 561 L477 555 L489 552 L502 553 L511 546 L521 535 L524 521 L540 510 L538 492 L542 483 L539 466 L539 450 L538 433 L541 425 L542 406 L542 391 L539 380 L539 368 L537 358 L536 347 L531 340 L524 334 L514 332 L494 330 L470 339 L448 339 L427 343 L416 339 Z',
+  2: 'M105 161 L134 169 L189 180 L247 191 L286 196 L307 201 L312 213 L304 222 L300 231 L294 242 L276 260 L260 263 L222 264 L188 256 L162 252 L130 241 L121 236 L110 231 L98 228 L96 212 L84 208 L76 199 L78 191 L84 177 Z',
   3: 'M847 460 L831 450 L830 424 L972 423 L1032 430 L1051 456 L1047 477 L1044 504 L1030 518 L1024 525 L927 544 L856 533 L852 523 L844 524 Z',
   4: 'M844 255 L847 296 L831 304 L829 413 L867 415 L968 415 L1031 422 L1043 405 L1046 376 L1044 355 L1043 335 L1038 319 L1039 302 L1033 291 L1006 276 L952 262 L928 257 Z',
   5: 'M1058 300 L1053 328 L1054 339 L1054 360 L1053 376 L1053 395 L1051 413 L1066 428 L1089 437 L1136 439 L1226 447 L1256 442 L1258 435 L1266 416 L1274 393 L1276 379 L1276 364 L1272 358 L1221 351 L1194 346 L1159 337 Z',
@@ -1007,8 +1010,14 @@ const cameraPointSlots = computed(() => buildCameraPointSlots())
 const connectedPointCount = computed(() => cameraPointSlots.value.filter((point) => point.camera).length)
 const selectedPointSlot = computed(() => cameraPointSlots.value.find((point) => point.no === selectedPointNo.value) || cameraPointSlots.value[0])
 const selectedPointTitle = computed(() => selectedPointSlot.value?.camera?.name || `${selectedPointNo.value}号监测点`)
-const selectedMapRegionPath = computed(() => cameraRegionPaths[selectedPointNo.value] || regionPathFromPoint(selectedPointSlot.value))
-const selectedMapRegionCallout = computed(() => regionCalloutFromPath(selectedMapRegionPath.value, selectedPointNo.value))
+const selectedMapRegionPath = computed(() => {
+  if (!mapRegionPointNo.value) return ''
+  const point = cameraPointSlots.value.find((item) => item.no === mapRegionPointNo.value)
+  return cameraRegionPaths[mapRegionPointNo.value] || regionPathFromPoint(point)
+})
+const selectedMapRegionCallout = computed(() => (
+  mapRegionPointNo.value ? regionCalloutFromPath(selectedMapRegionPath.value, mapRegionPointNo.value) : null
+))
 const gridSlots = computed(() => Array.from({ length: gridCameraLimit.value }, (_, index) => {
   const cameraId = gridSlotCameraIds.value[index]
   const camera = cameraId ? cameraById.value.get(cameraId) : null
@@ -1507,6 +1516,19 @@ async function selectPointFromPanel(pointNo) {
     return
   }
   await selectCameraFromPanel(slot.camera.id)
+}
+
+function syncMapRegionSelection() {
+  mapRegionPointNo.value = selectedPointNo.value || null
+}
+
+async function toggleMapPointRegion(pointNo) {
+  if (mapRegionPointNo.value === pointNo) {
+    mapRegionPointNo.value = null
+    return
+  }
+  mapRegionPointNo.value = pointNo
+  await selectPointFromPanel(pointNo)
 }
 
 function syncGridSlots() {

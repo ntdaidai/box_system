@@ -52,6 +52,7 @@ from app.services.broadcast_service import broadcast_service
 router = APIRouter()
 AnalysisTask = Literal["detect", "classify"]
 CameraBrand = Literal["dahua", "hikvision"]
+LOGICAL_CAMERA_DESCRIPTION_PREFIX = "测试逻辑点位，复用同一台物理摄像头视频源"
 
 
 class CameraDevicePayload(BaseModel):
@@ -375,6 +376,8 @@ def _camera_web_console_url(row: Camera) -> str:
 def _camera_web_proxy_url(row: Camera) -> str:
     if not row.web_proxy_port:
         return ""
+    if not camera_web_proxy_manager.status(str(row.id)):
+        return ""
     return camera_web_proxy_manager.public_url(int(row.web_proxy_port))
 
 
@@ -591,6 +594,7 @@ def _sync_camera_web_proxy(row: Camera, db: Session) -> Optional[dict]:
     runtime_id = str(row.id)
     if not row.enabled or not settings.CAMERA_WEB_PROXY_ENABLED:
         camera_web_proxy_manager.stop_proxy(runtime_id)
+        row.web_proxy_port = None
         return None
     try:
         proxy = camera_web_proxy_manager.start_proxy(
@@ -606,6 +610,30 @@ def _sync_camera_web_proxy(row: Camera, db: Session) -> Optional[dict]:
         logger.warning(f"摄像头 Web 控制台监听启动失败: camera={row.id}, error={exc}")
         row.last_error = f"Web控制台监听失败: {exc}"
         return None
+
+
+def _sync_logical_camera_config(source_row: Camera, db: Session) -> list[Camera]:
+    """Keep seeded logical points aligned with the 9号 physical camera."""
+    if source_row.camera_name != "9号监测点":
+        return []
+    logical_rows = (
+        db.query(Camera)
+        .filter(
+            Camera.id != source_row.id,
+            Camera.description.like(f"{LOGICAL_CAMERA_DESCRIPTION_PREFIX}%"),
+        )
+        .all()
+    )
+    for logical_row in logical_rows:
+        logical_row.brand = source_row.brand
+        logical_row.ip_address = source_row.ip_address
+        logical_row.rtsp_port = source_row.rtsp_port
+        logical_row.web_port = source_row.web_port
+        logical_row.username = source_row.username
+        logical_row.password = source_row.password
+        logical_row.rtsp_path = source_row.rtsp_path
+        logical_row.last_error = None
+    return logical_rows
 
 
 def _test_camera_source(source: str, timeout_seconds: float = 6.0) -> tuple[bool, str]:
@@ -935,9 +963,15 @@ async def update_camera_device(
         row.rtsp_path = _camera_rtsp_path(row.brand)
     db.commit()
     db.refresh(row)
+    logical_rows = _sync_logical_camera_config(row, db)
+    if logical_rows:
+        db.commit()
     status = _sync_camera_runtime(row)
     camera_live_relay_manager.stop(str(row.id))
     proxy = _sync_camera_web_proxy(row, db)
+    for logical_row in logical_rows:
+        _sync_camera_runtime(logical_row)
+        _sync_camera_web_proxy(logical_row, db)
     db.commit()
     await invalidate_cache("camera:*")
     return DetectResponse(

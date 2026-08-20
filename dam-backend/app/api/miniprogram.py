@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import datetime as dt
 import io
 import json
@@ -315,6 +316,20 @@ def _resolve_authenticated_staff(
 
 # 二维码登录码 URL 前缀（小程序 uni.scanCode 按 ticket= 解析）
 QR_LOGIN_SCHEME = "damqrlogin://login"
+
+
+def _staff_qr_png(ticket: str) -> bytes:
+    """生成现场人员登录码 PNG；统一供接口响应和图片接口使用。"""
+    import qrcode
+
+    qr = qrcode.QRCode(border=1, box_size=8)
+    qr.add_data(f"{QR_LOGIN_SCHEME}?ticket={ticket}")
+    qr.make(fit=True)
+    # 转为 RGB，避免不同 Pillow/qrcode 版本将深色模块渲染成白色或透明。
+    img = qr.make_image(fill_color=(10, 26, 42), back_color=(255, 255, 255)).convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def _staff_operator(row: Optional[MiniProgramStaff], fallback: Optional[str] = None) -> str:
@@ -916,6 +931,23 @@ async def list_staff(
         db.close()
 
 
+@router.delete("/staff/groups/{group_name}", response_model=MiniResponse, summary="后台删除现场人员组别")
+async def delete_staff_group(group_name: str):
+    db = SessionLocal()
+    try:
+        normalized_group = _optional_text(group_name)
+        if not normalized_group:
+            raise HTTPException(status_code=400, detail="组别名称不能为空")
+        if normalized_group in {"默认处置组", "九号点位组", "一号点位组", "三号点位组"}:
+            raise HTTPException(status_code=400, detail="固定组别不可删除")
+        members = db.query(MiniProgramStaff).filter(MiniProgramStaff.group_name == normalized_group).count()
+        if members:
+            raise HTTPException(status_code=409, detail=f"组别内还有 {members} 人，请先调整人员所属组别")
+        return MiniResponse(data={"group_name": normalized_group}, message="组别已删除")
+    finally:
+        db.close()
+
+
 @router.post("/staff", response_model=MiniResponse, summary="后台新增处置人员")
 async def create_staff(payload: StaffCreateRequest):
     db = SessionLocal()
@@ -1010,10 +1042,12 @@ async def generate_staff_qrcode(staff_id: int):
         ticket = secrets.token_urlsafe(32)
         row.qr_ticket = ticket
         db.commit()
+        qr_png = _staff_qr_png(ticket)
         return MiniResponse(data={
             "ticket": ticket,
             "expires_at": None,
             "qr_url": f"{QR_LOGIN_SCHEME}?ticket={ticket}",
+            "qr_image": f"data:image/png;base64,{base64.b64encode(qr_png).decode('ascii')}",
         }, message="登录码已生成")
     finally:
         db.close()
@@ -1028,16 +1062,8 @@ async def staff_qrcode_png(staff_id: int, ticket: str = Query(..., max_length=25
             raise HTTPException(status_code=404, detail="登录码不存在或已失效")
     finally:
         db.close()
-    import qrcode
-
-    qr = qrcode.QRCode(border=1, box_size=8)
-    qr.add_data(f"{QR_LOGIN_SCHEME}?ticket={ticket}")
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="#0a1a2a", back_color="#ffffff")
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
     return Response(
-        content=buf.getvalue(),
+        content=_staff_qr_png(ticket),
         media_type="image/png",
         headers={"Cache-Control": "no-store"},
     )

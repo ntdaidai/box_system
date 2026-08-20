@@ -6,7 +6,11 @@
         <h2>无人机设备</h2>
         <p>展示无人机与绑定机场，选择航线测试自动巡检；航线以地图总览方式查看</p>
       </div>
-      <el-button :icon="Refresh" :loading="loading" @click="refreshCurrent">刷新</el-button>
+      <div class="status-summary" aria-label="无人机设备统计">
+        <div class="metric"><i class="dot total"></i><strong class="metric-num">{{ devices.length }}</strong><span class="metric-label">总数</span></div>
+        <div class="metric"><i class="dot online"></i><strong class="metric-num">{{ droneOnlineCount }}</strong><span class="metric-label">在线</span></div>
+        <div class="metric"><i class="dot offline"></i><strong class="metric-num">{{ droneOfflineCount }}</strong><span class="metric-label">离线</span></div>
+      </div>
     </header>
 
     <!-- 工具条 -->
@@ -39,7 +43,7 @@
           <div class="col-name">设备名称</div>
           <div class="col-desc">描述</div>
           <div class="col-dock">绑定机场</div>
-          <div class="col-battery">电量(剩余飞行时间)</div>
+          <div class="col-runtime">电量 / 剩余飞行</div>
           <div class="col-status">状态</div>
           <div class="col-enabled">是否启用</div>
           <div class="col-actions">操作</div>
@@ -59,12 +63,9 @@
           <div class="col-dock">
             <span>{{ row.dockName }}</span>
           </div>
-          <div class="col-battery">
-            <template v-if="row.battery != null && row.battery !== '--'">
-              <span class="battery-num" :class="batteryClass(row.battery)">{{ row.battery }}%</span>
-              <span class="battery-remain">{{ row.remain != null ? `${row.remain}min` : '--' }}</span>
-            </template>
-            <span v-else>--</span>
+          <div class="col-runtime device-runtime">
+            <strong :class="batteryClass(row.battery)">{{ row.battery }}%</strong>
+            <span>{{ row.remainFlightTime }} min</span>
           </div>
           <div class="col-status">
             <span class="status-pill" :class="row.online ? 'is-online' : 'is-offline'">
@@ -135,58 +136,118 @@
               :icon="VideoCamera"
               :disabled="!testWaylineId"
               type="primary"
+              v-if="!testing"
               @click="handleStartTest"
             >开始</el-button>
-            <el-button v-if="testing" :icon="Close" @click="handleStopTest">停止</el-button>
+            <el-button v-else :icon="Close" type="danger" @click="handleStopTest">停止</el-button>
           </div>
         </div>
 
         <!-- 主体：左地图 右视频 -->
         <div class="test-body">
-          <div class="test-map" ref="mapRef">
-            <img src="/dam-map.png" alt="大藤峡地图" class="map-image" draggable="false" />
+          <div class="test-map wayline-map-stage test-wayline-map-stage" ref="mapRef">
+            <img src="/dam.png" alt="大藤峡航线图" draggable="false" />
+            <svg
+              v-if="selectedWaylineMapRegionPath"
+              class="wayline-camera-region-layer"
+              viewBox="0 0 2168 725"
+              preserveAspectRatio="none"
+              aria-hidden="true"
+            >
+              <path class="wayline-region-fill" :d="selectedWaylineMapRegionPath" />
+              <path class="wayline-region-halo" :d="selectedWaylineMapRegionPath" />
+              <path class="wayline-region-line" :d="selectedWaylineMapRegionPath" />
+              <g v-if="selectedWaylineMapRegionCallout" class="wayline-region-callout">
+                <rect
+                  :x="selectedWaylineMapRegionCallout.x"
+                  :y="selectedWaylineMapRegionCallout.y"
+                  :width="selectedWaylineMapRegionCallout.width"
+                  :height="34"
+                  rx="5"
+                />
+                <text
+                  :x="selectedWaylineMapRegionCallout.x + selectedWaylineMapRegionCallout.width / 2"
+                  :y="selectedWaylineMapRegionCallout.y + 22"
+                >
+                  {{ selectedWaylineMapRegionCallout.label }}
+                </text>
+              </g>
+            </svg>
             <svg
               v-if="activeRoutePoints.length"
-              class="route-layer"
+              class="wayline-map-svg"
               viewBox="0 0 100 100"
               preserveAspectRatio="none"
               aria-hidden="true"
             >
-              <polyline class="route-line route-line-glow" :points="activeRoutePolyline" />
-              <polyline class="route-line" :points="activeRoutePolyline" />
-              <circle
-                v-for="(pt, index) in activeRoutePoints"
-                :key="`${activeRouteName}-${index}`"
-                class="route-point"
-                :cx="pt.x"
-                :cy="pt.y"
-                r="1.2"
-              />
+              <g
+                class="wayline-map-route-group"
+                :class="{ active: activeRouteName === selectedWaylineRouteName }"
+                @click="selectWaylineRoute(activeRouteName)"
+              >
+                <polyline class="wayline-map-route-hit" :points="activeRoutePolyline" />
+                <polyline class="wayline-map-route route-glow tone-0" :points="activeRoutePolyline" />
+                <polyline class="wayline-map-route tone-0" :points="activeRoutePolyline" />
+                <circle
+                  v-for="(pt, index) in activeRoutePoints"
+                  :key="`${activeRouteName}-${index}`"
+                  class="wayline-map-point"
+                  :class="{ endpoint: index === 0 || index === activeRoutePoints.length - 1 }"
+                  :cx="pt.x"
+                  :cy="pt.y"
+                  :r="(index === 0 || index === activeRoutePoints.length - 1 ? 2.2 : 1.7) * (activeRouteName === selectedWaylineRouteName ? 1.6 : 1)"
+                />
+              </g>
             </svg>
-            <!-- 机场 P3 -->
-            <div class="map-fixed-point" style="left: 94.9%; top: 24.9%;">
-              <img src="/starting-point.png" alt="机场" class="fixed-point-icon" />
-              <span class="fixed-point-label">机场</span>
-            </div>
-            <!-- 禁渔点 P1 -->
-            <div class="map-fixed-point" style="left: 47.4%; top: 58.1%;">
-              <img src="/waypoint.png" alt="禁渔点" class="fixed-point-icon" />
-              <span class="fixed-point-label">禁渔点</span>
-            </div>
-            <!-- 禁涉水点 P2 -->
-            <div class="map-fixed-point" style="left: 96.3%; top: 54.3%;">
-              <img src="/waypoint.png" alt="禁涉水点" class="fixed-point-icon" />
-              <span class="fixed-point-label">禁涉水点</span>
-            </div>
-            <!-- 无人机（默认在起始点） -->
+            <button
+              v-for="point in waylineCameraPoints"
+              :key="`test-camera-point-${point.no}`"
+              type="button"
+              class="wayline-camera-point"
+              :class="{ active: point.no === selectedWaylineMapPointNo }"
+              :style="waylineCameraPointStyle(point)"
+              :title="`${point.no}号摄像头监测区域`"
+              @click.stop="selectWaylineMapPoint(point.no)"
+            >
+              <span>{{ point.no }}</span>
+            </button>
+            <button
+              type="button"
+              class="wayline-landmark airport"
+              :class="{ active: selectedWaylineLandmark === 'airport' || selectedWaylineRouteName }"
+              style="left: 94.9%; top: 24.9%;"
+              @click.stop="selectWaylineLandmark('airport')"
+            >
+              <span class="wayline-landmark-mark" aria-hidden="true"></span>
+              <span>机场点</span>
+            </button>
+            <button
+              type="button"
+              class="wayline-landmark"
+              :class="{ active: selectedWaylineLandmark === 'fishing' }"
+              style="left: 47.4%; top: 58.1%;"
+              @click.stop="selectWaylineLandmark('fishing')"
+            >
+              <span class="wayline-landmark-mark" aria-hidden="true"></span>
+              <span>禁渔点</span>
+            </button>
+            <button
+              type="button"
+              class="wayline-landmark"
+              :class="{ active: selectedWaylineLandmark === 'wading' }"
+              style="left: 96.3%; top: 54.3%;"
+              @click.stop="selectWaylineLandmark('wading')"
+            >
+              <span class="wayline-landmark-mark" aria-hidden="true"></span>
+              <span>禁涉水点</span>
+            </button>
             <div class="drone-marker" :style="droneOnMapStyle">
               <div class="marker-pulse"></div>
               <img src="/drone-icon.png" alt="无人机" class="marker-icon" />
             </div>
-            <!-- 图注 -->
             <div class="map-legend">
-              <span class="legend-item"><img src="/starting-point.png" class="legend-icon-img" />起始点</span>
-              <span class="legend-item"><img src="/waypoint.png" class="legend-icon-img" />航点</span>
+              <span class="legend-item"><span class="legend-route-swatch airport"></span>机场点</span>
+              <span class="legend-item"><span class="legend-route-swatch waypoint"></span>航点</span>
               <span class="legend-item"><img src="/drone-icon.png" class="legend-icon-img" />无人机</span>
               <span class="legend-item"><i class="legend-line"></i>航线</span>
             </div>
@@ -209,7 +270,6 @@
                 <strong>请选择航线</strong>
                 <span>选择航线后点击开始，播放对应的巡检演示视频</span>
               </div>
-              <div v-if="testing" class="video-progress-badge">{{ testProgress }}%</div>
               <div class="scan-grid"></div>
             </div>
           </div>
@@ -223,41 +283,120 @@
       class="wayline-map-dialog"
       title="航线总览图"
       width="95vw"
-      top="3vh"
+      align-center
     >
       <div class="wayline-map-stage">
-        <img src="/dam-map.png" alt="大藤峡航线总览" draggable="false" />
+        <img src="/dam.png" alt="大藤峡摄像头点位总览" draggable="false" />
+        <svg
+          v-if="selectedWaylineMapRegionPath"
+          class="wayline-camera-region-layer"
+          viewBox="0 0 2168 725"
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          <defs>
+            <filter id="wayline-camera-region-glow" x="-14%" y="-18%" width="128%" height="136%">
+              <feGaussianBlur stdDeviation="5" result="blur" />
+              <feColorMatrix
+                in="blur"
+                type="matrix"
+                values="0 0 0 0 0.25 0 0 0 0 0.86 0 0 0 0 1 0 0 0 .88 0"
+                result="cyanGlow"
+              />
+              <feMerge>
+                <feMergeNode in="cyanGlow" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+          <path class="wayline-region-fill" :d="selectedWaylineMapRegionPath" />
+          <path class="wayline-region-halo" :d="selectedWaylineMapRegionPath" />
+          <path class="wayline-region-line" :d="selectedWaylineMapRegionPath" />
+          <g v-if="selectedWaylineMapRegionCallout" class="wayline-region-callout">
+            <rect
+              :x="selectedWaylineMapRegionCallout.x"
+              :y="selectedWaylineMapRegionCallout.y"
+              :width="selectedWaylineMapRegionCallout.width"
+              :height="34"
+              rx="5"
+            />
+            <text
+              :x="selectedWaylineMapRegionCallout.x + selectedWaylineMapRegionCallout.width / 2"
+              :y="selectedWaylineMapRegionCallout.y + 22"
+            >
+              {{ selectedWaylineMapRegionCallout.label }}
+            </text>
+          </g>
+        </svg>
         <svg
           class="wayline-map-svg"
           viewBox="0 0 100 100"
           preserveAspectRatio="none"
           aria-hidden="true"
         >
-          <g v-for="(route, index) in waylineRoutes" :key="route.name" class="wayline-map-route-group">
+          <g
+            v-for="(route, index) in waylineRoutes"
+            :key="route.name"
+            class="wayline-map-route-group"
+            :class="{ active: route.name === selectedWaylineRouteName }"
+            @click="selectWaylineRoute(route.name)"
+          >
+            <polyline class="wayline-map-route-hit" :points="routePolyline(route)" />
             <polyline class="wayline-map-route route-glow" :class="`tone-${index}`" :points="routePolyline(route)" />
             <polyline class="wayline-map-route" :class="`tone-${index}`" :points="routePolyline(route)" />
             <circle
               v-for="(pt, i) in route.waypoints"
               :key="`${route.name}-${i}`"
               class="wayline-map-point"
+              :class="{ endpoint: i === 0 || i === route.waypoints.length - 1 }"
               :cx="pt.x"
               :cy="pt.y"
-              r="1.4"
+              :r="(i === 0 || i === route.waypoints.length - 1 ? 2.2 : 1.7) * (route.name === selectedWaylineRouteName ? 1.6 : 1)"
             />
           </g>
         </svg>
-        <div class="wayline-map-fixed-point" style="left: 94.9%; top: 24.9%;">
-          <img src="/starting-point.png" alt="机场" />
-          <span>P3 机场</span>
-        </div>
-        <div class="wayline-map-fixed-point" style="left: 47.4%; top: 58.1%;">
-          <img src="/waypoint.png" alt="禁渔点" />
+        <button
+          v-for="point in waylineCameraPoints"
+          :key="`wayline-camera-point-${point.no}`"
+          type="button"
+          class="wayline-camera-point"
+          :class="{ active: point.no === selectedWaylineMapPointNo }"
+          :style="waylineCameraPointStyle(point)"
+          :title="`${point.no}号摄像头监测区域`"
+          @click.stop="selectWaylineMapPoint(point.no)"
+        >
+          <span>{{ point.no }}</span>
+        </button>
+        <button
+          type="button"
+          class="wayline-landmark airport"
+          :class="{ active: selectedWaylineLandmark === 'airport' || selectedWaylineRouteName }"
+          style="left: 94.9%; top: 24.9%;"
+          @click.stop="selectWaylineLandmark('airport')"
+        >
+          <span class="wayline-landmark-mark" aria-hidden="true"></span>
+          <span>机场点</span>
+        </button>
+        <button
+          type="button"
+          class="wayline-landmark"
+          :class="{ active: selectedWaylineLandmark === 'fishing' }"
+          style="left: 47.4%; top: 58.1%;"
+          @click.stop="selectWaylineLandmark('fishing')"
+        >
+          <span class="wayline-landmark-mark" aria-hidden="true"></span>
           <span>禁渔点</span>
-        </div>
-        <div class="wayline-map-fixed-point" style="left: 96.3%; top: 54.3%;">
-          <img src="/waypoint.png" alt="禁涉水点" />
+        </button>
+        <button
+          type="button"
+          class="wayline-landmark"
+          :class="{ active: selectedWaylineLandmark === 'wading' }"
+          style="left: 96.3%; top: 54.3%;"
+          @click.stop="selectWaylineLandmark('wading')"
+        >
+          <span class="wayline-landmark-mark" aria-hidden="true"></span>
           <span>禁涉水点</span>
-        </div>
+        </button>
         <div class="wayline-map-legend">
           <span class="legend-item"><img src="/starting-point.png" class="legend-icon-img" />起始点</span>
           <span class="legend-item"><img src="/waypoint.png" class="legend-icon-img" />航点</span>
@@ -295,7 +434,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Close, MapLocation, Refresh, VideoCamera,
+  Close, MapLocation, VideoCamera,
 } from '@element-plus/icons-vue'
 import {
   dijLogin,
@@ -328,12 +467,44 @@ const ROUTES = {
   },
 }
 
+// 与“摄像头点位图”共用的点位和监测区域坐标，航线浮层叠加在同一张底图上。
+const waylineCameraPoints = [
+  { no: 1, x: 17.3410, y: 40.8304 },
+  // 与首页大屏 Dashboard 的 boat-2 点位保持一致。
+  { no: 2, x: 7.3988, y: 15.2249 },
+  { no: 3, x: 41.8497, y: 74.0484 },
+  { no: 4, x: 47.3988, y: 38.0623 },
+  { no: 5, x: 49.2486, y: 38.0623 },
+  { no: 6, x: 66.3584, y: 52.5952 },
+  { no: 7, x: 68.2081, y: 52.5952 },
+  { no: 8, x: 57.3410, y: 75.4325 },
+  { no: 9, x: 91.7919, y: 24.2215 },
+]
+
+const waylineCameraRegionPaths = {
+  1: 'M371 317 L297 320 L259 324 L230 336 L191 363 L176 386 L179 425 L179 453 L181 487 L178 536 L200 549 L214 554 L231 554 L244 557 L262 556 L272 560 L295 557 L298 558 L327 560 L351 567 L372 570 L374 577 L383 583 L395 581 L408 578 L422 576 L436 571 L449 569 L463 561 L477 555 L489 552 L502 553 L511 546 L521 535 L524 521 L540 510 L538 492 L542 483 L539 466 L539 450 L538 433 L541 425 L542 406 L542 391 L539 380 L539 368 L537 358 L536 347 L531 340 L524 334 L514 332 L494 330 L470 339 L448 339 L427 343 L416 339 Z',
+  2: 'M105 161 L134 169 L189 180 L247 191 L286 196 L307 201 L312 213 L304 222 L300 231 L294 242 L276 260 L260 263 L222 264 L188 256 L162 252 L130 241 L121 236 L110 231 L98 228 L96 212 L84 208 L76 199 L78 191 L84 177 Z',
+  3: 'M847 460 L831 450 L830 424 L972 423 L1032 430 L1051 456 L1047 477 L1044 504 L1030 518 L1024 525 L927 544 L856 533 L852 523 L844 524 Z',
+  4: 'M844 255 L847 296 L831 304 L829 413 L867 415 L968 415 L1031 422 L1043 405 L1046 376 L1044 355 L1043 335 L1038 319 L1039 302 L1033 291 L1006 276 L952 262 L928 257 Z',
+  5: 'M1058 300 L1053 328 L1054 339 L1054 360 L1053 376 L1053 395 L1051 413 L1066 428 L1089 437 L1136 439 L1226 447 L1256 442 L1258 435 L1266 416 L1274 393 L1276 379 L1276 364 L1272 358 L1221 351 L1194 346 L1159 337 Z',
+  6: 'M1439 335 L1383 352 L1367 353 L1355 361 L1343 365 L1332 368 L1318 362 L1299 361 L1288 361 L1283 379 L1282 396 L1279 415 L1279 436 L1279 445 L1279 466 L1283 483 L1283 495 L1286 510 L1296 514 L1304 516 L1318 510 L1334 512 L1367 508 L1367 497 L1390 486 L1398 488 L1424 476 L1432 468 L1441 471 L1464 457 Z',
+  7: 'M1447 335 L1576 287 L1617 282 L1649 283 L1730 280 L1749 271 L1778 271 L1792 263 L1799 278 L1804 299 L1812 330 L1809 360 L1809 374 L1798 385 L1781 393 L1671 406 L1589 415 L1519 444 L1514 441 L1474 450 Z',
+  8: 'M1273 520 L1259 521 L1230 526 L1193 540 L1178 541 L1165 530 L1147 545 L1049 523 L1049 513 L1051 498 L1054 486 L1055 467 L1061 456 L1073 445 L1090 444 L1126 445 L1165 451 L1199 452 L1224 454 L1249 456 L1261 453 L1269 461 L1274 479 L1279 503 L1280 517 Z',
+  9: 'M2127 373 L2108 370 L2104 375 L2084 378 L2066 375 L2030 377 L1984 376 L1944 378 L1915 379 L1897 381 L1872 384 L1843 385 L1836 385 L1826 389 L1823 398 L1824 408 L1838 418 L1877 412 L1898 408 L1922 411 L1944 415 L1974 419 L2005 422 L2025 412 L2041 409 L2056 407 L2066 410 L2088 410 L2104 408 L2121 410 L2134 406 L2142 393 L2141 381 L2142 373 Z',
+}
+
 // 示例无人机数据（DJI 拓扑不可用或暂无真实设备时用于界面展示）
 const MOCK_DRONES = [
-  { device_sn: 'mock-drone-001', device_name: '御3行业版-1号', device_desc: 'P3 机场起降，负责禁渔区常态化巡检', device_model: 'M30T', dockName: 'P3 机场', battery: 86, remain: 32, status: 'online' },
-  { device_sn: 'mock-drone-002', device_name: 'M350 RTK-2号', device_desc: 'P2 机场起降，负责禁涉水区重点巡查', device_model: 'M350', dockName: 'P2 机场', battery: 54, remain: 18, status: 'online' },
-  { device_sn: 'mock-drone-003', device_name: '精灵4 RTK-3号', device_desc: 'P1 机场起降，应急巡检备用机', device_model: 'P4RTK', dockName: 'P1 机场', battery: 23, remain: 6, status: 'offline', enabled: false },
+  { device_sn: 'mock-drone-001', device_name: '御3行业版-1号', device_desc: 'P3 机场起降，负责禁渔区常态化巡检', device_model: 'M30T', dockName: 'P3 机场', status: 'online', battery: 86, remainFlightTime: 32 },
+  { device_sn: 'mock-drone-002', device_name: 'M350 RTK-2号', device_desc: 'P2 机场起降，负责禁涉水区重点巡查', device_model: 'M350', dockName: 'P2 机场', status: 'online', battery: 64, remainFlightTime: 24 },
+  { device_sn: 'mock-drone-003', device_name: '精灵4 RTK-3号', device_desc: 'P1 机场起降，应急巡检备用机', device_model: 'P4RTK', dockName: 'P1 机场', status: 'offline', enabled: false, battery: 28, remainFlightTime: 9 },
 ]
+
+const MOCK_DEVICE_RUNTIME = {
+  'mock-drone-001': { description: 'P3 机场起降，负责禁渔区常态化巡检', battery: 86, remainFlightTime: 32 },
+  'mock-drone-002': { description: 'P2 机场起降，负责禁涉水区重点巡查', battery: 64, remainFlightTime: 24 },
+  'mock-drone-003': { description: 'P1 机场起降，应急巡检备用机', battery: 28, remainFlightTime: 9 },
+}
 
 // ========== 视图状态 ==========
 const loading = ref(false)
@@ -342,8 +513,8 @@ const authError = ref('')
 
 // 演示视频映射：固定演示航线 → 本地演示视频（点击开始后播放，模拟真实视频流）
 const DEMO_VIDEO_MAP = {
-  '禁渔航线': '/demo/wading.mp4',
-  '禁涉水航线': '/demo/fishing.mp4',
+  '禁渔航线': '/demo/fishing.mp4',
+  '禁涉水航线': '/demo/wading.mp4',
 }
 
 // ========== dij 连接 ==========
@@ -379,24 +550,37 @@ const pagedDevices = computed(() => {
   return filteredDevices.value.slice(start, start + pageSize)
 })
 
-// 列表 = DJI 真实飞行器 + 合并 WS OSD（电量/剩余飞行时间）+ 绑定机场；示例数据自带电量/时长字段
+// 列表 = DJI 真实飞行器 + WS 在线状态 + 绑定机场
 const devices = computed(() =>
   djiDrones.value.map((d) => {
-    const osd = osdMap[d.device_sn] || {}
-    const battery = osd.battery?.capacity_percent ?? d.battery ?? null
-    const remain = osd.battery?.remain_flight_time ?? d.remain ?? null
     const online = onlineSet.has(d.device_sn) || d.status === 'online' || d.online === true
+    const runtime = MOCK_DEVICE_RUNTIME[d.device_sn] || {
+      description: `${d.device_model || '无人机'}巡检设备`,
+      battery: 78,
+      remainFlightTime: 28,
+    }
+    const osd = osdMap[d.device_sn] || {}
+    const osdBattery = osd.battery || {}
     return {
       ...d,
       device_name: d.nickname || d.device_name || d.deviceCallsign || d.device_sn,
-      device_desc: d.device_desc || d.deviceDesc || '',
+      device_desc: d.device_desc || d.deviceDesc || runtime.description,
       dockName: bindDockName(d),
       online,
-      battery: battery != null ? battery : '--',
-      remain: remain != null ? remain : '--',
+      battery: osdBattery.capacity_percent ?? osdBattery.percentage ?? d.battery ?? runtime.battery,
+      remainFlightTime:
+        osdBattery.remain_flight_time ?? d.remainFlightTime ?? d.remain_flight_time ?? runtime.remainFlightTime,
     }
   })
 )
+
+const batteryClass = (battery) => {
+  if (battery <= 20) return 'battery-danger'
+  if (battery <= 40) return 'battery-warning'
+  return 'battery-ok'
+}
+const droneOnlineCount = computed(() => devices.value.filter((device) => device.online).length)
+const droneOfflineCount = computed(() => devices.value.length - droneOnlineCount.value)
 
 // 从拓扑中解析飞行器绑定的机场名称（示例数据自带 dockName 时优先使用）
 function bindDockName(drone) {
@@ -415,70 +599,58 @@ const testDialogVisible = ref(false)
 const testingDevice = ref(null)
 const testWaylineId = ref('')
 const testing = ref(false)
-const testProgress = ref(0)
 
-// 地图动画
-const dronePos = ref({ x: 94.9, y: 24.9 })
 const activeRoute = computed(() => ROUTES[testWaylineId.value] || null)
 const activeRouteName = computed(() => activeRoute.value?.name || '当前航线')
 const activeRoutePoints = computed(() => activeRoute.value?.waypoints || [])
 const activeRoutePolyline = computed(() =>
   activeRoutePoints.value.map((p) => `${p.x},${p.y}`).join(' ')
 )
-const droneOnMapStyle = computed(() => ({ left: `${dronePos.value.x}%`, top: `${dronePos.value.y}%` }))
-// 当前航线对应的演示视频地址（选择航线后右侧自动播放）
+// 当前航线对应的演示视频地址（只有点击开始后才播放）
 const demoVideoSrc = computed(() => DEMO_VIDEO_MAP[testWaylineId.value] || '')
 
-// 本地航线动画（演示用途，不依赖后端模拟/实时流）
+// 测试页左侧保留无人机按航线飞行的演示动画。
+const dronePos = ref({ x: 94.9, y: 24.9 })
+const droneOnMapStyle = computed(() => ({ left: `${dronePos.value.x}%`, top: `${dronePos.value.y}%` }))
 let animFrame = null
 let animStart = null
-const ANIM_DURATION = 30000 // 单次演示时长 30s
+const ANIM_DURATION = 30000
 function pointAt(pts, t) {
   const segs = pts.slice(0, -1).map((p, i) => ({
     a: p,
     b: pts[i + 1],
     len: Math.hypot(pts[i + 1].x - p.x, pts[i + 1].y - p.y),
   }))
-  const total = segs.reduce((s, x) => s + x.len, 0) || 1
+  const total = segs.reduce((sum, item) => sum + item.len, 0) || 1
   let target = t * total
   for (const seg of segs) {
     if (target <= seg.len) {
-      const k = seg.len ? target / seg.len : 0
-      return { x: seg.a.x + (seg.b.x - seg.a.x) * k, y: seg.a.y + (seg.b.y - seg.a.y) * k }
+      const ratio = seg.len ? target / seg.len : 0
+      return { x: seg.a.x + (seg.b.x - seg.a.x) * ratio, y: seg.a.y + (seg.b.y - seg.a.y) * ratio }
     }
     target -= seg.len
   }
-  const last = pts[pts.length - 1]
-  return { x: last.x, y: last.y }
+  return pts[pts.length - 1]
 }
 function startLocalAnimation(route) {
   stopLocalAnimation()
-  const pts = route?.waypoints || []
-  if (pts.length < 2) return
+  const points = route?.waypoints || []
+  if (points.length < 2) return
   animStart = performance.now()
   const step = (now) => {
-    const t = Math.min(1, (now - animStart) / ANIM_DURATION)
-    dronePos.value = pointAt(pts, t)
-    testProgress.value = Math.round(t * 100)
-    if (t < 1) {
-      animFrame = requestAnimationFrame(step)
-    } else {
-      testing.value = false
-    }
+    const progress = Math.min(1, (now - animStart) / ANIM_DURATION)
+    dronePos.value = pointAt(points, progress)
+    if (progress < 1) animFrame = requestAnimationFrame(step)
   }
   animFrame = requestAnimationFrame(step)
 }
 function stopLocalAnimation() {
-  if (animFrame) { cancelAnimationFrame(animFrame); animFrame = null }
+  if (animFrame) cancelAnimationFrame(animFrame)
+  animFrame = null
   animStart = null
 }
 
 // ========== 工具函数 ==========
-function batteryClass(pct) {
-  if (pct <= 20) return 'is-danger'
-  if (pct <= 40) return 'is-warn'
-  return 'is-ok'
-}
 function normalizeDevice(d) {
   return {
     ...d,
@@ -637,11 +809,76 @@ function connectWebSocket() {
 // ========== 航线大图弹窗 ==========
 const waylineMapVisible = ref(false)
 const waylineRoutes = Object.values(ROUTES)
+const selectedWaylineMapPointNo = ref(5)
+const selectedWaylineRouteName = ref('')
+const selectedWaylineLandmark = ref('')
+const selectedWaylineMapRegionPath = computed(() => (
+  waylineCameraRegionPaths[selectedWaylineMapPointNo.value]
+  || regionPathFromWaylinePoint(waylineCameraPoints.find((point) => point.no === selectedWaylineMapPointNo.value))
+))
+const selectedWaylineMapRegionCallout = computed(() => (
+  regionCalloutFromWaylinePath(selectedWaylineMapRegionPath.value, selectedWaylineMapPointNo.value)
+))
+
 function routePolyline(route) {
   return (route.waypoints || []).map((p) => `${p.x},${p.y}`).join(' ')
 }
 function openWaylineMap() {
   waylineMapVisible.value = true
+}
+function selectWaylineRoute(routeName) {
+  selectedWaylineRouteName.value = selectedWaylineRouteName.value === routeName ? '' : routeName
+}
+function selectWaylineLandmark(landmark) {
+  selectedWaylineLandmark.value = selectedWaylineLandmark.value === landmark ? '' : landmark
+}
+function selectWaylineMapPoint(pointNo) {
+  selectedWaylineMapPointNo.value = selectedWaylineMapPointNo.value === pointNo ? null : pointNo
+}
+function waylineCameraPointStyle(point) {
+  return { left: `${point.x}%`, top: `${point.y}%` }
+}
+function regionPathFromWaylinePoint(point) {
+  if (!point) return ''
+  const centerX = Number(point.x) / 100 * 2168
+  const centerY = Number(point.y) / 100 * 725
+  if (!Number.isFinite(centerX) || !Number.isFinite(centerY)) return ''
+  const width = 150
+  const height = 76
+  const left = Math.max(24, Math.min(2168 - width - 24, centerX - width / 2))
+  const top = Math.max(24, Math.min(725 - height - 24, centerY - height / 2))
+  const right = left + width
+  const bottom = top + height
+  return [
+    `M${left} ${top + 18}`,
+    `L${left + 18} ${top}`,
+    `L${right - 26} ${top + 4}`,
+    `L${right} ${top + 28}`,
+    `L${right - 14} ${bottom - 8}`,
+    `L${left + 32} ${bottom}`,
+    `L${left} ${bottom - 22}`,
+    'Z',
+  ].join(' ')
+}
+function regionCalloutFromWaylinePath(path, pointNo) {
+  const values = String(path || '').match(/-?\d+(\.\d+)?/g)?.map(Number) || []
+  const points = []
+  for (let index = 0; index < values.length; index += 2) {
+    points.push({ x: values[index], y: values[index + 1] })
+  }
+  const validPoints = points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+  if (!validPoints.length) return null
+  const minX = Math.min(...validPoints.map((point) => point.x))
+  const maxX = Math.max(...validPoints.map((point) => point.x))
+  const minY = Math.min(...validPoints.map((point) => point.y))
+  const label = `${pointNo}号摄像头监测区域`
+  const width = Math.max(170, label.length * 14)
+  return {
+    label,
+    width,
+    x: Math.max(16, Math.min(2168 - width - 16, (minX + maxX) / 2 - width / 2)),
+    y: Math.max(18, minY - 58),
+  }
 }
 
 // ========== 编辑 / 删除（对标广播设备列表样式，示例数据与本地信息编辑） ==========
@@ -690,19 +927,16 @@ function toggleEnabled(row, value) {
 async function openTestDialog(row) {
   testingDevice.value = row
   testWaylineId.value = ''
-  testProgress.value = 0
-  dronePos.value = { x: 94.9, y: 24.9 }
   testDialogVisible.value = true
 }
 
-// 点击开始：左侧地图动画 + 右侧演示视频（模拟真实视频流，无进度条）
+// 点击开始：左侧显示选中航线 + 右侧演示视频（模拟真实视频流，无进度条）
 function handleStartTest() {
   const route = ROUTES[testWaylineId.value]
   if (!route) {
     ElMessage.warning('请先选择航线')
     return
   }
-  stopLocalAnimation()
   startLocalAnimation(route)
   testing.value = true
 }
@@ -732,7 +966,6 @@ watch(filteredDevices, (items) => {
 watch(testWaylineId, () => {
   stopLocalAnimation()
   testing.value = false
-  testProgress.value = 0
   dronePos.value = { x: 94.9, y: 24.9 }
 })
 
@@ -770,16 +1003,22 @@ async function refreshCurrent() {
   background: linear-gradient(90deg, rgba(14, 48, 76, 0.82) 0%, rgba(9, 29, 48, 0.72) 58%, rgba(7, 20, 34, 0.46) 100%);
   box-shadow: inset 0 1px 0 rgba(147, 206, 241, 0.08);
 }
+.page-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+.status-summary { display: flex; justify-content: flex-end; align-items: center; }
+.metric { min-width: 96px; display: inline-flex; align-items: baseline; gap: 8px; padding: 8px 18px; white-space: nowrap; }
+.metric + .metric { border-left: 1px solid rgba(96, 151, 191, .18); }
+.metric .dot { width: 8px; height: 8px; flex: 0 0 auto; align-self: center; border-radius: 50%; background: #8db2c8; }
+.metric .dot.total { box-shadow: 0 0 8px rgba(141, 178, 200, .75); }
+.metric .dot.online { background: #48e6bf; box-shadow: 0 0 8px rgba(72, 230, 191, .75); }
+.metric .dot.offline { background: #8494a3; }
+.metric-num { color: #f2fbff; font-size: 22px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+.metric-label { color: #8db2c8; font-size: 12px; }
 .page-header h2 { margin: 0; color: #f3f8fd; font-size: 25px; }
 .page-header p { margin: 7px 0 0; color: #87a5bb; font-size: 13px; }
-.page-header :deep(.el-button) {
-  min-width: 92px;
-  height: 36px;
-  border-color: #1b7fa5;
-  color: #dcefff;
-  background: #103954;
-  font-weight: 700;
-}
 .tab-header h3 { margin: 0; color: #f3f8fd; font-size: 18px; }
 .tab-actions {
   flex: 0 0 auto;
@@ -858,7 +1097,7 @@ async function refreshCurrent() {
   display: grid;
   align-items: center;
   gap: 14px;
-  grid-template-columns: minmax(190px, 1.05fr) minmax(210px, 1.15fr) minmax(120px, 0.75fr) minmax(150px, 1fr) 100px 100px 300px;
+  grid-template-columns: minmax(190px, 1.05fr) minmax(260px, 1.35fr) minmax(140px, 0.85fr) 150px 100px 100px 300px;
 }
 .device-list-header-row {
   min-height: 48px;
@@ -879,12 +1118,17 @@ async function refreshCurrent() {
 }
 .device-row:hover { background: #102940; }
 .device-row > div { min-width: 0; }
-.col-dock, .col-battery, .col-status, .col-enabled, .col-actions {
+.col-dock, .col-runtime, .col-status, .col-enabled, .col-actions {
   display: grid;
   gap: 5px;
   justify-items: center;
   text-align: center;
 }
+.device-runtime strong { font-size: 14px; }
+.device-runtime span { color: #8daabd; font-size: 12px; }
+.battery-ok { color: #81efad; }
+.battery-warning { color: #ffd27a; }
+.battery-danger { color: #ff9ca8; }
 .col-enabled :deep(.el-switch__core) {
   border-color: rgba(120, 153, 176, 0.34);
   background: rgba(96, 118, 134, 0.38);
@@ -943,11 +1187,6 @@ async function refreshCurrent() {
   background: rgba(48, 154, 118, 0.18);
   color: #81efad;
 }
-.battery-num { font-weight: 800; font-size: 15px; }
-.battery-num.is-ok { color: #67c23a; }
-.battery-num.is-warn { color: #e6a23c; }
-.battery-num.is-danger { color: #ff4d4f; }
-.battery-remain { color: #7f9bb0; font-size: 12px; }
 .list-actions {
   display: flex;
   align-items: center;
@@ -1052,21 +1291,6 @@ async function refreshCurrent() {
 .test-wayline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .toolbar-label { color: #a9c7de; font-size: 13px; font-weight: 700; }
 .wayline-select { width: 240px; }
-.video-progress-badge {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: 3;
-  padding: 2px 10px;
-  border: 1px solid rgba(72, 216, 255, 0.35);
-  border-radius: 12px;
-  background: rgba(7, 20, 34, 0.72);
-  color: #48d8ff;
-  font-size: 12px;
-  font-weight: 700;
-  font-family: monospace;
-}
-
 .test-body {
   display: grid;
   grid-template-columns: 3fr 2fr;
@@ -1237,6 +1461,12 @@ async function refreshCurrent() {
   border-radius: 8px;
   background: #02080d;
 }
+.test-wayline-map-stage {
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  aspect-ratio: auto;
+}
 .wayline-map-stage > img {
   width: 100%;
   height: 100%;
@@ -1244,7 +1474,7 @@ async function refreshCurrent() {
   object-fit: contain;
   filter: saturate(1.08) contrast(1.06) brightness(0.76);
 }
-.wayline-map-svg {
+.wayline-camera-region-layer {
   position: absolute;
   inset: 0;
   z-index: 2;
@@ -1252,18 +1482,76 @@ async function refreshCurrent() {
   height: 100%;
   pointer-events: none;
 }
+.wayline-region-fill { fill: rgba(67, 220, 255, .14); stroke: transparent; }
+.wayline-region-halo {
+  fill: none;
+  stroke: rgba(81, 229, 255, .48);
+  stroke-width: 13;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  filter: url(#wayline-camera-region-glow);
+}
+.wayline-region-line {
+  fill: none;
+  stroke: rgba(126, 238, 255, .96);
+  stroke-width: 2.2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  filter: url(#wayline-camera-region-glow);
+}
+.wayline-region-callout rect {
+  fill: rgba(7, 42, 55, .86);
+  stroke: rgba(126, 238, 255, .74);
+  stroke-width: 1.5;
+  filter: drop-shadow(0 0 8px rgba(72, 216, 255, .5));
+}
+.wayline-region-callout text {
+  fill: #e9f7ff;
+  font-size: 18px;
+  font-weight: 900;
+  text-anchor: middle;
+}
+.wayline-map-svg {
+  position: absolute;
+  inset: 0;
+  z-index: 16;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.wayline-map-route-hit {
+  fill: none;
+  stroke: rgba(0, 0, 0, .001);
+  stroke-width: 14;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: stroke;
+  cursor: pointer;
+}
 .wayline-map-route {
   fill: none;
-  stroke-width: 0.5;
+  stroke-width: 1;
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-dasharray: 2.2 1.3;
   vector-effect: non-scaling-stroke;
+  pointer-events: stroke;
 }
 .wayline-map-route.route-glow {
-  stroke-width: 1.8;
+  stroke-width: 3.8;
   stroke-dasharray: none;
   opacity: 0.4;
+}
+.wayline-map-route-group {
+  pointer-events: auto;
+  cursor: pointer;
+}
+.wayline-map-route-group.active .wayline-map-route {
+  stroke-width: 1.7;
+}
+.wayline-map-route-group.active .wayline-map-route.route-glow {
+  stroke-width: 5.2;
+  opacity: 0.72;
 }
 .wayline-map-route.tone-0 { stroke: #48d8ff; }
 .wayline-map-route.tone-1 { stroke: #ffd166; }
@@ -1273,7 +1561,126 @@ async function refreshCurrent() {
   stroke-width: 0.4;
   vector-effect: non-scaling-stroke;
   filter: drop-shadow(0 0 5px rgba(72, 216, 255, 0.75));
+  pointer-events: all;
 }
+.wayline-camera-point,
+.wayline-landmark {
+  position: absolute;
+  /* 地标是可点击的最上层交互点，航线线条仍位于区域层之上。 */
+  z-index: 20;
+  appearance: none;
+  -webkit-appearance: none;
+  font-family: inherit;
+}
+.wayline-camera-point {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  margin: -14px 0 0 -14px;
+  border: 2px solid rgba(255, 255, 255, .62);
+  border-radius: 50%;
+  color: #fff;
+  background: #d93a4b;
+  box-shadow: 0 0 0 8px rgba(217, 58, 75, .18), 0 0 16px rgba(217, 58, 75, .72);
+  font: 900 14px/1 "Consolas", "Monaco", monospace;
+  cursor: pointer;
+}
+.wayline-camera-point:hover,
+.wayline-camera-point.active {
+  width: 34px;
+  height: 34px;
+  margin: -17px 0 0 -17px;
+  color: #041417;
+  border-color: rgba(230, 250, 255, .92);
+  background: #48d8ff;
+  box-shadow: 0 0 0 10px rgba(72, 216, 255, .24), 0 0 24px rgba(72, 216, 255, .88);
+}
+.wayline-landmark {
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #e9faff;
+  box-shadow: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform .2s ease, background .2s ease, box-shadow .2s ease, border-color .2s ease;
+}
+.wayline-landmark-mark {
+  position: relative;
+  width: 23px;
+  height: 23px;
+  display: block;
+  border: 2px solid #aaf5ff;
+  border-radius: 50% 50% 50% 0;
+  background: linear-gradient(145deg, #52e4ff, #087da8);
+  box-shadow: 0 0 10px rgba(72, 216, 255, .8), 0 2px 5px rgba(0, 0, 0, .72);
+  transform: rotate(-45deg);
+}
+.wayline-landmark-mark::after {
+  content: '';
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  top: 6px;
+  left: 6px;
+  border-radius: 50%;
+  background: #063747;
+  box-shadow: 0 0 0 2px rgba(226, 252, 255, .82);
+}
+.wayline-landmark > span:not(.wayline-landmark-mark) {
+  font-size: 11px;
+  font-weight: 900;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .85);
+}
+.wayline-landmark:hover,
+.wayline-landmark.active {
+  transform: translate(-50%, -50%) scale(1.32);
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+.wayline-landmark:hover .wayline-landmark-mark,
+.wayline-landmark.active .wayline-landmark-mark {
+  box-shadow: 0 0 0 5px rgba(72, 216, 255, .2), 0 0 26px rgba(72, 216, 255, .98), 0 2px 5px rgba(0, 0, 0, .72);
+}
+.wayline-landmark.airport:hover,
+.wayline-landmark.airport.active {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+.wayline-landmark.airport .wayline-landmark-mark {
+  border-color: #fff0b0;
+  background: linear-gradient(145deg, #ffe184, #bd7710);
+  box-shadow: 0 0 10px rgba(255, 209, 102, .82), 0 2px 5px rgba(0, 0, 0, .72);
+}
+.wayline-landmark.airport .wayline-landmark-mark::after { background: #6b4308; }
+.wayline-landmark.airport:hover .wayline-landmark-mark,
+.wayline-landmark.airport.active .wayline-landmark-mark {
+  box-shadow: 0 0 0 5px rgba(255, 209, 102, .2), 0 0 26px rgba(255, 209, 102, .98), 0 2px 5px rgba(0, 0, 0, .72);
+}
+.legend-route-swatch {
+  width: 14px;
+  height: 14px;
+  display: inline-block;
+  border-radius: 50%;
+  border: 2px solid #aaf5ff;
+  background: #16a8d2;
+  box-shadow: 0 0 8px rgba(72, 216, 255, .7);
+}
+.legend-route-swatch.airport {
+  border-color: #fff0b0;
+  background: #d89b2b;
+  box-shadow: 0 0 8px rgba(255, 209, 102, .72);
+}
+.legend-route-swatch.waypoint { background: #16a8d2; }
 .wayline-map-fixed-point {
   position: absolute;
   transform: translate(-50%, -50%);

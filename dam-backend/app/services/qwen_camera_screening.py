@@ -289,6 +289,7 @@ class QwenCameraScreeningService:
                 model_image_urls,
                 effective_window,
                 detection_region=detection_region,
+                zone_type=zone_type,
                 original_frame_count=len(frames),
             )
         if not result:
@@ -724,6 +725,7 @@ class QwenCameraScreeningService:
         window_seconds: float,
         *,
         detection_region: Optional[Dict[str, Any]] = None,
+        zone_type: Optional[str] = None,
         original_frame_count: Optional[int] = None,
     ) -> tuple[Optional[Dict[str, Any]], str, Dict[str, Any]]:
         prompt_config = await asyncio.to_thread(self._get_camera_screening_prompt)
@@ -745,13 +747,26 @@ class QwenCameraScreeningService:
                     "image_url": {"url": f"data:image/jpeg;base64,{encoded}"},
                 })
 
+        target_instruction = (
+            "本区域类型为捕鱼区，优先判断矩形内是否存在船只、渔船或捕鱼活动线索。"
+            if str(zone_type or "").upper() == "FISHING" else
+            "本区域类型为人员区域，优先判断矩形内是否存在人员、群体或涉水活动。"
+            if zone_type else
+            ""
+        )
         region_instruction = (
-            "画面中的黄色矩形是本次检测区域。人员、船只、渔船或捕鱼线索只有在目标主体/锚点位于矩形内部时才计入事件；矩形外目标一律视为背景，不得用于触发。"
+            "画面中的黄色矩形是本次检测区域，归一化边界为 "
+            f"({detection_region.get('x1')},{detection_region.get('y1')})-({detection_region.get('x2')},{detection_region.get('y2')})。"
+            f"{target_instruction}"
+            "人员、船只、渔船或捕鱼线索只有在目标主体/锚点位于矩形内部时才计入事件；矩形外目标一律视为背景，不得用于触发。"
             if detection_region else
             "本次没有指定检测区域，按整幅画面判断。"
         )
+        system_prompt = str(prompt_config["prompt"] or "")
+        if detection_region:
+            system_prompt += f"\n\n区域判定补充：{region_instruction}"
         messages = [
-            {"role": "system", "content": prompt_config["prompt"]},
+            {"role": "system", "content": system_prompt},
             {
                 "role": "user",
                 "content": image_content + [

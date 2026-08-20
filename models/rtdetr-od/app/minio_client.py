@@ -6,7 +6,7 @@ from pathlib import Path
 from minio import Minio
 from minio.error import S3Error
 
-from cp.service.rtdetr.app.config import MinIOConfig
+from config import MinIOConfig
 
 
 class MinIOClient:

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import cv2
 
-from cp.service.rtdetr.app.config import ModelConfig
+from config import ModelConfig
 
 
 class DetectorService:

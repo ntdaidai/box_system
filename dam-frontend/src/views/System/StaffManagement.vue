@@ -12,14 +12,9 @@
           <span class="metric-label">总数</span>
         </div>
         <div class="metric">
-          <i class="dot idle"></i>
-          <strong class="metric-num">{{ summary.idle }}</strong>
-          <span class="metric-label">空闲</span>
-        </div>
-        <div class="metric">
-          <i class="dot working"></i>
-          <strong class="metric-num">{{ summary.working }}</strong>
-          <span class="metric-label">工作中</span>
+          <i class="dot online"></i>
+          <strong class="metric-num">{{ onlineCount }}</strong>
+          <span class="metric-label">在线</span>
         </div>
         <div class="metric">
           <i class="dot offline"></i>
@@ -27,21 +22,18 @@
           <span class="metric-label">离线</span>
         </div>
       </div>
-      <el-button :icon="Refresh" :loading="loading" @click="loadStaff">刷新</el-button>
     </header>
 
     <section class="resource-control-card staff-toolbar-card">
       <header class="tab-header">
         <div>
           <h3>人员列表</h3>
-          <span>共 {{ total }} 人</span>
         </div>
         <div class="tab-actions panel-toolbar">
           <el-button type="primary" :icon="Plus" @click="openStaffDialog()">新增人员</el-button>
           <el-select v-model="filters.group" class="group-filter-select" placeholder="所属组别" clearable @change="applyFilters">
             <el-option v-for="item in allGroups" :key="item" :label="item" :value="item" />
           </el-select>
-          <el-button type="primary" :icon="Search" @click="applyFilters">筛选</el-button>
         </div>
       </header>
     </section>
@@ -61,7 +53,6 @@
           <div class="col-name name-cell">
             <div class="name-main">
               <strong>{{ row.display_name || '--' }}</strong>
-              <span class="staff-no">{{ row.staff_no }}</span>
             </div>
           </div>
           <div class="col-description staff-description">
@@ -127,18 +118,29 @@
           />
         </el-form-item>
         <el-form-item label="所属组别" prop="group_name">
-          <el-select
-            v-model="staffForm.group_name"
-            class="dialog-group-select"
-            popper-class="staff-filter-popper"
-            filterable
-            allow-create
-            default-first-option
-            clearable
-            placeholder="请选择组别，或输入新组名创建"
-          >
-            <el-option v-for="item in allGroups" :key="item" :label="item" :value="item" />
-          </el-select>
+          <div class="group-select-control">
+            <el-select
+              v-model="staffForm.group_name"
+              class="dialog-group-select"
+              popper-class="staff-filter-popper"
+              filterable
+              clearable
+              placeholder="请选择组别"
+            >
+              <el-option v-for="item in allGroups" :key="item" :label="item" :value="item" />
+            </el-select>
+            <div class="group-manage-actions">
+              <el-button circle size="small" :icon="Plus" title="新增组别" @click="createGroup" />
+              <el-button
+                circle
+                size="small"
+                :icon="Minus"
+                title="删除当前组别"
+                :disabled="!staffForm.group_name"
+                @click="removeGroup"
+              />
+            </div>
+          </div>
         </el-form-item>
         <el-form-item label="联系电话" prop="phone">
           <el-input v-model.trim="staffForm.phone" maxlength="32" placeholder="联系电话（可选）" />
@@ -164,10 +166,10 @@
       @closed="closeQrDialog"
     >
       <div class="qr-body">
-        <div v-if="qrTicket" class="qr-canvas">
-          <img :src="staffQrCodeUrl(qrStaff.id, qrTicket)" alt="登录二维码" class="qr-img" />
+        <div v-if="qrImageSrc" class="qr-canvas">
+          <img :src="qrImageSrc" alt="登录二维码" class="qr-img" @error="handleQrImageError" />
         </div>
-        <div v-else class="qr-loading">生成中...</div>
+        <div v-else class="qr-loading">{{ qrRefreshing ? '生成中...' : '登录码加载失败，请点击刷新登录码' }}</div>
         <div class="qr-permanent">永久有效</div>
         <p class="qr-tip">登录码永久有效；人员用小程序扫此码即可登录，登录后长期有效，删除人员即登录失效</p>
       </div>
@@ -181,10 +183,11 @@
 <script setup>
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { Minus, Plus } from '@element-plus/icons-vue'
 import {
   createStaff,
   deleteStaff,
+  deleteStaffGroup,
   getStaffList,
   getStaffLoginCode,
   staffQrCodeUrl,
@@ -217,6 +220,7 @@ const total = ref(0)
 const rows = ref([])
 const enableLoading = reactive({})
 const summary = ref({ total: 0, idle: 0, offline: 0, working: 0 })
+const serverGroups = ref([])
 const filters = reactive({
   keyword: '',
   group: '',
@@ -224,6 +228,7 @@ const filters = reactive({
 })
 
 const staffRows = computed(() => rows.value)
+const onlineCount = computed(() => Math.max(0, Number(summary.value.total || 0) - Number(summary.value.offline || 0)))
 
 onMounted(() => {
   loadStaff()
@@ -242,12 +247,58 @@ async function loadStaff() {
     rows.value = data.data?.items || data.items || []
     total.value = Number(data.data?.total ?? data.total ?? 0)
     summary.value = data.data?.summary || { total: 0, idle: 0, offline: 0, working: 0 }
-    const serverGroups = data.data?.groups || data.groups
-    if (Array.isArray(serverGroups)) {
-      allGroups.value = mergeGroups(serverGroups)
+    const responseGroups = data.data?.groups || data.groups
+    if (Array.isArray(responseGroups)) {
+      serverGroups.value = responseGroups
+      allGroups.value = mergeGroups(responseGroups)
     }
   } finally {
     loading.value = false
+  }
+}
+
+async function createGroup() {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入组别名称', '新增组别', {
+      confirmButtonText: '添加',
+      cancelButtonText: '取消',
+      inputPattern: /\\S+/,
+      inputErrorMessage: '组别名称不能为空',
+    })
+    const groupName = value.trim()
+    if (allGroups.value.includes(groupName)) {
+      staffForm.group_name = groupName
+      return
+    }
+    allGroups.value = [...allGroups.value, groupName]
+    staffForm.group_name = groupName
+    ElMessage.success('组别已添加，请保存人员后生效')
+  } catch {
+    // 用户取消
+  }
+}
+
+async function removeGroup() {
+  const groupName = staffForm.group_name
+  if (!groupName) return
+  if (GROUP_OPTIONS.includes(groupName)) {
+    ElMessage.warning('固定点位组不可删除')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(`确认删除组别「${groupName}」？`, '删除组别', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+    })
+    if (serverGroups.value.includes(groupName)) {
+      await deleteStaffGroup(groupName)
+    }
+    allGroups.value = allGroups.value.filter((item) => item !== groupName)
+    staffForm.group_name = ''
+    ElMessage.success('组别已删除')
+  } catch (error) {
+    if (error?.response?.data?.detail) ElMessage.error(error.response.data.detail)
   }
 }
 
@@ -370,10 +421,12 @@ const qrVisible = ref(false)
 const qrRefreshing = ref(false)
 const qrStaff = ref(null)
 const qrTicket = ref('')
+const qrImageSrc = ref('')
 
 async function openLoginCodeDialog(row) {
   qrStaff.value = row
   qrTicket.value = ''
+  qrImageSrc.value = ''
   qrVisible.value = true
   await refreshLoginCode()
 }
@@ -381,17 +434,27 @@ async function openLoginCodeDialog(row) {
 async function refreshLoginCode() {
   if (!qrStaff.value) return
   qrRefreshing.value = true
+  qrImageSrc.value = ''
   try {
     const data = await getStaffLoginCode(qrStaff.value.id)
     qrTicket.value = data.data?.ticket || data.ticket
+    qrImageSrc.value = data.data?.qr_image || data.qr_image || staffQrCodeUrl(qrStaff.value.id, qrTicket.value)
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '登录码生成失败，请重试')
   } finally {
     qrRefreshing.value = false
   }
 }
 
+function handleQrImageError() {
+  qrImageSrc.value = ''
+  ElMessage.error('登录码图片加载失败，请点击刷新登录码')
+}
+
 function closeQrDialog() {
   qrStaff.value = null
   qrTicket.value = ''
+  qrImageSrc.value = ''
 }
 </script>
 
@@ -422,11 +485,11 @@ function closeQrDialog() {
   box-shadow: inset 0 1px 0 rgba(147, 206, 241, .08);
 }
 
-/* 顶部概览：标题 + 统计卡片 + 刷新按钮（参考机器狗设备页） */
+/* 顶部概览：标题 + 右侧统计 */
 .staff-overview-bar {
   min-height: 96px;
   display: grid;
-  grid-template-columns: minmax(200px, 1fr) minmax(460px, 1.8fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 18px;
 }
@@ -435,7 +498,7 @@ function closeQrDialog() {
 .status-summary {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-end;
   gap: 0;
   flex-wrap: nowrap;
 }
@@ -463,8 +526,7 @@ function closeQrDialog() {
   box-shadow: 0 0 8px rgba(141, 178, 200, .75);
 }
 
-.metric .dot.idle { background: #48e6bf; box-shadow: 0 0 8px rgba(72, 230, 191, .75); }
-.metric .dot.working { background: #43d4ff; box-shadow: 0 0 8px rgba(67, 212, 255, .75); }
+.metric .dot.online { background: #48e6bf; box-shadow: 0 0 8px rgba(72, 230, 191, .75); }
 .metric .dot.offline { background: #8494a3; box-shadow: none; }
 
 .metric-num {
@@ -499,14 +561,6 @@ function closeQrDialog() {
   line-height: 1.45;
 }
 
-.page-header :deep(.el-button) {
-  min-width: 92px;
-  height: 36px;
-  border-color: #1b7fa5;
-  color: #dcefff;
-  background: #103954;
-  font-weight: 700;
-}
 
 .tab-header span {
   margin: 6px 0 0;
@@ -653,11 +707,6 @@ function closeQrDialog() {
   display: grid;
   gap: 3px;
   justify-items: center;
-}
-
-.staff-no {
-  color: #5f82a0;
-  font-size: 12px;
 }
 
 strong {
@@ -979,6 +1028,28 @@ strong {
 
 .dialog-group-select {
   width: 100%;
+}
+
+.group-select-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.group-select-control .dialog-group-select {
+  flex: 1;
+}
+
+.group-manage-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.group-manage-actions :deep(.el-button) {
+  margin: 0;
+  border-color: rgba(72, 216, 255, .42);
+  color: #bcefff;
+  background: rgba(13, 58, 84, .72);
 }
 
 .staff-meta {

@@ -8,6 +8,7 @@ class ImageRequest(BaseModel):
 
     bucket: str = Field(..., description="MinIO 存储桶名称")
     object_key: str = Field(..., description="MinIO 对象键")
+    detection_region: dict | list[float] | None = Field(default=None, description="归一化检测区域 x1,y1,x2,y2")
 
 
 class VideoRequest(BaseModel):
@@ -16,6 +17,8 @@ class VideoRequest(BaseModel):
     bucket: str = Field(..., description="MinIO 存储桶名称")
     object_key: str = Field(..., description="MinIO 对象键")
     frame_interval: int = Field(default=30, ge=1, le=300, description="抽帧间隔")
+    max_frames: int = Field(default=8, ge=1, le=32, description="代表帧数量")
+    detection_region: dict | list[float] | None = Field(default=None, description="归一化检测区域 x1,y1,x2,y2")
 
 
 class DetectionResult(BaseModel):
@@ -34,6 +37,10 @@ class ImageResponse(BaseModel):
     detections: list[DetectionResult] = Field(..., description="检测结果")
     detection_count: int = Field(..., description="检测目标数量")
     annotated_path: str | None = Field(default=None, description="本地标注图片路径")
+    detection_region: dict | None = Field(default=None, description="归一化检测区域")
+    detection_region_pixels: dict | None = Field(default=None, description="像素检测区域")
+    region_applied: bool = Field(default=False, description="是否应用区域裁剪")
+    region_target: str = Field(default="full_frame", description="区域检测方式")
 
 
 class FrameResult(BaseModel):
@@ -45,6 +52,8 @@ class FrameResult(BaseModel):
     detection_count: int = Field(..., description="检测目标数量")
     annotated_path: str | None = Field(default=None, description="本地标注帧路径")
     annotated_ref: str | None = Field(default=None, description="MinIO 标注帧路径")
+    detection_region: dict | None = Field(default=None, description="归一化检测区域")
+    region_applied: bool = Field(default=False, description="是否应用区域裁剪")
 
 
 class VideoResponse(BaseModel):
@@ -61,6 +70,10 @@ class VideoResponse(BaseModel):
     frames: list[FrameResult] = Field(..., description="各采样帧检测结果")
     detections: list[DetectionResult] = Field(..., description="所有采样帧检测框")
     detection_count: int = Field(..., description="检测目标总数")
+    detection_region: dict | None = Field(default=None, description="归一化检测区域")
+    detection_region_pixels: dict | None = Field(default=None, description="像素检测区域")
+    region_applied: bool = Field(default=False, description="是否应用区域裁剪")
+    region_target: str = Field(default="full_frame", description="区域检测方式")
 
 
 class HealthResponse(BaseModel):

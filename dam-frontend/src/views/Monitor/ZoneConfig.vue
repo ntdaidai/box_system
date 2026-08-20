@@ -2,8 +2,13 @@
   <div class="zone-config-page">
     <header class="config-header">
       <div class="title-block">
-        <h1>区域配置</h1>
+        <h2>区域配置</h2>
         <p>维护摄像头监测区域、画框边界和启用状态</p>
+      </div>
+      <div class="status-summary" aria-label="区域配置统计">
+        <div class="metric"><i class="dot total"></i><strong class="metric-num">{{ zones.length }}</strong><span class="metric-label">总数</span></div>
+        <div class="metric"><i class="dot online"></i><strong class="metric-num">{{ zoneOnlineCount }}</strong><span class="metric-label">在线</span></div>
+        <div class="metric"><i class="dot offline"></i><strong class="metric-num">{{ zoneOfflineCount }}</strong><span class="metric-label">离线</span></div>
       </div>
       <el-button :icon="Refresh" @click="refreshZones">刷新</el-button>
     </header>
@@ -63,11 +68,11 @@
           </span>
           <span>{{ formatZoneTime(zone) }}</span>
           <div class="row-actions">
-            <button type="button" class="row-edit" @click.stop="openZoneEditor(zone.id)">
+            <button type="button" class="row-view" @click.stop="openZoneViewer(zone.id)">
               查看
             </button>
-            <button type="button" class="row-delete" @click.stop="deleteZone(zone.id)">
-              删除
+            <button type="button" class="row-edit" @click.stop="openZoneEditor(zone.id)">
+              编辑
             </button>
           </div>
         </div>
@@ -206,18 +211,36 @@
 
         <aside class="zone-side-editor">
           <div class="side-editor-title">
-            <strong>编辑点位</strong>
+            <strong>{{ editorMode === 'view' ? '查看区域' : '编辑点位' }}</strong>
             <span>{{ selectedZone ? `顶点 ${selectedZone.polygon_points.length}` : '未选择区域' }}</span>
           </div>
           <el-form v-if="selectedZone" label-position="top" class="zone-form">
+          <el-form-item v-if="editorMode === 'create'" label="选择摄像头">
+            <el-select
+              v-model="currentCameraId"
+              class="zone-config-select"
+              popper-class="zone-config-select-popper"
+              placeholder="请选择摄像头"
+              :disabled="selectedZone.polygon_points.length > 0"
+              @change="switchCreateCamera"
+            >
+              <el-option
+                v-for="camera in cameras"
+                :key="camera.id"
+                :label="camera.name"
+                :value="camera.id"
+              />
+            </el-select>
+          </el-form-item>
           <el-form-item label="区域名称">
-            <el-input v-model="selectedZone.zone_name" maxlength="80" placeholder="请输入区域名称" />
+            <el-input v-model="selectedZone.zone_name" maxlength="80" placeholder="请输入区域名称" :disabled="editorMode === 'view'" />
           </el-form-item>
           <el-form-item label="区域类型">
             <el-select
               v-model="selectedZone.zone_type"
               class="zone-config-select"
               popper-class="zone-config-select-popper"
+              :disabled="editorMode === 'view'"
               @change="applyTypeDefaults"
             >
               <el-option label="人员低风险区" value="PERSON_LOW" />
@@ -256,6 +279,7 @@
                     :step="0.1"
                     :min="0"
                     :max="overlayWidth"
+                    :disabled="editorMode === 'view'"
                     @update:model-value="updatePointCoordinate(index, 'x', $event)"
                   />
                 </div>
@@ -267,10 +291,11 @@
                     :step="0.1"
                     :min="0"
                     :max="overlayHeight"
+                    :disabled="editorMode === 'view'"
                     @update:model-value="updatePointCoordinate(index, 'y', $event)"
                   />
                 </div>
-                <button type="button" class="point-delete" @click="deletePoint(index)">删除</button>
+                <button v-if="editorMode !== 'view'" type="button" class="point-delete" @click="deletePoint(index)">删除</button>
               </div>
               <div v-if="!selectedZone.polygon_points.length" class="point-empty">暂无顶点</div>
             </div>
@@ -288,8 +313,8 @@
           </el-form>
           <div v-else class="panel-empty">请选择一个区域进行编辑。</div>
           <div class="side-editor-actions">
-            <el-button class="exit-button" @click="drawDialogVisible = false">完成</el-button>
-            <el-button class="save-button" :loading="saving" @click="saveZones({ includeDraft: true, closeOnSuccess: true })">
+            <el-button class="exit-button" @click="drawDialogVisible = false">{{ editorMode === 'view' ? '关闭' : '完成' }}</el-button>
+            <el-button v-if="editorMode !== 'view'" class="save-button" :loading="saving" @click="saveZones({ includeDraft: true, closeOnSuccess: true })">
               <el-icon><Check /></el-icon>保存配置
             </el-button>
           </div>
@@ -345,7 +370,11 @@ const currentCameraName = computed(() => cameras.value.find((camera) => camera.i
 const zoneLabelFontSize = computed(() => Math.max(16, Math.min(64, overlayWidth.value * 0.022)))
 const vertexAnchorRadius = computed(() => Math.max(6, Math.min(28, overlayWidth.value * 0.007)))
 const vertexIndexFontSize = computed(() => Math.max(13, Math.min(42, overlayWidth.value * 0.016)))
-const drawDialogTitle = computed(() => (editorMode.value === 'create' ? '新增区域' : '区域画框'))
+const drawDialogTitle = computed(() => ({
+  create: '新增区域',
+  edit: '编辑区域',
+  view: '查看区域',
+}[editorMode.value] || '区域配置'))
 const drawTipText = computed(() => {
   if (rectFirstPoint.value) return '已放置左上角，请点击画面确定右下角'
   if (selectedZone.value?.polygon_points?.length) return '区域已生成：可拖拽顶点微调，或修改右侧坐标'
@@ -363,6 +392,9 @@ const pagedZones = computed(() => {
   const start = (zonePage.value - 1) * pageSize
   return zones.value.slice(start, start + pageSize)
 })
+// 区域没有独立连接状态，统计卡片按启用/停用状态映射为在线/离线。
+const zoneOnlineCount = computed(() => zones.value.filter((zone) => zone.enabled !== false).length)
+const zoneOfflineCount = computed(() => zones.value.length - zoneOnlineCount.value)
 
 watch(zones, (items) => {
   const maxPage = Math.max(1, Math.ceil(items.length / pageSize))
@@ -465,6 +497,7 @@ function pointerToUnitPoint(event) {
 }
 
 function handleOverlayClick(event) {
+  if (editorMode.value === 'view') return
   if (!drawing.value || !selectedZone.value) return
   // 已有顶点的区域进入编辑微调，点击画面不再追加点，避免覆盖已有区域
   if (selectedZone.value.polygon_points.length) return
@@ -535,6 +568,10 @@ function createZone() {
 }
 
 function startNewZone() {
+  if (!currentCameraId.value) {
+    ElMessage.warning('请先选择摄像头')
+    return
+  }
   draftZone.value = createZone()
   selectedZoneId.value = draftZone.value.id
   editorMode.value = 'create'
@@ -545,7 +582,19 @@ function startNewZone() {
   drawing.value = true
 }
 
+async function switchCreateCamera() {
+  if (editorMode.value !== 'create' || !draftZone.value || draftZone.value.polygon_points.length) return
+  const draftId = draftZone.value.id
+  zones.value = []
+  selectedZoneId.value = ''
+  streamUrl.value = ''
+  await loadZones()
+  selectedZoneId.value = draftId
+  await refreshStream()
+}
+
 function appendPointToSelectedZone(point) {
+  if (editorMode.value === 'view') return
   if (!selectedZone.value) return
   if (selectedZone.value.polygon_points.length >= 15) {
     ElMessage.warning('单个区域最多支持 15 个顶点')
@@ -574,6 +623,19 @@ function openZoneEditor(zoneId) {
   if (!streamUrl.value) refreshStream()
 }
 
+function openZoneViewer(zoneId) {
+  const source = zones.value.find((zone) => zone.id === zoneId)
+  if (!source) return
+  draftZone.value = cloneZone(source)
+  selectedZoneId.value = draftZone.value.id
+  editorMode.value = 'view'
+  drawing.value = false
+  drawDialogVisible.value = true
+  rectFirstPoint.value = null
+  rectPreview.value = null
+  if (!streamUrl.value) refreshStream()
+}
+
 function handleDrawDialogClosed() {
   drawing.value = false
   dragging.value = null
@@ -588,6 +650,7 @@ function showZoneAnchors(zone) {
 }
 
 function startDrag(zoneId, index) {
+  if (editorMode.value === 'view') return
   if (draftZone.value?.id !== zoneId) return
   selectedZoneId.value = zoneId
   dragging.value = { zoneId, index }
@@ -627,6 +690,7 @@ async function deleteZone(zoneId) {
 }
 
 function deletePoint(index) {
+  if (editorMode.value === 'view') return
   if (!selectedZone.value) return
   selectedZone.value.polygon_points.splice(index, 1)
 }
@@ -663,6 +727,7 @@ function pointCoordinateY(point) {
 }
 
 function updatePointCoordinate(index, axis, value) {
+  if (editorMode.value === 'view') return
   if (!selectedZone.value || !Number.isFinite(Number(value))) return
   const point = selectedZone.value.polygon_points[index]
   if (!point) return
@@ -847,9 +912,9 @@ onMounted(async () => {
   background: #071422;
 }
 .config-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(230px, 1fr) minmax(390px, 1.5fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 16px;
   min-height: 74px;
   margin-bottom: 16px;
@@ -859,6 +924,15 @@ onMounted(async () => {
   background: linear-gradient(90deg, rgba(14, 48, 76, 0.82) 0%, rgba(9, 29, 48, 0.72) 58%, rgba(7, 20, 34, 0.46) 100%);
   box-shadow: inset 0 1px 0 rgba(147, 206, 241, 0.08);
 }
+.status-summary { display: flex; justify-content: flex-end; align-items: center; }
+.metric { min-width: 96px; display: inline-flex; align-items: baseline; gap: 8px; padding: 8px 18px; white-space: nowrap; }
+.metric + .metric { border-left: 1px solid rgba(96, 151, 191, .18); }
+.metric .dot { width: 8px; height: 8px; flex: 0 0 auto; align-self: center; border-radius: 50%; background: #8db2c8; }
+.metric .dot.total { box-shadow: 0 0 8px rgba(141, 178, 200, .75); }
+.metric .dot.online { background: #48e6bf; box-shadow: 0 0 8px rgba(72, 230, 191, .75); }
+.metric .dot.offline { background: #8494a3; }
+.metric-num { color: #f2fbff; font-size: 22px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+.metric-label { color: #8db2c8; font-size: 12px; }
 
 .title-block {
   min-width: 0;
@@ -866,7 +940,7 @@ onMounted(async () => {
   gap: 8px;
 }
 
-.config-header h1 {
+.config-header h2 {
   margin: 0;
   color: #f3f8fd;
   font-size: 25px;
@@ -1153,6 +1227,7 @@ onMounted(async () => {
   justify-content: center;
   gap: 10px;
 }
+.row-view,
 .row-edit,
 .row-delete {
   min-width: auto;
@@ -1164,6 +1239,11 @@ onMounted(async () => {
   font-size: 13px;
   font-weight: 800;
   cursor: pointer;
+}
+.row-view {
+  border-color: rgba(72, 216, 255, 0.5);
+  color: #c7f0ff;
+  background: rgba(20, 102, 137, 0.62);
 }
 .row-edit {
   border-color: rgba(66, 164, 224, 0.5);
@@ -1177,6 +1257,10 @@ onMounted(async () => {
 }
 .row-edit:hover {
   color: #c7f0ff;
+}
+.row-view:hover {
+  color: #ffffff;
+  border-color: rgba(126, 238, 255, 0.82);
 }
 .row-delete:hover {
   color: #ffd5d9;

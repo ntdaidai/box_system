@@ -71,6 +71,8 @@ services:
     # 挂载源码目录，修改后只需 docker compose restart 即可生效
     volumes:
       - ./dam-backend:/app
+      # 无人机模拟巡航从演示视频抽取四张取证图
+      - ./dam-frontend/public/demo:/app/drone-demo:ro
       # 挂载 Jetson 平台工具和设备树，用于读取 GPU/温度/功耗
       - /usr/bin/tegrastats:/usr/bin/tegrastats:ro
       - /usr/sbin/nvidia-smi:/usr/sbin/nvidia-smi:ro
@@ -86,6 +88,8 @@ services:
       - ./dam-miniprogram/wechat-keys/wechat.env
     environment:
       TZ: Asia/Shanghai
+      MODEL_IMPORT_OWNER_UID: "${MODEL_IMPORT_OWNER_UID:-1000}"
+      MODEL_IMPORT_OWNER_GID: "${MODEL_IMPORT_OWNER_GID:-1000}"
       # vLLM 视觉模型
       VLLM_QWEN3VL_URL: "${VLLM_QWEN3VL_URL:-http://localhost:8001}"
       QWEN_CAMERA_SCREENING_ENABLED: "${QWEN_CAMERA_SCREENING_ENABLED:-false}"
@@ -134,6 +138,19 @@ services:
       MAX_VIDEO_SIZE_MB: "${MAX_VIDEO_SIZE_MB:-200}"
       MAX_VIDEO_DURATION_SECONDS: "${MAX_VIDEO_DURATION_SECONDS:-600}"
       VIDEO_DETECTION_FPS: "${VIDEO_DETECTION_FPS:-2}"
+      # 无人机巡航动作：simulation 用于当前演示，real 对接 DJI 航线与拍照指令
+      DRONE_CRUISE_EXECUTOR: "${DRONE_CRUISE_EXECUTOR:-simulation}"
+      DJI_CLOUD_API_BASE_URL: "${DJI_CLOUD_API_BASE_URL:-http://127.0.0.1:6790}"
+      DJI_CLOUD_API_USERNAME: "${DJI_CLOUD_API_USERNAME:-adminPC}"
+      DJI_CLOUD_API_PASSWORD: "${DJI_CLOUD_API_PASSWORD:-adminPC}"
+      DRONE_CRUISE_WORKSPACE_ID: "${DRONE_CRUISE_WORKSPACE_ID:-}"
+      DRONE_CRUISE_DOCK_SN: "${DRONE_CRUISE_DOCK_SN:-}"
+      DRONE_CRUISE_FISHING_FILE_ID: "${DRONE_CRUISE_FISHING_FILE_ID:-}"
+      DRONE_CRUISE_WADING_FILE_ID: "${DRONE_CRUISE_WADING_FILE_ID:-}"
+      DRONE_CRUISE_PAYLOAD_INDEX: "${DRONE_CRUISE_PAYLOAD_INDEX:-88-0-0}"
+      DRONE_CRUISE_OBJECT_PREFIX: "${DRONE_CRUISE_OBJECT_PREFIX:-drone-cruises}"
+      DRONE_CRUISE_FISHING_VIDEO: "${DRONE_CRUISE_FISHING_VIDEO:-/app/drone-demo/fishing.mp4}"
+      DRONE_CRUISE_WADING_VIDEO: "${DRONE_CRUISE_WADING_VIDEO:-/app/drone-demo/wading.mp4}"
       # OnlyOffice / 文档服务
       APP_PORT: "${APP_PORT:-8090}"
       PUBLIC_HOST: "${PUBLIC_HOST:-192.168.31.52}"

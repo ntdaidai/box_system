@@ -760,10 +760,10 @@ const alarmFlowSteps = computed(() => {
       .filter((row) => definition.logTypes.includes(String(row.log_type || '').toUpperCase()))
       .map((row, index) => ({
         key: row.id || `${definition.key}-${row.create_time || row.created_at || index}`,
-        title: row.title || logTypeLabel(row.log_type),
+        title: overviewLogTitle(row, definition),
         status: String(row.status || '').toUpperCase(),
         statusText: timelineStatusLabel(row.status),
-        message: row.message || row.action || row.title || '暂无处理说明',
+        message: overviewLogMessage(row, definition),
         time: row.create_time || row.created_at,
         operator: operatorLabel(row.operator),
       }))
@@ -1713,6 +1713,49 @@ function alertTitle(event) {
 
 function logTypeLabel(value) {
   return ({ TRIGGER: '事件触发', RISK_CHANGE: '风险变化', ACTION: '执行动作', DAM_WORKFLOW: 'DAM_WORKFLOW', MANUAL: '人工操作', REPORT: 'REPORT', RESOLVE: '事件闭环', SYSTEM: '系统记录' })[value] || value || '系统记录'
+}
+
+function overviewLogStatus(row) {
+  const status = String(row?.status || '').toUpperCase()
+  if (['PROCESSING', 'RUNNING', 'PENDING'].includes(status)) return 'running'
+  if (['FAILED', 'FAIL', 'ERROR'].includes(status)) return 'failed'
+  return 'done'
+}
+
+function overviewLogTitle(row, definition) {
+  const type = String(row?.log_type || '').toUpperCase()
+  const status = overviewLogStatus(row)
+  if (type === 'TRIGGER') return '安全事件已触发'
+  if (type === 'DAM_WORKFLOW' || type === 'WORKFLOW') {
+    const planning = /plan|规划/.test(`${row?.action_key || ''} ${row?.title || ''}`.toLowerCase())
+    const label = planning ? '智能路由规划' : '模型工作流执行'
+    return status === 'running' ? `${label}中` : status === 'failed' ? `${label}异常` : `${label}已完成`
+  }
+  if (type === 'ACTION' || type === 'MANUAL') {
+    return status === 'running' ? '联动动作执行中' : status === 'failed' ? '联动动作异常' : '联动动作已完成'
+  }
+  if (type === 'REPORT') return status === 'running' ? '事件处置报告生成中' : status === 'failed' ? '事件处置报告异常' : '事件处置报告已生成'
+  return definition?.label || logTypeLabel(type)
+}
+
+function overviewLogMessage(row, definition) {
+  const type = String(row?.log_type || '').toUpperCase()
+  const status = overviewLogStatus(row)
+  if (type === 'TRIGGER') return '安全事件已创建，系统正在匹配处置流程。'
+  if (type === 'DAM_WORKFLOW' || type === 'WORKFLOW') {
+    const planning = /plan|规划/.test(`${row?.action_key || ''} ${row?.title || ''}`.toLowerCase())
+    if (planning) return status === 'running' ? '系统正在生成处置流程。' : '处置流程已生成。'
+    if (status === 'running') return '处置流程正在执行。'
+    if (status === 'failed') return '处置流程执行异常。'
+    return '处置流程已完成。'
+  }
+  if (type === 'ACTION' || type === 'MANUAL') {
+    if (status === 'running') return '联动动作正在执行。'
+    if (status === 'failed') return '联动动作执行异常。'
+    return '联动动作已完成。'
+  }
+  if (type === 'REPORT') return status === 'running' ? '事件报告正在生成。' : status === 'failed' ? '事件报告生成异常。' : '事件报告已生成并归档。'
+  return definition?.idleText || '流程节点已记录。'
 }
 
 function timelineTone(value) {

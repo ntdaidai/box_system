@@ -126,6 +126,38 @@ docker compose up -d
 | Qwen3-VL-8B | 8003 | 视觉模型                   |
 | WebRTC 网关 | 8002 | 仅回环监听的 RTSP 信令代理 |
 
+## 无人机巡航动作 API
+
+无人机巡航已从测试页面动作中抽成可供 ECA/工作流调用的业务 API。两条固定动作均会产生四张取证图：去程两张、回程两张；照片归档到 MinIO 的
+`drone-cruises/{route_key}/{run_id}/` 目录，并在接口完成后返回四个 `minio_url`。
+
+```text
+GET  /api/v1/drone/routes
+POST /api/v1/drone/cruises/fishing   # 禁渔航线
+POST /api/v1/drone/cruises/wading    # 禁涉水航线
+```
+
+请求需要登录凭证：`Authorization: Bearer <JWT>`。默认模拟模式不要求请求体，传空 JSON 即可；也可以用 `duration_seconds`（1~900）调整模拟时长：
+
+```json
+{}
+```
+
+真实航线模式需要提供或在环境变量中配置以下四项：`workspace_id`（工作空间）、`dock_sn`（机场 SN）、`file_id`（对应航线 KMZ 文件 ID）、`payload_index`（相机负载索引，例如 `88-0-0`）。还可以传 `rth_altitude`（返航高度，默认 50 米）和 `min_battery_capacity`（最低电量阈值，默认 50%）：
+
+```json
+{
+  "workspace_id": "工作空间 ID",
+  "dock_sn": "机场 SN",
+  "file_id": "当前航线文件 ID",
+  "payload_index": "88-0-0",
+  "rth_altitude": 50,
+  "min_battery_capacity": 50
+}
+```
+
+`fishing` 和 `wading` 会分别读取对应的航线文件配置。接口是同步调用，完成巡航和四张照片的 MinIO 归档后返回 `photos` 和 `image_urls`；默认 `DRONE_CRUISE_EXECUTOR=simulation` 用于当前演示联调，切换为 `real` 后才下发 DJI 航线和拍照指令。
+
 ## 安全注意事项
 
 - **生产环境必须**将 `JWT_SECRET` 环境变量设置为强随机字符串

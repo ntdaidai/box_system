@@ -2,8 +2,12 @@ fastapi==0.115.0
 uvicorn==0.30.0
 minio==7.2.0
 python-multipart==0.0.9
-opencv-python-headless==4.10.0.84
-numpy
-Pillow
-ultralytics
-lap>=0.5.12
+# Jetson 基础镜像已提供针对平台优化的 opencv-contrib-python，避免重复安装两套 OpenCV。
+numpy==1.26.4
+Pillow==10.4.0
+matplotlib==3.10.9
+PyYAML==6.0.3
+polars==1.43.2
+nvidia-ml-py==13.610.43
+ultralytics-thop==2.1.6
+lap==0.5.13

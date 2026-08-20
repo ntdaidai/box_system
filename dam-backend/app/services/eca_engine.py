@@ -1024,6 +1024,7 @@ class ECAEngine:
                     "event_type": result.get("event_type"),
                     "node_count": node_count,
                     "edge_count": edge_count,
+                    "final_dag": final_dag,
                     "visual_tasks": result.get("visual_tasks") or [],
                     "event_category": event.event_category,
                     "source_type": instance.source_type,
@@ -1051,6 +1052,7 @@ class ECAEngine:
                         "node_count": node_count,
                         "edge_count": edge_count,
                         "visual_count": len(result.get("visual_tasks") or []),
+                        "final_dag": final_dag,
                     },
                 )
                 db.commit()
@@ -2197,6 +2199,15 @@ class ECAEngine:
                 supplemental_context = screening.get("supplemental_context")
                 if isinstance(supplemental_context, dict) and supplemental_context:
                     camera_data["supplemental_context"] = supplemental_context
+                for key in (
+                    "zone_id",
+                    "zone_name",
+                    "zone_type",
+                    "detection_region",
+                    "detection_region_coordinate_system",
+                ):
+                    if screening.get(key) not in (None, "", [], {}):
+                        camera_data[key] = screening[key]
                 source_video_url = screening.get("source_video_url")
                 video_urls = screening.get("video_urls") or ([source_video_url] if source_video_url else [])
                 media_objects = screening.get("media_objects") or []
@@ -2208,6 +2219,28 @@ class ECAEngine:
                     camera_data["videos"] = video_urls
                 if media_objects:
                     camera_data["media_objects"] = media_objects
+
+            # A camera may have several visual zone event definitions attached
+            # to the same data source. A simulation with an explicit zone must
+            # evaluate only the visual event family represented by that zone;
+            # unrelated configured events remain available for other inputs.
+            zone_type = str(camera_data.get("zone_type") or "").upper()
+            visual_event_codes = {
+                "PERSON_INTRUSION", "PERSON_WATERFRONT", "PERSON_WADING",
+                "BOAT_INTRUSION", "BOAT_STAY", "BOAT_ILLEGAL_FISHING",
+            }
+            allowed_visual_event_codes = {
+                "PERSON_LOW": {"PERSON_INTRUSION"},
+                "PERSON_MEDIUM": {"PERSON_WATERFRONT"},
+                "PERSON_HIGH": {"PERSON_WADING"},
+                "FISHING": {"BOAT_INTRUSION", "BOAT_STAY", "BOAT_ILLEGAL_FISHING"},
+            }.get(zone_type)
+            if allowed_visual_event_codes:
+                events = [
+                    event for event in events
+                    if str(getattr(event, "event_code", "") or "") not in visual_event_codes
+                    or str(getattr(event, "event_code", "") or "") in allowed_visual_event_codes
+                ]
 
             triggered_events = []
             for event in events:
@@ -2299,10 +2332,14 @@ class ECAEngine:
         }
 
         risk_rank = {"LOW": 1, "MEDIUM": 2, "HIGH": 3}
+        zone_id_value = observation.get("zone_id")
+        zone_db_id = int(zone_id_value) if str(zone_id_value or "").isdigit() else None
         if active:
             should_resubmit_workflow = self._should_resubmit_camera_workflow(db, active)
             active.last_observed_at = now
             active.latest_observation = observation
+            if zone_db_id is not None:
+                active.zone_id = zone_db_id
             active.risk_level = risk
             if risk_rank.get(risk, 0) > risk_rank.get(active.max_risk_level, 0):
                 active.max_risk_level = risk
@@ -2320,6 +2357,7 @@ class ECAEngine:
             data_source_id=source.id,
             source_type="camera",
             source_id=source.device_id,
+            zone_id=zone_db_id,
             risk_level=risk,
             max_risk_level=risk,
             state="ACTIVE",

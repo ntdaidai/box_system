@@ -236,6 +236,20 @@ class WorkflowExecutorService:
         inputs.setdefault("media_mode", media_mode)
         inputs.setdefault("max_frames", max_frames)
         inputs.setdefault("fallback_to_frames", fallback_to_frames)
+        nested_sensor = inputs.get("sensor_data") if isinstance(inputs.get("sensor_data"), dict) else {}
+        for key in (
+            "camera_id",
+            "camera_name",
+            "zone_id",
+            "zone_name",
+            "zone_type",
+            "detection_region",
+            "detection_region_coordinate_system",
+        ):
+            if inputs.get(key) in (None, "", [], {}):
+                value = nested_sensor.get(key)
+                if value not in (None, "", [], {}):
+                    inputs[key] = value
         return inputs
 
     def _collect_end_output(
@@ -373,6 +387,17 @@ class WorkflowExecutorService:
                 **media_options,
                 **metadata,
             }
+            for key in (
+                "camera_id",
+                "camera_name",
+                "zone_id",
+                "zone_name",
+                "zone_type",
+                "detection_region",
+                "detection_region_coordinate_system",
+            ):
+                if request_inputs.get(key) not in (None, "", [], {}):
+                    request_data[key] = request_inputs[key]
             if model_category == "local_llm":
                 request_data.setdefault("enable_knowledge_retrieval", True)
                 # The cloud reviewer reads the original event video from the
@@ -692,6 +717,11 @@ class WorkflowExecutorService:
             "qwen_risk_level",
             "camera_id",
             "camera_name",
+            "zone_id",
+            "zone_name",
+            "zone_type",
+            "detection_region",
+            "detection_region_coordinate_system",
             "started_at",
             "create_time",
             "occur_time",
