@@ -217,8 +217,18 @@ import {
   updateStaffEnabled,
 } from '@/api/staff'
 
-// 固定点位组：九号点位组、一号点位组、三号点位组
-const GROUP_OPTIONS = ['九号点位组', '一号点位组', '三号点位组']
+// 固定点位组统一使用阿拉伯数字；兼容数据库中的历史中文数字组名。
+const GROUP_OPTIONS = ['9号点位组', '1号点位组', '3号点位组']
+const LEGACY_GROUP_NAMES = {
+  九号点位组: '9号点位组',
+  一号点位组: '1号点位组',
+  三号点位组: '3号点位组',
+}
+
+function normalizeGroupName(groupName) {
+  const name = String(groupName || '').trim()
+  return LEGACY_GROUP_NAMES[name] || name
+}
 
 // 全部组别：固定三组 + 后端已存在的自定义组（列表筛选、弹窗下拉共用）
 const allGroups = ref([...GROUP_OPTIONS])
@@ -226,7 +236,8 @@ const allGroups = ref([...GROUP_OPTIONS])
 function mergeGroups(serverGroups = []) {
   const seen = new Set(GROUP_OPTIONS)
   const merged = [...GROUP_OPTIONS]
-  for (const g of serverGroups) {
+  for (const rawGroup of serverGroups) {
+    const g = normalizeGroupName(rawGroup)
     if (g && !seen.has(g)) {
       seen.add(g)
       merged.push(g)
@@ -266,7 +277,11 @@ async function loadStaff() {
       group: filters.group || undefined,
       status: filters.status || 'all',
     })
-    rows.value = data.data?.items || data.items || []
+    const responseRows = data.data?.items || data.items || []
+    rows.value = responseRows.map((item) => ({
+      ...item,
+      group_name: normalizeGroupName(item.group_name),
+    }))
     total.value = Number(data.data?.total ?? data.total ?? 0)
     summary.value = data.data?.summary || { total: 0, idle: 0, offline: 0, working: 0 }
     const responseGroups = data.data?.groups || data.groups
@@ -355,7 +370,7 @@ function openStaffDialog(row) {
       staff_no: row.staff_no,
       display_name: row.display_name || '',
       description: row.description || '',
-      group_name: row.group_name || '',
+      group_name: normalizeGroupName(row.group_name),
       phone: row.phone || '',
       openid_bound: !!row.openid_bound,
     })
@@ -385,7 +400,7 @@ async function submitStaff() {
     const payload = {
       display_name: staffForm.display_name.trim(),
       description: staffForm.description || undefined,
-      group_name: staffForm.group_name || undefined,
+      group_name: normalizeGroupName(staffForm.group_name) || undefined,
       phone: staffForm.phone || undefined,
     }
     if (staffForm.id) {
@@ -1085,6 +1100,8 @@ strong {
 
 /* 所属组别下拉（allow-create）popper 深色主题 */
 :global(.staff-filter-popper.el-select__popper) {
+  /* AppDialog 遮罩层为 3400；Element Plus 默认 popper 层级较低会被遮住。 */
+  z-index: 3600 !important;
   border: 1px solid rgba(72, 216, 255, .28);
   background: #082033;
   box-shadow: 0 16px 36px rgba(0, 7, 18, .38);

@@ -40,7 +40,7 @@
   -> COMPLETED
 ```
 
-演示模式不需要工作人员点击接单，也不需要算法上传图片。三类演示图片会在后端启动初始化阶段预置到 MinIO；后续每次演示调用只引用已经存在的 MinIO 地址，不会再次读取本地图片或重复上传。人员涉水和夜间捕鱼返回固定两张图片；洪水事件会从四张预置图片中随机返回两张，第一张为处置前、第二张为处置后。默认从下发到返回现场证据图片约 10 秒，其中前 5 秒为待处理、后 5 秒为处理中。
+演示模式不需要工作人员点击接单，也不需要算法上传图片。演示图片会在后端启动初始化阶段预置到 MinIO；后续每次演示调用只引用已经存在的 MinIO 地址，不会再次读取本地图片或重复上传。人员涉水和夜间捕鱼返回固定两张图片；自然灾害和极端天气会从四张预置应急处置图片中随机返回两张，第一张为处置前、第二张为处置后。默认从下发到返回现场证据图片约 10 秒，其中前 5 秒为待处理、后 5 秒为处理中。
 
 延迟由 `STAFF_TASK_DEMO_DELAY_SECONDS` 配置，默认值为 `10`。该延迟同时用于集成接口和 ECA 自动联动；设置为 `0` 可关闭演示缓冲。
 
@@ -52,13 +52,15 @@
 | --- | --- | --- |
 | `PERSON_WADING` | 人员涉水事件 | `data/worker_pictures/nowater` |
 | `NIGHT_FISHING` | 夜间捕鱼事件 | `data/worker_pictures/nofishing` |
-| `FLOOD_EVENT` | 洪水事件 | `data/worker_pictures/flood`（预置 4 张，每次随机返回 2 张） |
+| `NATURAL_DISASTER_EVENT` | 自然灾害事件 | `data/worker_pictures/flood`（预置 4 张，每次随机返回 2 张） |
+| `EXTREME_WEATHER_EVENT` | 极端天气事件 | `data/worker_pictures/flood`（预置 4 张通用应急处置图，每次随机返回 2 张） |
 
 当前也兼容以下历史别名，但算法侧不要使用别名：
 
 - 人员类：`PERSON_HIGH`、`人员涉水`、`人员涉水事件`、`人员亲水`、`人员闯入`
 - 捕鱼类：`BOAT_ILLEGAL_FISHING`、`FISHING`、`夜间捕鱼`、`夜间捕鱼事件`、`非法捕鱼`、`禁渔事件`
-- 洪水类：`FLOOD`、`FLOOD_WARNING`、`FLOOD_HIGH`、`洪水`、`洪水事件`、`洪涝`、`洪涝事件`
+- 自然灾害类：`FLOOD_EVENT`、`FLOOD`、`FLOOD_WARNING`、`FLOOD_HIGH`、`洪水`、`洪水事件`、`洪涝`、`洪涝事件`、`自然灾害`
+- 极端天气类：`EXTREME_WEATHER`、`暴雨`、`台风`、`极端天气`
 
 ## 3. 算法下发人工处置任务
 
@@ -74,7 +76,7 @@ Content-Type: application/json
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `event_type` | string | 是 | `PERSON_WADING`、`NIGHT_FISHING` 或 `FLOOD_EVENT` |
+| `event_type` | string | 是 | `PERSON_WADING`、`NIGHT_FISHING`、`NATURAL_DISASTER_EVENT` 或 `EXTREME_WEATHER_EVENT` |
 | `assignee` | string | 否 | 指定处理人名称，最长 128 个字符；不指定时由工作人员接单 |
 | `group_name` | string | 否 | 接收任务的处置组名称，最长 128 个字符 |
 | `note` | string | 否 | 给工作人员的任务说明，最长 500 个字符；不传时服务端自动生成 |
@@ -184,7 +186,8 @@ curl -X POST \
 
 - `PERSON_WADING`：`已完成现场核查，人员已成功驱离，并已上传驱离前后照片。`
 - `NIGHT_FISHING`：`已完成现场核查，夜间捕鱼行为已成功制止并驱离，并已上传驱离前后照片。`
-- `FLOOD_EVENT`：`已完成洪水现场核查和应急处置，并已上传处置前后照片。`
+- `NATURAL_DISASTER_EVENT`：`已完成自然灾害现场核查和应急处置，并已上传处置前后照片。`
+- `EXTREME_WEATHER_EVENT`：`已完成极端天气现场核查和应急处置，并已上传处置前后照片。`
 
 ## 4. Web 端提交人工处置结果
 
@@ -202,7 +205,7 @@ Content-Type: multipart/form-data
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `event_type` | string | 是 | `PERSON_WADING`、`NIGHT_FISHING` 或 `FLOOD_EVENT` |
+| `event_type` | string | 是 | `PERSON_WADING`、`NIGHT_FISHING`、`NATURAL_DISASTER_EVENT` 或 `EXTREME_WEATHER_EVENT` |
 | `result` | string | 是 | `DRIVEN_AWAY`、`LEFT_BY_SELF` 或 `OTHER` |
 | `remark` | string | 否 | 现场处置文本，最长 500 个字符 |
 | `photos` | file | 是 | 必须重复提交两次，第一张为驱离前，第二张为驱离后；支持 JPG、PNG、WEBP，单张不超过 10MB |
@@ -273,7 +276,7 @@ Content-Type: multipart/form-data
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `phase` | string | 第一次传 `before`，第二次传 `after` |
-| `event_type` | string | `PERSON_WADING`、`NIGHT_FISHING` 或 `FLOOD_EVENT` |
+| `event_type` | string | `PERSON_WADING`、`NIGHT_FISHING`、`NATURAL_DISASTER_EVENT` 或 `EXTREME_WEATHER_EVENT` |
 | `operator` | string | 可选，处理人名称 |
 | `photo` | file | 当前阶段的一张现场图片 |
 

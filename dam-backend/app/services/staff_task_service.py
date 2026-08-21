@@ -16,7 +16,8 @@ from app.services.safety_event_runtime_service import safety_event_runtime_servi
 STAFF_EVENT_TYPE_LABELS = {
     "PERSON_WADING": "人员涉水事件",
     "NIGHT_FISHING": "夜间捕鱼事件",
-    "FLOOD_EVENT": "洪水事件",
+    "NATURAL_DISASTER_EVENT": "自然灾害事件",
+    "EXTREME_WEATHER_EVENT": "极端天气事件",
 }
 
 STAFF_EVENT_TYPE_ALIASES = {
@@ -33,14 +34,25 @@ STAFF_EVENT_TYPE_ALIASES = {
     "夜间捕鱼事件": "NIGHT_FISHING",
     "非法捕鱼": "NIGHT_FISHING",
     "禁渔事件": "NIGHT_FISHING",
-    "FLOOD_EVENT": "FLOOD_EVENT",
-    "FLOOD": "FLOOD_EVENT",
-    "FLOOD_WARNING": "FLOOD_EVENT",
-    "FLOOD_HIGH": "FLOOD_EVENT",
-    "洪水": "FLOOD_EVENT",
-    "洪水事件": "FLOOD_EVENT",
-    "洪涝": "FLOOD_EVENT",
-    "洪涝事件": "FLOOD_EVENT",
+    # 历史“洪水事件”统一归入自然灾害，不再作为配置侧独立事件类型展示。
+    "NATURAL_DISASTER_EVENT": "NATURAL_DISASTER_EVENT",
+    "NATURAL_DISASTER": "NATURAL_DISASTER_EVENT",
+    "FLOOD_EVENT": "NATURAL_DISASTER_EVENT",
+    "FLOOD": "NATURAL_DISASTER_EVENT",
+    "FLOOD_WARNING": "NATURAL_DISASTER_EVENT",
+    "FLOOD_HIGH": "NATURAL_DISASTER_EVENT",
+    "洪水": "NATURAL_DISASTER_EVENT",
+    "洪水事件": "NATURAL_DISASTER_EVENT",
+    "洪涝": "NATURAL_DISASTER_EVENT",
+    "洪涝事件": "NATURAL_DISASTER_EVENT",
+    "自然灾害": "NATURAL_DISASTER_EVENT",
+    "自然灾害事件": "NATURAL_DISASTER_EVENT",
+    "EXTREME_WEATHER_EVENT": "EXTREME_WEATHER_EVENT",
+    "EXTREME_WEATHER": "EXTREME_WEATHER_EVENT",
+    "极端天气": "EXTREME_WEATHER_EVENT",
+    "极端天气事件": "EXTREME_WEATHER_EVENT",
+    "暴雨": "EXTREME_WEATHER_EVENT",
+    "台风": "EXTREME_WEATHER_EVENT",
 }
 
 
@@ -49,7 +61,7 @@ def normalize_staff_event_type(value: str) -> str:
     text = str(value or "").strip()
     canonical = STAFF_EVENT_TYPE_ALIASES.get(text.upper(), STAFF_EVENT_TYPE_ALIASES.get(text))
     if not canonical:
-        raise ValueError("人工处置事件类型仅支持 PERSON_WADING、NIGHT_FISHING 或 FLOOD_EVENT")
+        raise ValueError("人工处置事件类型仅支持 PERSON_WADING、NIGHT_FISHING、NATURAL_DISASTER_EVENT 或 EXTREME_WEATHER_EVENT")
     return canonical
 
 
@@ -109,7 +121,8 @@ class StaffTaskService:
         remarks = {
             "PERSON_WADING": "已完成现场核查，人员已成功驱离，并已上传驱离前后照片。",
             "NIGHT_FISHING": "已完成现场核查，夜间捕鱼行为已成功制止并驱离，并已上传驱离前后照片。",
-            "FLOOD_EVENT": "已完成洪水现场核查和应急处置，并已上传处置前后照片。",
+            "NATURAL_DISASTER_EVENT": "已完成自然灾害现场核查和应急处置，并已上传处置前后照片。",
+            "EXTREME_WEATHER_EVENT": "已完成极端天气现场核查和应急处置，并已上传处置前后照片。",
         }
         return self.complete_manual_task(
             db,

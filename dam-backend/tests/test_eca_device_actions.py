@@ -14,7 +14,7 @@ from sqlalchemy.pool import StaticPool
 from app.core.database import Base
 from app.models.event_action import EventActionConfig
 from app.models.event_library import EventLibrary
-from app.models.safety_integration import SafetyEventEvidence, SafetyEventInstance
+from app.models.safety_integration import SafetyEventEvidence, SafetyEventInstance, SafetyEventTimelineLog
 from app.models.safety_event_task import SafetyEventTask
 from app.services.eca_engine import ECAEngine
 from app.services.dam_event_report_service import DamEventReportService
@@ -108,7 +108,7 @@ class EcaDeviceActionTests(unittest.IsolatedAsyncioTestCase):
             event_id=1,
             step_order=1,
             action_type="machine_dog_dispatch",
-            # 兼容旧流程编辑器保存的逻辑路线，运行时应规范为唯一的 all 路线。
+            # 路线标识应保留为实际执行方向。
             route_id="route-a",
             config_json={"machine_dog_id": "dog-01"},
         )
@@ -119,8 +119,8 @@ class EcaDeviceActionTests(unittest.IsolatedAsyncioTestCase):
             result = await ECAEngine().execute_machine_dog_step(step, {}, self.db)
 
         self.assertEqual(len(result["evidences"]), 4)
-        self.assertEqual(result["route_id"], "all")
-        self.assertTrue(all(item["metadata"]["route_id"] == "all" for item in result["evidences"]))
+        self.assertEqual(result["route_id"], "route-a")
+        self.assertTrue(all(item["metadata"]["route_id"] == "route-a" for item in result["evidences"]))
         ECAEngine._persist_action_evidences(self.db, self.instance, result)
         self.db.commit()
         rows = self.db.query(SafetyEventEvidence).all()
@@ -208,7 +208,19 @@ class EcaDeviceActionTests(unittest.IsolatedAsyncioTestCase):
             is_activate=True,
         )
 
-        self.assertEqual(ECAEngine._staff_event_type(event, {}), "FLOOD_EVENT")
+        self.assertEqual(ECAEngine._staff_event_type(event, {}), "NATURAL_DISASTER_EVENT")
+
+    def test_staff_action_infers_extreme_weather_event_type(self):
+        event = EventLibrary(
+            id=1,
+            event_name="库区暴雨预警",
+            event_code="RAINSTORM_WARNING",
+            event_category="NATURAL_DISASTER",
+            risk_level=3,
+            is_activate=True,
+        )
+
+        self.assertEqual(ECAEngine._staff_event_type(event, {}), "EXTREME_WEATHER_EVENT")
 
     def test_flood_demo_selects_two_of_four_prepared_minio_pictures(self):
         service = StaffTaskMediaService()
@@ -220,12 +232,12 @@ class EcaDeviceActionTests(unittest.IsolatedAsyncioTestCase):
             }
             for index in range(1, 5)
         ]
-        service._prepared_demo_pictures = {"FLOOD_EVENT": pictures}
+        service._prepared_demo_pictures = {"NATURAL_DISASTER_EVENT": pictures}
         with patch(
             "app.services.staff_task_media_service.random.sample",
             return_value=[pictures[3], pictures[1]],
         ):
-            selected = service.get_prepared_demo_pictures("FLOOD_EVENT")
+            selected = service.get_prepared_demo_pictures("NATURAL_DISASTER_EVENT")
 
         self.assertEqual([item["phase"] for item in selected], ["before", "after"])
         self.assertEqual(
@@ -299,7 +311,151 @@ class EcaDeviceActionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(execution_order, ["workflow", "actions", "report"])
 
-    def test_report_uses_only_one_representative_linkage_image(self):
+    async def test_supplemental_context_is_applied_before_workflow_and_actions(self):
+        self.db.add(EventLibrary(
+            id=1,
+            event_name="人员闯入",
+            event_code="PERSON_INTRUSION",
+            event_category="PERSON_SAFETY",
+            risk_level=2,
+            is_activate=True,
+        ))
+        self.db.commit()
+        engine = ECAEngine()
+        execution_order = []
+
+        async def plan(*_args, **_kwargs):
+            execution_order.append("workflow")
+            return {"final_dag": {}, "execution_result": {"status": "success"}}
+
+        async def execute_actions(*_args, **_kwargs):
+            execution_order.append("actions")
+            return {
+                "success": True,
+                "steps": [],
+                "resource_info": {"original_steps_count": 0, "executed_steps_count": 0, "skipped_steps_count": 0},
+            }
+
+        def apply_context(*_args, **_kwargs):
+            execution_order.append("context")
+            return {"escalated": False, "risk_before": "MEDIUM", "risk_after": "MEDIUM"}
+
+        with patch("app.services.eca_engine.SessionLocal", return_value=self.db), \
+             patch("app.services.supplemental_context_service.supplemental_context_service.apply", side_effect=apply_context), \
+             patch.object(engine, "plan_dam_workflow", new=AsyncMock(side_effect=plan)), \
+             patch.object(engine, "execute_configured_actions", new=AsyncMock(side_effect=execute_actions)), \
+             patch.object(engine, "generate_dam_event_report"):
+            await engine.execute_event_actions(
+                1,
+                self.instance.id,
+                {"supplemental_context": {"context_type": "DAM_DISCHARGE", "active": True}},
+            )
+
+        self.assertEqual(execution_order, ["context", "workflow", "actions"])
+
+    async def test_risk_escalation_appends_only_the_configured_staff_policy(self):
+        event = EventLibrary(
+            id=1,
+            event_name="人员闯入",
+            event_code="PERSON_INTRUSION",
+            event_category="PERSON_SAFETY",
+            risk_level=2,
+            is_activate=True,
+        )
+        policy_step = EventActionConfig(
+            id=101,
+            event_id=1,
+            step_order=99,
+            action_type="staff_task",
+            route_id="安全巡查组",
+            config_json={"risk_escalation_only": True},
+            is_activate=True,
+        )
+        self.instance.latest_observation = {
+            "risk_escalation": {
+                "escalated": True,
+                "from": "MEDIUM",
+                "to": "HIGH",
+                "reason": "泄洪期间禁止人员进入",
+            },
+        }
+        self.instance.risk_level = "HIGH"
+        self.instance.max_risk_level = "HIGH"
+        self.instance.status = "COMPLETED"
+        self.instance.state = "RESOLVED"
+        self.db.add_all([event, policy_step])
+        self.db.commit()
+        engine = ECAEngine()
+        action_result = {
+            "success": True,
+            "steps": [{
+                "action_type": "staff_task",
+                "success": True,
+                "result": {"requires_manual_completion": True},
+            }],
+            "resource_info": {"original_steps_count": 1, "executed_steps_count": 1, "skipped_steps_count": 0},
+        }
+        with patch.object(engine, "execute_configured_actions", new=AsyncMock(return_value=action_result)) as execute_actions:
+            result = await engine.execute_risk_escalation_staff_actions(self.db, self.instance)
+
+        self.assertTrue(result["dispatched"])
+        self.assertTrue(result["pending"])
+        self.assertEqual(self.instance.status, "PROCESSING")
+        self.assertEqual(self.instance.state, "ACTIVE")
+        self.assertEqual(execute_actions.await_args.kwargs["execution_phase"], "risk_escalation")
+        logs = self.db.query(SafetyEventTimelineLog).all()
+        messages = [row.message for row in logs]
+        self.assertTrue(any(row.title == "风险升级追加人工处置" for row in logs))
+        self.assertTrue(any(row.title == "风险升级重新打开事件" for row in logs))
+        self.assertTrue(any("报告等待现场取证完成后更新" in message for message in messages))
+
+    def test_risk_escalation_requires_low_or_medium_to_high_transition(self):
+        self.instance.latest_observation = {
+            "risk_escalation": {"escalated": True, "from": "MEDIUM", "to": "HIGH"},
+        }
+        self.assertTrue(ECAEngine._has_high_risk_escalation(self.instance))
+        self.instance.latest_observation["risk_escalation"] = {"escalated": True, "from": "HIGH", "to": "HIGH"}
+        self.assertFalse(ECAEngine._has_high_risk_escalation(self.instance))
+
+    def test_knowledge_risk_is_promoted_only_after_model_returns_high(self):
+        self.instance.latest_observation = {
+            "risk_escalation": {
+                "pending_model_review": True,
+                "escalated": False,
+                "from": "LOW",
+                "to": "LOW",
+                "reason": "泄洪期间禁止人员进入",
+                "knowledge_hits": [{"chunk_id": "DISCHARGE-PERSON-001"}],
+            },
+        }
+        workflow_payload = {
+            "execution_result": {
+                "node_results": [{
+                    "node_id": "action_report",
+                    "status": "success",
+                    "output": {
+                        "inference_result": {
+                            "risk_level": "high",
+                            "detailed_scene_analysis": "人员位于泄洪影响区域。",
+                            "risk_reasoning": "泄洪期间进入滩涂存在冲刷和溺水风险。",
+                            "impact_assessment": "存在人员安全风险。",
+                            "response_plan": "立即安排现场处置。",
+                            "monitoring_suggestions": "持续监测。",
+                        },
+                    },
+                }],
+            },
+        }
+
+        self.assertTrue(ECAEngine()._apply_pending_model_risk_escalation(
+            self.instance, workflow_payload, self.db,
+        ))
+        self.assertEqual(self.instance.risk_level, "HIGH")
+        self.assertTrue(self.instance.latest_observation["risk_escalation"]["escalated"])
+        titles = [row.title for row in self.db.query(SafetyEventTimelineLog).all()]
+        self.assertIn("模型确认风险升级", titles)
+
+    def test_report_uses_one_representative_image_per_linkage_object(self):
         evidence = [
             SimpleNamespace(
                 evidence_type="DRONE_IMAGE",
@@ -318,11 +474,70 @@ class EcaDeviceActionTests(unittest.IsolatedAsyncioTestCase):
             )
             for index in range(1, 5)
         )
+        evidence.extend(
+            SimpleNamespace(
+                evidence_type="IMAGE",
+                source_type="STAFF",
+                file_url=f"http://minio.test/staff/{index}.png",
+                description=f"人工处置取证 {index}",
+            )
+            for index in range(1, 3)
+        )
 
+        selected_items = DamEventReportService.select_linkage_report_images(evidence)
         selected = DamEventReportService.select_linkage_report_image(evidence)
 
+        self.assertEqual([item["linkage_label"] for item in selected_items], ["无人机", "机器狗", "人工处置"])
+        self.assertEqual(len(selected_items), 3)
         self.assertEqual(selected["url"], "http://minio.test/drone/1.png")
         self.assertEqual(selected["role"], "linkage_representative")
+        self.assertEqual(selected["linkage_label"], "无人机")
+        self.assertIn("无人机联动代表性取证图", selected["caption"])
+
+    def test_report_keeps_model_frame_and_machine_dog_evidence_distinct(self):
+        service = DamEventReportService()
+        images = [
+            {
+                "url": "http://minio.test/qwen-4b/frame.jpg",
+                "role": "model_representative",
+                "caption": "4B 初筛代表性抽帧",
+            },
+            {
+                "url": "http://minio.test/machine-dog/point-1.png",
+                "role": "linkage_representative",
+                "linkage_label": "机器狗",
+                "caption": "机器狗联动代表性取证图",
+            },
+        ]
+
+        self.assertIn("1 张 4B 代表性抽帧", service.evidence_summary(images, []))
+        self.assertIn("机器狗联动代表性取证图 1 张", service.evidence_summary(images, []))
+        self.assertIn("4B代表性抽帧1张", service.frame_evidence_summary(images, []))
+        self.assertIn("机器狗联动取证图片1张", service.frame_evidence_summary(images, []))
+
+    def test_report_repairs_legacy_model_url_from_persisted_minio_reference(self):
+        service = DamEventReportService()
+        items = [{
+            "url": "cloud-tasks/workflow-media/event/frame.jpg",
+            "source": {
+                "bucket": "dam",
+                "object_name": "qwen4b-proxy-media/event/representative-frame.jpg",
+            },
+        }]
+        with patch.object(
+            service,
+            "read_minio_or_http_bytes",
+            side_effect=lambda value: b"image" if value.startswith("dam/") else None,
+        ) as read_image:
+            selected = service.select_model_report_image(items)
+
+        self.assertEqual(
+            selected["url"],
+            "dam/qwen4b-proxy-media/event/representative-frame.jpg",
+        )
+        read_image.assert_called_once_with(
+            "dam/qwen4b-proxy-media/event/representative-frame.jpg",
+        )
 
 
 if __name__ == "__main__":

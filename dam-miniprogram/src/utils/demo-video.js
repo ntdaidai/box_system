@@ -1,7 +1,7 @@
 import { DEMO_MONITOR_VIDEO } from './config'
 
-const USER_VIDEO_NAME = 'fixed-monitor-video-8e9d32a7.mp4'
-const EXPECTED_VIDEO_SIZE = 860756
+const USER_VIDEO_NAME = 'fixed-monitor-video-cropped-424ee849.mp4'
+const EXPECTED_VIDEO_SIZE = 1157496
 let preparePromise = null
 
 /**

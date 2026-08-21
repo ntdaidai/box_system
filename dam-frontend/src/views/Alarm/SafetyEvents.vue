@@ -53,6 +53,7 @@
         <el-option label="低风险" value="LOW" />
         <el-option label="中风险" value="MEDIUM" />
         <el-option label="高风险" value="HIGH" />
+        <el-option label="误报" value="FALSE_ALARM" />
       </el-select>
       <el-select
         v-model="query.status"
@@ -111,7 +112,7 @@
         </el-table-column>
         <el-table-column label="风险等级" prop="risk_level" min-width="116" sortable="custom" align="center" header-align="center">
           <template #default="{ row }">
-            <el-tag :type="riskTag(row.risk_level)" effect="dark">{{ riskLevelLabel(row.risk_level, row.risk_label) }}</el-tag>
+            <el-tag :type="riskTag(row.risk_level, row.status)" effect="dark">{{ riskLevelLabel(row.risk_level, row.risk_label, row.status) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="来源" min-width="108" align="center" header-align="center">
@@ -416,11 +417,13 @@ function instanceSequence(value) {
   return matched?.[1] || ''
 }
 
-function riskTag(value) {
+function riskTag(value, status) {
+  if (status === 'FALSE_ALARM') return 'info'
   return ({ LOW: 'success', MEDIUM: 'warning', HIGH: 'danger' })[value] || 'info'
 }
 
-function riskLevelLabel(value, fallback) {
+function riskLevelLabel(value, fallback, status) {
+  if (status === 'FALSE_ALARM') return '误报'
   return fallback || ({ LOW: '低风险', MEDIUM: '中风险', HIGH: '高风险' })[value] || '未知'
 }
 

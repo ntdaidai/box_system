@@ -31,33 +31,29 @@
     <view class="section">
       <view class="section-title">监控视频</view>
       <view class="video-box">
-        <video
-          v-if="demoVideoUrl"
-          class="video-frame"
-          :src="demoVideoUrl"
-          autoplay
-          loop
-          muted
-          :controls="false"
-          :show-center-play-btn="false"
-          :show-play-btn="false"
-          :show-fullscreen-btn="false"
-          :show-mute-btn="false"
-          :show-progress="false"
-          :enable-progress-gesture="false"
-          :vslide-gesture="false"
-          object-fit="cover"
-          @play="handleVideoPlay"
-          @error="handleVideoError"
-        />
+        <view v-if="demoVideoUrl" class="video-crop-layer">
+          <video
+            class="video-frame"
+            :src="demoVideoUrl"
+            autoplay
+            loop
+            muted
+            :controls="false"
+            :show-center-play-btn="false"
+            :show-play-btn="false"
+            :show-fullscreen-btn="false"
+            :show-mute-btn="false"
+            :show-progress="false"
+            :enable-progress-gesture="false"
+            :vslide-gesture="false"
+            object-fit="cover"
+            @play="handleVideoPlay"
+            @error="handleVideoError"
+          />
+        </view>
         <view v-else class="video-empty">正在准备监控录像</view>
         <view v-if="videoError" class="video-error">{{ videoError }}</view>
       </view>
-    </view>
-
-    <view v-if="event" class="section">
-      <view class="section-title">当前系统动作</view>
-      <view class="action-panel">{{ event.system_action_text }}</view>
     </view>
 
     <view class="section">
@@ -70,7 +66,12 @@
           class="evidence-item"
           @tap="previewEvidence(item)"
         >
-          <image v-if="isImageEvidence(item)" :src="absoluteEvidenceUrl(item.url)" mode="aspectFill" />
+          <image
+            v-if="isImageEvidence(item) && !evidenceErrors[item.id]"
+            :src="absoluteEvidenceUrl(item.url)"
+            mode="aspectFill"
+            @error="handleEvidenceError(item)"
+          />
           <video
             v-else-if="isVideoEvidence(item)"
             class="evidence-video"
@@ -79,21 +80,11 @@
             show-center-play-btn
             object-fit="contain"
           />
-          <view v-else class="evidence-file">{{ item.evidence_type }}</view>
+          <view v-else-if="isImageEvidence(item)" class="evidence-file">图片加载失败</view>
+          <view v-else class="evidence-file">暂不支持预览</view>
           <text>{{ item.description || '现场证据' }}</text>
         </view>
       </scroll-view>
-    </view>
-
-    <view class="section">
-      <view class="section-title">联动执行线路</view>
-      <view v-if="linkageLines.length === 0" class="timeline-empty">暂无联动线路</view>
-      <view v-else class="linkage-list">
-        <view v-for="item in linkageLines" :key="item.id" class="linkage-item">
-          <view>{{ item.type_label }}</view>
-          <text>{{ item.target }}{{ item.route ? ' / ' + item.route : '' }}</text>
-        </view>
-      </view>
     </view>
 
     <button
@@ -151,17 +142,22 @@
     </view>
 
     <view class="section">
-      <view class="section-title">处置过程</view>
+      <view class="section-title-row">
+        <view class="section-title">处置过程</view>
+        <button v-if="timelineCanExpand" class="timeline-toggle" @tap="toggleTimeline">
+          {{ timelineExpanded ? '收起说明' : '展开说明' }}
+        </button>
+      </view>
       <view v-if="timeline.length === 0" class="timeline-empty">暂无处置记录</view>
       <view v-else class="timeline">
-        <view v-for="item in timeline" :key="item.action_id" class="timeline-item">
+        <view v-for="item in visibleTimeline" :key="item.action_id" class="timeline-item">
           <view class="dot"></view>
           <view class="timeline-head">
             <view class="timeline-stage">{{ item.stageText }}</view>
             <view class="timeline-time">{{ item.timeText }}</view>
           </view>
           <view class="timeline-title">{{ item.titleText }}</view>
-          <view v-if="item.messageText" class="timeline-message">{{ item.messageText }}</view>
+          <view v-if="timelineExpanded && item.messageText" class="timeline-message">{{ item.messageText }}</view>
         </view>
       </view>
     </view>
@@ -180,11 +176,13 @@ export default {
   data() {
     return {
       eventId: '',
+      isDemo: false,
       event: null,
       staff: null,
       timeline: [],
       evidence: [],
-      linkageLines: [],
+      evidenceErrors: {},
+      timelineExpanded: false,
       riskClassName: '',
       startTime: '--',
       durationText: '--',
@@ -202,16 +200,29 @@ export default {
   computed: {
     canNavigate() {
       return Boolean(this.event && Number(this.event.latitude) && Number(this.event.longitude))
+    },
+
+    visibleTimeline() {
+      return this.timeline
+    },
+
+    timelineCanExpand() {
+      return this.timeline.some((item) => Boolean(item.messageText))
     }
   },
 
   onLoad(options) {
     this.eventId = options?.event_id || ''
+    this.isDemo = options?.demo === '1'
     this.staff = readCache('mini-staff', null)
     this.prepareMonitorVideo()
-    this.restoreCachedDetail()
-    this.loadDetail()
-    this.connectEventSocket()
+    if (this.isDemo) {
+      this.loadDemoDetail()
+    } else {
+      this.restoreCachedDetail()
+      this.loadDetail()
+      this.connectEventSocket()
+    }
     this.prepareBroadcastRecorder()
   },
 
@@ -224,7 +235,8 @@ export default {
   },
 
   onPullDownRefresh() {
-    this.loadDetail().finally(() => uni.stopPullDownRefresh())
+    const action = this.isDemo ? this.loadDemoDetail() : this.loadDetail()
+    Promise.resolve(action).finally(() => uni.stopPullDownRefresh())
   },
 
   methods: {
@@ -256,6 +268,84 @@ export default {
       this.applyDetailData(cached)
     },
 
+    loadDemoDetail() {
+      const cached = readCache(`demo-event:${this.eventId}`, null)
+      if (!cached) {
+        uni.showToast({ title: '演示事件数据已失效，请返回列表重试', icon: 'none' })
+        return Promise.resolve()
+      }
+      const status = cached.business_status || 'pending'
+      const startedAt = Number(cached.started_at || Math.floor(Date.now() / 1000))
+      const completedAt = Number(cached.completed_at || 0)
+      const statusConfig = {
+        pending: { mini: 'WAITING_MANUAL', miniLabel: '等待人工处理', label: '待处理' },
+        processing: { mini: 'MANUAL_PROCESSING', miniLabel: '正在人工处理', label: '处理中' },
+        completed: { mini: 'COMPLETED', miniLabel: '已完成', label: '已完成' }
+      }[status] || { mini: 'WAITING_MANUAL', miniLabel: '等待人工处理', label: '待处理' }
+      const duration = Number(cached.duration_seconds || (completedAt ? completedAt - startedAt : 0))
+      const event = {
+        ...cached,
+        event_id: cached.event_id || cached.id,
+        event_type: cached.event_type || cached.event_name || '风险事件',
+        monitor_point: cached.monitor_point || '9号监测点',
+        business_status: status,
+        business_status_label: cached.business_status_label || statusConfig.label,
+        mini_status: cached.mini_status || statusConfig.mini,
+        mini_status_label: cached.mini_status_label || statusConfig.miniLabel,
+        duration_seconds: Math.max(0, duration),
+        can_start_manual: false,
+        can_submit_result: false
+      }
+      const timeline = this.buildDemoTimeline(event, startedAt, completedAt)
+      this.applyDetailData({ event, timeline, evidence: [], staff: this.staff })
+      return Promise.resolve()
+    },
+
+    buildDemoTimeline(event, startedAt, completedAt) {
+      const eventTitle = event.event_name || event.event_type
+      const groupName = event.assigned_group_name || '现场处置组'
+      const handlerName = event.handler_name || event.assignee || '值班人员'
+      const timeline = [
+        {
+          action_id: `${event.event_id}-trigger`,
+          log_type: 'TRIGGER',
+          stage: 'TRIGGER',
+          title: '事件触发',
+          message: `${event.monitor_point}检测到${eventTitle}，系统已生成事件并完成风险研判。`,
+          created_at: startedAt
+        },
+        {
+          action_id: `${event.event_id}-dispatch`,
+          log_type: 'ACTION',
+          stage: 'DISPATCH',
+          title: `任务下发至${groupName}`,
+          message: `事件已按任务组下发，${groupName}内值班人员均可查看并接受该任务。`,
+          created_at: startedAt + 30
+        }
+      ]
+      if (['processing', 'completed'].includes(event.business_status)) {
+        timeline.push({
+          action_id: `${event.event_id}-processing`,
+          log_type: 'MANUAL',
+          stage: 'PROCESSING',
+          title: `${handlerName}开始现场处置`,
+          message: `${handlerName}已接受任务并前往现场，正在进行核查、处置和证据留存。`,
+          created_at: startedAt + 90
+        })
+      }
+      if (event.business_status === 'completed') {
+        timeline.push({
+          action_id: `${event.event_id}-close`,
+          log_type: 'RESOLVE',
+          stage: 'CLOSE',
+          title: '事件处置完成',
+          message: `${handlerName}已提交处置结果，事件完成闭环并进入历史记录。`,
+          created_at: completedAt || startedAt + Math.max(300, event.duration_seconds)
+        })
+      }
+      return timeline
+    },
+
     applyDetailData(data) {
       const event = data.event
       const latestByAction = new Map()
@@ -275,7 +365,7 @@ export default {
       if (this.staff) writeCache('mini-staff', this.staff)
       this.timeline = timeline
       this.evidence = data.evidence || []
-      this.linkageLines = data.linkage_lines || []
+      this.evidenceErrors = {}
       this.riskClassName = riskClass(event.risk_level)
       this.startTime = formatDateTime(event.started_at)
       this.durationText = formatDuration(event.duration_seconds)
@@ -334,11 +424,12 @@ export default {
     },
 
     isImageEvidence(item) {
-      return String(item.evidence_type || '').toUpperCase() === 'IMAGE'
+      const type = String(item.evidence_type || '').toUpperCase()
+      return type.includes('IMAGE') || type.includes('PHOTO') || type.includes('SNAPSHOT')
     },
 
     isVideoEvidence(item) {
-      return String(item.evidence_type || '').toUpperCase() === 'VIDEO'
+      return String(item.evidence_type || '').toUpperCase().includes('VIDEO')
     },
 
     previewEvidence(item) {
@@ -347,6 +438,15 @@ export default {
         urls: this.evidence.filter(this.isImageEvidence).map((row) => this.absoluteEvidenceUrl(row.url)),
         current: this.absoluteEvidenceUrl(item.url)
       })
+    },
+
+    handleEvidenceError(item) {
+      this.evidenceErrors = { ...this.evidenceErrors, [item.id]: true }
+      console.error('[event-evidence] image failed', item.id, this.absoluteEvidenceUrl(item.url))
+    },
+
+    toggleTimeline() {
+      this.timelineExpanded = !this.timelineExpanded
     },
 
     connectEventSocket() {
@@ -371,6 +471,10 @@ export default {
 
     handleBroadcast() {
       if (!this.eventId || this.broadcasting) return
+      if (this.isDemo) {
+        uni.showToast({ title: '演示事件仅展示详情', icon: 'none' })
+        return
+      }
       if (this.recordingBroadcast) {
         this.broadcastRecorder?.stop()
         return
@@ -574,6 +678,14 @@ export default {
   height: 100%;
 }
 
+.video-crop-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+}
+
 .video-empty {
   height: 100%;
   display: flex;
@@ -597,7 +709,6 @@ export default {
   text-align: center;
 }
 
-.action-panel,
 .auto-panel {
   color: #24474f;
   line-height: 44rpx;
@@ -614,16 +725,16 @@ export default {
 
 .evidence-item {
   display: inline-block;
-  width: 220rpx;
-  margin-right: 14rpx;
+  width: 360rpx;
+  margin-right: 18rpx;
   vertical-align: top;
 }
 
 .evidence-item image,
 .evidence-item video,
 .evidence-file {
-  width: 220rpx;
-  height: 150rpx;
+  width: 360rpx;
+  height: 240rpx;
   border-radius: 8rpx;
   background: #eef4f5;
 }
@@ -644,31 +755,6 @@ export default {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.linkage-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12rpx;
-}
-
-.linkage-item {
-  padding: 16rpx;
-  border-radius: 8rpx;
-  background: #f2f6f7;
-}
-
-.linkage-item view {
-  color: #172026;
-  font-weight: 700;
-  margin-bottom: 6rpx;
-}
-
-.linkage-item text {
-  color: #52656c;
-  font-size: 24rpx;
-  line-height: 34rpx;
-  word-break: break-all;
 }
 
 .manual-panel.high {
@@ -693,6 +779,31 @@ export default {
   display: flex;
   flex-direction: column;
   gap: 18rpx;
+}
+
+.section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18rpx;
+  margin-bottom: 16rpx;
+}
+
+.section-title-row .section-title {
+  margin-bottom: 0;
+}
+
+.timeline-toggle {
+  min-width: 180rpx;
+  height: 58rpx;
+  line-height: 58rpx;
+  margin: 0;
+  padding: 0 18rpx;
+  border-radius: 8rpx;
+  background: #e7eff1;
+  color: #0f4c5c;
+  font-size: 23rpx;
+  font-weight: 700;
 }
 
 .timeline-item {

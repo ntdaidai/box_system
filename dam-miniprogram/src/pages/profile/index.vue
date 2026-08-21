@@ -12,8 +12,7 @@
     <template v-else>
       <view class="profile-panel">
         <view class="profile-top">
-          <image v-if="staff.avatar_url" class="avatar-img" :src="staff.avatar_url" mode="aspectFill" />
-          <view v-else class="avatar">{{ avatarText }}</view>
+          <image class="avatar-img" src="/static/miniprogram-avatar.png" mode="aspectFill" />
           <view class="profile-main">
             <view>{{ staff.display_name || '现场处置员' }}</view>
             <text>{{ staff.staff_no || '--' }}</text>
@@ -109,10 +108,6 @@ export default {
   computed: {
     loggedIn() {
       return this.loggedInState
-    },
-
-    avatarText() {
-      return String(this.staff.display_name || '巡').slice(0, 1)
     },
 
     pointFilterLabel() {
@@ -309,7 +304,7 @@ export default {
       const staffId = Number(this.staff?.staff_id || 0)
       const handlerName = this.staff?.display_name || '现场处置员'
       const groupName = this.staff?.group_name || '现场处置组'
-      const pointName = groupName.includes('三号') ? '3号监测点' : '9号监测点'
+      const pointName = groupName.includes('3号') || groupName.includes('三号') ? '3号监测点' : '9号监测点'
       const titlesByStaff = {
         8: ['人员涉水现场驱离', '高风险区域人员劝离', '坝区异常情况复核'],
         9: ['船只靠近警戒区核查', '人员亲水现场处置', '夜间安全巡查复核'],
@@ -358,7 +353,11 @@ export default {
 
     openDetail(item) {
       if (item?.is_demo) {
-        uni.showToast({ title: '演示处理记录', icon: 'none' })
+        const eventId = item.event_id || item.id
+        writeCache(`demo-event:${eventId}`, item)
+        uni.navigateTo({
+          url: `/pages/detail/index?demo=1&event_id=${encodeURIComponent(eventId)}`
+        })
         return
       }
       const eventId = item?.event_id || item
@@ -418,11 +417,20 @@ export default {
 }
 
 .logout-btn {
-  margin-top: 22rpx;
-  height: 80rpx;
-  line-height: 80rpx;
-  font-size: 28rpx;
+  position: absolute;
+  right: 22rpx;
+  bottom: 18rpx;
+  width: 158rpx;
+  height: 56rpx;
+  line-height: 56rpx;
+  margin: 0;
+  padding: 0;
+  font-size: 23rpx;
   font-weight: 700;
+}
+
+.profile-panel {
+  position: relative;
 }
 
 .profile-panel,
@@ -451,25 +459,16 @@ export default {
   display: flex;
   align-items: flex-start;
   gap: 18rpx;
-  margin-bottom: 22rpx;
+  min-height: 112rpx;
+  margin-bottom: 54rpx;
 }
 
-.avatar,
 .avatar-img {
   width: 88rpx;
   height: 88rpx;
   border-radius: 50%;
   flex-shrink: 0;
-}
-
-.avatar {
-  background: #0f4c5c;
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 34rpx;
-  font-weight: 800;
+  background: #eef4f5;
 }
 
 .profile-main {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import io
 import json
 import os
 import re
@@ -23,6 +24,7 @@ from docx.shared import RGBColor
 from docx.shared import Mm, Pt
 from docxtpl import DocxTemplate, InlineImage
 from loguru import logger
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 from sqlalchemy.orm import Session, load_only
 
 from app.core.config import BASE_DIR, settings
@@ -581,15 +583,37 @@ class DamEventReportService:
         )
         visual = self.visual_snapshot(instance, timeline)
         camera = self.find_camera(db, instance, visual)
-        # 联动设备一次任务可能归档多张取证图（无人机 4 张、机器狗 3 张）。
-        # 报告只展示一张代表性联动图，其余仅保存在事件证据库供追溯下载。
-        linkage_report_image = self.select_linkage_report_image(evidence)
-        image_items = (
-            [linkage_report_image]
-            if linkage_report_image
-            else self.collect_image_items(workflow_payload, visual, evidence)
-        )
+        # 联动设备一次任务可能归档多张取证图（无人机、机器狗、人工处置）。
+        # 报告对每一种实际执行且有图像回传的联动对象各展示一张代表图，
+        # 同一对象的其余图片仍仅归档，避免一次巡航的多帧挤占报告版面。
+        model_image_items = self.collect_image_items(workflow_payload, visual, evidence)
         video_items = self.collect_video_items(workflow_payload, visual, evidence)
+        if not model_image_items and video_items:
+            model_image_items = self.extract_frame_items_from_videos(
+                video_items,
+                event_name=getattr(event, "event_name", None) or instance.summary or "安全事件",
+                analysis_text=self.clean_report_text(selected["text"]),
+                workflow_insight={},
+            )
+        model_report_image = self.select_model_report_image(model_image_items)
+        # 云端工作流媒体地址可能过期。先由 ``select_model_report_image`` 映射到
+        # 同一记录里的本地 MinIO 对象；若本地对象也无法读取，则从已归档的事件
+        # 视频取一帧，保证报告不会只剩联动设备的图片。
+        if (
+            (not model_report_image or not self.is_readable_image_item(model_report_image))
+            and video_items
+        ):
+            fallback_items = self.extract_frame_items_from_videos(
+                video_items,
+                event_name=getattr(event, "event_name", None) or instance.summary or "安全事件",
+                analysis_text=self.clean_report_text(selected["text"]),
+                workflow_insight={},
+            )
+            fallback_image = self.select_model_report_image(fallback_items)
+            if fallback_image:
+                model_report_image = fallback_image
+        linkage_report_images = self.select_linkage_report_images(evidence)
+        image_items = [item for item in (model_report_image, *linkage_report_images) if item]
         selected_text = self.clean_report_text(selected["text"])
         workflow_insight = self.workflow_insight(workflow_payload, visual, selected_text)
         report_sources, report_citations = self.report_knowledge_citations(
@@ -636,13 +660,6 @@ class DamEventReportService:
             workflow_insight["risk_escalation_knowledge_summary"] = self.risk_escalation_knowledge_summary(risk_escalation)
         workflow_insight["event_name"] = getattr(event, "event_name", None) or instance.summary or "安全事件"
         workflow_insight["event_code"] = getattr(event, "event_code", None)
-        if not image_items and video_items:
-            image_items = self.extract_frame_items_from_videos(
-                video_items,
-                event_name=getattr(event, "event_name", None) or instance.summary or "安全事件",
-                analysis_text=selected_text,
-                workflow_insight=workflow_insight,
-            )
         timeline_summary = self.timeline_summary(timeline)
         evidence_image_path = self.select_evidence_image(image_items, video_items)
 
@@ -1457,10 +1474,19 @@ class DamEventReportService:
             "images",
         ):
             self.extend_image_media_items(candidates, self.find_nested_values(workflow_payload, key))
+        # 模型库工作流没有返回代表帧时，使用 4B 初筛阶段均匀抽取的中间帧。
+        # 这不是联动设备图，必须与后续的机器狗/无人机代表取证图同时保留。
+        screening_frames = visual.get("image_urls") if isinstance(visual.get("image_urls"), list) else []
+        screening_frames = [str(item) for item in screening_frames if str(item or "").strip()]
+        if screening_frames:
+            candidates.append({
+                "url": screening_frames[len(screening_frames) // 2],
+                "caption": "4B 初筛代表性抽帧",
+                "source": "qwen4b_camera_screening",
+                "role": "model_representative",
+            })
         for row in evidence:
-            if str(row.evidence_type or "").upper() in {
-                "IMAGE", "CAMERA_SNAPSHOT", "DRONE_IMAGE", "ROBOT_IMAGE", "STAFF_IMAGE",
-            }:
+            if str(row.evidence_type or "").upper() in {"IMAGE", "CAMERA_SNAPSHOT"}:
                 candidates.append({"url": row.file_url, "caption": row.description or "事件图像"})
         items = [
             item
@@ -1470,18 +1496,76 @@ class DamEventReportService:
         items.sort(key=lambda item: self.image_media_priority(item))
         return items[:8]
 
+    def select_model_report_image(self, items: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+        """Pick one model-side frame for the report, independently of action evidence."""
+        if not items:
+            return None
+        qwen_items = [item for item in items if self.image_media_priority(item) in {0, 1}]
+        # 历史工作流偶尔会保留已经失效的 cloud-tasks 地址，同时还会带有
+        # 同一次 4B 推理实际归档到 dam 桶的候选帧。优先使用可读取的那一张，
+        # 不能让失效地址把真正的 4B 抽帧排除在报告之外。
+        ordered_items = qwen_items or items
+        selected = dict(ordered_items[0])
+        for item in ordered_items:
+            for reference in self.image_item_references(item):
+                if not self.read_minio_or_http_bytes(reference):
+                    continue
+                selected = dict(item)
+                selected["url"] = reference
+                break
+            else:
+                continue
+            break
+        selected["role"] = "model_representative"
+        selected.setdefault("source", "model_representative")
+        selected.setdefault("caption", "4B 代表性抽帧")
+        return selected
+
     @staticmethod
-    def select_linkage_report_image(
+    def image_item_references(item: dict[str, Any]) -> list[str]:
+        """Return local persisted media before any legacy/cloud display URL."""
+        references: list[str] = []
+        source = item.get("source")
+        if isinstance(source, dict):
+            bucket = str(source.get("bucket") or "").strip()
+            object_name = str(
+                source.get("object_name") or source.get("object_key") or source.get("path") or ""
+            ).strip().lstrip("/")
+            if bucket and object_name:
+                references.append(f"{bucket}/{object_name}")
+        references.append(str(item.get("url") or "").strip())
+        return list(dict.fromkeys(reference for reference in references if reference))
+
+    def is_readable_image_item(self, item: Optional[dict[str, Any]]) -> bool:
+        return bool(item and any(
+            self.read_minio_or_http_bytes(reference)
+            for reference in self.image_item_references(item)
+        ))
+
+    @staticmethod
+    def select_linkage_report_images(
         evidence: list[SafetyEventEvidence],
-    ) -> Optional[dict[str, Any]]:
-        """Pick one physical-action image for report display.
+    ) -> list[dict[str, Any]]:
+        """Pick one representative image for each executed linkage object.
 
         Device actions retain every returned image in ``safety_event_evidence``.
-        This method deliberately exposes only the earliest action image in the
-        rendered report, so a multi-photo cruise does not crowd the document.
+        A report shows one image for each of drone, robot dog and staff when
+        present, while additional images from the same action stay archived.
         """
         linkage_types = {"DRONE_IMAGE", "ROBOT_IMAGE", "STAFF_IMAGE"}
         linkage_sources = {"DRONE", "UAV", "ROBOT_DOG", "ROBOT", "STAFF"}
+        linkage_labels = {
+            "DRONE": "无人机",
+            "UAV": "无人机",
+            "DRONE_IMAGE": "无人机",
+            "ROBOT_DOG": "机器狗",
+            "ROBOT": "机器狗",
+            "ROBOT_IMAGE": "机器狗",
+            "STAFF": "人工处置",
+            "STAFF_IMAGE": "人工处置",
+        }
+        selected: list[dict[str, Any]] = []
+        selected_labels: set[str] = set()
         for row in evidence:
             if (
                 str(row.evidence_type or "").upper() not in linkage_types
@@ -1490,13 +1574,32 @@ class DamEventReportService:
                 continue
             if not row.file_url:
                 continue
-            return {
+            linkage_label = (
+                linkage_labels.get(str(row.source_type or "").upper())
+                or linkage_labels.get(str(row.evidence_type or "").upper())
+                or "联动设备"
+            )
+            if linkage_label in selected_labels:
+                continue
+            description = row.description or "现场取证"
+            selected.append({
                 "url": row.file_url,
-                "caption": row.description or "联动设备代表性取证图",
+                "caption": f"{linkage_label}联动代表性取证图：{description}",
                 "source": "linkage_action_representative",
                 "role": "linkage_representative",
-            }
-        return None
+                "linkage_label": linkage_label,
+            })
+            selected_labels.add(linkage_label)
+        return selected
+
+    @classmethod
+    def select_linkage_report_image(
+        cls,
+        evidence: list[SafetyEventEvidence],
+    ) -> Optional[dict[str, Any]]:
+        """Compatibility helper for callers that need just the first object."""
+        items = cls.select_linkage_report_images(evidence)
+        return items[0] if items else None
 
     def extend_image_media_items(self, items: list[dict[str, Any]], value: Any) -> None:
         if not value:
@@ -1697,11 +1800,84 @@ class DamEventReportService:
         image_items: list[dict[str, Any]],
         video_items: list[dict[str, Any]],
     ) -> Optional[Path]:
-        # 优先使用 4B 选出的代表帧；早期 qwen_camera_screening 事件只留存
-        # 证据视频时，``image_items`` 已由视频兜底抽帧补齐，不能因此让正式
-        # 事件报告显示“未获取到可嵌入图像”。
-        qwen_items = [item for item in image_items if self.image_media_priority(item) in {0, 1}]
-        return self.download_first_image(qwen_items or image_items)
+        model_item = next(
+            (item for item in image_items if str(item.get("role") or "") == "model_representative"),
+            None,
+        )
+        linkage_items = [
+            item for item in image_items
+            if str(item.get("role") or "") == "linkage_representative"
+        ]
+        report_items: list[tuple[dict[str, Any], str]] = []
+        if model_item:
+            report_items.append((model_item, "4B 代表性抽帧"))
+        report_items.extend(
+            (item, f"{item.get('linkage_label') or '联动设备'}联动取证")
+            for item in linkage_items
+        )
+        if len(report_items) >= 2:
+            composite = self.compose_evidence_images(report_items)
+            if composite:
+                return composite
+        return self.download_first_image([
+            item for item in (model_item, *linkage_items, *image_items) if item
+        ])
+
+    def compose_evidence_images(
+        self,
+        items: list[tuple[dict[str, Any], str]],
+    ) -> Optional[Path]:
+        """Compose representative frames for the single DOCX image slot."""
+        panels: list[tuple[Image.Image, str]] = []
+        for item, title in items:
+            content = self.read_minio_or_http_bytes(str(item.get("url") or ""))
+            if not content:
+                continue
+            try:
+                with Image.open(io.BytesIO(content)) as source:
+                    panels.append((ImageOps.exif_transpose(source).convert("RGB"), title))
+            except Exception as exc:
+                logger.debug("报告证据图合成读取失败 {}: {}", item.get("url"), exc)
+        if len(panels) < 2:
+            return None
+
+        # 两张时沿用上下布局；三张及以上转为双列网格，既保留每个联动对象，
+        # 也避免单张合成图超过一页可用高度。
+        columns = 1 if len(panels) <= 2 else 2
+        panel_width, panel_height = (1080, 500) if columns == 1 else (620, 330)
+        title_height, gap, margin = (46, 26, 12) if columns == 1 else (38, 18, 12)
+        panel_block_height = title_height + panel_height
+        rows = (len(panels) + columns - 1) // columns
+        canvas = Image.new(
+            "RGB",
+            (
+                panel_width * columns + gap * (columns - 1) + margin * 2,
+                panel_block_height * rows + gap * (rows - 1) + margin * 2,
+            ),
+            "white",
+        )
+        drawer = ImageDraw.Draw(canvas)
+        try:
+            title_font = ImageFont.truetype(
+                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                28 if columns == 1 else 20,
+            )
+        except OSError:
+            title_font = ImageFont.load_default()
+        for index, (image, title) in enumerate(panels):
+            row, column = divmod(index, columns)
+            block_x = margin + column * (panel_width + gap)
+            block_y = margin + row * (panel_block_height + gap)
+            title_box = drawer.textbbox((0, 0), title, font=title_font)
+            title_x = block_x + (panel_width - (title_box[2] - title_box[0])) // 2
+            drawer.text((title_x, block_y + 5), title, fill="#1f2937", font=title_font)
+            panel = ImageOps.contain(image, (panel_width, panel_height))
+            offset_x = block_x + (panel_width - panel.width) // 2
+            offset_y = block_y + title_height + (panel_height - panel.height) // 2
+            canvas.paste(panel, (offset_x, offset_y))
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            canvas.save(tmp, format="JPEG", quality=92)
+            return Path(tmp.name)
 
     def extract_frame_items_from_videos(
         self,
@@ -2165,7 +2341,14 @@ class DamEventReportService:
         if video_items:
             pieces.append(f"关联事件证据视频 {len(video_items)} 段")
         if image_items:
-            pieces.append(f"关联抽帧图像 {len(image_items)} 张")
+            model_count = self.model_image_count(image_items)
+            linkage_labels = self.linkage_image_labels(image_items)
+            if model_count:
+                pieces.append(f"关联 4B 代表性抽帧 {model_count} 张")
+            if linkage_labels:
+                pieces.append(f"关联{self.format_linkage_image_labels(linkage_labels)}联动代表性取证图 {sum(linkage_labels.values())} 张")
+            elif not model_count:
+                pieces.append(f"关联抽帧图像 {len(image_items)} 张")
         return "；".join(pieces) + "。"
 
     def evidence_summary(self, image_items: list[dict[str, Any]], video_items: list[dict[str, Any]]) -> str:
@@ -2175,7 +2358,14 @@ class DamEventReportService:
         if video_items:
             pieces.append(f"已归档 {len(video_items)} 段事件证据视频")
         if image_items:
-            pieces.append(f"已归档 {len(image_items)} 张关键帧/检测图像")
+            model_count = self.model_image_count(image_items)
+            linkage_labels = self.linkage_image_labels(image_items)
+            if model_count:
+                pieces.append(f"已归档 {model_count} 张 4B 代表性抽帧")
+            if linkage_labels:
+                pieces.append(f"已归档 {self.format_linkage_image_labels(linkage_labels)}联动代表性取证图 {sum(linkage_labels.values())} 张")
+            elif not model_count:
+                pieces.append(f"已归档 {len(image_items)} 张关键帧/检测图像")
         return "；".join(pieces) + "，用于支撑本次事件研判。"
 
     def evidence_caption(self, image_items: list[dict[str, Any]], video_items: list[dict[str, Any]]) -> str:
@@ -2353,28 +2543,59 @@ class DamEventReportService:
         if video_items:
             parts.append(f"事件证据视频 {len(video_items)} 段")
         if image_items:
-            parts.append(f"关键帧/检测图像 {len(image_items)} 张")
+            model_count = self.model_image_count(image_items)
+            linkage_labels = self.linkage_image_labels(image_items)
+            if model_count:
+                parts.append(f"4B 代表性抽帧 {model_count} 张")
+            if linkage_labels:
+                parts.append(f"{self.format_linkage_image_labels(linkage_labels)}联动代表性取证图 {sum(linkage_labels.values())} 张")
+            elif not model_count:
+                parts.append(f"关键帧/检测图像 {len(image_items)} 张")
         return "，".join(parts) + "，原始文件已归档至事件证据库。" if parts else "未归档媒体证据。"
 
     def frame_evidence_summary(self, image_items: list[dict[str, Any]], video_items: list[dict[str, Any]]) -> str:
         model_frames = 0
-        linkage_frames = 0
+        linkage_labels: dict[str, int] = {}
         for item in image_items:
             url = str(item.get("url") or "")
-            if "workflow-media" in url or "qwen4b-proxy-media" in url or "yolo-detections" in url or "key_frame" in url:
+            role = str(item.get("role") or "")
+            if role == "model_representative" or "workflow-media" in url or "qwen4b-proxy-media" in url or "yolo-detections" in url or "key_frame" in url:
                 model_frames += 1
-            else:
-                linkage_frames += 1
+            elif role == "linkage_representative":
+                label = str(item.get("linkage_label") or "联动设备").strip() or "联动设备"
+                linkage_labels[label] = linkage_labels.get(label, 0) + 1
         parts = []
         if video_items:
             parts.append(f"事件证据视频{len(video_items)}段")
         if model_frames:
-            parts.append(f"模型复核证据帧{model_frames}张")
-        if linkage_frames:
-            parts.append(f"联动取证图片{linkage_frames}张")
+            parts.append(f"4B代表性抽帧{model_frames}张")
+        if linkage_labels:
+            parts.append(f"{self.format_linkage_image_labels(linkage_labels)}联动取证图片{sum(linkage_labels.values())}张")
         if not parts:
             return "未记录可用于报告展示的抽帧图片。"
         return "已归档" + "、".join(parts) + "；报告正文嵌入代表性画面，其余图片随事件证据一并留存。"
+
+    @staticmethod
+    def linkage_image_labels(image_items: list[dict[str, Any]]) -> dict[str, int]:
+        labels: dict[str, int] = {}
+        for item in image_items:
+            if str(item.get("role") or "") != "linkage_representative":
+                continue
+            label = str(item.get("linkage_label") or "联动设备").strip() or "联动设备"
+            labels[label] = labels.get(label, 0) + 1
+        return labels
+
+    @staticmethod
+    def model_image_count(image_items: list[dict[str, Any]]) -> int:
+        return sum(
+            1
+            for item in image_items
+            if str(item.get("role") or "") == "model_representative"
+        )
+
+    @staticmethod
+    def format_linkage_image_labels(labels: dict[str, int]) -> str:
+        return "、".join(labels.keys())
 
     def linkage_evidence_summary(self, evidence: list[SafetyEventEvidence]) -> str:
         labels = {
@@ -2386,6 +2607,8 @@ class DamEventReportService:
             "ROBOT": "机器狗",
             "ROBOT_IMAGE": "机器狗",
             "ROBOT_VIDEO": "机器狗",
+            "STAFF": "人工处置",
+            "STAFF_IMAGE": "人工处置",
         }
         counts: dict[str, int] = {}
         for row in evidence:

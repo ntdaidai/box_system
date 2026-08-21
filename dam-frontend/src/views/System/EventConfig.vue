@@ -166,11 +166,13 @@
       />
     </section>
 
+    <!-- 事件流程工作区必须压过页面固定层以及 Element Plus 默认浮层。 -->
     <AppDialog
       v-model="flowDialogVisible"
       class="flow-workspace-dialog"
-      width="min(1400px, 90vw)"
-      top="6vh"
+      width="min(1560px, 94vw)"
+      top="3vh"
+      :z-index="10000"
       :show-close="false"
       destroy-on-close
       @closed="closeFlowWorkspace"
@@ -185,10 +187,8 @@
             <el-button plain @click="flowDialogVisible = false">关闭页面</el-button>
           </div>
           <div class="flow-dialog-actions" v-else>
-            <el-button :icon="Plus" type="primary" plain @click="addNodeDialogVisible = true">添加动作</el-button>
-            <el-button :icon="RefreshRight" plain @click="autoLayoutDraft">自动布局</el-button>
-            <el-button plain @click="cancelFlowEdit">取消</el-button>
             <el-button class="flow-save-action" type="primary" :loading="savingFlow" @click="saveFlow">保存流程</el-button>
+            <el-button plain @click="cancelFlowEdit">取消</el-button>
           </div>
         </div>
       </template>
@@ -203,6 +203,14 @@
           @pointerleave="finishDrag"
           @click="clearFlowSelection"
         >
+          <div v-if="flowEditMode" class="flow-canvas-actions" @pointerdown.stop @click.stop>
+            <el-button class="flow-canvas-action" :icon="Plus" type="primary" plain @click="addNodeDialogVisible = true">
+              添加动作
+            </el-button>
+            <el-button class="flow-canvas-action" :icon="RefreshRight" plain @click="autoLayoutDraft">
+              自动布局
+            </el-button>
+          </div>
           <div class="flow-stage" :style="flowStageStyle">
             <svg
               class="flow-edges"
@@ -398,11 +406,16 @@
                   <el-select v-model="actionForm.staff_event_type" popper-class="flow-inspector-popper" clearable placeholder="自动按当前事件识别">
                     <el-option label="人员涉水事件" value="PERSON_WADING" />
                     <el-option label="夜间捕鱼事件" value="NIGHT_FISHING" />
-                    <el-option label="洪水事件" value="FLOOD_EVENT" />
+                    <el-option label="自然灾害事件" value="NATURAL_DISASTER_EVENT" />
+                    <el-option label="极端天气事件" value="EXTREME_WEATHER_EVENT" />
                   </el-select>
                 </el-form-item>
                 <el-form-item label="演示自动闭环">
-                  <el-switch v-model="actionForm.staff_demo" active-text="启用" inactive-text="关闭" />
+                  <el-switch class="inspector-switch" v-model="actionForm.staff_demo" active-text="启用" inactive-text="关闭" />
+                </el-form-item>
+                <el-form-item label="风险升级后追加">
+                  <el-switch class="inspector-switch" v-model="actionForm.staff_escalation_only" active-text="仅风险升级时执行" inactive-text="常规联动执行" />
+                  <p class="form-field-hint">开启后，广播、无人机、机器狗等原有联动完成后，只有知识库/特殊工况将风险由低中提升至高风险时才创建人工任务。</p>
                 </el-form-item>
                 <el-form-item label="任务说明">
                   <el-input v-model.trim="actionForm.staff_note" maxlength="500" show-word-limit placeholder="可选：留空则使用系统默认说明" />
@@ -427,7 +440,13 @@
       </div>
     </AppDialog>
 
-    <AppDialog v-model="addNodeDialogVisible" title="添加联动动作" width="460px" destroy-on-close>
+    <AppDialog
+      v-model="addNodeDialogVisible"
+      title="添加联动动作"
+      width="460px"
+      :z-index="11000"
+      destroy-on-close
+    >
       <div class="add-action-grid">
         <button v-for="item in addActionOptions" :key="item.type" type="button" @click="addActionNode(item.type)">
           <el-icon><component :is="item.icon" /></el-icon>
@@ -514,6 +533,19 @@ const selectedEventId = ref(null)
 const editingEventId = ref(null)
 const flowDialogVisible = ref(false)
 const addNodeDialogVisible = ref(false)
+// Element Plus MessageBox 默认层级低于流程工作区，统一提升以避免确认框被页面遮挡。
+const EVENT_CONFIRM_Z_INDEX = 12000
+const EVENT_MESSAGE_Z_INDEX = 13000
+
+function notifyEvent(type, message) {
+  return ElMessage({
+    type,
+    message,
+    zIndex: EVENT_MESSAGE_Z_INDEX,
+    customClass: 'event-config-top-message',
+  })
+}
+
 const flowEditMode = ref(false)
 const selectedNodeId = ref('')
 const selectedEdgeId = ref('')
@@ -557,6 +589,7 @@ const actionForm = reactive({
   staff_group: '',
   staff_event_type: '',
   staff_demo: false,
+  staff_escalation_only: false,
   staff_note: '',
 })
 
@@ -644,7 +677,8 @@ const machineDogOptions = [
 ]
 
 const machineDogRouteOptions = [
-  { value: 'all', label: '9号检测区域巡检路线' },
+  { value: 'route-a', label: '岸线由西向东巡检' },
+  { value: 'route-b', label: '岸线由东向西巡检' },
 ]
 
 const events = computed(() => config.events)
@@ -798,7 +832,7 @@ async function loadConfig() {
     config.broadcast_templates = data.broadcast_templates || []
     ensureSelectedEvent()
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || '事件配置加载失败')
+    notifyEvent('error', error.response?.data?.detail || '事件配置加载失败')
   } finally {
     loading.value = false
   }
@@ -900,7 +934,11 @@ function selectEvent(id, options = {}) {
 async function openFlowWorkspace(event) {
   if (editingEventId.value && ruleDirty.value) {
     try {
-      await ElMessageBox.confirm('当前规则修改尚未保存，是否放弃并查看联动？', '查看联动', { type: 'warning' })
+      await ElMessageBox.confirm('当前规则修改尚未保存，是否放弃并查看联动？', '查看联动', {
+        type: 'warning',
+        zIndex: EVENT_CONFIRM_Z_INDEX,
+        modalClass: 'event-config-confirm-overlay',
+      })
     } catch {
       return
     }
@@ -920,6 +958,7 @@ async function openFlowWorkspace(event) {
 }
 
 function closeFlowWorkspace() {
+  addNodeDialogVisible.value = false
   if (flowEditMode.value) cancelFlowEdit()
   editingNode.value = null
   inspectorMode.value = 'view'
@@ -932,14 +971,22 @@ function closeFlowWorkspace() {
 async function toggleListEvent(event, nextEnabled) {
   if (flowEditMode.value && event.id === selectedEventId.value) {
     try {
-      await ElMessageBox.confirm('当前流程修改尚未保存，是否继续修改事件状态？', '事件状态', { type: 'warning' })
+      await ElMessageBox.confirm('当前流程修改尚未保存，是否继续修改事件状态？', '事件状态', {
+        type: 'warning',
+        zIndex: EVENT_CONFIRM_Z_INDEX,
+        modalClass: 'event-config-confirm-overlay',
+      })
     } catch {
       return
     }
   }
   if (!nextEnabled) {
     try {
-      await ElMessageBox.confirm('停用后，该事件规则将不再参与触发判断。', '停用事件', { type: 'warning' })
+      await ElMessageBox.confirm('停用后，该事件规则将不再参与触发判断。', '停用事件', {
+        type: 'warning',
+        zIndex: EVENT_CONFIRM_Z_INDEX,
+        modalClass: 'event-config-confirm-overlay',
+      })
     } catch {
       return
     }
@@ -950,10 +997,10 @@ async function toggleListEvent(event, nextEnabled) {
     for (const condition of event.conditions || []) {
       await updateConditionConfig(condition.id, { enabled: nextEnabled })
     }
-    ElMessage.success(nextEnabled ? '事件已启用' : '事件已停用')
+    notifyEvent('success', nextEnabled ? '事件已启用' : '事件已停用')
     await loadConfig()
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || '状态更新失败')
+    notifyEvent('error', error.response?.data?.detail || '状态更新失败')
   } finally {
     savingEventId.value = null
   }
@@ -1076,7 +1123,11 @@ function resetRuleForm() {
 async function startInlineRuleEdit(event) {
   if (editingEventId.value && editingEventId.value !== event.id && ruleDirty.value) {
     try {
-      await ElMessageBox.confirm('当前规则修改尚未保存，是否放弃？', '切换编辑行', { type: 'warning' })
+      await ElMessageBox.confirm('当前规则修改尚未保存，是否放弃？', '切换编辑行', {
+        type: 'warning',
+        zIndex: EVENT_CONFIRM_Z_INDEX,
+        modalClass: 'event-config-confirm-overlay',
+      })
     } catch {
       return
     }
@@ -1111,10 +1162,10 @@ async function saveRule() {
       }
       await updateConditionConfig(primaryCondition.value.id, payload)
     }
-    ElMessage.success('事件规则已保存')
+    notifyEvent('success', '事件规则已保存')
     await loadConfig()
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || '保存失败')
+    notifyEvent('error', error.response?.data?.detail || '保存失败')
   } finally {
     savingRule.value = false
   }
@@ -1509,12 +1560,20 @@ function openNodeConfig(node) {
     ? (action.route_id || DEFAULT_STAFF_GROUP)
     : ''
   actionForm.staff_event_type = action.action_type === 'staff_task'
-    ? (action.config_json?.event_type || '')
+    ? normalizeStaffEventType(action.config_json?.event_type)
     : ''
   actionForm.staff_demo = action.action_type === 'staff_task' && action.config_json?.demo === true
+  actionForm.staff_escalation_only = action.action_type === 'staff_task' && (
+    action.config_json?.risk_escalation_only === true || action.config_json?.escalation_only === true
+  )
   actionForm.staff_note = action.action_type === 'staff_task'
     ? (action.config_json?.note || '')
     : ''
+}
+
+function normalizeStaffEventType(value) {
+  const eventType = String(value || '').trim().toUpperCase()
+  return eventType === 'FLOOD_EVENT' ? 'NATURAL_DISASTER_EVENT' : eventType
 }
 
 function openNodeViewer(node) {
@@ -1555,7 +1614,8 @@ function actionReadonlyFields(action) {
   if (action.action_type === 'staff_task') {
     return [
       { label: '处置工作组', value: action.route_id || '未选择处置组' },
-      { label: '事件类型', value: action.config_json?.event_type === 'NIGHT_FISHING' ? '夜间捕鱼事件' : action.config_json?.event_type === 'PERSON_WADING' ? '人员涉水事件' : action.config_json?.event_type === 'FLOOD_EVENT' ? '洪水事件' : '自动识别' },
+      { label: '事件类型', value: action.config_json?.event_type === 'NIGHT_FISHING' ? '夜间捕鱼事件' : action.config_json?.event_type === 'PERSON_WADING' ? '人员涉水事件' : action.config_json?.event_type === 'EXTREME_WEATHER_EVENT' ? '极端天气事件' : ['NATURAL_DISASTER_EVENT', 'FLOOD_EVENT'].includes(action.config_json?.event_type) ? '自然灾害事件' : '自动识别' },
+      { label: '触发条件', value: action.config_json?.risk_escalation_only === true || action.config_json?.escalation_only === true ? '知识库/特殊工况升级为高风险后追加' : '常规联动执行' },
       { label: '执行方式', value: action.config_json?.demo === true ? '演示自动闭环' : '等待人工处置' },
     ]
   }
@@ -1567,7 +1627,7 @@ function saveNodeConfig() {
   const action = editingNode.value.action
   if (action.action_type === 'broadcast') {
     if (!actionForm.broadcast_device_id || !actionForm.template_id) {
-      ElMessage.warning('请先选择广播设备和播报模板')
+      notifyEvent('warning', '请先选择广播设备和播报模板')
       return
     }
     action.broadcast_device_id = actionForm.broadcast_device_id
@@ -1576,20 +1636,27 @@ function saveNodeConfig() {
     action.max_executions = actionForm.repeat_mode === 'repeat' ? clampNumber(actionForm.max_executions, 2, 100) : 1
   } else if (action.action_type === 'drone_dispatch') {
     if (!actionForm.drone_id || !actionForm.route_id) {
-      ElMessage.warning('请先选择无人机型号和航线')
+      notifyEvent('warning', '请先选择无人机型号和航线')
       return
     }
     action.drone_id = actionForm.drone_id || null
     action.route_id = normalizeDroneRouteId(actionForm.route_id) || null
+    action.config_json = {
+      ...(action.config_json || {}),
+      drone_name: findConfiguredOption(droneOptions.value, actionForm.drone_id)?.label || actionForm.drone_id || null,
+      route_name: findConfiguredOption(routeOptions.value, action.route_id)?.label || action.route_id || null,
+    }
   } else if (action.action_type === 'machine_dog_dispatch') {
     if (!actionForm.machine_dog_id || !actionForm.route_id) {
-      ElMessage.warning('请先选择机器狗型号和巡检路线')
+      notifyEvent('warning', '请先选择机器狗型号和巡检路线')
       return
     }
     action.route_id = normalizeMachineDogRouteId(actionForm.route_id) || null
     action.config_json = {
       ...(action.config_json || {}),
       machine_dog_id: actionForm.machine_dog_id || null,
+      machine_dog_name: findMachineDog(actionForm.machine_dog_id)?.label || actionForm.machine_dog_id || null,
+      route_name: findMachineDogRoute(action.route_id)?.label || action.route_id || null,
     }
   } else if (action.action_type === 'staff_task') {
     action.route_id = actionForm.staff_group || DEFAULT_STAFF_GROUP
@@ -1597,13 +1664,14 @@ function saveNodeConfig() {
       ...(action.config_json || {}),
       event_type: actionForm.staff_event_type || null,
       demo: actionForm.staff_demo === true,
+      risk_escalation_only: actionForm.staff_escalation_only === true,
       note: actionForm.staff_note || null,
     }
   }
   editingNode.value.title = actionBusinessLabel(action)
   editingNode.value.subtitle = actionBusinessSummary(action)
   editingNode.value.detail = actionBusinessDetail(action)
-  ElMessage.success('动作配置已应用')
+  notifyEvent('success', '动作配置已应用')
 }
 
 function deleteInspectorNode() {
@@ -1641,12 +1709,12 @@ async function saveFlow() {
       }
     }
     writeFlowLayout(flowDraft.nodes, flowDraft.edges)
-    ElMessage.success('联动流程已保存')
+    notifyEvent('success', '联动流程已保存')
     flowEditMode.value = false
     closeInspector()
     await loadConfig()
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || '保存失败')
+    notifyEvent('error', error.response?.data?.detail || '保存失败')
   } finally {
     savingFlow.value = false
   }
@@ -1661,7 +1729,7 @@ function validateFlowDraft() {
   if (invalidBroadcast) {
     selectedNodeId.value = invalidBroadcast.id
     openNodeConfig(invalidBroadcast)
-    ElMessage.warning('请完善广播动作的设备和播报模板')
+    notifyEvent('warning', '请完善广播动作的设备和播报模板')
     return false
   }
   const invalidDrone = flowDraft.nodes.find((node) => (
@@ -1672,7 +1740,7 @@ function validateFlowDraft() {
   if (invalidDrone) {
     selectedNodeId.value = invalidDrone.id
     openNodeConfig(invalidDrone)
-    ElMessage.warning('请完善无人机任务的型号和航线')
+    notifyEvent('warning', '请完善无人机任务的型号和航线')
     return false
   }
   const invalidMachineDog = flowDraft.nodes.find((node) => (
@@ -1683,7 +1751,7 @@ function validateFlowDraft() {
   if (invalidMachineDog) {
     selectedNodeId.value = invalidMachineDog.id
     openNodeConfig(invalidMachineDog)
-    ElMessage.warning('请完善机器狗任务的型号和巡检路线')
+    notifyEvent('warning', '请完善机器狗任务的型号和巡检路线')
     return false
   }
   return true
@@ -1794,14 +1862,14 @@ function normalizeDroneRouteId(routeId) {
 function normalizeMachineDogRouteId(routeId) {
   const value = String(routeId || '').trim().toLowerCase()
   const aliases = {
-    all: 'all',
-    '机器狗全路线': 'all',
-    '9号检测区域巡检路线': 'all',
-    '巡检路线': 'all',
-    'route-a': 'all',
-    'route-b': 'all',
-    '岸线由西向东巡检': 'all',
-    '岸线由东向西巡检': 'all',
+    all: 'route-a',
+    '机器狗全路线': 'route-a',
+    '9号检测区域巡检路线': 'route-a',
+    '巡检路线': 'route-a',
+    'route-a': 'route-a',
+    'route-b': 'route-b',
+    '岸线由西向东巡检': 'route-a',
+    '岸线由东向西巡检': 'route-b',
   }
   return aliases[value] || value
 }
@@ -2114,6 +2182,39 @@ onBeforeUnmount(() => {
 
 .flow-canvas.editing {
   border-color: rgba(47, 214, 196, .34);
+}
+
+.flow-canvas-actions {
+  position: absolute;
+  top: 26px;
+  right: 28px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.flow-canvas-actions :deep(.flow-canvas-action) {
+  min-width: 158px;
+  height: 52px;
+  margin: 0;
+  padding: 0 26px;
+  border-radius: 7px;
+  font-size: 17px;
+  font-weight: 800;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, .2);
+}
+
+.flow-canvas-actions :deep(.flow-canvas-action:first-child) {
+  border-color: rgba(47, 214, 196, .64);
+  color: #e9fffc;
+  background: rgba(16, 92, 91, .72);
+}
+
+.flow-canvas-actions :deep(.flow-canvas-action:last-child) {
+  border-color: rgba(74, 161, 211, .58);
+  color: #eaf7ff;
+  background: rgba(13, 52, 82, .88);
 }
 
 .flow-stage {
@@ -2722,7 +2823,10 @@ onBeforeUnmount(() => {
 }
 
 :global(.flow-workspace-dialog) {
-  height: min(820px, 88vh);
+  position: relative;
+  z-index: 1;
+  isolation: isolate;
+  height: min(900px, 94vh);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -2742,6 +2846,7 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   padding: 0;
+  overflow: hidden;
 }
 
 .flow-dialog-header {
@@ -2798,7 +2903,7 @@ onBeforeUnmount(() => {
 }
 
 .flow-workspace-body.with-inspector {
-  grid-template-columns: minmax(0, 1fr) 380px;
+  grid-template-columns: minmax(0, 1fr) clamp(400px, 28vw, 460px);
 }
 
 .flow-workspace-body .flow-canvas {
@@ -2810,8 +2915,10 @@ onBeforeUnmount(() => {
 
 .action-inspector {
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   padding: 0;
   border-left: 1px solid rgba(112, 157, 190, .16);
   background: linear-gradient(180deg, #0b2136 0%, #071a2c 100%);
@@ -2929,9 +3036,33 @@ onBeforeUnmount(() => {
   width: 100%;
 }
 
+/* 字数提示沿用浏览器默认的白底会破坏深色面板的视觉层级。 */
+.inspector-form :deep(.el-input__count) {
+  color: #789ab2 !important;
+}
+
+.inspector-form :deep(.el-input__count .el-input__count-inner) {
+  padding: 2px 6px 2px 8px !important;
+  border: 1px solid rgba(74, 151, 195, .28);
+  border-radius: 4px;
+  color: #91b2c8 !important;
+  background: rgba(7, 28, 45, .96) !important;
+  line-height: 1.2;
+}
+
 /* 自定义弹窗层级高于 Element 默认浮层，下拉菜单必须显式浮在弹窗之上。 */
 :global(.flow-inspector-popper) {
-  z-index: 3501 !important;
+  z-index: 11100 !important;
+}
+
+/* MessageBox 的 z-index 会由 Element Plus 运行时重算，使用 modalClass 覆盖其遮罩层，确保确认框在工作区之上。 */
+:global(.event-config-confirm-overlay) {
+  z-index: 12000 !important;
+}
+
+/* 保存成功/失败提示也必须浮在流程工作区遮罩之上，避免被 backdrop-filter 模糊。 */
+:global(.el-message.event-config-top-message) {
+  z-index: 13000 !important;
 }
 
 .inspector-form {
@@ -2980,6 +3111,71 @@ onBeforeUnmount(() => {
   margin-bottom: 7px;
   color: #91b3c8;
   font-weight: 700;
+}
+
+.form-field-hint {
+  margin: 7px 0 0;
+  color: #789bb4;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+/* Inspector switches use a compact status-pill treatment so the active side is immediately recognizable. */
+.inspector-form :deep(.inspector-switch) {
+  --el-switch-on-color: #3c9fff;
+  --el-switch-off-color: rgba(65, 91, 111, .78);
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  gap: 8px;
+}
+
+.inspector-form :deep(.inspector-switch .el-switch__core) {
+  width: 52px !important;
+  height: 28px;
+  flex: 0 0 52px;
+  border: 1px solid rgba(121, 163, 188, .55);
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(70, 95, 114, .92), rgba(43, 63, 79, .96));
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, .28), 0 0 0 1px rgba(5, 18, 31, .36);
+  transition: border-color .18s ease, background .18s ease, box-shadow .18s ease;
+}
+
+.inspector-form :deep(.inspector-switch .el-switch__action) {
+  width: 22px;
+  height: 22px;
+  top: 2px;
+  background: #f4fbff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .32);
+  transition: transform .18s ease, background-color .18s ease;
+}
+
+.inspector-form :deep(.inspector-switch.is-checked .el-switch__core) {
+  border-color: rgba(111, 211, 255, .92);
+  background: linear-gradient(135deg, #348ff4 0%, #42bdf4 100%);
+  box-shadow: inset 0 1px 2px rgba(255, 255, 255, .22), 0 0 0 3px rgba(56, 169, 255, .12), 0 4px 14px rgba(35, 148, 231, .22);
+}
+
+.inspector-form :deep(.inspector-switch .el-switch__label) {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: #7694aa;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  transition: color .18s ease, background-color .18s ease, border-color .18s ease;
+}
+
+.inspector-form :deep(.inspector-switch .el-switch__label.is-active) {
+  color: #a9efff;
+  border-color: rgba(74, 194, 247, .42);
+  background: rgba(36, 151, 207, .18);
+  text-shadow: 0 0 12px rgba(87, 214, 255, .2);
 }
 
 .inspector-form :deep(.el-select__wrapper),

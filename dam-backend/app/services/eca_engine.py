@@ -8,6 +8,7 @@ import threading
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 from loguru import logger
 
 from app.core.database import SessionLocal
@@ -23,6 +24,7 @@ from app.models.safety_integration import (
     SafetyEventInstance,
     SafetyEventTimelineLog,
 )
+from app.models.safety_event_task import SafetyEventTask
 from app.api.health import _get_gpu_info
 from app.core.config import settings
 from app.services.dam_event_report_service import dam_event_report_service
@@ -847,15 +849,43 @@ class ECAEngine:
             )
             sensor_data["event_instance_id"] = instance.id
             sensor_data["instance_no"] = instance.instance_no
+            # 视频测试页（以及传感器模拟入口）提交的特殊工况必须在联动前参与
+            # 知识库风险复核。这样风险升级人工处置会自然排在原有设备动作之后，
+            # 而不是等事件自动闭环后再补救。
+            supplemental_context = sensor_data.get("supplemental_context")
+            if event and isinstance(supplemental_context, dict) and supplemental_context:
+                from app.services.supplemental_context_service import supplemental_context_service
+
+                escalation = supplemental_context_service.apply(
+                    db,
+                    instance,
+                    context=supplemental_context,
+                    operator=str(supplemental_context.get("submitted_by") or "SYSTEM"),
+                    defer_risk_decision_to_model=True,
+                )
+                sensor_data["risk_escalation"] = escalation
             # 工作流负责产生报告所需的研判结果；报告本身必须等所有联动动作
             # （以及它们产出的 MinIO 取证）完成后再生成。
             workflow_payload = None
             if event:
                 workflow_payload = await self.plan_dam_workflow(instance, event, sensor_data, db)
+                self._apply_pending_model_risk_escalation(instance, workflow_payload, db)
 
             action_result = await self.execute_configured_actions(
                 event_id, sensor_data, db, event, event_instance=instance
             )
+            # 风险升级策略不是事件的固有设备联动：先执行广播/无人机/机器狗，
+            # 再根据知识库/特殊工况的最终风险追加人工处置。
+            if self._has_high_risk_escalation(instance):
+                escalation_result = await self.execute_configured_actions(
+                    event_id,
+                    sensor_data,
+                    db,
+                    event,
+                    event_instance=instance,
+                    execution_phase="risk_escalation",
+                )
+                action_result = self._merge_action_results(action_result, escalation_result)
 
             flow_actions = action_result if isinstance(action_result, dict) else {}
             flow_resource = flow_actions.get("resource_info") or {}
@@ -1328,6 +1358,19 @@ class ECAEngine:
         screening = visual.get("screening") if isinstance(visual.get("screening"), dict) else sensor_data
         event_name = getattr(event, "event_name", None) or instance.summary or "安全事件"
         risk = str(instance.max_risk_level or instance.risk_level or "LOW").upper()
+        # 云端增强超时后，这里仍是工作流的最终研判节点。不能只因本地视觉
+        # 置信度偏低而丢弃已经命中的运行工况/知识库约束；否则特殊工况与
+        # 普通事件会被错误地得出同一风险结论。该结论随后仍由
+        # _apply_pending_model_risk_escalation 统一落库并决定是否追加人工处置。
+        escalation = sensor_data.get("risk_escalation") if isinstance(sensor_data.get("risk_escalation"), dict) else {}
+        knowledge_hits = escalation.get("knowledge_hits") if isinstance(escalation.get("knowledge_hits"), list) else []
+        local_knowledge_escalation = bool(
+            escalation.get("pending_model_review")
+            and knowledge_hits
+            and str(escalation.get("from") or risk).upper() in {"LOW", "MEDIUM"}
+        )
+        if local_knowledge_escalation:
+            risk = "HIGH"
         risk_label = {"HIGH": "高风险", "MEDIUM": "中风险", "LOW": "低风险"}.get(risk, "待确认")
         summary = (
             screening.get("summary")
@@ -1346,10 +1389,18 @@ class ECAEngine:
             f"{event_name}由边缘侧摄像头/ECA触发。本地初筛摘要：{summary} "
             f"关联视频{video_count}段、图像/抽帧{image_count}张；{evidence_text}"
         )
-        risk_reasoning = (
-            f"当前按{risk_label}处置，初筛综合置信度为{confidence_text}。"
-            f"{cloud_note}系统未等待云端增强结论，已降级采用本地4B初筛、事件条件和证据清单生成处置报告。"
-        )
+        if local_knowledge_escalation:
+            knowledge_reason = str(escalation.get("reason") or "特殊工况已命中知识库高风险条款")
+            risk_reasoning = (
+                f"本地工作流兜底研判为{risk_label}：初筛综合置信度为{confidence_text}，"
+                f"且{knowledge_reason}。{cloud_note}云端增强不可用时，"
+                "本地4B工作流结合初筛、特殊工况和知识库命中结果输出高风险结论。"
+            )
+        else:
+            risk_reasoning = (
+                f"当前按{risk_label}处置，初筛综合置信度为{confidence_text}。"
+                f"{cloud_note}系统未等待云端增强结论，已降级采用本地4B初筛、事件条件和证据清单生成处置报告。"
+            )
         response_plan = (
             "保持摄像头连续取证，通知值守人员查看现场视频；必要时安排人员到场复核。"
             "若水位、雨量、风速、坝体监测或画面目标持续异常，应升级告警并启动对应应急预案。"
@@ -1634,6 +1685,7 @@ class ECAEngine:
         db: Session,
         event: EventLibrary = None,
         event_instance: SafetyEventInstance = None,
+        execution_phase: str = "base",
     ) -> Dict[str, Any]:
         """
         执行事件动作配置（支持资源感知调度）
@@ -1652,7 +1704,7 @@ class ECAEngine:
         Returns:
             Dict: 执行结果，包含 gpu_status 和 original_steps_count
         """
-        steps = (
+        configured_steps = (
             db.query(EventActionConfig)
             .filter(
                 EventActionConfig.event_id == event_id,
@@ -1662,9 +1714,21 @@ class ECAEngine:
             .all()
         )
 
+        # 带有 risk_escalation_only 的人工动作是“升级处置策略”，不能在
+        # 普通低/中风险链路中提前执行；升级后始终排在原有设备动作之后。
+        escalation_steps = [
+            step for step in configured_steps
+            if self._is_risk_escalation_staff_step(step)
+        ]
+        if execution_phase == "risk_escalation":
+            steps = escalation_steps
+            original_count = len(escalation_steps)
+        else:
+            steps = [step for step in configured_steps if step not in escalation_steps]
+            original_count = len(configured_steps)
+
         # 资源感知调度：根据 GPU 状态过滤步骤
         gpu_status = self.get_gpu_status()
-        original_count = len(steps)
         steps = self.filter_steps_by_resource(steps, gpu_status)
 
         # 判断告警类型
@@ -1803,6 +1867,259 @@ class ECAEngine:
                 "skipped_steps_count": original_count - len(results),
             }
         }
+
+    @staticmethod
+    def _is_risk_escalation_staff_step(step: EventActionConfig) -> bool:
+        if str(step.action_type or "").lower().strip() != "staff_task":
+            return False
+        config = step.config_json if isinstance(step.config_json, dict) else {}
+        return bool(config.get("risk_escalation_only") or config.get("escalation_only"))
+
+    @staticmethod
+    def _has_high_risk_escalation(instance: SafetyEventInstance) -> bool:
+        observation = instance.latest_observation if isinstance(instance.latest_observation, dict) else {}
+        escalation = observation.get("risk_escalation") if isinstance(observation.get("risk_escalation"), dict) else {}
+        before = str(escalation.get("from") or escalation.get("risk_before") or "").upper()
+        after = str(escalation.get("to") or escalation.get("risk_after") or instance.max_risk_level or "").upper()
+        return bool(
+            escalation.get("escalated")
+            and after == "HIGH"
+            and before in {"LOW", "MEDIUM"}
+        )
+
+    def _apply_pending_model_risk_escalation(
+        self,
+        instance: SafetyEventInstance,
+        workflow_payload: Optional[Dict[str, Any]],
+        db: Session,
+    ) -> bool:
+        """Promote a knowledge-backed risk only after DAM model confirmation."""
+        observation = dict(instance.latest_observation or {})
+        escalation = observation.get("risk_escalation") if isinstance(observation.get("risk_escalation"), dict) else {}
+        if not escalation.get("pending_model_review"):
+            return False
+
+        selected = dam_event_report_service.select_llm_report(workflow_payload or {})
+        model_value = dam_event_report_service.find_in_selected(selected or {}, "risk_level")
+        model_risk = {
+            "critical": "HIGH", "严重风险": "HIGH", "high": "HIGH", "高风险": "HIGH",
+            "medium": "MEDIUM", "中风险": "MEDIUM", "low": "LOW", "低风险": "LOW",
+        }.get(str(model_value or "").strip().lower())
+        before = str(escalation.get("from") or instance.risk_level or "LOW").upper()
+        reason = str(escalation.get("reason") or "").strip()
+        if model_risk == "HIGH" and before in {"LOW", "MEDIUM"}:
+            instance.risk_level = "HIGH"
+            instance.max_risk_level = "HIGH"
+            escalation.update({
+                "escalated": True,
+                "pending_model_review": False,
+                "from": before,
+                "to": "HIGH",
+                "model_risk_level": "HIGH",
+                "escalation_source": "dam_model_with_knowledge",
+            })
+            observation["risk_escalation"] = escalation
+            instance.latest_observation = observation
+            flag_modified(instance, "latest_observation")
+            safety_event_runtime_service.append_timeline(
+                db,
+                instance,
+                log_type="RISK_CHANGE",
+                trigger_type="AUTO",
+                status="SUCCESS",
+                title="模型确认风险升级",
+                message=(
+                    f"DAM 模型结合特殊工况与知识库依据，将风险由{risk_label(before)}升级为高风险"
+                    + (f"（依据：{truncate(reason)}）" if reason else "")
+                ),
+                risk_level="HIGH",
+                payload={
+                    "risk_before": before,
+                    "risk_after": "HIGH",
+                    "model_risk_level": "HIGH",
+                    "reason": reason,
+                    "knowledge_hits": escalation.get("knowledge_hits") or [],
+                    "escalation_source": "dam_model_with_knowledge",
+                },
+            )
+            db.commit()
+            return True
+
+        after = model_risk or before
+        escalation.update({
+            "escalated": False,
+            "pending_model_review": False,
+            "from": before,
+            "to": after,
+            "model_risk_level": model_risk,
+            "escalation_source": "dam_model_with_knowledge",
+        })
+        observation["risk_escalation"] = escalation
+        instance.latest_observation = observation
+        flag_modified(instance, "latest_observation")
+        safety_event_runtime_service.append_timeline(
+            db,
+            instance,
+            log_type="RISK_REVIEW",
+            trigger_type="AUTO",
+            status="SUCCESS",
+            title="模型风险复核完成",
+            message=(
+                f"DAM 模型已完成特殊工况风险复核，模型结论为{risk_label(after)}，"
+                "未触发人工处置升级"
+            ),
+            payload={
+                "risk_before": before,
+                "risk_after": after,
+                "model_risk_level": model_risk,
+                "reason": reason,
+                "knowledge_hits": escalation.get("knowledge_hits") or [],
+                "escalation_source": "dam_model_with_knowledge",
+            },
+        )
+        db.commit()
+        return False
+
+    @staticmethod
+    def _merge_action_results(*results: Dict[str, Any]) -> Dict[str, Any]:
+        valid = [item for item in results if isinstance(item, dict)]
+        steps = [step for item in valid for step in (item.get("steps") or [])]
+        original_count = max(
+            (int((item.get("resource_info") or {}).get("original_steps_count") or 0) for item in valid),
+            default=0,
+        )
+        executed_count = sum(int((item.get("resource_info") or {}).get("executed_steps_count") or 0) for item in valid)
+        resource = {
+            "original_steps_count": original_count,
+            "executed_steps_count": executed_count,
+            "skipped_steps_count": max(original_count - executed_count, 0),
+        }
+        if valid:
+            resource["gpu_status"] = (valid[-1].get("resource_info") or {}).get("gpu_status")
+        return {
+            "success": all(bool(item.get("success")) for item in valid),
+            "steps": steps,
+            "resource_info": resource,
+        }
+
+    async def execute_risk_escalation_staff_actions(
+        self,
+        db: Session,
+        instance: SafetyEventInstance,
+    ) -> Dict[str, Any]:
+        """Append configured staff actions after a knowledge-backed risk escalation.
+
+        This is invoked by the supplemental-context endpoint after it updates the
+        event instance, so an already-completed device linkage can still be
+        escalated safely without replaying broadcast/drone/robot actions.
+        """
+        if not self._has_high_risk_escalation(instance):
+            return {"dispatched": False, "reason": "当前事件未满足由低中风险升级为高风险的条件"}
+        event = db.query(EventLibrary).filter(EventLibrary.id == instance.current_event_id).first()
+        if not event:
+            return {"dispatched": False, "reason": "缺少事件定义"}
+        policy_steps = [
+            step for step in db.query(EventActionConfig).filter(
+                EventActionConfig.event_id == event.id,
+                EventActionConfig.is_activate.is_(True),
+            ).order_by(EventActionConfig.step_order.asc(), EventActionConfig.id.asc()).all()
+            if self._is_risk_escalation_staff_step(step)
+        ]
+        if not policy_steps:
+            return {"dispatched": False, "reason": "流程未配置风险升级后的人工处置策略"}
+        existing_task = db.query(SafetyEventTask).filter(
+            SafetyEventTask.event_instance_id == instance.id,
+            SafetyEventTask.task_status.in_(("WAITING_ACCEPT", "DISPATCHED", "ACCEPTED", "PROCESSING")),
+        ).first()
+        if existing_task:
+            return {"dispatched": False, "reason": "已有待处理人工处置任务", "task_id": existing_task.id}
+        already_dispatched = db.query(SafetyEventTimelineLog).filter(
+            SafetyEventTimelineLog.event_instance_id == instance.id,
+            SafetyEventTimelineLog.action_key.like(f"eca-risk-escalation-staff:{instance.instance_no}:%"),
+            SafetyEventTimelineLog.status.in_(("SUCCESS", "PROCESSING", "PENDING")),
+        ).first()
+        if already_dispatched:
+            return {"dispatched": False, "reason": "风险升级人工处置已追加", "timeline_id": already_dispatched.id}
+
+        # 特殊工况可能在原设备联动和初版报告完成后才被补充。此时需要把事件
+        # 从自动闭环状态重新打开，人工任务完成后再更新最终报告。
+        if instance.state == "RESOLVED" or instance.status in {"COMPLETED", "FALSE_ALARM"}:
+            instance.state = "ACTIVE"
+            instance.status = "PROCESSING"
+            instance.resolved_at = None
+            instance.resolve_reason = "risk_escalation_staff_pending"
+            safety_event_runtime_service.append_timeline(
+                db,
+                instance,
+                action_key=f"risk-escalation-reopen:{instance.instance_no}",
+                log_type="RISK_CHANGE",
+                trigger_type="AUTO",
+                status="SUCCESS",
+                title="风险升级重新打开事件",
+                message="知识库/特殊工况将事件升级为高风险，原自动闭环已转为等待人工处置",
+                risk_level="HIGH",
+                payload={"instance_no": instance.instance_no, "reason": "risk_escalation_staff_pending"},
+            )
+
+        observation = dict(instance.latest_observation or {})
+        visual = observation.get("visual") if isinstance(observation.get("visual"), dict) else {}
+        screening = visual.get("screening") if isinstance(visual.get("screening"), dict) else {}
+        input_source = str(observation.get("input_source") or screening.get("input_source") or "").lower()
+        sensor_data = {
+            **observation,
+            "event_instance_id": instance.id,
+            "instance_no": instance.instance_no,
+            "demo_mode": input_source.startswith("simulation"),
+        }
+        escalation = observation.get("risk_escalation") if isinstance(observation.get("risk_escalation"), dict) else {}
+        for step in policy_steps:
+            safety_event_runtime_service.append_timeline(
+                db,
+                instance,
+                action_key=f"eca-risk-escalation-staff:{instance.instance_no}:{step.id}",
+                log_type="ACTION",
+                trigger_type="AUTO",
+                status="PROCESSING",
+                title="风险升级追加人工处置",
+                message=(
+                    f"风险由{risk_label(escalation.get('from') or 'LOW')}升级为高风险，"
+                    f"按升级策略追加人工处置"
+                    + (f"（{truncate(str(escalation.get('reason') or ''))}）" if escalation.get("reason") else "")
+                ),
+                event_action_id=step.id,
+                payload={"instance_no": instance.instance_no, "risk_escalation": escalation},
+            )
+        db.commit()
+        result = await self.execute_configured_actions(
+            event.id,
+            sensor_data,
+            db,
+            event,
+            event_instance=instance,
+            execution_phase="risk_escalation",
+        )
+        pending = any(
+            step.get("action_type") == "staff_task"
+            and bool(step.get("success"))
+            and bool((step.get("result") or {}).get("requires_manual_completion"))
+            for step in result.get("steps") or []
+        )
+        if pending:
+            safety_event_runtime_service.append_timeline(
+                db,
+                instance,
+                action_key=f"dam-event-report:{instance.instance_no}",
+                log_type="REPORT",
+                trigger_type="AUTO",
+                status="PENDING",
+                title="事件报告更新",
+                message="风险升级后已追加人工处置，报告等待现场取证完成后更新",
+                payload={"instance_no": instance.instance_no, "deferred_by": "risk_escalation_staff_task"},
+            )
+        elif result.get("success"):
+            self.generate_deferred_event_report(db, instance)
+        db.commit()
+        return {"dispatched": bool(result.get("steps")), "pending": pending, "result": result}
 
     @staticmethod
     def _persist_action_evidences(
@@ -2017,8 +2334,12 @@ class ECAEngine:
         event_code = str(getattr(event, "event_code", "") or "").upper()
         category = str(getattr(event, "event_category", "") or "").upper()
         event_name = str(getattr(event, "event_name", "") or "")
-        if "FLOOD" in event_code or "FLOOD" in category or "洪水" in event_name or "洪涝" in event_name:
-            return "FLOOD_EVENT"
+        if any(token in event_code or token in category or token in event_name.upper() for token in (
+            "WEATHER", "RAINSTORM", "TYPHOON", "暴雨", "台风", "极端天气",
+        )):
+            return "EXTREME_WEATHER_EVENT"
+        if "FLOOD" in event_code or "NATURAL_DISASTER" in category or "洪水" in event_name or "洪涝" in event_name:
+            return "NATURAL_DISASTER_EVENT"
         if "FISH" in event_code or "BOAT" in event_code or "FISH" in category:
             return "NIGHT_FISHING"
         if "PERSON" in event_code or "PERSON" in category:
@@ -2136,7 +2457,7 @@ class ECAEngine:
         except MachineDogCruiseError as exc:
             raise ValueError(str(exc)) from exc
 
-        result = await machine_dog_cruise_service.cruise()
+        result = await machine_dog_cruise_service.cruise(route_id)
         evidences = []
         for photo in result.get("photos") or []:
             if not isinstance(photo, dict) or not photo.get("minio_url"):

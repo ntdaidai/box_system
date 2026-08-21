@@ -267,6 +267,12 @@ const routes = [
             component: () => import('@/views/System/ModelManagement.vue'),
             meta: { title: '模型管理' }
           },
+          {
+            path: 'models/error-samples',
+            name: 'SystemFalseAlarmAnnotation',
+            component: () => import('@/views/System/FalseAlarmAnnotation.vue'),
+            meta: { title: '误报样本标注' }
+          },
         ],
       },
       // ========== 业务管理（告警 + 数据） ==========

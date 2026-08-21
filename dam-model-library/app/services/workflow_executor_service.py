@@ -385,14 +385,17 @@ class WorkflowExecutorService:
             compact_inputs = self._compact_for_prompt(request_inputs)
             top_media_objects = self._top_level_media_objects(node, request_inputs)
             model_category = str(node.get("model_category") or "").lower()
+            rendered_prompt = self._render_prompt(
+                template,
+                compact_inputs,
+                self._short_text(prompt, 1200),
+                self._compact_for_prompt(sensor_data),
+                event_type,
+            )
+            if model_category == "local_llm":
+                rendered_prompt += self._pending_risk_escalation_instruction(sensor_data)
             request_data = {
-                "prompt": self._render_prompt(
-                    template,
-                    compact_inputs,
-                    self._short_text(prompt, 1200),
-                    self._compact_for_prompt(sensor_data),
-                    event_type,
-                ),
+                "prompt": rendered_prompt,
                 "inputs": compact_inputs,
                 "sensor_data": sensor_data or request_inputs.get("sensor_data") or {},
                 "event_type": event_type or request_inputs.get("event_type"),
@@ -428,6 +431,35 @@ class WorkflowExecutorService:
                 request_data.setdefault("request_timeout", max(1, int(settings.workflow_local_llm_node_timeout or 60)))
             return request_data
         return {**request_inputs, **media_options, **metadata}
+
+    @staticmethod
+    def _pending_risk_escalation_instruction(sensor_data: Dict[str, Any]) -> str:
+        """Expose an already matched special-condition rule to the edge reviewer.
+
+        ECA deliberately waits for the workflow result before changing the
+        instance risk.  The local 4B reviewer therefore needs the same
+        explicit decision context as the cloud reviewer; otherwise a cloud
+        timeout makes it silently fall back to the base event risk.
+        """
+        data = sensor_data if isinstance(sensor_data, dict) else {}
+        escalation = data.get("risk_escalation") if isinstance(data.get("risk_escalation"), dict) else {}
+        context = data.get("supplemental_context") if isinstance(data.get("supplemental_context"), dict) else {}
+        hits = escalation.get("knowledge_hits") if isinstance(escalation.get("knowledge_hits"), list) else []
+        if not (escalation.get("pending_model_review") and context.get("active") and hits):
+            return ""
+        clauses = "、".join(
+            str(item.get("clause_id") or item.get("evidence_id") or "")
+            for item in hits[:3]
+            if isinstance(item, dict)
+        )
+        reason = str(escalation.get("reason") or "特殊工况已命中知识库高风险条款")
+        return (
+            "\n【特殊工况风险复核指令】当前事件存在已确认的运行特殊工况："
+            f"{context.get('label') or context.get('context_type') or '特殊工况'}。"
+            f"知识库已命中高风险条款：{clauses or '已命中'}；依据：{reason}。"
+            "该工况与人员活动线索同时满足，必须在本次模型输出中将最终 risk_level 判为 HIGH，"
+            "并在风险研判中说明运行工况和知识库依据；这是对基础事件低风险的模型复核结论。"
+        )
 
     @staticmethod
     def _build_knowledge_query(

@@ -29,39 +29,37 @@
       </view>
 
       <view class="video-box">
-        <video
-          v-if="streamUrl"
-          :key="livePlayerKey"
-          class="video-frame"
-          :src="streamUrl"
-          autoplay
-          loop
-          muted
-          :controls="false"
-          :show-center-play-btn="false"
-          :show-play-btn="false"
-          :show-fullscreen-btn="false"
-          :show-mute-btn="false"
-          :show-progress="false"
-          :enable-progress-gesture="false"
-          :vslide-gesture="false"
-          object-fit="cover"
-          @play="handleVideoPlay"
-          @error="handleVideoError"
-        />
+        <view v-if="streamUrl" class="video-crop-layer">
+          <video
+            :key="livePlayerKey"
+            class="video-frame"
+            :src="streamUrl"
+            autoplay
+            loop
+            muted
+            :controls="false"
+            :show-center-play-btn="false"
+            :show-play-btn="false"
+            :show-fullscreen-btn="false"
+            :show-mute-btn="false"
+            :show-progress="false"
+            :enable-progress-gesture="false"
+            :vslide-gesture="false"
+            object-fit="cover"
+            @play="handleVideoPlay"
+            @error="handleVideoError"
+          />
+          <view v-if="showAssistBox && selectedCamera.id" class="assist-overlay">
+            <view
+              v-for="zone in assistZones"
+              :key="zone.id || zone.zone_name"
+              class="assist-zone"
+              :style="assistZoneStyle(zone)"
+            />
+          </view>
+        </view>
         <view v-else class="video-empty">{{ videoText }}</view>
         <view v-if="videoError" class="video-error">{{ videoError }}</view>
-        <view v-if="showAssistBox && selectedCamera.id" class="assist-overlay">
-          <view
-            v-for="zone in assistZones"
-            :key="zone.id || zone.zone_name"
-            class="assist-zone"
-            :style="assistZoneStyle(zone)"
-          >
-            <text>{{ zone.zone_name || zoneTypeLabel(zone.zone_type) }}</text>
-          </view>
-          <view v-if="!assistZones.length" class="assist-empty">暂无辅助区域</view>
-        </view>
       </view>
 
       <view class="video-actions">
@@ -80,13 +78,18 @@
         >
           点位导航
         </button>
-        <button
-          class="ghost-btn action-btn"
-          :disabled="!selectedCamera.id"
-          @tap="toggleAssistBox"
+        <picker
+          class="assist-picker"
+          mode="selector"
+          :range="assistZoneNames"
+          :value="selectedAssistZoneIndex"
+          :disabled="!availableAssistZones.length"
+          @change="selectAssistZone"
         >
-          {{ showAssistBox ? '隐藏辅助框' : '显示辅助框' }}
-        </button>
+          <button class="ghost-btn action-btn" :disabled="!availableAssistZones.length">
+            {{ assistControlLabel }}
+          </button>
+        </picker>
       </view>
 
       <button
@@ -149,7 +152,7 @@ export default {
       cameraBroadcasting: false,
       recordingBroadcast: false,
       broadcastRecorder: null,
-      showAssistBox: false
+      selectedAssistZoneId: ''
     }
   },
 
@@ -173,8 +176,40 @@ export default {
       return '暂无可用喊话设备'
     },
 
-    assistZones() {
+    availableAssistZones() {
       return (this.selectedCamera.detection_zones || []).filter((zone) => zone && zone.enabled !== false)
+    },
+
+    assistZoneOptions() {
+      return [{ id: '', zone_name: '不显示辅助框' }, ...this.availableAssistZones]
+    },
+
+    assistZoneNames() {
+      return this.assistZoneOptions.map((zone) => zone.zone_name || zone.name || this.zoneTypeLabel(zone.zone_type))
+    },
+
+    selectedAssistZoneIndex() {
+      const index = this.assistZoneOptions.findIndex((zone) => String(zone.id) === String(this.selectedAssistZoneId))
+      return index > -1 ? index : 0
+    },
+
+    selectedAssistZone() {
+      return this.availableAssistZones.find((zone) => String(zone.id) === String(this.selectedAssistZoneId)) || null
+    },
+
+    assistZones() {
+      return this.selectedAssistZone ? [this.selectedAssistZone] : []
+    },
+
+    showAssistBox() {
+      return Boolean(this.selectedAssistZone)
+    },
+
+    assistControlLabel() {
+      if (!this.availableAssistZones.length) return '暂无辅助框'
+      if (!this.selectedAssistZone) return '选择辅助框'
+      const name = this.selectedAssistZone.zone_name || this.selectedAssistZone.name || this.zoneTypeLabel(this.selectedAssistZone.zone_type)
+      return `辅助框：${name}`
     }
   },
 
@@ -210,6 +245,7 @@ export default {
           if (this.selectedCameraIndex >= this.cameras.length) {
             this.selectedCameraIndex = 0
           }
+          this.syncAssistZoneSelection()
           if (autoStart) {
             this.openSelectedCamera(false)
           }
@@ -235,6 +271,7 @@ export default {
     selectCameraByIndex(index) {
       if (index === this.selectedCameraIndex && this.streamUrl) return
       this.selectedCameraIndex = index
+      this.selectedAssistZoneId = ''
       this.openSelectedCamera(true)
     },
 
@@ -277,12 +314,19 @@ export default {
       console.error('[monitor-video] playback failed', event?.detail || event)
     },
 
-    toggleAssistBox() {
-      this.showAssistBox = !this.showAssistBox
+    selectAssistZone(event) {
+      const index = Number(event.detail.value || 0)
+      const selected = this.assistZoneOptions[index] || this.assistZoneOptions[0]
+      this.selectedAssistZoneId = selected?.id || ''
       uni.showToast({
-        title: this.showAssistBox ? '辅助框已显示' : '辅助框已隐藏',
+        title: this.selectedAssistZoneId ? '辅助框已切换' : '辅助框已隐藏',
         icon: 'none'
       })
+    },
+
+    syncAssistZoneSelection() {
+      const exists = this.availableAssistZones.some((zone) => String(zone.id) === String(this.selectedAssistZoneId))
+      if (!exists) this.selectedAssistZoneId = ''
     },
 
     zoneTypeLabel(type) {
@@ -478,7 +522,7 @@ export default {
 .video-box {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 11;
+  aspect-ratio: 16 / 9;
   margin-top: 18rpx;
   border-radius: 8rpx;
   overflow: hidden;
@@ -486,9 +530,19 @@ export default {
 }
 
 .video-frame {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   background: #172026;
+}
+
+.video-crop-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
 }
 
 .video-empty {
@@ -532,6 +586,17 @@ export default {
   font-size: 25rpx;
 }
 
+.assist-picker {
+  min-width: 0;
+}
+
+.assist-picker .action-btn {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .broadcast-btn {
   display: flex;
   align-items: center;
@@ -563,61 +628,10 @@ export default {
 
 .assist-zone {
   position: absolute;
-  min-width: 88rpx;
-  min-height: 62rpx;
   border: 4rpx solid #31d6a0;
   border-radius: 6rpx;
   box-sizing: border-box;
   box-shadow: 0 0 18rpx rgba(49, 214, 160, 0.35);
-}
-
-.assist-zone::before,
-.assist-zone::after {
-  content: '';
-  position: absolute;
-  width: 18rpx;
-  height: 18rpx;
-  border-radius: 50%;
-  background: currentColor;
-  box-shadow: 0 0 16rpx currentColor;
-}
-
-.assist-zone::before {
-  left: -11rpx;
-  top: -11rpx;
-}
-
-.assist-zone::after {
-  right: -11rpx;
-  bottom: -11rpx;
-}
-
-.assist-zone text {
-  position: absolute;
-  left: 10rpx;
-  top: 8rpx;
-  max-width: calc(100% - 20rpx);
-  padding: 4rpx 8rpx;
-  border-radius: 4rpx;
-  background: rgba(8, 24, 31, 0.78);
-  color: currentColor;
-  font-size: 20rpx;
-  line-height: 28rpx;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.assist-empty {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  padding: 10rpx 16rpx;
-  border-radius: 6rpx;
-  background: rgba(8, 24, 31, 0.72);
-  color: #d8e5e8;
-  font-size: 22rpx;
 }
 
 .broadcast-note {

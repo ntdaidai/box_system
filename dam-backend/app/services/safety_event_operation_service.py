@@ -92,14 +92,21 @@ async def operate_safety_event(
     risk_level: Optional[str] = None,
     version: Optional[int] = None,
     evidence_url: Optional[str] = None,
+    allow_closed_false_alarm: bool = False,
+    false_alarm_evidence: Optional[list[dict[str, Any]]] = None,
 ) -> dict:
     event = _instance(db, instance_id)
-    if _closed(event):
+    action = action.upper()
+    was_closed = _closed(event)
+    if was_closed and not (
+        action == "FALSE_ALARM"
+        and allow_closed_false_alarm
+        and event.status != "FALSE_ALARM"
+    ):
         raise HTTPException(status_code=409, detail="事件已结束，不能继续处置")
     if version is not None and (event.version or 0) != version:
         raise HTTPException(status_code=409, detail="事件状态已变化，请刷新后重试")
 
-    action = action.upper()
     if action not in ACTION_MESSAGES:
         raise HTTPException(status_code=422, detail="不支持的事件操作")
     operator = getattr(user, "username", None) or "UNKNOWN"
@@ -178,10 +185,17 @@ async def operate_safety_event(
             event.resolved_at = now
             event.resolve_reason = reason or "人工处置完成"
         elif action in {"FALSE_ALARM", "RESOLVE"}:
+            if action == "RESOLVE" and task and task.task_status not in {"COMPLETED", "CANCELLED"}:
+                task.task_status = "COMPLETED"
+                task.completed_at = now
             event.state = "RESOLVED"
             event.status = "FALSE_ALARM" if action == "FALSE_ALARM" else "COMPLETED"
             event.resolved_at = now
-            event.resolve_reason = reason or ("人工标记误报" if action == "FALSE_ALARM" else "人工闭环")
+            event.resolve_reason = reason or (
+                "复核标记误报" if action == "FALSE_ALARM" and was_closed
+                else "人工标记误报" if action == "FALSE_ALARM"
+                else "人工闭环"
+            )
         risk_before = risk_after = None
         log_type = "RESOLVE" if event.state == "RESOLVED" else "MANUAL"
 
@@ -198,7 +212,11 @@ async def operate_safety_event(
     elif action == "COMPLETE_TASK":
         message = f"工作人员 {operator} 已完成现场处置，事件闭环（任务 #{task_id}）"
     elif action == "FALSE_ALARM":
-        message = f"工作人员 {operator} 判断为误报，事件已归档"
+        selected_count = len(false_alarm_evidence or [])
+        review_prefix = "复核后" if was_closed else ""
+        message = f"工作人员 {operator} {review_prefix}标记误报，事件已归档"
+        if selected_count:
+            message = f"{message}，已归档 {selected_count} 张误报图片"
     elif action == "RESOLVE":
         message = f"工作人员 {operator} 确认事件解除，事件已闭环"
     else:
@@ -225,6 +243,7 @@ async def operate_safety_event(
             "task_id": task_id,
             "risk_before": risk_before,
             "risk_after": risk_after,
+            "false_alarm_evidence_count": len(false_alarm_evidence or []) if action == "FALSE_ALARM" else None,
         },
         create_time=now,
     )
@@ -239,6 +258,26 @@ async def operate_safety_event(
             description="人工处置证据",
             captured_at=now,
         ))
+    if action == "FALSE_ALARM":
+        for item in false_alarm_evidence or []:
+            file_url = str(item.get("file_url") or "").strip()
+            if not file_url:
+                continue
+            db.add(SafetyEventEvidence(
+                event_instance_id=event.id,
+                timeline_log_id=log.id,
+                evidence_type="IMAGE",
+                source_type="FALSE_ALARM",
+                source_id=operator,
+                file_url=file_url,
+                description="复核标记为误报的图片",
+                metadata_json={
+                    "false_alarm": True,
+                    "original_object_name": item.get("object_name"),
+                    "error_picture_path": item.get("error_picture_path"),
+                },
+                captured_at=now,
+            ))
     db.commit()
 
     if action in {"RESOLVE", "FALSE_ALARM", "COMPLETE_TASK"} and event.source_type == "camera":

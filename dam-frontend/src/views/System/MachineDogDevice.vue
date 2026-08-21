@@ -126,7 +126,15 @@
               :disabled="dog.status === 'offline'"
             />
           </el-select>
-          <div class="route-picker fixed-route-picker">{{ presetRoutes[0]?.name || '9号检测区域巡检路线' }}</div>
+          <el-select
+            v-model="selectedPresetRouteId"
+            class="route-picker"
+            placeholder="选择巡检路线"
+            popper-class="dog-select-popper"
+            @change="applyPresetRoute"
+          >
+            <el-option v-for="route in presetRoutes" :key="route.id" :label="route.name" :value="route.id" />
+          </el-select>
           <el-button class="ctrl-btn" :icon="VideoPlay" type="primary" :disabled="!canStartTask" @click="startInspection">
             开始巡检
           </el-button>
@@ -250,7 +258,7 @@
           <video
             v-if="isDogRunning"
             :key="selectedDog?.id || activeDog?.id || 'machine-dog-walking'"
-            class="video-stream"
+            class="video-stream demo-video-crop"
             :src="videoUrl"
             autoplay
             muted
@@ -447,13 +455,12 @@ const waypoints = [
 // 机器狗充电区（标记图紫色区域，全局坐标）
 const chargeZone = { x: 82, y: 36.2 }
 
-// 机器狗接口当前只支持固定的 all 全路线；清理旧版多路线本地缓存，
-// 避免页面展示出后端无法执行的 route-a / route-b。
+// 机器狗测试与规则配置共用两条方向明确的巡检路线。
 const ROUTE_STORAGE_KEY = 'machine-dog-preset-routes-v1'
 const SELECTED_ROUTE_STORAGE_KEY = 'machine-dog-selected-route-v1'
-// 固定路线
 const DEFAULT_PRESET_ROUTES = [
-  { id: 'all', name: '9号检测区域巡检路线', points: ['p1', 'p2', 'p3'] },
+  { id: 'route-a', name: '岸线由西向东巡检', points: ['p1', 'p2', 'p3'] },
+  { id: 'route-b', name: '岸线由东向西巡检', points: ['p3', 'p2', 'p1'] },
 ]
 
 function cloneDefaultRoutes() {
@@ -1649,6 +1656,15 @@ onBeforeUnmount(() => {
   height: 100%;
   display: block;
   object-fit: cover;
+}
+.video-stage .demo-video-crop {
+  position: absolute;
+  /* 演示素材的水印位于底部：保留上方画面，仅加大底部裁切。 */
+  top: -12%;
+  left: 0;
+  width: 100%;
+  height: 126%;
+  object-fit: fill;
 }
 
 .video-placeholder {

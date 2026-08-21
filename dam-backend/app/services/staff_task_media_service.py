@@ -88,7 +88,10 @@ class StaffTaskMediaService:
         event_sources = {
             "PERSON_WADING": "nowater",
             "NIGHT_FISHING": "nofishing",
-            "FLOOD_EVENT": "flood",
+            # 现有洪水现场图作为自然灾害/极端天气处置的演示素材；真实任务
+            # 仍由工作人员回传现场照片。
+            "NATURAL_DISASTER_EVENT": "flood",
+            "EXTREME_WEATHER_EVENT": "flood",
         }
         prepared: dict[str, list[dict[str, str]]] = {}
         for event_type, folder_name in event_sources.items():
@@ -98,7 +101,7 @@ class StaffTaskMediaService:
                 for path in picture_dir.iterdir()
                 if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
             ) if picture_dir.is_dir() else []
-            required_count = 4 if event_type == "FLOOD_EVENT" else 2
+            required_count = 4 if event_type in {"NATURAL_DISASTER_EVENT", "EXTREME_WEATHER_EVENT"} else 2
             if len(pictures) < required_count:
                 raise ValueError(f"人工处置演示图片不足，需要 {required_count} 张：{picture_dir}")
 
@@ -143,7 +146,9 @@ class StaffTaskMediaService:
         pictures = self._prepared_demo_pictures.get(canonical_type)
         if not pictures or len(pictures) < 2:
             raise ValueError("人工处置演示图片尚未预置到 MinIO，请先执行演示图片初始化")
-        selected = random.sample(pictures, 2) if canonical_type == "FLOOD_EVENT" else pictures[:2]
+        selected = random.sample(pictures, 2) if canonical_type in {
+            "NATURAL_DISASTER_EVENT", "EXTREME_WEATHER_EVENT",
+        } else pictures[:2]
         return [
             {**item, "phase": phase}
             for phase, item in zip(("before", "after"), selected)

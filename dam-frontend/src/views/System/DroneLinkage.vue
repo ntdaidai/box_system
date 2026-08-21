@@ -265,7 +265,7 @@
                 :key="testWaylineId"
                 ref="testVideoRef"
                 :src="demoVideoSrc"
-                class="video-stream"
+              class="video-stream demo-video-crop"
                 autoplay
                 muted
                 loop
@@ -1516,6 +1516,14 @@ async function refreshCurrent() {
   border: 1px solid rgba(93, 184, 225, 0.17);
 }
 .video-stream { width: 100%; height: 100%; object-fit: fill; }
+.video-stage .demo-video-crop {
+  position: absolute;
+  /* 演示素材的水印位于底部：保留上方画面，仅加大底部裁切。 */
+  top: -12%;
+  left: 0;
+  width: 100%;
+  height: 126%;
+}
 .video-placeholder {
   display: flex;
   flex-direction: column;

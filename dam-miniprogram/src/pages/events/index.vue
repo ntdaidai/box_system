@@ -361,8 +361,8 @@ export default {
     demoEventsFor(status) {
       if (!ENABLE_DEMO_EVENTS || !['pending', 'processing'].includes(status)) return []
       const now = Math.floor(Date.now() / 1000)
-      const currentGroup = this.staff?.group_name || '九号点位组'
-      const otherGroup = currentGroup === '九号点位组' ? '三号点位组' : '九号点位组'
+      const currentGroup = this.staff?.group_name || '9号点位组'
+      const otherGroup = currentGroup === '9号点位组' ? '3号点位组' : '9号点位组'
       const currentName = '9号点位值班员1'
       const sameGroupName = '9号点位值班员2'
       const base = (eventId, title, groupName, extra = {}) => ({
@@ -547,16 +547,15 @@ export default {
     openDetail(item) {
       const eventId = item?.event_id || item
       if (item?.is_demo) {
+        writeCache(`demo-event:${eventId}`, item)
         if (item.business_status === 'processing' && item.is_my_assignee) {
-          writeCache(`demo-event:${eventId}`, item)
           uni.navigateTo({
             url: `/pages/process/index?demo=1&event_id=${encodeURIComponent(eventId)}`
           })
           return
         }
-        uni.showToast({
-          title: item.business_status === 'processing' ? '该任务由其他人员处理中' : '演示待处理任务',
-          icon: 'none'
+        uni.navigateTo({
+          url: `/pages/detail/index?demo=1&event_id=${encodeURIComponent(eventId)}`
         })
         return
       }

@@ -77,9 +77,11 @@
                 :key="item.id"
                 type="button"
                 class="review-frame-item"
+                :class="{ 'is-false-alarm': isFalseAlarmFrame(item) }"
                 @click="openEvidenceItem(item)"
               >
                 <el-image :src="normalizeMediaUrl(item.file_url)" fit="cover" />
+                <span v-if="isFalseAlarmFrame(item)" class="false-alarm-frame-flag">误报样本</span>
                 <footer>
                   <span>复核帧 {{ String(index + 1).padStart(2, '0') }}</span>
                 </footer>
@@ -143,14 +145,23 @@
                 :key="entry.item.id"
                 :class="[timelineTone(entry.item), timelineNodeClass(entry.item)]"
               >
-                <span class="log-type">{{ logTypeLabel(entry.item.log_type) }}</span>
+                <span class="log-type">{{ logTypeLabel(entry.item.log_type, entry.item) }}</span>
                 <div class="log-body">
                   <strong>{{ logTitle(entry.item) }}</strong>
                   <p v-if="logMessage(entry.item)">{{ logMessage(entry.item) }}</p>
                   <dl v-if="logDetailFields(entry.item).length" class="log-fields">
-                    <div v-for="field in logDetailFields(entry.item)" :key="field.label">
-                      <dt>{{ field.label }}</dt>
-                      <dd>{{ field.value }}</dd>
+                    <div
+                      v-for="field in logDetailFields(entry.item)"
+                      :key="`${field.kind || field.label}-${field.value}`"
+                      :class="{ 'log-field-note': field.kind === 'note' }"
+                    >
+                      <template v-if="field.kind === 'note'">
+                        <dd class="log-field-note-text">{{ field.value }}</dd>
+                      </template>
+                      <template v-else>
+                        <dt>{{ field.label }}</dt>
+                        <dd>{{ field.value }}</dd>
+                      </template>
                     </div>
                   </dl>
                   <div v-if="entry.dag" class="workflow-dag-block">
@@ -209,15 +220,6 @@
                   <span>{{ operatorLabel(entry.item.operator) }}</span>
                   <time>{{ formatTime(entry.item.create_time || entry.item.created_at) }}</time>
                 </div>
-                <el-button
-                  v-if="evidenceForLog(entry.item.id).length"
-                  link
-                  type="primary"
-                  :icon="Picture"
-                  @click="openEvidence(entry.item.id)"
-                >
-                  证据
-                </el-button>
               </article>
             </div>
             <div v-else class="compact-empty">
@@ -305,19 +307,10 @@
               </div>
             </header>
             <div class="action-context">
-              <strong>{{ primaryAction.title }}</strong>
-              <p v-if="event.state === 'ACTIVE'">{{ primaryAction.hint }}</p>
+              <strong>{{ operationContext.title }}</strong>
+              <p>{{ operationContext.hint }}</p>
             </div>
             <div class="decision-actions">
-              <el-button
-                v-if="primaryAction.action"
-                type="primary"
-                class="archive-primary-action"
-                :disabled="primaryAction.disabled"
-                @click="operate(primaryAction.action)"
-              >
-                {{ primaryAction.label }}
-              </el-button>
               <el-button
                 v-for="button in secondaryActions"
                 :key="button.action"
@@ -412,6 +405,43 @@
     </AppDialog>
 
     <el-dialog
+      v-model="falseAlarmDialogVisible"
+      class="false-alarm-dialog"
+      width="760px"
+      align-center
+      destroy-on-close
+      :close-on-click-modal="false"
+      title="标记误报"
+      @closed="resetFalseAlarmSelection"
+    >
+      <div class="false-alarm-dialog-copy">请选择模型误判的现场证据。确认后将把原始图片归档为误报样本。</div>
+      <div class="false-alarm-selection-grid">
+        <button
+          v-for="(item, index) in falseAlarmCandidates"
+          :key="`false-alarm-${item.id}-${index}`"
+          type="button"
+          class="false-alarm-selection-item"
+          :class="{ selected: isFalseAlarmSelected(item.file_url) }"
+          @click="toggleFalseAlarmSelection(item.file_url)"
+        >
+          <el-image :src="normalizeMediaUrl(item.file_url)" fit="cover" />
+          <span class="false-alarm-selection-check">{{ isFalseAlarmSelected(item.file_url) ? '✓' : '' }}</span>
+          <strong>复核帧 {{ String(index + 1).padStart(2, '0') }}</strong>
+        </button>
+      </div>
+      <div v-if="!falseAlarmCandidates.length" class="linkage-evidence-empty">
+        <el-icon><Picture /></el-icon>
+        <div><strong>暂无可标记图片</strong><span>当前事件没有可归档的现场图片</span></div>
+      </div>
+      <template #footer>
+        <el-button @click="falseAlarmDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="falseAlarmSubmitting" :disabled="!selectedFalseAlarmUrls.length" @click="submitFalseAlarmReview">
+          归档 {{ selectedFalseAlarmUrls.length }} 张误报图片
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
       v-model="processDialogVisible"
       class="linkage-process-dialog drone-test-dialog"
       width="92%"
@@ -457,7 +487,7 @@
                 :key="processRouteSelection"
                 ref="processVideoRef"
                 :src="processVideoSrc"
-                class="video-stream"
+                class="video-stream demo-video-crop"
                 autoplay
                 muted
                 loop
@@ -495,6 +525,7 @@ import {
   getIntegrationConfig,
   getUnifiedSafetyEventDetail,
   operateUnifiedSafetyEvent,
+  reviewUnifiedSafetyEventFalseAlarm,
   STAFF_TASK_EVENT_TYPES,
   submitStaffTaskResult,
 } from '@/api/integration'
@@ -524,6 +555,9 @@ const processVideoRef = ref(null)
 let processTimer = null
 const staffResultDialogVisible = ref(false)
 const staffResultSubmitting = ref(false)
+const falseAlarmDialogVisible = ref(false)
+const falseAlarmSubmitting = ref(false)
+const selectedFalseAlarmUrls = ref([])
 const staffResultForm = reactive({
   eventType: 'PERSON_WADING',
   result: 'DRIVEN_AWAY',
@@ -560,9 +594,51 @@ const displayedTimeline = computed(() => {
   const entries = order
     .map((key) => latestByAction.get(key))
     .filter(Boolean)
+  const riskReviews = entries.filter((item) => String(item?.log_type || '').toUpperCase() === 'RISK_REVIEW')
+  const initiationReviews = riskReviews.filter(isRiskReviewInitiation)
+  const latestInitiationReview = initiationReviews.reduce((latest, item) => {
+    if (!latest) return item
+    const latestTime = new Date(latest?.create_time || latest?.created_at || 0).getTime()
+    const itemTime = new Date(item?.create_time || item?.created_at || 0).getTime()
+    return itemTime >= latestTime ? item : latest
+  }, null)
+  const modelConclusions = entries.filter(isModelRiskConclusion)
+  const latestModelConclusion = modelConclusions.reduce((latest, item) => {
+    if (!latest) return item
+    const latestTime = new Date(latest?.create_time || latest?.created_at || 0).getTime()
+    const itemTime = new Date(item?.create_time || item?.created_at || 0).getTime()
+    return itemTime >= latestTime ? item : latest
+  }, null)
   return entries
     .filter((item) => !isLegacyDuplicateBroadcastLog(item, entries))
+    // 发起记录与模型复核结论各保留一条，结论作为智能路由的最后一条独立记录。
+    .filter((item) => {
+      const type = String(item?.log_type || '').toUpperCase()
+      if (type === 'RISK_REVIEW') {
+        return isRiskReviewInitiation(item) ? item === latestInitiationReview : item === latestModelConclusion
+      }
+      if (isModelRiskConclusion(item)) return item === latestModelConclusion
+      return true
+    })
     .sort((left, right) => {
+      const leftType = String(left?.log_type || '').toUpperCase()
+      const rightType = String(right?.log_type || '').toUpperCase()
+      const leftRiskReview = leftType === 'RISK_REVIEW'
+      const rightRiskReview = rightType === 'RISK_REVIEW'
+      if (leftRiskReview && rightRiskReview) {
+        if (isRiskReviewInitiation(left) && !isRiskReviewInitiation(right)) return -1
+        if (!isRiskReviewInitiation(left) && isRiskReviewInitiation(right)) return 1
+      }
+      if (leftRiskReview && isRiskReviewInitiation(left) && rightType === 'DAM_WORKFLOW') return -1
+      if (leftType === 'DAM_WORKFLOW' && rightRiskReview && isRiskReviewInitiation(right)) return 1
+      if (leftRiskReview && !isRiskReviewInitiation(left) && rightType === 'DAM_WORKFLOW') return 1
+      if (leftType === 'DAM_WORKFLOW' && rightRiskReview && !isRiskReviewInitiation(right)) return -1
+      const leftConclusion = isModelRiskConclusion(left)
+      const rightConclusion = isModelRiskConclusion(right)
+      if (leftConclusion && rightType === 'DAM_WORKFLOW') return 1
+      if (leftType === 'DAM_WORKFLOW' && rightConclusion) return -1
+      if (leftConclusion && ['ACTION', 'MANUAL', 'REPORT', 'RESOLVE'].includes(rightType)) return -1
+      if (rightConclusion && ['ACTION', 'MANUAL', 'REPORT', 'RESOLVE'].includes(leftType)) return 1
       const leftReport = String(left?.log_type || '').toUpperCase() === 'REPORT'
       const rightReport = String(right?.log_type || '').toUpperCase() === 'REPORT'
       if (leftReport !== rightReport) return leftReport ? 1 : -1
@@ -580,6 +656,13 @@ const reviewFrames = computed(() => {
   const fallback = evidence.value.filter(isImageEvidence)
   return dedupeEvidenceFrames(frames.length ? frames : fallback).slice(0, 8)
 })
+const falseAlarmCandidates = computed(() => dedupeEvidenceFrames(reviewFrames.value))
+const falseAlarmObjectKeys = computed(() => new Set(
+  evidence.value
+    .filter((item) => item.is_false_alarm)
+    .flatMap((item) => [item.original_object_name, mediaObjectKey(item.file_url)])
+    .filter(Boolean)
+))
 const linkageEvidenceDefinitions = [
   { key: 'drone', label: '无人机', limit: 4 },
   { key: 'machine_dog', label: '机器狗', limit: 4 },
@@ -792,7 +875,6 @@ const actionModules = computed(() => {
         ['对象', (config, logs) => firstActionValue(config, logs, ['broadcast_device_name', 'device_name', 'object_name'])],
         ['模板', (config, logs) => firstActionValue(config, logs, ['template_name', 'template', 'template_title'])],
       ],
-      forceVisible: configsForModule(['broadcast']).length > 0,
     }),
     buildActionModule({
       key: 'drone',
@@ -800,21 +882,19 @@ const actionModules = computed(() => {
       types: ['drone_dispatch', 'drone', 'uav'],
       icon: Connection,
       meta: [
-        ['对象', (config, logs) => firstActionValue(config, logs, ['drone_name', 'device_name', 'drone_id', 'object_name'])],
-        ['航线', (config, logs) => firstActionValue(config, logs, ['route_name', 'wayline_name', 'route_id', 'wayline_id'])],
+        ['设备名称', (config, logs) => linkageDeviceName('drone', config, logs)],
+        ['执行路径', (config, logs) => linkageRouteName('drone', config, logs)],
       ],
-      forceVisible: configsForModule(['drone_dispatch', 'drone', 'uav']).length > 0,
     }),
     buildActionModule({
       key: 'machine_dog',
       title: '机器狗设备',
-      types: ['machine_dog', 'dog_dispatch', 'robot_dog', 'robot_dispatch', 'quadruped'],
+      types: ['machine_dog_dispatch', 'machine_dog', 'dog_dispatch', 'robot_dog', 'robot_dispatch', 'quadruped'],
       icon: Connection,
       meta: [
-        ['对象', (config, logs) => firstActionValue(config, logs, ['machine_dog_name', 'dog_name', 'robot_name', 'device_name', 'dog_id', 'robot_id', 'object_name'])],
-        ['路线', (config, logs) => firstActionValue(config, logs, ['route_name', 'path_name', 'route_id', 'path_id'])],
+        ['设备名称', (config, logs) => linkageDeviceName('machine_dog', config, logs)],
+        ['执行路径', (config, logs) => linkageRouteName('machine_dog', config, logs)],
       ],
-      forceVisible: configsForModule(['machine_dog', 'dog_dispatch', 'robot_dog', 'robot_dispatch', 'quadruped']).length > 0,
     }),
     buildActionModule({
       key: 'manual',
@@ -823,43 +903,26 @@ const actionModules = computed(() => {
       icon: User,
       meta: [
         ['对象', (_config, logs) => latestTask.value?.assignee || firstActionValue(null, logs, ['assignee', 'operator', 'operator_name']) || '系统'],
+        ['处置组别', () => latestTask.value?.assigned_group_name || '未分组'],
       ],
-      forceVisible: Boolean(latestTask.value || logsForModule('manual').length),
     }),
   ]
   return modules.filter(Boolean)
 })
 
-const primaryAction = computed(() => {
-  if (event.value?.state !== 'ACTIVE') {
-    return { title: '事件已归档', hint: archivedReason.value, label: '已归档', action: 'RESOLVE', disabled: true }
-  }
-  if (event.value.risk_level === 'HIGH') {
-    if (latestTask.value?.status === 'ACCEPTED' || latestTask.value?.status === 'PROCESSING') {
-      return { title: '人工处置进行中', hint: '请在联动执行卡片中完成处置，完成后事件将进入闭环。', label: '完成现场处置', action: null }
-    }
-    return { title: '需要人工接管', hint: '高风险事件需要先接受处置任务。', label: '接受处置', action: 'ACCEPT_TASK' }
-  }
-  return { title: '无需强制人工处置', hint: '确认事件真实性后可直接闭环，也可以升级风险。', label: '确认闭环', action: 'RESOLVE' }
+const operationContext = computed(() => {
+  if (event.value?.status === 'FALSE_ALARM') return { title: '事件已标记为误报', hint: '误报图片已归档，可在后续标注页面用于完善模型。' }
+  if (isResolved.value) return { title: '事件已归档', hint: '可继续复核现场图片并标记为误报。' }
+  return { title: '人工决策', hint: '可升级风险、标记误报，或直接完成闭环。' }
 })
 
 const secondaryActions = computed(() => {
-  if (event.value?.state !== 'ACTIVE') {
-    return [
-      { label: '升级风险', action: 'UPGRADE', type: 'danger', disabled: true },
-      { label: '标记误报', action: 'FALSE_ALARM', type: 'default', disabled: true },
-      { label: '完成闭环', action: 'RESOLVE', type: 'primary', disabled: true },
-    ]
-  }
-  const actions = []
-  if (event.value?.risk_level !== 'HIGH') {
-    actions.push({ label: '升级风险', action: 'UPGRADE', type: 'danger', disabled: false })
-  }
-  actions.push({ label: '标记误报', action: 'FALSE_ALARM', type: 'default', disabled: false })
-  if (event.value?.risk_level === 'HIGH' && latestTask.value?.status !== 'ACCEPTED' && latestTask.value?.status !== 'PROCESSING') {
-    actions.push({ label: '完成闭环', action: 'RESOLVE', type: 'primary', disabled: true })
-  }
-  return actions
+  const markedFalseAlarm = event.value?.status === 'FALSE_ALARM'
+  return [
+    { label: '升级风险', action: 'UPGRADE', type: 'warning', disabled: isResolved.value || event.value?.risk_level === 'HIGH' },
+    { label: '完成闭环', action: 'RESOLVE', type: 'success', disabled: isResolved.value },
+    { label: markedFalseAlarm ? '已标记误报' : '标记误报', action: 'FALSE_ALARM', type: 'danger', disabled: markedFalseAlarm },
+  ]
 })
 
 async function loadDetail() {
@@ -913,8 +976,8 @@ function buildActionModule(options) {
     label,
     value: getter(config, logs) || '未记录',
   }))
-  const objectValue = values.find((item) => item.label === '对象')?.value || '未记录'
-  const routeLabel = values.find((item) => ['航线', '路线'].includes(item.label))?.value || '未指定路线'
+  const objectValue = values.find((item) => ['对象', '设备名称'].includes(item.label))?.value || '未记录'
+  const routeLabel = values.find((item) => ['航线', '路线', '执行路径'].includes(item.label))?.value || '未指定路线'
   const executionTime = options.key === 'manual'
     ? (
       latestTask.value?.accepted_at
@@ -950,30 +1013,75 @@ function configsForModule(types) {
 }
 
 function logsForModule(key) {
-  const includes = {
-    broadcast: ['broadcast', '广播', '喊话'],
-    drone: ['drone', 'uav', '无人机', '派飞'],
-    machine_dog: ['machine_dog', 'dog_dispatch', 'robot_dog', 'robot', '机器狗', '四足'],
-    manual: ['manual', '人工', '处置', '接单', '工作人员'],
+  const actionTypes = {
+    broadcast: ['broadcast', 'auto_broadcast', 'manual_broadcast', 'manual_one_touch_broadcast'],
+    drone: ['drone_dispatch'],
+    machine_dog: ['machine_dog_dispatch'],
+    manual: ['staff_task'],
   }[key] || []
   return timeline.value.filter((item) => {
     const payload = parsePayload(item.payload)
-    const text = `${item.log_type || ''} ${item.title || ''} ${item.message || ''} ${item.action || ''} ${JSON.stringify(payload)}`.toLowerCase()
-    return includes.some((keyword) => text.includes(keyword))
+    const types = [
+      payload?.action_type,
+      payload?.canonical_action_type,
+      payload?.result?.action_type,
+      payload?.actions?.action_type,
+    ].filter(Boolean).map((value) => String(value).toLowerCase())
+    if (types.some((type) => actionTypes.includes(type))) return true
+    // 人工处置日志不一定带 action_type，但日志类型是确定的，不能再用描述文字模糊匹配。
+    return key === 'manual' && String(item?.log_type || '').toUpperCase() === 'MANUAL'
   })
 }
 
 function firstActionValue(config, logs, keys) {
+  const configPayload = parsePayload(config?.config_json)
   for (const key of keys) {
     if (hasValue(config?.[key])) return localizeText(config[key])
+    if (hasValue(configPayload?.[key])) return localizeText(configPayload[key])
   }
   for (const item of [...(logs || [])].reverse()) {
     const payload = parsePayload(item?.payload)
-    for (const key of keys) {
-      if (hasValue(payload?.[key])) return localizeText(payload[key])
+    const sources = [
+      payload,
+      payload?.result,
+      ...(Array.isArray(payload?.actions?.steps)
+        ? payload.actions.steps.slice().reverse().flatMap((step) => [step, step?.result])
+        : []),
+    ]
+    for (const source of sources) {
+      for (const key of keys) {
+        if (hasValue(source?.[key])) return localizeText(source[key])
+      }
     }
   }
   return ''
+}
+
+function linkageDeviceName(kind, config, logs) {
+  const named = firstActionValue(config, logs, kind === 'drone'
+    ? ['drone_name', 'device_name', 'object_name']
+    : ['machine_dog_name', 'dog_name', 'robot_name', 'device_name', 'object_name'])
+  if (named) return named
+
+  const identifier = firstActionValue(config, logs, kind === 'drone'
+    ? ['drone_id', 'source_id']
+    : ['machine_dog_id', 'dog_id', 'robot_id', 'source_id'])
+  if (kind === 'machine_dog' && identifier === 'dog-01') return '绝影 Lite 3'
+  return identifier || '未记录'
+}
+
+function linkageRouteName(kind, config, logs) {
+  const named = firstActionValue(config, logs, ['route_name', 'wayline_name', 'path_name'])
+  if (named) return named
+  const routeId = firstActionValue(config, logs, ['route_id', 'wayline_id', 'path_id'])
+  if (kind === 'drone') {
+    return ({ fishing: '禁渔航线', wading: '禁涉水航线' })[String(routeId).toLowerCase()] || routeId || '未指定路径'
+  }
+  return ({
+    all: '岸线由西向东巡检',
+    'route-a': '岸线由西向东巡检',
+    'route-b': '岸线由东向西巡检',
+  })[String(routeId).toLowerCase()] || routeId || '未指定路径'
 }
 
 function firstLog(predicate) {
@@ -1077,9 +1185,10 @@ function openEvidenceItem(item) {
 
 function inferStaffEventType() {
   const existing = String(latestTask.value?.event_type || '').toUpperCase()
-  if (['PERSON_WADING', 'NIGHT_FISHING', 'FLOOD_EVENT'].includes(existing)) return existing
+  if (['PERSON_WADING', 'NIGHT_FISHING', 'NATURAL_DISASTER_EVENT', 'EXTREME_WEATHER_EVENT'].includes(existing)) return existing
   const text = `${event.value?.event_name || ''} ${event.value?.summary || ''}`
-  if (/洪水|洪涝|flood/i.test(text)) return 'FLOOD_EVENT'
+  if (/暴雨|台风|极端天气|rainstorm|typhoon|weather/i.test(text)) return 'EXTREME_WEATHER_EVENT'
+  if (/洪水|洪涝|flood|自然灾害/i.test(text)) return 'NATURAL_DISASTER_EVENT'
   return /捕鱼|禁渔|船只/.test(text) ? 'NIGHT_FISHING' : 'PERSON_WADING'
 }
 
@@ -1137,6 +1246,10 @@ async function submitStaffResult() {
 
 async function operate(action) {
   if (!event.value?.id) return
+  if (action === 'FALSE_ALARM') {
+    openFalseAlarmDialog()
+    return
+  }
   const riskLevel = action === 'UPGRADE'
     ? (event.value.risk_level === 'LOW' ? 'MEDIUM' : 'HIGH')
     : undefined
@@ -1160,6 +1273,47 @@ async function operate(action) {
   }
 }
 
+function openFalseAlarmDialog() {
+  if (!falseAlarmCandidates.value.length) {
+    ElMessage.warning('当前事件没有可标记的现场图片')
+    return
+  }
+  resetFalseAlarmSelection()
+  falseAlarmDialogVisible.value = true
+}
+
+function resetFalseAlarmSelection() {
+  selectedFalseAlarmUrls.value = []
+}
+
+function isFalseAlarmSelected(fileUrl) {
+  return selectedFalseAlarmUrls.value.includes(fileUrl)
+}
+
+function toggleFalseAlarmSelection(fileUrl) {
+  const current = selectedFalseAlarmUrls.value
+  selectedFalseAlarmUrls.value = current.includes(fileUrl)
+    ? current.filter((item) => item !== fileUrl)
+    : [...current, fileUrl]
+}
+
+async function submitFalseAlarmReview() {
+  if (!event.value?.id || !selectedFalseAlarmUrls.value.length || falseAlarmSubmitting.value) return
+  falseAlarmSubmitting.value = true
+  try {
+    const result = await reviewUnifiedSafetyEventFalseAlarm(event.value.id, {
+      file_urls: selectedFalseAlarmUrls.value,
+    })
+    ElMessage.success(result.message || '误报图片已归档')
+    falseAlarmDialogVisible.value = false
+    await loadDetail()
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '误报图片归档失败')
+  } finally {
+    falseAlarmSubmitting.value = false
+  }
+}
+
 onBeforeUnmount(() => {
   stopLinkageProcess()
   for (let index = 0; index < 2; index += 1) revokeStaffPhotoPreview(index)
@@ -1173,6 +1327,18 @@ function isImageEvidence(item) {
   const type = String(item?.evidence_type || '').toUpperCase()
   const url = String(item?.file_url || '').split('?')[0].toLowerCase()
   return type === 'IMAGE' || type.endsWith('_IMAGE') || /\.(png|jpe?g|webp|gif|bmp)$/.test(url)
+}
+
+function mediaObjectKey(url) {
+  const clean = String(url || '').split('?')[0].replace(/^\/+/, '')
+  const marker = '/dam/'
+  const index = clean.indexOf(marker)
+  if (index >= 0) return clean.slice(index + marker.length)
+  return clean.replace(/^dam\//, '')
+}
+
+function isFalseAlarmFrame(item) {
+  return falseAlarmObjectKeys.value.has(mediaObjectKey(item?.file_url))
 }
 
 function linkageEvidenceKind(item) {
@@ -1221,8 +1387,24 @@ function statusClass(value) {
   return ({ PENDING: 'is-pending', PROCESSING: 'is-processing', COMPLETED: 'is-completed', FALSE_ALARM: 'is-false-alarm' })[value] || ''
 }
 
-function logTypeLabel(value) {
-  return ({ TRIGGER: '事件触发', RECOVERY: '条件恢复', WORKFLOW: '工作流', DAM_WORKFLOW: '智能路由', ACTION: '联动动作', REPORT: '闭环归档', MANUAL: '人工操作', RESOLVE: '闭环归档', SYSTEM: '系统记录', RISK_CHANGE: '风险变化' })[value] || localizeText(value) || '记录'
+function logTypeLabel(value, item) {
+  if (String(value || '').toUpperCase() === 'RISK_REVIEW') {
+    return isRiskReviewInitiation(item) ? '事件触发' : '智能路由'
+  }
+  if (String(value || '').toUpperCase() === 'RISK_CHANGE' && isModelRiskConclusion(item)) return '智能路由'
+  return ({
+    TRIGGER: '事件触发',
+    SUPPLEMENTAL_CONTEXT: '事件触发',
+    RECOVERY: '条件恢复',
+    WORKFLOW: '工作流',
+    DAM_WORKFLOW: '智能路由',
+    ACTION: '联动动作',
+    REPORT: '闭环归档',
+    MANUAL: '人工操作',
+    RESOLVE: '闭环归档',
+    SYSTEM: '系统记录',
+    RISK_CHANGE: '风险变化',
+  })[value] || localizeText(value) || '记录'
 }
 
 function logTitle(item) {
@@ -1244,6 +1426,8 @@ function logTitle(item) {
     if (status === 'FAILED') return '事件处置报告生成异常'
     return '事件处置报告已生成'
   }
+  if (type === 'RISK_REVIEW') return isRiskReviewInitiation(item) ? '发起风险复核' : '风险复核'
+  if (type === 'RISK_CHANGE' && isModelRiskConclusion(item)) return '风险复核'
   if (type === 'ACTION') {
     const action = actionTaskLabel(p)
     if (action) {
@@ -1256,7 +1440,16 @@ function logTitle(item) {
     return '所有联动动作已完成'
   }
   if (type === 'MANUAL') return status === 'FAILED' ? '人工处置异常' : '人工处置已记录'
-  if (type === 'RESOLVE') return '事件已完成闭环'
+  if (type === 'RESOLVE') {
+    return String(p.operation || '').toUpperCase() === 'FALSE_ALARM'
+      ? '事件已标记为误报'
+      : '事件已完成闭环'
+  }
+  if (type === 'SUPPLEMENTAL_CONTEXT' || type === 'RISK_REVIEW') {
+    return type === 'SUPPLEMENTAL_CONTEXT'
+      ? '运行状态补充'
+      : '风险依据复核'
+  }
   return localizeText(item?.title || item?.message || item?.action || '事件记录')
 }
 
@@ -1264,6 +1457,14 @@ function logMessage(item) {
   const type = String(item?.log_type || '').toUpperCase()
   const status = normalizedLogStatus(item)
   const p = parsePayload(item?.payload)
+
+  if (type === 'SUPPLEMENTAL_CONTEXT') return ''
+
+  if (type === 'RISK_REVIEW') {
+    return ''
+  }
+
+  if (type === 'RISK_CHANGE' && isModelRiskConclusion(item)) return ''
 
   if (type === 'TRIGGER') {
     const source = p.source_name || p.camera_name || (eventKind.value === 'sensor' ? sensorSourceName() : sourceLabel(event.value?.source_type))
@@ -1276,10 +1477,9 @@ function logMessage(item) {
       const size = workflowSizeText(p)
       return size ? `系统已根据事件信息生成处置流程，包含${size}。` : '系统正在根据事件信息生成处置流程。'
     }
-    if (workflowFallbackUsed(p)) return '云端结果复核未成功返回，系统已切换到本地备用分析路径继续完成处置。'
     if (status === 'RUNNING') return '系统正在执行已生成的处置流程，逐步完成分析任务。'
     if (status === 'FAILED') return '处置流程执行未完成，请检查当前节点的执行情况。'
-    return '处置流程已执行完成，分析结果已交给后续报告环节。'
+    return ''
   }
   if (type === 'REPORT') {
     if (status === 'RUNNING') return '系统正在整理事件信息和处置结果，生成可归档的事件报告。'
@@ -1296,12 +1496,29 @@ function logMessage(item) {
 
 function timelineTone(item) {
   if (isFailedStatus(item?.status)) return 'is-failed'
-  return ({ TRIGGER: 'is-trigger', DAM_WORKFLOW: 'is-action', WORKFLOW: 'is-action', RISK_CHANGE: 'is-warning', ACTION: 'is-action', REPORT: 'is-resolve', RESOLVE: 'is-resolve', MANUAL: 'is-manual' })[item?.log_type] || 'is-system'
+  if (String(item?.log_type || '').toUpperCase() === 'RISK_REVIEW') {
+    return isRiskReviewInitiation(item) ? 'is-trigger' : 'is-action'
+  }
+  if (String(item?.log_type || '').toUpperCase() === 'RISK_CHANGE' && isModelRiskConclusion(item)) return 'is-action'
+  return ({
+    TRIGGER: 'is-trigger',
+    SUPPLEMENTAL_CONTEXT: 'is-trigger',
+    RISK_REVIEW: 'is-trigger',
+    DAM_WORKFLOW: 'is-action',
+    WORKFLOW: 'is-action',
+    RISK_CHANGE: 'is-warning',
+    ACTION: 'is-action',
+    REPORT: 'is-resolve',
+    RESOLVE: 'is-resolve',
+    MANUAL: 'is-manual',
+  })[item?.log_type] || 'is-system'
 }
 
 function timelineNodeClass(item) {
   const type = String(item?.log_type || '').toUpperCase()
-  if (type === 'TRIGGER') return 'node-trigger'
+  if (type === 'RISK_REVIEW') return isRiskReviewInitiation(item) ? 'node-trigger' : 'node-routing'
+  if (type === 'RISK_CHANGE' && isModelRiskConclusion(item)) return 'node-routing'
+  if (['TRIGGER', 'SUPPLEMENTAL_CONTEXT'].includes(type)) return 'node-trigger'
   if (type === 'DAM_WORKFLOW' || type === 'WORKFLOW') return 'node-routing'
   if (type === 'ACTION' || type === 'MANUAL') return 'node-linkage'
   if (type === 'REPORT') return 'node-archive'
@@ -1326,6 +1543,52 @@ function workflowStatusTitle(label, status) {
 function workflowSizeText(payload) {
   if (payload?.node_count == null) return ''
   return `${payload.node_count}个节点、${payload.edge_count ?? 0}条边`
+}
+
+function isRiskReviewInitiation(item) {
+  if (String(item?.log_type || '').toUpperCase() !== 'RISK_REVIEW') return false
+  const payload = parsePayload(item?.payload)
+  const text = `${item?.title || ''} ${item?.message || ''}`
+  return payload.pending_model_review === true
+    || /待模型确认|提交.*模型复核|发起.*风险复核/.test(text)
+}
+
+function modelRiskReviewConclusionText() {
+  const conclusion = timeline.value
+    .filter(isModelRiskConclusion)
+    .sort((left, right) => new Date(left?.create_time || left?.created_at || 0).getTime()
+      - new Date(right?.create_time || right?.created_at || 0).getTime())
+    .at(-1)
+  if (!conclusion) return ''
+  const payload = parsePayload(conclusion.payload)
+  const risk = payload.model_risk_level || payload.risk_after
+  if (!risk) return sanitizeLogText(conclusion.message || '')
+  const label = riskLevelLabel(String(risk).toUpperCase())
+  const upgraded = String(payload.escalation_source || '').includes('dam_model')
+    && String(payload.risk_before || '').toUpperCase() !== String(risk).toUpperCase()
+  if (!upgraded) return `${label} 未变化`
+  return `${label} 已升级`
+}
+
+function isModelRiskUpgrade(item) {
+  const payload = parsePayload(item?.payload)
+  const risk = payload.model_risk_level || payload.risk_after
+  return Boolean(risk)
+    && String(payload.escalation_source || '').includes('dam_model')
+    && String(payload.risk_before || '').toUpperCase() !== String(risk).toUpperCase()
+}
+
+function modelRiskReviewReason(item) {
+  if (!isModelRiskUpgrade(item)) return ''
+  const payload = parsePayload(item?.payload)
+  return sanitizeLogText(payload.reason || '')
+}
+
+function isModelRiskConclusion(item) {
+  const type = String(item?.log_type || '').toUpperCase()
+  const payload = parsePayload(item?.payload)
+  if (type === 'RISK_REVIEW') return !isRiskReviewInitiation(item)
+  return type === 'RISK_CHANGE' && String(payload.escalation_source || '').includes('dam_model')
 }
 
 function isWorkflowPlanning(item) {
@@ -1477,6 +1740,14 @@ function logDetailFields(item) {
     if (String(value).trim() === '') return
     fields.push({ label, value: String(value) })
   }
+  const pushConclusion = (value) => {
+    if (value === undefined || value === null) return
+    if (String(value).trim() === '') return
+    fields.push({
+      label: isModelRiskUpgrade(item) ? '模型复核结论' : '复核结论',
+      value: String(value),
+    })
+  }
 
   if (type === 'TRIGGER') {
     push('来源', p.source_name || p.camera_name || sensorSourceName())
@@ -1494,9 +1765,18 @@ function logDetailFields(item) {
       )
     }
   } else if (type === 'ACTION') {
+    const actionType = String(p.action_type || p.result?.action_type || '').toLowerCase()
     const devices = actionDeviceNames(p)
-    // 汇总动作只展示总体结果，具体任务节点才展示对应设备。
-    if (devices && actionTaskLabel(p)) push('联动设备', devices)
+    // 机器狗和无人机任务要明确展示实际设备与执行路径；其他动作沿用通用设备明细。
+    if (actionType === 'machine_dog_dispatch') {
+      push('设备名称', linkageDeviceName('machine_dog', null, [{ payload: p }]))
+      push('执行路径', linkageRouteName('machine_dog', null, [{ payload: p }]))
+    } else if (actionType === 'drone_dispatch') {
+      push('设备名称', linkageDeviceName('drone', null, [{ payload: p }]))
+      push('执行路径', linkageRouteName('drone', null, [{ payload: p }]))
+    } else if (devices && actionTaskLabel(p)) {
+      push('联动设备', devices)
+    }
     if (p.total_count != null) {
       const failedText = p.failed_devices?.length ? `，失败：${p.failed_devices.join('、')}` : ''
       push('广播结果', `${p.success_count ?? 0}/${p.total_count} 台成功${failedText}`)
@@ -1525,26 +1805,29 @@ function logDetailFields(item) {
   } else if (type === 'SUPPLEMENTAL_CONTEXT') {
     const sc = p.supplemental_context || {}
     push('运行状态', sc.label)
-    push('状态类型', sc.context_type)
     push('影响区域', sc.affected_area)
-    push('严重程度', sc.severity_hint ? riskLevelLabel(sc.severity_hint) : '')
-    push('状态', sc.active ? '持续中' : '已结束')
-    push('来源', sc.source)
-    push('提交人', sc.submitted_by)
     push('备注', sc.note)
   } else if (type === 'RISK_CHANGE') {
-    if (p.risk_before || p.risk_after) push('风险变化', `${riskLevelLabel(p.risk_before)} → ${riskLevelLabel(p.risk_after)}`)
-    push('变化原因', p.reason)
-    push('触发方式', p.operation === 'UPGRADE' ? '人工升级' : (p.escalation_source === 'knowledge_base' ? '系统·知识库依据' : ''))
-    if (p.from_status && p.to_status) push('状态流转', `${statusLabel(p.from_status)} → ${statusLabel(p.to_status)}`)
+    if (isModelRiskConclusion(item)) {
+      pushConclusion(modelRiskReviewConclusionText())
+      push('升级原因', modelRiskReviewReason(item))
+    } else {
+      if (p.risk_before || p.risk_after) push('风险变化', `${riskLevelLabel(p.risk_before)} → ${riskLevelLabel(p.risk_after)}`)
+      push('变化原因', p.reason)
+      push('触发方式', p.operation === 'UPGRADE' ? '人工升级' : (p.escalation_source === 'knowledge_base' ? '系统·知识库依据' : ''))
+      if (p.from_status && p.to_status) push('状态流转', `${statusLabel(p.from_status)} → ${statusLabel(p.to_status)}`)
+    }
   } else if (type === 'RISK_REVIEW') {
-    push('复核结论', p.risk_after ? `风险维持 ${riskLevelLabel(p.risk_after)}` : '风险维持原等级')
-    if (p.knowledge_hit_count != null) push('命中条款数', `${p.knowledge_hit_count} 条`)
+    if (!isRiskReviewInitiation(item)) {
+      pushConclusion(modelRiskReviewConclusionText())
+      push('升级原因', modelRiskReviewReason(item))
+    }
   } else if (type === 'REPORT') {
     if (p.error) push('生成说明', p.error)
   } else if (type === 'MANUAL' || type === 'RESOLVE') {
     push('处置动作', p.operation ? actionTypeLabel(p.operation) : (p.canonical_action_type ? actionTypeLabel(p.canonical_action_type) : ''))
     if (p.from_status && p.to_status) push('状态流转', `${statusLabel(p.from_status)} → ${statusLabel(p.to_status)}`)
+    if (p.false_alarm_evidence_count != null) push('误报图片', `${p.false_alarm_evidence_count} 张已归档`)
     push('责任人', p.assignee)
     push('任务编号', p.task_id)
     push('现场结果', p.result_label)
@@ -2448,6 +2731,24 @@ dd {
 .review-frame-item:hover {
   border-color: rgba(105, 216, 255, .58);
 }
+.review-frame-item.is-false-alarm {
+  border-color: rgba(255, 184, 74, .95);
+  box-shadow: inset 0 0 0 1px rgba(255, 184, 74, .45), 0 0 18px rgba(255, 166, 53, .2);
+}
+.false-alarm-frame-flag {
+  position: absolute;
+  z-index: 2;
+  top: 9px;
+  right: 9px;
+  padding: 4px 7px;
+  border: 1px solid rgba(255, 225, 159, .88);
+  border-radius: 4px;
+  color: #3b2306;
+  background: #ffbf4d;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .35);
+  font-size: 11px;
+  font-weight: 900;
+}
 .review-frame-item footer {
   position: absolute;
   z-index: 1;
@@ -2833,6 +3134,15 @@ dd {
   font-size: 13px;
   line-height: 1.4;
 }
+.log-fields .log-field-note {
+  grid-column: 1 / -1;
+}
+.log-fields .log-field-note-text {
+  margin: 0;
+  color: #a8bfce;
+  font-size: 13px;
+  line-height: 1.4;
+}
 .workflow-dag-block {
   margin-top: 12px;
   padding-top: 10px;
@@ -3017,7 +3327,7 @@ dd {
 .decision-actions {
   margin-top: 14px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 .decision-actions .el-button {
@@ -3040,6 +3350,79 @@ dd {
   border-color: #9ecfff !important;
   background: #9ecfff !important;
   opacity: 1;
+}
+.false-alarm-dialog :deep(.el-dialog__body) {
+  padding-top: 12px;
+}
+.false-alarm-dialog-copy {
+  color: #8fb4ca;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.false-alarm-selection-grid {
+  max-height: min(54vh, 430px);
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  overflow-y: auto;
+  padding-right: 3px;
+}
+.false-alarm-selection-item {
+  position: relative;
+  min-width: 0;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid rgba(105, 216, 255, .28);
+  border-radius: 8px;
+  color: #edf8ff;
+  text-align: left;
+  background: #020b13;
+  cursor: pointer;
+}
+.false-alarm-selection-item .el-image {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.false-alarm-selection-item::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 52%, rgba(0, 0, 0, .74));
+}
+.false-alarm-selection-item:hover,
+.false-alarm-selection-item.selected {
+  border-color: #ffbd47;
+  box-shadow: 0 0 0 2px rgba(255, 189, 71, .28), 0 0 18px rgba(255, 165, 51, .18);
+}
+.false-alarm-selection-item strong {
+  position: absolute;
+  z-index: 2;
+  left: 9px;
+  bottom: 8px;
+  font-size: 12px;
+}
+.false-alarm-selection-check {
+  position: absolute;
+  z-index: 2;
+  top: 8px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(226, 249, 255, .7);
+  border-radius: 50%;
+  color: #13220d;
+  background: rgba(6, 30, 45, .72);
+  font-size: 16px;
+  font-weight: 900;
+}
+.false-alarm-selection-item.selected .false-alarm-selection-check {
+  border-color: #dcffd5;
+  background: #8eea75;
 }
 .closed-note {
   margin-top: 14px;
@@ -3633,6 +4016,14 @@ dd {
   height: 100%;
   display: block;
   object-fit: fill;
+}
+.video-stage .demo-video-crop {
+  position: absolute;
+  /* 演示素材的水印位于底部：保留上方画面，仅加大底部裁切。 */
+  top: -12%;
+  left: 0;
+  width: 100%;
+  height: 126%;
 }
 .process-video-label {
   position: absolute;

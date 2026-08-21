@@ -48,11 +48,28 @@ export function operateUnifiedSafetyEvent(id, data) {
   return request.post(`/v1/integration/safety-events/${id}/operation`, data)
 }
 
-// 现场人工处置的演示下发：事件类型必须明确区分人员涉水与夜间捕鱼。
+export function reviewUnifiedSafetyEventFalseAlarm(id, data) {
+  return request.post(`/v1/integration/safety-events/${id}/false-alarm-review`, data)
+}
+
+export function getFalseAlarmSamples(params = {}) {
+  return request.get('/v1/integration/false-alarm-samples', { params, localCache: false })
+}
+
+export function saveFalseAlarmSampleAnnotation(data) {
+  return request.post('/v1/integration/false-alarm-samples/annotations', data)
+}
+
+export function falseAlarmSampleImageUrl(sourcePath) {
+  return `/api/v1/integration/false-alarm-samples/image?path=${encodeURIComponent(sourcePath)}`
+}
+
+// 现场人工处置的演示下发：事件类型须与处置场景保持一致。
 export const STAFF_TASK_EVENT_TYPES = Object.freeze([
   { value: 'PERSON_WADING', label: '人员涉水事件' },
   { value: 'NIGHT_FISHING', label: '夜间捕鱼事件' },
-  { value: 'FLOOD_EVENT', label: '洪水事件' },
+  { value: 'NATURAL_DISASTER_EVENT', label: '自然灾害事件' },
+  { value: 'EXTREME_WEATHER_EVENT', label: '极端天气事件' },
 ])
 
 export function dispatchStaffTask(id, data) {

@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import hashlib
+import json
 import re
+import shutil
 from typing import Any, Literal, Optional
 from urllib.parse import urlparse
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session
@@ -145,10 +150,29 @@ class SafetyEventOperation(BaseModel):
     evidence_url: Optional[str] = Field(None, max_length=1024)
 
 
+class FalseAlarmReviewRequest(BaseModel):
+    """First-stage false-alarm review: selected evidence is copied for later labeling."""
+
+    file_urls: list[str] = Field(..., min_length=1, max_length=8)
+
+
+class FalseAlarmAnnotationBox(BaseModel):
+    label: str = Field(..., min_length=1, max_length=64)
+    x: float = Field(..., ge=0, le=1)
+    y: float = Field(..., ge=0, le=1)
+    width: float = Field(..., gt=0, le=1)
+    height: float = Field(..., gt=0, le=1)
+
+
+class FalseAlarmAnnotationRequest(BaseModel):
+    source_path: str = Field(..., min_length=1, max_length=1024)
+    annotations: list[FalseAlarmAnnotationBox] = Field(default_factory=list, max_length=50)
+
+
 class StaffTaskDispatchRequest(BaseModel):
     """模拟下发现场人员任务时使用的业务参数。"""
 
-    event_type: str = Field(..., max_length=64, description="PERSON_WADING、NIGHT_FISHING 或 FLOOD_EVENT")
+    event_type: str = Field(..., max_length=64, description="PERSON_WADING、NIGHT_FISHING、NATURAL_DISASTER_EVENT 或 EXTREME_WEATHER_EVENT")
     assignee: Optional[str] = Field(None, max_length=128)
     group_name: Optional[str] = Field(None, max_length=128, description="接收任务的处置组")
     note: str = Field("", max_length=500)
@@ -278,6 +302,116 @@ def _dam_object_exists(url: str) -> bool:
         return False
     except Exception:
         return True  # 连接异常不阻断展示
+
+
+_ERROR_PICTURES_ROOT = Path(__file__).resolve().parents[2] / "data" / "error_pictures"
+_ERROR_PICTURES_OUTPUT_ROOT = _ERROR_PICTURES_ROOT / "pictures"
+_ERROR_PICTURE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+
+
+def _resolve_error_picture(relative_path: str) -> Path:
+    """Resolve a source sample path and keep all reads within error_pictures."""
+    relative = Path(str(relative_path or ""))
+    if not relative_path or relative.is_absolute() or ".." in relative.parts or "pictures" in relative.parts:
+        raise HTTPException(status_code=422, detail="误报图片路径不合法")
+    root = _ERROR_PICTURES_ROOT.resolve()
+    target = (root / relative).resolve()
+    if root not in target.parents or not target.is_file() or target.suffix.lower() not in _ERROR_PICTURE_SUFFIXES:
+        raise HTTPException(status_code=404, detail="误报图片不存在")
+    return target
+
+
+def _annotated_error_picture_sources() -> set[str]:
+    if not _ERROR_PICTURES_OUTPUT_ROOT.exists():
+        return set()
+    sources: set[str] = set()
+    for metadata_path in _ERROR_PICTURES_OUTPUT_ROOT.glob("*/annotation.json"):
+        try:
+            data = json.loads(metadata_path.read_text(encoding="utf-8"))
+            source_path = str(data.get("source_path") or "").strip()
+            if source_path:
+                sources.add(source_path)
+        except (OSError, ValueError, TypeError):
+            continue
+    return sources
+
+
+def _list_false_alarm_samples() -> list[dict[str, Any]]:
+    if not _ERROR_PICTURES_ROOT.exists():
+        return []
+    root = _ERROR_PICTURES_ROOT.resolve()
+    annotated_sources = _annotated_error_picture_sources()
+    samples: list[dict[str, Any]] = []
+    for path in root.rglob("*"):
+        if not path.is_file() or _ERROR_PICTURES_OUTPUT_ROOT in path.parents:
+            continue
+        if path.suffix.lower() not in _ERROR_PICTURE_SUFFIXES:
+            continue
+        relative = path.relative_to(root).as_posix()
+        stat = path.stat()
+        samples.append({
+            "source_path": relative,
+            "event_no": path.relative_to(root).parts[0] if len(path.relative_to(root).parts) > 1 else "未分组",
+            "filename": path.name,
+            "size": stat.st_size,
+            "created_at": dt.datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            "annotated": relative in annotated_sources,
+        })
+    return sorted(samples, key=lambda item: item["created_at"], reverse=True)
+
+
+def _false_alarm_candidate_urls(
+    instance: SafetyEventInstance,
+    timeline: list[SafetyEventTimelineLog],
+    evidence: list[SafetyEventEvidence],
+) -> dict[str, str]:
+    """Return the event-owned MinIO image objects, keyed by stable object name."""
+    observation = dict(instance.latest_observation or {})
+    refs = [row.file_url for row in evidence]
+    refs.extend(item.get("file_url") for item in _collect_review_frames(observation, timeline, evidence))
+    candidates: dict[str, str] = {}
+    for ref in refs:
+        object_name = _dam_object_name(str(ref or ""))
+        if object_name:
+            candidates[object_name] = minio_service.object_url(object_name)
+    return candidates
+
+
+def _archive_false_alarm_pictures(instance: SafetyEventInstance, object_names: list[str]) -> list[dict[str, str]]:
+    """Download selected MinIO evidence into the local false-alarm sample directory."""
+    if not minio_service.client:
+        minio_service.connect()
+    if not minio_service.client:
+        raise HTTPException(status_code=503, detail="MinIO 暂不可用，无法归档误报图片")
+
+    downloaded: list[tuple[str, bytes]] = []
+    for object_name in object_names:
+        try:
+            response = minio_service.client.get_object(minio_service.bucket_name, object_name)
+            try:
+                downloaded.append((object_name, response.read()))
+            finally:
+                response.close()
+                response.release_conn()
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"误报图片归档失败：{object_name}") from exc
+
+    safe_instance_no = re.sub(r"[^0-9A-Za-z_.-]+", "_", str(instance.instance_no or instance.id))
+    target_dir = _ERROR_PICTURES_ROOT / safe_instance_no
+    target_dir.mkdir(parents=True, exist_ok=True)
+    archived: list[dict[str, str]] = []
+    for index, (object_name, content) in enumerate(downloaded, start=1):
+        suffix = Path(object_name).suffix.lower() or ".jpg"
+        digest = hashlib.sha256(object_name.encode("utf-8")).hexdigest()[:12]
+        target = target_dir / f"{index:02d}_{digest}{suffix}"
+        if not target.exists():
+            target.write_bytes(content)
+        archived.append({
+            "object_name": object_name,
+            "file_url": minio_service.object_url(object_name),
+            "error_picture_path": str(target),
+        })
+    return archived
 
 
 def _collect_review_frames(
@@ -740,7 +874,11 @@ def list_safety_events(
     if status:
         query = query.filter(SafetyEventInstance.status == status)
     if risk_level:
-        query = query.filter(SafetyEventInstance.risk_level == risk_level)
+        query = query.filter(
+            SafetyEventInstance.status == "FALSE_ALARM"
+            if risk_level == "FALSE_ALARM"
+            else SafetyEventInstance.risk_level == risk_level
+        )
     if source_type in {"sensor", "camera"}:
         query = query.filter(SafetyEventInstance.source_type == source_type)
     if event_category:
@@ -765,6 +903,7 @@ def list_safety_events(
         query = query.filter(or_(SafetyEventInstance.instance_no.like(like), SafetyEventInstance.summary.like(like), EventLibrary.event_name.like(like)))
     total = query.count()
     risk_order = case(
+        (SafetyEventInstance.status == "FALSE_ALARM", 4),
         (SafetyEventInstance.risk_level == "LOW", 1),
         (SafetyEventInstance.risk_level == "MEDIUM", 2),
         (SafetyEventInstance.risk_level == "HIGH", 3),
@@ -901,6 +1040,8 @@ def get_safety_event_detail(
             "id": row.id, "timeline_log_id": row.timeline_log_id, "evidence_type": row.evidence_type,
             "source_type": row.source_type, "file_url": row.file_url, "description": row.description,
             "captured_at": row.captured_at.isoformat() if row.captured_at else None,
+            "is_false_alarm": bool((row.metadata_json or {}).get("false_alarm")),
+            "original_object_name": (row.metadata_json or {}).get("original_object_name"),
         } for row in evidence],
         "review_frames": _collect_review_frames(observation, timeline, evidence),
         "supplemental_context": observation.get("supplemental_context"),
@@ -1129,7 +1270,7 @@ async def submit_staff_task_result(
 
 
 @router.post("/safety-events/{instance_id}/supplemental-context", summary="补充运行状态并结合知识库复核风险")
-def add_supplemental_context(
+async def add_supplemental_context(
     instance_id: int,
     payload: SupplementalContextPayload,
     db: Session = Depends(get_db),
@@ -1145,6 +1286,11 @@ def add_supplemental_context(
         context=payload.model_dump(),
         operator=str(operator),
     )
+    escalation_action = None
+    if result.get("escalated"):
+        from app.services.eca_engine import eca_engine
+        escalation_action = await eca_engine.execute_risk_escalation_staff_actions(db, instance)
+        result["escalation_staff_action"] = escalation_action
     return {"code": 200, "message": result["reason"], "data": result}
 
 
@@ -1167,6 +1313,98 @@ async def operate_safety_event(
         evidence_url=payload.evidence_url,
     )
     return {"code": 200, "message": result["message"], "data": result}
+
+
+@router.post("/safety-events/{instance_id}/false-alarm-review", summary="复核事件误报并归档所选图片")
+async def review_safety_event_false_alarm(
+    instance_id: int,
+    payload: FalseAlarmReviewRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_auth),
+):
+    instance = db.query(SafetyEventInstance).filter(SafetyEventInstance.id == instance_id).first()
+    if not instance:
+        raise HTTPException(status_code=404, detail="安全事件不存在")
+    if instance.status == "FALSE_ALARM":
+        raise HTTPException(status_code=409, detail="该事件已标记为误报")
+
+    timeline = db.query(SafetyEventTimelineLog).filter(
+        SafetyEventTimelineLog.event_instance_id == instance.id
+    ).order_by(SafetyEventTimelineLog.create_time.asc(), SafetyEventTimelineLog.id.asc()).all()
+    evidence = db.query(SafetyEventEvidence).filter(
+        SafetyEventEvidence.event_instance_id == instance.id
+    ).order_by(SafetyEventEvidence.captured_at.asc()).all()
+    candidates = _false_alarm_candidate_urls(instance, timeline, evidence)
+
+    selected_objects: list[str] = []
+    for file_url in payload.file_urls:
+        object_name = _dam_object_name(file_url)
+        if not object_name or object_name not in candidates:
+            raise HTTPException(status_code=422, detail="所选图片不属于该事件的现场证据")
+        if object_name not in selected_objects:
+            selected_objects.append(object_name)
+    if not selected_objects:
+        raise HTTPException(status_code=422, detail="请至少选择一张误报图片")
+
+    archived = _archive_false_alarm_pictures(instance, selected_objects)
+    result = await apply_safety_event_operation(
+        db,
+        user,
+        instance_id,
+        action="FALSE_ALARM",
+        allow_closed_false_alarm=True,
+        false_alarm_evidence=archived,
+    )
+    return {"code": 200, "message": result["message"], "data": result}
+
+
+@router.get("/false-alarm-samples", summary="获取待标注的误报图片")
+def list_false_alarm_samples(
+    include_annotated: bool = Query(True),
+    _user: User = Depends(require_auth),
+):
+    samples = _list_false_alarm_samples()
+    if not include_annotated:
+        samples = [item for item in samples if not item["annotated"]]
+    return {"code": 200, "data": {"items": samples, "total": len(samples)}}
+
+
+@router.get("/false-alarm-samples/image", summary="读取误报样本图片")
+def get_false_alarm_sample_image(
+    path: str = Query(..., min_length=1, max_length=1024),
+    _user: User = Depends(require_auth),
+):
+    source = _resolve_error_picture(path)
+    return FileResponse(source)
+
+
+@router.post("/false-alarm-samples/annotations", summary="保存误报图片标注")
+def save_false_alarm_annotation(
+    payload: FalseAlarmAnnotationRequest,
+    _user: User = Depends(require_auth),
+):
+    source = _resolve_error_picture(payload.source_path)
+    source_relative = source.relative_to(_ERROR_PICTURES_ROOT.resolve()).as_posix()
+    sample_hash = hashlib.sha256(source_relative.encode("utf-8")).hexdigest()[:12]
+    safe_stem = re.sub(r"[^0-9A-Za-z_.-]+", "_", source.stem)[:64] or "sample"
+    sample_id = f"{dt.datetime.now().strftime('%Y%m%d%H%M%S%f')}_{safe_stem}_{sample_hash}"
+    target_dir = _ERROR_PICTURES_OUTPUT_ROOT / sample_id
+    target_dir.mkdir(parents=True, exist_ok=False)
+    target_image = target_dir / f"image{source.suffix.lower()}"
+    shutil.copy2(source, target_image)
+    metadata = {
+        "sample_id": sample_id,
+        "source_path": source_relative,
+        "event_no": source_relative.split("/", 1)[0] if "/" in source_relative else "未分组",
+        "image": target_image.name,
+        "annotations": [item.model_dump() for item in payload.annotations],
+        "annotated_at": dt.datetime.now().isoformat(),
+    }
+    (target_dir / "annotation.json").write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return {"code": 200, "message": "误报样本标注已保存", "data": metadata}
 
 
 @router.websocket("/safety-events/ws")

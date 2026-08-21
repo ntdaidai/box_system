@@ -31,6 +31,7 @@ class SupplementalContextService:
         *,
         context: dict[str, Any],
         operator: str = "SYSTEM",
+        defer_risk_decision_to_model: bool = False,
     ) -> dict[str, Any]:
         event = db.query(EventLibrary).filter(EventLibrary.id == instance.current_event_id).first()
         before = str(instance.max_risk_level or instance.risk_level or "LOW").upper()
@@ -64,7 +65,42 @@ class SupplementalContextService:
         after = before
         reason = ""
 
-        if discharge_active and person_related and high_hit:
+        if discharge_active and person_related and high_hit and defer_risk_decision_to_model:
+            # 视频/传感器入口提交的特殊工况仅向 DAM 模型提供知识库依据，
+            # 不能由规则直接把风险写成高风险；最终级别由模型工作流输出确认。
+            reason = self._escalation_reason(normalized, high_hit)
+            observation["risk_escalation"] = {
+                "escalated": False,
+                "pending_model_review": True,
+                "from": before,
+                "to": before,
+                "reason": reason,
+                "knowledge_hits": self._knowledge_hit_summary(hits),
+                "escalation_source": "knowledge_base_pending_model",
+            }
+            instance.latest_observation = observation
+            flag_modified(instance, "latest_observation")
+            safety_event_runtime_service.append_timeline(
+                db,
+                instance,
+                log_type="RISK_REVIEW",
+                status="SUCCESS",
+                title="知识库风险依据待模型确认",
+                message=(
+                    f"已将补充信息「{normalized.get('label') or normalized.get('context_type')}」及知识库高风险依据"
+                    "提交 DAM 模型复核，当前风险暂不变更"
+                    + (f"（依据：{truncate(reason)}）" if reason else "")
+                ),
+                operator="SYSTEM",
+                payload={
+                    "risk_before": before,
+                    "risk_after": before,
+                    "pending_model_review": True,
+                    "reason": reason,
+                    "knowledge_hits": self._knowledge_hit_summary(hits),
+                },
+            )
+        elif discharge_active and person_related and high_hit:
             after = "HIGH"
             reason = self._escalation_reason(normalized, high_hit)
             self._upgrade_instance(instance, observation, before, after, reason, hits)
@@ -99,6 +135,7 @@ class SupplementalContextService:
                 "knowledge_hits": self._knowledge_hit_summary(hits),
             }
             instance.latest_observation = observation
+            flag_modified(instance, "latest_observation")
             safety_event_runtime_service.append_timeline(
                 db,
                 instance,
@@ -116,6 +153,11 @@ class SupplementalContextService:
             )
 
         db.commit()
+        # The caller forwards this return value to the workflow payload.  Keep
+        # the pending-review flag and provenance from the persisted object;
+        # otherwise the model nodes receive only a flattened LOW result and
+        # cannot distinguish a special-condition review from a normal event.
+        workflow_escalation = observation.get("risk_escalation") if isinstance(observation.get("risk_escalation"), dict) else {}
         return {
             "event_instance_id": instance.id,
             "instance_no": instance.instance_no,
@@ -124,6 +166,10 @@ class SupplementalContextService:
             "escalated": escalated,
             "reason": reason,
             "knowledge_hits": self._knowledge_hit_summary(hits),
+            "pending_model_review": bool(workflow_escalation.get("pending_model_review")),
+            "from": workflow_escalation.get("from", before),
+            "to": workflow_escalation.get("to", after),
+            "escalation_source": workflow_escalation.get("escalation_source"),
         }
 
     @staticmethod

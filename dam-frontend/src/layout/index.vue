@@ -180,7 +180,14 @@ const menuMap = {
         { name: '现场人员管理', path: '/system/linkage/staff', icon: SensorChipIcon },
       ],
     },
-    { name: '模型管理', path: '/system/models', icon: DataAnalysis },
+    {
+      name: '模型管理',
+      icon: DataAnalysis,
+      children: [
+        { name: '模型管理', path: '/system/models', icon: DataAnalysis },
+        { name: '误报样本标注', path: '/system/models/error-samples', icon: DataAnalysis },
+      ],
+    },
     {
       name: '场景测试',
       icon: DataAnalysis,

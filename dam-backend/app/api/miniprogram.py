@@ -7,15 +7,17 @@ import base64
 import datetime as dt
 import io
 import json
+import mimetypes
 import re
 import secrets
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -96,6 +98,13 @@ ACTION_LABELS = {
     "AUTO_RESOLVED": "事件自动解除",
     "TARGET_LEFT": "目标离开",
 }
+
+LEGACY_STAFF_GROUP_NAMES = {
+    "九号点位组": "9号点位组",
+    "一号点位组": "1号点位组",
+    "三号点位组": "3号点位组",
+}
+FIXED_STAFF_GROUP_NAMES = {"默认处置组", "9号点位组", "1号点位组", "3号点位组"}
 
 
 class MiniResponse(BaseModel):
@@ -191,6 +200,52 @@ def _optional_text(value) -> Optional[str]:
     return value if isinstance(value, str) and value.strip() else None
 
 
+def _normalize_staff_group_name(value) -> str:
+    """统一点位组展示名，并兼容数据库中的历史中文数字组名。"""
+    group_name = str(value or "").strip()
+    return LEGACY_STAFF_GROUP_NAMES.get(group_name, group_name)
+
+
+def _staff_group_aliases(value) -> set[str]:
+    normalized = _normalize_staff_group_name(value)
+    aliases = {normalized} if normalized else set()
+    aliases.update(
+        legacy
+        for legacy, current in LEGACY_STAFF_GROUP_NAMES.items()
+        if current == normalized
+    )
+    return aliases
+
+
+def _normalize_legacy_staff_group_records(db: Session) -> int:
+    """首次打开人员列表时幂等迁移现有人员和历史任务的旧组名。"""
+    updated = 0
+    for legacy_name, current_name in LEGACY_STAFF_GROUP_NAMES.items():
+        updated += db.query(MiniProgramStaff).filter(or_(
+            MiniProgramStaff.group_name == legacy_name,
+            MiniProgramStaff.group_id == legacy_name,
+        )).update(
+            {
+                MiniProgramStaff.group_name: current_name,
+                MiniProgramStaff.group_id: current_name,
+            },
+            synchronize_session=False,
+        )
+        updated += db.query(SafetyEventTask).filter(or_(
+            SafetyEventTask.assigned_group_name == legacy_name,
+            SafetyEventTask.assigned_group_id == legacy_name,
+        )).update(
+            {
+                SafetyEventTask.assigned_group_name: current_name,
+                SafetyEventTask.assigned_group_id: current_name,
+            },
+            synchronize_session=False,
+        )
+    if updated:
+        db.commit()
+    return updated
+
+
 def _is_online(row: MiniProgramStaff) -> bool:
     """按最近活跃时间判定在线（阈值 STAFF_ONLINE_THRESHOLD_SECONDS，默认 5 分钟）。"""
     if not row.last_active_at:
@@ -208,6 +263,7 @@ def _staff_work_status(row: MiniProgramStaff, busy_assignees: set) -> str:
 
 
 def _staff_to_dict(row: MiniProgramStaff) -> dict:
+    group_name = _normalize_staff_group_name(row.group_name)
     return {
         "id": row.id,
         "staff_id": row.id,
@@ -219,8 +275,8 @@ def _staff_to_dict(row: MiniProgramStaff) -> dict:
         "name": row.display_name,
         "nickname": row.nickname or "大藤峡安全巡查",
         "avatar_url": row.avatar_url,
-        "group_id": row.group_id,
-        "group_name": row.group_name,
+        "group_id": group_name or row.group_id,
+        "group_name": group_name,
         "phone": row.phone,
         "description": row.description,
         "status": row.status,
@@ -555,17 +611,52 @@ def _event_evidence(db: Session, event: SafetyEventInstance) -> list[dict]:
         .order_by(SafetyEventEvidence.captured_at.asc(), SafetyEventEvidence.id.asc())
         .all()
     )
-    return [{
-        "id": row.id,
-        "timeline_log_id": row.timeline_log_id,
-        "evidence_type": row.evidence_type,
-        "source_type": row.source_type,
-        "source_id": row.source_id,
-        "file_url": row.file_url,
-        "url": row.file_url,
-        "description": row.description or "现场证据",
-        "captured_at": _timestamp(row.captured_at),
-    } for row in rows]
+    result = []
+    for row in rows:
+        evidence_type = str(row.evidence_type or "").upper()
+        is_image = any(marker in evidence_type for marker in ("IMAGE", "PHOTO", "SNAPSHOT"))
+        raw_url = str(row.file_url or "").strip()
+        try:
+            is_local_file = Path(raw_url).is_file()
+        except OSError:
+            is_local_file = False
+        proxyable = not raw_url.startswith("/api/") and (
+            is_local_file or _evidence_minio_object_name(raw_url) is not None
+        )
+        content_url = (
+            f"/api/miniprogram/v1/evidence/{row.id}/content"
+            if is_image and proxyable
+            else row.file_url
+        )
+        result.append({
+            "id": row.id,
+            "timeline_log_id": row.timeline_log_id,
+            "evidence_type": row.evidence_type,
+            "source_type": row.source_type,
+            "source_id": row.source_id,
+            "file_url": row.file_url,
+            "original_url": row.file_url,
+            "url": content_url,
+            "description": row.description or "现场证据",
+            "captured_at": _timestamp(row.captured_at),
+        })
+    return result
+
+
+def _evidence_minio_object_name(value: str) -> Optional[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    parsed = urlparse(raw)
+    if parsed.scheme in {"http", "https"}:
+        parts = parsed.path.lstrip("/").split("/", 1)
+        if len(parts) == 2 and parts[0] == minio_service.bucket_name:
+            return parts[1]
+        return None
+    clean = raw.lstrip("/")
+    if clean.startswith(f"{minio_service.bucket_name}/"):
+        return clean.split("/", 1)[1]
+    return clean or None
 
 
 def _linkage_lines(db: Session, event: SafetyEventInstance) -> list[dict]:
@@ -621,7 +712,7 @@ def _linkage_lines(db: Session, event: SafetyEventInstance) -> list[dict]:
 def _event_group_name(event_data: dict, camera: Optional[Camera]) -> str:
     observation = dict(event_data.get("latest_observation") or {})
     visual = dict(observation.get("visual") or {}) if isinstance(observation.get("visual"), dict) else {}
-    return (
+    return _normalize_staff_group_name(
         str(visual.get("group_name") or observation.get("group_name") or "").strip()
         or getattr(camera, "group_name", None)
         or ""
@@ -634,7 +725,7 @@ def _task_group_name(
     camera: Optional[Camera],
 ) -> str:
     """返回任务实际接收组；旧任务没有组字段时回退到事件携带的组。"""
-    return (
+    return _normalize_staff_group_name(
         str(getattr(task, "assigned_group_name", None) or "").strip()
         or _event_group_name(event_data, camera)
     )
@@ -642,8 +733,8 @@ def _task_group_name(
 
 def _staff_group_matches(staff: Optional[MiniProgramStaff], group_name: str) -> bool:
     """无组任务对所有人可接；有组任务只允许同组人员接受。"""
-    group_name = str(group_name or "").strip()
-    staff_group = str(getattr(staff, "group_name", None) or "").strip()
+    group_name = _normalize_staff_group_name(group_name)
+    staff_group = _normalize_staff_group_name(getattr(staff, "group_name", None))
     if not group_name or not staff_group:
         return True
     return group_name == staff_group
@@ -900,6 +991,7 @@ async def list_staff(
 ):
     db = SessionLocal()
     try:
+        _normalize_legacy_staff_group_records(db)
         _default_staff(db)
         query = db.query(MiniProgramStaff)
         keyword = _optional_text(keyword)
@@ -917,7 +1009,7 @@ async def list_staff(
                 MiniProgramStaff.openid.ilike(like),
             ))
         if group:
-            query = query.filter(MiniProgramStaff.group_name == group)
+            query = query.filter(MiniProgramStaff.group_name.in_(_staff_group_aliases(group)))
         if normalized_status != "ALL":
             query = query.filter(MiniProgramStaff.status == normalized_status)
         if online == "online":
@@ -977,7 +1069,11 @@ async def list_staff(
             "page": page,
             "page_size": page_size,
             "has_more": page * page_size < total,
-            "groups": [value for (value,) in group_rows if value],
+            "groups": list(dict.fromkeys(
+                _normalize_staff_group_name(value)
+                for (value,) in group_rows
+                if value
+            )),
             "summary": summary,
         })
     finally:
@@ -988,12 +1084,14 @@ async def list_staff(
 async def delete_staff_group(group_name: str):
     db = SessionLocal()
     try:
-        normalized_group = _optional_text(group_name)
+        normalized_group = _normalize_staff_group_name(group_name)
         if not normalized_group:
             raise HTTPException(status_code=400, detail="组别名称不能为空")
-        if normalized_group in {"默认处置组", "九号点位组", "一号点位组", "三号点位组"}:
+        if normalized_group in FIXED_STAFF_GROUP_NAMES:
             raise HTTPException(status_code=400, detail="固定组别不可删除")
-        members = db.query(MiniProgramStaff).filter(MiniProgramStaff.group_name == normalized_group).count()
+        members = db.query(MiniProgramStaff).filter(
+            MiniProgramStaff.group_name.in_(_staff_group_aliases(normalized_group))
+        ).count()
         if members:
             raise HTTPException(status_code=409, detail=f"组别内还有 {members} 人，请先调整人员所属组别")
         return MiniResponse(data={"group_name": normalized_group}, message="组别已删除")
@@ -1005,7 +1103,7 @@ async def delete_staff_group(group_name: str):
 async def create_staff(payload: StaffCreateRequest):
     db = SessionLocal()
     try:
-        group_name = _optional_text(payload.group_name) or "默认处置组"
+        group_name = _normalize_staff_group_name(payload.group_name) or "默认处置组"
         row = MiniProgramStaff(
             staff_no=_next_staff_no(db),
             display_name=payload.display_name.strip(),
@@ -1040,7 +1138,7 @@ async def update_staff(staff_id: int, payload: StaffUpdateRequest):
         if "phone" in changes:
             row.phone = _optional_text(changes["phone"])
         if "group_name" in changes:
-            group_name = _optional_text(changes["group_name"]) or "默认处置组"
+            group_name = _normalize_staff_group_name(changes["group_name"]) or "默认处置组"
             row.group_name = group_name
             row.group_id = group_name
         row.update_time = dt.datetime.now()
@@ -1384,6 +1482,58 @@ async def get_event_snapshot(event_id: str):
             headers={
                 "Cache-Control": "no-store",
             },
+        )
+    finally:
+        db.close()
+
+
+@router.get("/evidence/{evidence_id}/content", summary="小程序现场证据媒体代理")
+def get_evidence_content(evidence_id: int):
+    """通过后端读取证据图片，避免手机直接访问容器内 MinIO 地址。"""
+    db = SessionLocal()
+    try:
+        evidence = db.query(SafetyEventEvidence).filter(SafetyEventEvidence.id == evidence_id).first()
+        if not evidence:
+            raise HTTPException(status_code=404, detail="现场证据不存在")
+        evidence_type = str(evidence.evidence_type or "").upper()
+        if not any(marker in evidence_type for marker in ("IMAGE", "PHOTO", "SNAPSHOT")):
+            raise HTTPException(status_code=415, detail="该证据不是图片")
+
+        raw_url = str(evidence.file_url or "").strip()
+        local_path = Path(raw_url)
+        if local_path.is_file():
+            media_type = mimetypes.guess_type(local_path.name)[0] or "image/jpeg"
+            return Response(
+                content=local_path.read_bytes(),
+                media_type=media_type,
+                headers={"Cache-Control": "private, max-age=300"},
+            )
+
+        object_name = _evidence_minio_object_name(raw_url)
+        if not object_name:
+            raise HTTPException(status_code=404, detail="现场证据地址不可用")
+        if not minio_service.client:
+            minio_service.connect()
+        if not minio_service.client:
+            raise HTTPException(status_code=503, detail="现场证据存储暂不可用")
+        try:
+            stat = minio_service.client.stat_object(minio_service.bucket_name, object_name)
+            media = minio_service.client.get_object(minio_service.bucket_name, object_name)
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail="现场证据图片不存在") from exc
+
+        def stream_content():
+            try:
+                yield from media.stream(32 * 1024)
+            finally:
+                media.close()
+                media.release_conn()
+
+        media_type = getattr(stat, "content_type", None) or mimetypes.guess_type(object_name)[0] or "image/jpeg"
+        return StreamingResponse(
+            stream_content(),
+            media_type=media_type,
+            headers={"Cache-Control": "private, max-age=300"},
         )
     finally:
         db.close()
