@@ -2,17 +2,20 @@
 
 The page-level demo used to own the idea of a drone task.  This service makes
 the two patrol routes callable by ECA/workflow jobs instead.  A cruise always
-has four evidence photos: two outbound and two return photos, stored below a
-run-specific MinIO prefix.
+has four evidence photos: two outbound and two return photos. Simulation
+photos are preloaded to stable MinIO objects at application startup; real DJI
+photos continue to be archived below a run-specific MinIO prefix.
 """
 
 from __future__ import annotations
 
 import asyncio
+import mimetypes
+import random
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import httpx
 from loguru import logger
@@ -25,7 +28,7 @@ ROUTES: Dict[str, Dict[str, Any]] = {
     "fishing": {
         "name": "禁渔航线",
         "file_id_setting": "DRONE_CRUISE_FISHING_FILE_ID",
-        "video_setting": "DRONE_CRUISE_FISHING_VIDEO",
+        "picture_dir": "nofishing",
         "waypoints": [
             {"x": 94.9, "y": 24.9, "label": "机场"},
             {"x": 47.4, "y": 58.1, "label": "禁渔点"},
@@ -35,7 +38,7 @@ ROUTES: Dict[str, Dict[str, Any]] = {
     "wading": {
         "name": "禁涉水航线",
         "file_id_setting": "DRONE_CRUISE_WADING_FILE_ID",
-        "video_setting": "DRONE_CRUISE_WADING_VIDEO",
+        "picture_dir": "nowater",
         "waypoints": [
             {"x": 94.9, "y": 24.9, "label": "机场"},
             {"x": 96.3, "y": 54.3, "label": "禁涉水点"},
@@ -60,6 +63,7 @@ class DroneCruiseError(RuntimeError):
 class DroneCruiseService:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
+        self._prepared_simulation_pictures: dict[str, list[dict[str, Any]]] = {}
 
     def route_catalog(self) -> list[dict[str, Any]]:
         return [
@@ -73,11 +77,68 @@ class DroneCruiseService:
             for key, route in ROUTES.items()
         ]
 
+    async def prepare_simulation_pictures(
+        self,
+        *,
+        source_root: str | Path | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """预置两条模拟航线的固定图片，已存在对象不会重复上传。"""
+        if not minio_service.client:
+            raise DroneCruiseError("MinIO 未连接，无法预置无人机演示图片")
+
+        root = Path(source_root or settings.DRONE_CRUISE_PICTURE_ROOT)
+        prepared: dict[str, list[dict[str, Any]]] = {}
+        for route_key, route in ROUTES.items():
+            picture_dir = root / route["picture_dir"]
+            pictures = sorted(
+                path
+                for path in picture_dir.iterdir()
+                if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+            ) if picture_dir.is_dir() else []
+            if len(pictures) < 6:
+                raise DroneCruiseError(
+                    f"无人机巡航演示图片不足，需要至少 6 张: {picture_dir}"
+                )
+
+            route_items: list[dict[str, Any]] = []
+            for index, picture_path in enumerate(pictures[:6], 1):
+                suffix = picture_path.suffix.lower() or ".png"
+                object_name = (
+                    f"{settings.DRONE_CRUISE_DEMO_OBJECT_PREFIX}/"
+                    f"{route_key}/{index}{suffix}"
+                )
+                if not minio_service.object_exists(object_name):
+                    image = await asyncio.to_thread(picture_path.read_bytes)
+                    content_type = mimetypes.guess_type(picture_path.name)[0] or "image/png"
+                    minio_url = await asyncio.to_thread(
+                        minio_service.upload_bytes,
+                        image,
+                        object_name=object_name,
+                        content_type=content_type,
+                    )
+                    if not minio_url:
+                        raise DroneCruiseError(
+                            f"无人机演示图片预置到 MinIO 失败: {picture_path.name}"
+                        )
+                else:
+                    minio_url = minio_service.object_url(object_name)
+                route_items.append({
+                    "object_name": object_name,
+                    "minio_url": minio_url,
+                    "source_file_name": picture_path.name,
+                })
+            prepared[route_key] = route_items
+
+        self._prepared_simulation_pictures = prepared
+        return prepared
+
     async def cruise(
         self,
         route_key: str,
         payload: Dict[str, Any],
         http_client: httpx.AsyncClient,
+        *,
+        force_simulation: bool = False,
     ) -> dict[str, Any]:
         route = ROUTES.get(route_key)
         if route is None:
@@ -86,154 +147,59 @@ class DroneCruiseService:
         # A dock cannot safely execute two route actions at the same time.
         async with self._lock:
             run_id = f"{route_key}_{uuid.uuid4().hex}"
-            if settings.DRONE_CRUISE_EXECUTOR == "real":
+            if settings.DRONE_CRUISE_EXECUTOR == "real" and not force_simulation:
                 return await self._cruise_real(run_id, route_key, route, payload, http_client)
-            return await self._cruise_simulation(run_id, route_key, route, payload, http_client)
+            return await self._cruise_simulation(run_id, route_key, route)
 
     async def _cruise_simulation(
         self,
         run_id: str,
         route_key: str,
         route: dict[str, Any],
-        payload: dict[str, Any],
-        http_client: httpx.AsyncClient,
     ) -> dict[str, Any]:
-        """Run the existing DJI simulation and capture four demo frames."""
-        headers = await self._dji_login(http_client)
-        duration = float(payload.get("duration_seconds") or settings.DRONE_CRUISE_SIMULATION_DURATION_SECONDS)
-        duration = max(1.0, min(duration, settings.DRONE_CRUISE_TIMEOUT_SECONDS))
-        response = await http_client.post(
-            f"{settings.DJI_CLOUD_API_BASE_URL}/manage/api/v1/simulation/start",
-            headers=headers,
-            json={
-                "job_id": run_id,
-                "route_name": route["name"],
-                "waypoints": route["waypoints"],
-                "duration": int(duration * 1000),
-            },
-        )
-        data = self._dji_data(response, "启动无人机巡航模拟失败")
-        simulation_job_id = str(data.get("job_id") or run_id)
-
-        capture_task = asyncio.create_task(
-            self._capture_simulation_photos(
-                route_key=route_key,
-                route=route,
-                run_id=run_id,
-                video_path=Path(getattr(settings, route["video_setting"])),
-                duration=duration,
-            )
-        )
-        try:
-            await self._wait_simulation(http_client, headers, simulation_job_id, duration)
-            photos = await capture_task
-        except Exception:
-            capture_task.cancel()
-            try:
-                await capture_task
-            except asyncio.CancelledError:
-                pass
-            raise
+        """Select four already-prepared MinIO objects for the demo response."""
+        selected = self._select_simulation_pictures(route_key, route)
+        photos = self._build_simulation_pictures(selected)
 
         return {
             "run_id": run_id,
             "route_key": route_key,
             "route_name": route["name"],
             "executor": "simulation",
-            "simulation_job_id": simulation_job_id,
             "photo_count": len(photos),
             "photos": photos,
             "image_urls": [item["minio_url"] for item in photos],
         }
 
-    async def _capture_simulation_photos(
+    def _select_simulation_pictures(
         self,
-        *,
         route_key: str,
         route: dict[str, Any],
-        run_id: str,
-        video_path: Path,
-        duration: float,
     ) -> list[dict[str, Any]]:
-        started = time.monotonic()
+        pictures = self._prepared_simulation_pictures.get(route_key)
+        if not pictures or len(pictures) < len(PHOTO_MARKS):
+            raise DroneCruiseError(
+                f"{route['name']}演示图片尚未预置到 MinIO，请先完成后端启动初始化"
+            )
+        return random.sample(pictures, len(PHOTO_MARKS))
+
+    @staticmethod
+    def _build_simulation_pictures(
+        selected: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         photos: list[dict[str, Any]] = []
-        for index, ((phase, phase_index), mark) in enumerate(zip(PHOTO_MARKS, PHOTO_PROGRESS), 1):
-            await asyncio.sleep(max(0.0, started + duration * mark - time.monotonic()))
-            image = await asyncio.to_thread(self._read_video_frame, video_path, mark)
-            object_name = (
-                f"{settings.DRONE_CRUISE_OBJECT_PREFIX}/{route_key}/{run_id}/"
-                f"{phase}-{phase_index}.jpg"
-            )
-            minio_url = await asyncio.to_thread(
-                minio_service.upload_bytes,
-                image,
-                object_name=object_name,
-                content_type="image/jpeg",
-            )
-            if not minio_url:
-                raise DroneCruiseError(f"第 {index} 张无人机照片上传 MinIO 失败")
+        for index, ((phase, phase_index), picture) in enumerate(zip(PHOTO_MARKS, selected), 1):
             photos.append(
                 {
                     "index": index,
                     "phase": phase,
                     "phase_index": phase_index,
-                    "object_name": object_name,
-                    "minio_url": minio_url,
+                    "object_name": picture["object_name"],
+                    "minio_url": picture["minio_url"],
+                    "source_file_name": picture["source_file_name"],
                 }
             )
         return photos
-
-    @staticmethod
-    def _read_video_frame(video_path: Path, position: float) -> bytes:
-        try:
-            import cv2
-        except ImportError as exc:  # pragma: no cover - deployment dependency
-            raise DroneCruiseError("当前环境未安装 OpenCV，无法生成无人机照片") from exc
-
-        if not video_path.is_file():
-            raise DroneCruiseError(f"无人机巡航演示视频不存在: {video_path}")
-        capture = cv2.VideoCapture(str(video_path))
-        try:
-            if not capture.isOpened():
-                raise DroneCruiseError(f"无法打开无人机巡航演示视频: {video_path}")
-            frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
-            target = max(0, min(frame_count - 1, int(frame_count * position)))
-            capture.set(cv2.CAP_PROP_POS_FRAMES, target)
-            ok, frame = capture.read()
-            if not ok:
-                raise DroneCruiseError(f"无法从巡航演示视频读取第 {position:.0%} 位置画面")
-            ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
-            if not ok:
-                raise DroneCruiseError("无人机巡航画面 JPEG 编码失败")
-            return encoded.tobytes()
-        finally:
-            capture.release()
-
-    async def _wait_simulation(
-        self,
-        http_client: httpx.AsyncClient,
-        headers: dict[str, str],
-        job_id: str,
-        duration: float,
-    ) -> None:
-        started = time.monotonic()
-        deadline = started + max(duration + 10, settings.DRONE_CRUISE_TIMEOUT_SECONDS)
-        while time.monotonic() < deadline:
-            response = await http_client.get(
-                f"{settings.DJI_CLOUD_API_BASE_URL}/manage/api/v1/simulation/status/{job_id}",
-                headers=headers,
-            )
-            try:
-                data = self._dji_data(response, "查询无人机巡航模拟状态失败")
-            except DroneCruiseError as exc:
-                # 模拟控制器在完成时会移除内存任务，已观察到运行状态后可视为完成。
-                if "任务不存在" in str(exc) and time.monotonic() - started >= duration:
-                    return
-                raise
-            if data.get("status") == "completed":
-                return
-            await asyncio.sleep(max(0.1, settings.DRONE_CRUISE_POLL_SECONDS))
-        raise DroneCruiseError("无人机巡航超时")
 
     async def _cruise_real(
         self,

@@ -70,6 +70,11 @@
               <el-input v-model.trim="action.route_id" placeholder="航线编号" />
             </template>
 
+            <template v-else-if="action.action_type === 'machine_dog_dispatch'">
+              <el-input v-model.trim="action.config_json.machine_dog_id" placeholder="机器狗型号/编号" />
+              <el-input v-model.trim="action.route_id" placeholder="巡检路线（all）" />
+            </template>
+
             <div class="row-actions">
               <el-switch v-model="action.enabled" active-text="启用" inactive-text="停用" />
               <el-button type="primary" plain :loading="savingId === `action-${action.id}`" @click="saveAction(action)">保存</el-button>
@@ -105,9 +110,9 @@ const config = reactive({
 })
 
 const actionTypes = [
-  { label: '摄像头抓拍', value: 'camera_snapshot' },
   { label: '自动广播', value: 'broadcast' },
   { label: '无人机派飞', value: 'drone_dispatch' },
+  { label: '机器狗巡检', value: 'machine_dog_dispatch' },
   { label: '人工处置任务', value: 'staff_task' },
 ]
 
@@ -133,7 +138,12 @@ async function loadConfig() {
   loading.value = true
   try {
     const res = await getIntegrationConfig()
-    Object.assign(config, res.data || {})
+    const data = res.data || {}
+    data.action_configs = (data.action_configs || []).map((action) => ({
+      ...action,
+      config_json: action.config_json || {},
+    }))
+    Object.assign(config, data)
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '动作配置加载失败')
   } finally {
@@ -154,6 +164,7 @@ function actionPayload(row) {
     template_id: row.template_id,
     drone_id: row.drone_id,
     route_id: row.route_id,
+    config_json: row.config_json,
     repeat_interval_seconds: row.repeat_interval_seconds,
     max_executions: row.max_executions,
   }
@@ -179,8 +190,8 @@ async function addAction(event) {
     await createActionConfig({
       event_id: event.id,
       step_order: nextOrder,
-      action_type: 'camera_snapshot',
-      action_name: '摄像头抓拍',
+      action_type: 'staff_task',
+      action_name: '生成人工处置任务',
       timeout_seconds: 60,
       failure_strategy: 'continue',
       retry_count: 0,

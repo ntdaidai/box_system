@@ -62,7 +62,7 @@
         v-for="item in events"
         :key="item.event_id"
         class="event-card"
-        :class="{ mine: item.is_my_task }"
+        :class="{ mine: item.is_my_task, demo: item.is_demo }"
         @tap="openDetail(item.event_id)"
       >
         <view class="card-head">
@@ -76,6 +76,8 @@
           </view>
         </view>
 
+        <view v-if="item.is_demo" class="demo-tag">演示数据</view>
+
         <view class="meta-line">
           <text>监测点</text>
           <text>{{ item.monitor_point }}</text>
@@ -83,6 +85,10 @@
         <view class="meta-line">
           <text>开始时间</text>
           <text>{{ item.startText }}</text>
+        </view>
+        <view v-if="item.assigned_group_name" class="meta-line">
+          <text>任务组</text>
+          <text>{{ item.assigned_group_name }}</text>
         </view>
         <view v-if="activeTab === 'completed'" class="meta-line">
           <text>持续时间</text>
@@ -97,8 +103,9 @@
           <text>{{ item.handler_name || '--' }}</text>
         </view>
 
-        <view v-if="activeTab === 'processing' && item.is_my_task" class="mine-tag">我的处理中</view>
-        <view v-if="activeTab === 'pending'" class="card-actions">
+        <view v-if="activeTab === 'processing' && item.is_my_assignee" class="mine-tag">我的处理中</view>
+        <view v-if="activeTab === 'pending' && item.is_my_group_task" class="mine-tag">本组待处理</view>
+        <view v-if="activeTab === 'pending' && item.can_accept" class="card-actions">
           <button class="primary-btn card-btn" @tap.stop="acceptEvent(item)">接受任务</button>
           <button class="ghost-btn card-btn" @tap.stop="markFalseAlarm(item)">标记误报</button>
         </view>
@@ -115,6 +122,7 @@ import { formatDateTime, formatDuration, riskClass } from '../../utils/format'
 import { readCache, writeCache } from '../../utils/cache'
 import { isLoggedIn } from '../../utils/auth'
 import { subscribeRiskAlert } from '../../utils/subscribe'
+import { DEMO_EVENT_TARGETS, ENABLE_DEMO_EVENTS } from '../../utils/config'
 import Pager from '../../components/pager/pager.vue'
 
 const PAGE_SIZE = 10
@@ -186,7 +194,8 @@ export default {
     restoreCached() {
       const cached = readCache(this.cacheKey(), null)
       if (!cached) return
-      this.events = cached.items || []
+      const cachedItems = cached.items || []
+      this.events = ENABLE_DEMO_EVENTS ? cachedItems : cachedItems.filter((item) => !item.is_demo)
       this.total = cached.total || 0
       this.hasMore = Boolean(cached.hasMore)
       this.summary = cached.summary || this.summary
@@ -198,12 +207,14 @@ export default {
     },
 
     bootstrap() {
-      this.reload()
       this.ensureStaff()
         .then(() => {
-          this.loadSummary().catch(() => null)
-          this.reload()
+          return Promise.all([
+            this.loadSummary().catch(() => null),
+            this.loadEvents(false)
+          ])
         })
+        .catch(() => this.loadEvents(false))
         .catch(() => null)
       this.loadCameraOptions().catch(() => null)
     },
@@ -237,7 +248,14 @@ export default {
             processing: Number(data.processing || 0),
             pending: Number(data.pending || 0)
           }
+          this.applyDemoSummary()
         })
+    },
+
+    applyDemoSummary() {
+      if (!ENABLE_DEMO_EVENTS) return
+      this.summary.pending = Math.max(this.summary.pending, DEMO_EVENT_TARGETS.pending)
+      this.summary.processing = Math.max(this.summary.processing, DEMO_EVENT_TARGETS.processing)
     },
 
     loadCameraOptions() {
@@ -283,10 +301,15 @@ export default {
       ].filter(Boolean).join('&')
       return request({ url: `/events?${params}` })
         .then((data) => {
-          const rows = (data.items || []).map(this.decorateEvent)
+          const realRows = (data.items || []).map(this.decorateEvent)
+          const demoRows = this.demoEventsFor(this.activeTab)
+          const target = this.page === 1 ? Number(DEMO_EVENT_TARGETS[this.activeTab] || 0) : 0
+          const demoCount = Math.max(0, target - Number(data.total || 0))
+          const rows = this.sortEventRows(realRows.concat(demoRows.slice(0, demoCount)))
           this.events = append ? this.events.concat(rows) : rows
-          this.total = Number(data.total || 0)
-          this.hasMore = Boolean(data.has_more)
+          this.total = Number(data.total || 0) + demoCount
+          this.hasMore = Boolean(data.has_more) || this.page * PAGE_SIZE < this.total
+          this.applyDemoSummary()
           writeCache(this.cacheKey(), {
             items: this.events,
             total: this.total,
@@ -318,6 +341,86 @@ export default {
         completedText: formatDateTime(item.completed_at),
         durationText: formatDuration(item.duration_seconds)
       }
+    },
+
+    sortEventRows(rows) {
+      if (!['pending', 'processing'].includes(this.activeTab)) return rows
+      const rank = (item) => {
+        if (this.activeTab === 'pending') return item.is_my_group_task ? 0 : 1
+        return item.is_my_assignee ? 0 : 1
+      }
+      return rows
+        .map((item, index) => ({ item, index }))
+        .sort((left, right) => rank(left.item) - rank(right.item) || left.index - right.index)
+        .map(({ item }) => item)
+    },
+
+    demoEventsFor(status) {
+      if (!ENABLE_DEMO_EVENTS || !['pending', 'processing'].includes(status)) return []
+      const now = Math.floor(Date.now() / 1000)
+      const currentGroup = this.staff?.group_name || '九号点位组'
+      const otherGroup = currentGroup === '九号点位组' ? '三号点位组' : '九号点位组'
+      const currentName = this.staff?.display_name || '现场处置员'
+      const sameGroupName = currentName === '九号点位值班员' ? '一号点位值班员' : '组内其他处置员'
+      const base = (eventId, title, groupName, extra = {}) => ({
+        id: eventId,
+        event_id: eventId,
+        instance_no: eventId,
+        event_no: eventId,
+        event_name: title,
+        event_type: title,
+        monitor_point: extra.monitor_point || '9号监测点',
+        camera_id: '1',
+        risk_level: extra.risk_level || 'HIGH',
+        risk_level_label: extra.risk_level === 'MEDIUM' ? '中' : '高',
+        business_status: status,
+        business_status_label: status === 'pending' ? '待处理' : '处理中',
+        mini_status: status === 'pending' ? 'WAITING_MANUAL' : 'MANUAL_PROCESSING',
+        mini_status_label: status === 'pending' ? '等待人工处理' : '正在人工处理',
+        started_at: now - (extra.age || 900),
+        duration_seconds: status === 'processing' ? extra.duration || 420 : 0,
+        assigned_group_id: groupName,
+        assigned_group_name: groupName,
+        handler_name: extra.handler_name || null,
+        assignee: extra.assignee || null,
+        is_demo: true,
+        can_accept: status === 'pending' && groupName === currentGroup,
+        can_false_alarm: status === 'pending' && groupName === currentGroup,
+        can_submit_result: status === 'processing' && extra.assignee === currentName,
+        is_my_group_task: status === 'pending' && groupName === currentGroup,
+        is_my_assignee: status === 'processing' && extra.assignee === currentName,
+        is_my_task: status === 'pending' ? groupName === currentGroup : extra.assignee === currentName,
+        ...extra
+      })
+
+      if (status === 'pending') {
+        return [
+          base('DEMO_PENDING_GROUP_01', '人员进入高风险区域（演示）', currentGroup, { age: 480 }),
+          base('DEMO_PENDING_GROUP_02', '船只靠近禁入水域（演示）', currentGroup, { risk_level: 'MEDIUM', age: 960 }),
+          base('DEMO_PENDING_OTHER_GROUP', '夜间非法捕鱼告警（演示）', otherGroup, { age: 1440 })
+        ].map(this.decorateEvent)
+      }
+
+      return [
+        base('DEMO_PROCESSING_ME', '人员涉水处置中（演示）', currentGroup, {
+          assignee: currentName,
+          handler_name: currentName,
+          age: 360,
+          duration: 180
+        }),
+        base('DEMO_PROCESSING_GROUP', '库区船只核查中（演示）', currentGroup, {
+          assignee: sameGroupName,
+          handler_name: sameGroupName,
+          age: 720,
+          duration: 540
+        }),
+        base('DEMO_PROCESSING_OTHER_GROUP', '坝区人员巡查中（演示）', otherGroup, {
+          assignee: '三号点位值班员',
+          handler_name: '三号点位值班员',
+          age: 1080,
+          duration: 780
+        })
+      ].map(this.decorateEvent)
     },
 
     switchTab(tab) {
@@ -354,6 +457,10 @@ export default {
     },
 
     acceptEvent(item) {
+      if (item.is_demo) {
+        uni.showToast({ title: '演示任务，仅用于展示', icon: 'none' })
+        return
+      }
       request({
         url: `/events/${encodeURIComponent(item.event_id)}/accept`,
         method: 'POST',
@@ -431,6 +538,10 @@ export default {
     },
 
     openDetail(eventId) {
+      if (String(eventId).startsWith('DEMO_')) {
+        uni.showToast({ title: '演示事件暂无详情', icon: 'none' })
+        return
+      }
       uni.navigateTo({
         url: `/pages/detail/index?event_id=${encodeURIComponent(eventId)}`
       })
@@ -648,6 +759,20 @@ export default {
 
 .event-card.mine {
   border-left: 8rpx solid #0f6b7a;
+}
+
+.event-card.demo {
+  border-top: 2rpx dashed #a6c8cf;
+}
+
+.demo-tag {
+  display: inline-block;
+  margin-bottom: 10rpx;
+  padding: 6rpx 12rpx;
+  border-radius: 6rpx;
+  background: #edf5f6;
+  color: #36717b;
+  font-size: 21rpx;
 }
 
 .card-head {

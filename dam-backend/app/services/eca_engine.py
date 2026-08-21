@@ -837,10 +837,21 @@ class ECAEngine:
             elif event and instance.source_type == "camera":
                 self._archive_camera_event_video_evidence(db, instance, sensor_data)
             sensor_data = dict(sensor_data or {})
+            # 系统管理模拟入口执行完整联动链路：无人机使用预设图片模拟巡航，
+            # 人工任务自动用预设取证闭环；其他动作仍按其已配置的执行器运行。
+            input_source = str(sensor_data.get("input_source") or "").lower()
+            sensor_data["demo_mode"] = bool(
+                sensor_data.get("demo_mode")
+                or sensor_data.get("trigger_channel") == "manual_sensor_simulation"
+                or input_source.startswith("simulation")
+            )
             sensor_data["event_instance_id"] = instance.id
             sensor_data["instance_no"] = instance.instance_no
+            # 工作流负责产生报告所需的研判结果；报告本身必须等所有联动动作
+            # （以及它们产出的 MinIO 取证）完成后再生成。
+            workflow_payload = None
             if event:
-                await self.plan_dam_workflow(instance, event, sensor_data, db)
+                workflow_payload = await self.plan_dam_workflow(instance, event, sensor_data, db)
 
             action_result = await self.execute_configured_actions(
                 event_id, sensor_data, db, event, event_instance=instance
@@ -853,6 +864,28 @@ class ECAEngine:
             flow_skipped = int(flow_resource.get("skipped_steps_count") or 0)
             flow_plan = int(flow_resource.get("original_steps_count") or 0)
             flow_failed = sum(1 for s in flow_steps if not bool(s.get("success")))
+
+            manual_task_pending = any(
+                step.get("action_type") == "staff_task"
+                and bool(step.get("success"))
+                and bool((step.get("result") or {}).get("requires_manual_completion"))
+                for step in flow_steps
+            )
+            if event and workflow_payload and not manual_task_pending:
+                self.generate_dam_event_report(instance, event, workflow_payload, db)
+            elif event and workflow_payload and manual_task_pending:
+                safety_event_runtime_service.append_timeline(
+                    db,
+                    instance,
+                    action_key=f"dam-event-report:{instance.instance_no}",
+                    log_type="REPORT",
+                    trigger_type="AUTO",
+                    status="PENDING",
+                    title="事件报告生成",
+                    message="事件处置报告等待人工处置完成及现场取证照片归档后生成",
+                    payload={"instance_no": instance.instance_no, "deferred_by": "staff_task"},
+                )
+
             safety_event_runtime_service.append_timeline(
                 db,
                 instance,
@@ -873,10 +906,18 @@ class ECAEngine:
                     "failure_count": flow_failed,
                 },
             )
-            instance.status = "COMPLETED"
-            instance.state = "RESOLVED"
-            instance.resolved_at = instance.resolved_at or datetime.now()
-            instance.resolve_reason = instance.resolve_reason or "eca_flow_completed"
+            if manual_task_pending:
+                # 创建人工任务只代表自动联动完成，事件仍须等待现场人员闭环。
+                instance.status = "PENDING"
+                instance.state = "ACTIVE"
+            elif flow_failed:
+                instance.status = "FAILED"
+                instance.state = "ACTIVE"
+            else:
+                instance.status = "COMPLETED"
+                instance.state = "RESOLVED"
+                instance.resolved_at = instance.resolved_at or datetime.now()
+                instance.resolve_reason = instance.resolve_reason or "eca_flow_completed"
             db.commit()
 
         except Exception as e:
@@ -1193,9 +1234,10 @@ class ECAEngine:
                 ),
                 payload=workflow_payload,
             )
-            self.generate_dam_event_report(instance, event, workflow_payload, db)
             db.commit()
-            return result
+            # 不在这里生成报告。联动动作可能产生 MinIO 取证，调用方将在
+            # execute_configured_actions 完成后使用同一份工作流结果生成报告。
+            return workflow_payload
         except Exception as e:
             logger.warning(f"DAM智能路由调用失败: event={event.event_name}, error={e}")
             safety_event_runtime_service.append_timeline(
@@ -1518,6 +1560,42 @@ class ECAEngine:
                 },
             )
 
+    def generate_deferred_event_report(
+        self,
+        db: Session,
+        instance: SafetyEventInstance,
+    ) -> bool:
+        """Generate the deferred report after an on-site staff task is completed."""
+        event = db.query(EventLibrary).filter(
+            EventLibrary.id == instance.current_event_id
+        ).first()
+        workflow_log = (
+            db.query(SafetyEventTimelineLog)
+            .filter(
+                SafetyEventTimelineLog.event_instance_id == instance.id,
+                SafetyEventTimelineLog.action_key == f"dam-workflow-execute:{instance.instance_no}",
+            )
+            .order_by(SafetyEventTimelineLog.id.desc())
+            .first()
+        )
+        payload = (
+            workflow_log.payload
+            if workflow_log and isinstance(workflow_log.payload, dict)
+            else None
+        )
+        if not event:
+            logger.warning(
+                "人工处置完成后未生成报告：缺少事件定义 instance={}",
+                instance.instance_no,
+            )
+            return False
+        # 直接从 Web/算法接口下发的独立人工任务没有 ECA 工作流，不需要报告；
+        # 只有带有该持久化工作流结果的联动任务才生成延后报告。
+        if not payload:
+            return False
+        self.generate_dam_event_report(instance, event, payload, db)
+        return True
+
     def _get_action_device_name(self, step: EventActionConfig, db: Session) -> Optional[str]:
         """Resolve the configured linkage device name for the timeline log."""
         if step.broadcast_device_id:
@@ -1599,22 +1677,51 @@ class ECAEngine:
         results = []
         for step in steps:
             action_device_name = self._get_action_device_name(step, db)
+            attempts = 0
             try:
-                # 执行步骤
-                step_result = await self.execute_step(
-                    step,
-                    sensor_data,
-                    db,
-                    alarm_type,
-                    device_id,
-                    step_context,
-                    event,
-                )
+                # 每个动作都使用自身的超时、重试和失败策略；一个事件可配置
+                # 多个不同类型动作，并按 step_order 依次执行。
+                max_attempts = max(1, int(step.retry_count or 0) + 1)
+                timeout_seconds = max(1, int(step.timeout_seconds or 60))
+                last_error = None
+                step_result = None
+                for attempts in range(1, max_attempts + 1):
+                    try:
+                        step_result = await asyncio.wait_for(
+                            self.execute_step(
+                                step,
+                                sensor_data,
+                                db,
+                                alarm_type,
+                                device_id,
+                                step_context,
+                                event,
+                            ),
+                            timeout=timeout_seconds,
+                        )
+                        break
+                    except Exception as exc:
+                        last_error = exc
+                        if attempts < max_attempts:
+                            logger.warning(
+                                "联动动作重试: step={}, action={}, attempt={}/{}，error={}",
+                                step.id,
+                                step.action_type,
+                                attempts,
+                                max_attempts,
+                                exc,
+                            )
+                else:
+                    raise RuntimeError(
+                        f"动作在 {max_attempts} 次尝试后仍失败: {last_error}"
+                    ) from last_error
+
                 results.append({
                     "step_id": step.id,
                     "step_name": step.step_name,
                     "action_type": step.action_type,
                     "device_name": action_device_name,
+                    "attempts": attempts,
                     "success": True,
                     "result": step_result
                 })
@@ -1622,7 +1729,7 @@ class ECAEngine:
                 if step_result and isinstance(step_result, dict):
                     step_context[f"step_{step.step_order}"] = step_result
                 if event_instance:
-                    safety_event_runtime_service.append_timeline(
+                    timeline = safety_event_runtime_service.append_timeline(
                         db,
                         event_instance,
                         action_key=f"eca-step:{event_instance.instance_no}:{step.id}",
@@ -1637,8 +1744,15 @@ class ECAEngine:
                             "action_label": action_label(step.action_type),
                             "step_name": step.step_name,
                             "device_name": action_device_name,
+                            "attempts": attempts,
                             "result": step_result,
                         },
+                    )
+                    self._persist_action_evidences(
+                        db,
+                        event_instance,
+                        step_result,
+                        timeline_log_id=timeline.id,
                     )
                     db.commit()
             except Exception as e:
@@ -1648,6 +1762,7 @@ class ECAEngine:
                     "step_name": step.step_name,
                     "action_type": step.action_type,
                     "device_name": action_device_name,
+                    "attempts": attempts,
                     "success": False,
                     "error": str(e)
                 })
@@ -1687,6 +1802,39 @@ class ECAEngine:
             }
         }
 
+    @staticmethod
+    def _persist_action_evidences(
+        db: Session,
+        event_instance: SafetyEventInstance,
+        step_result: Any,
+        *,
+        timeline_log_id: Optional[int] = None,
+    ) -> None:
+        """Persist MinIO media returned by a device action as event evidence."""
+        if not isinstance(step_result, dict):
+            return
+        evidences = step_result.get("evidences") or []
+        if not isinstance(evidences, list):
+            return
+        for item in evidences:
+            if not isinstance(item, dict):
+                continue
+            file_url = item.get("url") or item.get("file_url") or item.get("minio_url")
+            if not file_url:
+                continue
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            safety_event_runtime_service.add_evidence(
+                db,
+                event_instance,
+                timeline_log_id=timeline_log_id,
+                file_url=str(file_url),
+                evidence_type=str(item.get("evidence_type") or "IMAGE"),
+                source_type=str(item.get("source_type") or "DEVICE"),
+                source_id=str(item.get("source_id") or "") or None,
+                description=str(item.get("description") or "联动设备取证"),
+                metadata=metadata,
+            )
+
     async def execute_step(
         self,
         step: EventActionConfig,
@@ -1712,10 +1860,8 @@ class ECAEngine:
         Returns:
             Any: 执行结果
         """
-        action_type = str(step.action_type or "").lower()
-        if action_type == "llm":
-            return await self.execute_llm_step(step, sensor_data, db)
-        elif action_type == "alert":
+        action_type = str(step.action_type or "").lower().strip()
+        if action_type == "alert":
             return await self.execute_alert_step(
                 step,
                 sensor_data,
@@ -1724,44 +1870,19 @@ class ECAEngine:
                 step_context,
                 event,
             )
-        elif action_type == "script":
-            return await self.execute_script_step(step, sensor_data)
-        elif action_type == "http":
-            return await self.execute_http_step(step, sensor_data)
-        elif action_type == "camera_snapshot":
-            return await self.execute_camera_snapshot_step(step, sensor_data, db)
-        elif action_type == "broadcast":
-            return await self.execute_broadcast_step(step, sensor_data, db)
-        elif action_type == "staff_task":
-            return await self.execute_staff_task_step(step, sensor_data, db)
-        elif action_type == "machine_dog_dispatch":
-            return await self.execute_machine_dog_step(step, sensor_data, db)
-        else:
-            raise ValueError(f"未知的动作类型: {step.action_type}")
-
-    async def execute_camera_snapshot_step(
-        self,
-        step: EventActionConfig,
-        sensor_data: Dict[str, Any],
-        db: Session,
-    ) -> Dict[str, Any]:
-        """Record camera evidence for the event.
-
-        Camera-triggered events already carry an evidence video captured for
-        screening; use it as the linkage evidence when no dedicated PTZ/snapshot
-        device parameters are configured.
-        """
-        video_url = (
-            sensor_data.get("source_video_url")
-            or (sensor_data.get("video_urls") or [None])[0]
-            or (sensor_data.get("videos") or [None])[0]
-        )
-        return {
-            "status": "archived",
-            "message": "事件视频证据已归档",
-            "video_url": video_url,
-            "action_type": step.action_type,
+        handlers = {
+            "llm": lambda: self.execute_llm_step(step, sensor_data, db),
+            "script": lambda: self.execute_script_step(step, sensor_data),
+            "http": lambda: self.execute_http_step(step, sensor_data),
+            "broadcast": lambda: self.execute_broadcast_step(step, sensor_data, db),
+            "drone_dispatch": lambda: self.execute_drone_dispatch_step(step, sensor_data, db),
+            "machine_dog_dispatch": lambda: self.execute_machine_dog_step(step, sensor_data, db),
+            "staff_task": lambda: self.execute_staff_task_step(step, sensor_data, db, event),
         }
+        handler = handlers.get(action_type)
+        if handler is None:
+            raise ValueError(f"未知的动作类型: {step.action_type}")
+        return await handler()
 
     async def execute_broadcast_step(
         self,
@@ -1769,10 +1890,37 @@ class ECAEngine:
         sensor_data: Dict[str, Any],
         db: Session,
     ) -> Dict[str, Any]:
-        """Register an automatic broadcast action without failing missing hardware."""
+        """Execute the configured broadcast template on its configured device."""
+        if not step.broadcast_device_id or not step.template_id:
+            raise ValueError("自动广播必须配置广播设备和模板")
+        from app.services.broadcast_service import broadcast_service
+
+        instance = None
+        instance_id = sensor_data.get("event_instance_id")
+        if instance_id:
+            instance = db.query(SafetyEventInstance).filter(
+                SafetyEventInstance.id == int(instance_id)
+            ).first()
+        result = broadcast_service.play(
+            db,
+            {
+                "event_id": sensor_data.get("instance_no"),
+                "camera_id": sensor_data.get("camera_id"),
+                "device_ids": [step.broadcast_device_id],
+                "template_id": step.template_id,
+                "trigger_type": "AUTO",
+                "operator": "SYSTEM",
+                "risk_level": instance.risk_level if instance else None,
+            },
+        )
+        if not result.get("success"):
+            raise RuntimeError(result.get("result") or "自动广播执行失败")
         return {
-            "status": "registered",
-            "message": "广播联动已登记，待广播设备配置后执行",
+            "status": "completed",
+            "message": "自动广播已执行",
+            "broadcast_device_id": step.broadcast_device_id,
+            "template_id": step.template_id,
+            "broadcast_result": result,
             "action_type": step.action_type,
         }
 
@@ -1781,38 +1929,167 @@ class ECAEngine:
         step: EventActionConfig,
         sensor_data: Dict[str, Any],
         db: Session,
+        event: Optional[EventLibrary] = None,
     ) -> Dict[str, Any]:
-        """Create or reuse a staff handling task for the event."""
+        """Dispatch the documented staff-task workflow for this ECA event."""
         instance_id = sensor_data.get("event_instance_id")
         if not instance_id:
-            return {
-                "status": "registered",
-                "message": "人工处置任务已登记",
-                "action_type": step.action_type,
-            }
-        from app.models.safety_event_task import SafetyEventTask
+            raise ValueError("人工处置任务缺少事件实例")
+        instance = db.query(SafetyEventInstance).filter(
+            SafetyEventInstance.id == int(instance_id)
+        ).first()
+        if not instance:
+            raise ValueError("人工处置任务关联的事件实例不存在")
 
-        task = (
-            db.query(SafetyEventTask)
-            .filter(SafetyEventTask.event_instance_id == int(instance_id))
-            .order_by(SafetyEventTask.id.desc())
-            .first()
+        from app.services.staff_task_media_service import staff_task_media_service
+        from app.services.staff_task_service import (
+            normalize_staff_event_type,
+            staff_task_service,
         )
-        if task is None:
-            task = SafetyEventTask(
-                event_instance_id=int(instance_id),
-                dispatch_operator="SYSTEM",
-                task_status="WAITING_ACCEPT",
-                task_note="ECA自动生成现场处置任务",
-                dispatched_at=datetime.now(),
+
+        config = self._action_config(step)
+        event_type = self._staff_event_type(event, config)
+        canonical_type = normalize_staff_event_type(event_type)
+        group_name = str(config.get("group_name") or step.route_id or "").strip() or None
+        operator = str(config.get("operator") or "SYSTEM")
+        dispatched = staff_task_service.dispatch_manual_task(
+            db,
+            instance,
+            operator=operator,
+            event_type=canonical_type,
+            assignee=config.get("assignee"),
+            group_name=group_name,
+            note=str(config.get("note") or "ECA自动生成现场处置任务"),
+        )
+        demo = bool(config.get("demo", False) or sensor_data.get("demo_mode"))
+        final = dispatched
+        if demo:
+            # 演示图片在服务启动时已预置到 MinIO，这里只引用固定对象地址。
+            demo_pictures = staff_task_media_service.get_prepared_demo_pictures(canonical_type)
+            staff_task_service.start_manual_task(
+                db, instance, operator="SYSTEM", event_type=canonical_type
             )
-            db.add(task)
-            db.flush()
+            final = staff_task_service.complete_demo_task(
+                db,
+                instance,
+                operator="SYSTEM",
+                event_type=canonical_type,
+                photo_urls=[item["minio_url"] for item in demo_pictures],
+            )
+            # complete_demo_task 已将两张 MinIO 图片写入事件证据；不要再让
+            # execute_configured_actions 的通用持久化逻辑重复归档。
+        task = final["task"]
         return {
-            "status": "created",
-            "message": "人工处置任务已生成",
+            "status": "completed" if demo else "dispatched",
+            "message": "演示人工处置任务已自动完成" if demo else "人工处置任务已下发，等待工作人员接单",
             "task_id": task.id,
             "task_status": task.task_status,
+            "group_name": task.assigned_group_name,
+            "event_type": canonical_type,
+            "event_type_label": final.get("event_type_label"),
+            "demo": demo,
+            "requires_manual_completion": not demo,
+            "evidences": [],
+            "evidence_urls": final.get("photo_urls", []),
+            "action_type": step.action_type,
+        }
+
+    @staticmethod
+    def _staff_event_type(event: Optional[EventLibrary], config: Dict[str, Any]) -> str:
+        configured = str(config.get("event_type") or "").strip()
+        if configured:
+            return configured
+        event_code = str(getattr(event, "event_code", "") or "").upper()
+        category = str(getattr(event, "event_category", "") or "").upper()
+        if "FISH" in event_code or "BOAT" in event_code or "FISH" in category:
+            return "NIGHT_FISHING"
+        if "PERSON" in event_code or "PERSON" in category:
+            return "PERSON_WADING"
+        raise ValueError("人工处置动作必须在 config_json 中配置 event_type")
+
+    @staticmethod
+    def _action_config(step: EventActionConfig) -> Dict[str, Any]:
+        """Read optional action parameters from config_json, then parameter JSON."""
+        if isinstance(step.config_json, dict) and step.config_json:
+            return dict(step.config_json)
+        if step.parameter:
+            try:
+                value = json.loads(step.parameter)
+                if isinstance(value, dict):
+                    return value
+            except (TypeError, json.JSONDecodeError):
+                pass
+        return {}
+
+    @staticmethod
+    def _drone_route_key(route_id: Optional[str]) -> str:
+        route = str(route_id or "").strip().lower()
+        aliases = {
+            "fishing": "fishing",
+            "禁渔": "fishing",
+            "禁渔航线": "fishing",
+            "wading": "wading",
+            "涉水": "wading",
+            "禁涉水": "wading",
+            "禁涉水航线": "wading",
+        }
+        if route not in aliases:
+            raise ValueError("无人机派飞 route_id 仅支持 fishing（禁渔）或 wading（禁涉水）")
+        return aliases[route]
+
+    async def execute_drone_dispatch_step(
+        self,
+        step: EventActionConfig,
+        sensor_data: Dict[str, Any],
+        db: Session,
+    ) -> Dict[str, Any]:
+        """Run a documented drone cruise and return its four MinIO evidences."""
+        if not step.drone_id or not step.route_id:
+            raise ValueError("无人机派飞必须配置无人机和航线")
+        import httpx
+        from app.services.drone_cruise_service import drone_cruise_service
+
+        route_key = self._drone_route_key(step.route_id)
+        config = self._action_config(step)
+        payload = config.get("cruise_payload") if isinstance(config.get("cruise_payload"), dict) else {}
+        timeout = max(float(step.timeout_seconds or 60), 1.0)
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
+            result = await drone_cruise_service.cruise(
+                route_key,
+                payload,
+                client,
+                force_simulation=bool(sensor_data.get("demo_mode")),
+            )
+
+        evidences = []
+        for photo in result.get("photos") or []:
+            if not isinstance(photo, dict) or not photo.get("minio_url"):
+                continue
+            evidences.append({
+                "url": photo["minio_url"],
+                "evidence_type": "DRONE_IMAGE",
+                "source_type": "DRONE",
+                "source_id": step.drone_id,
+                "description": f"无人机{result.get('route_name') or route_key}取证：{photo.get('phase') or '巡航'}第{photo.get('phase_index') or photo.get('index')}张",
+                "metadata": {
+                    "action": "drone_dispatch",
+                    "drone_id": step.drone_id,
+                    "route_id": step.route_id,
+                    "run_id": result.get("run_id"),
+                    "object_name": photo.get("object_name"),
+                    "phase": photo.get("phase"),
+                    "phase_index": photo.get("phase_index"),
+                },
+            })
+        if not evidences:
+            raise RuntimeError("无人机巡航未返回 MinIO 取证图片")
+        return {
+            "status": "completed",
+            "message": f"无人机巡航完成，已归档 {len(evidences)} 张取证图片",
+            "drone_id": step.drone_id,
+            "route_id": step.route_id,
+            "cruise": result,
+            "evidences": evidences,
             "action_type": step.action_type,
         }
 
@@ -1822,13 +2099,50 @@ class ECAEngine:
         sensor_data: Dict[str, Any],
         db: Session,
     ) -> Dict[str, Any]:
-        """Register a machine-dog inspection task for the configured route."""
-        config = step.config_json if isinstance(step.config_json, dict) else {}
+        """Run the documented machine-dog route and return its MinIO evidences."""
+        config = self._action_config(step)
+        machine_dog_id = config.get("machine_dog_id")
+        route_id = str(step.route_id or "").strip().lower()
+        if not machine_dog_id or not route_id:
+            raise ValueError("机器狗巡检必须配置机器狗型号和巡检路线")
+        if route_id not in {
+            "all", "巡检路线", "机器狗全路线",
+            # 兼容配置页旧版本留下的两条逻辑路线；设备 API 现统一执行 all。
+            "route-a", "route-b", "岸线由西向东巡检", "岸线由东向西巡检",
+        }:
+            raise ValueError("机器狗巡检 route_id 仅支持 all（机器狗全路线）")
+        from app.services.machine_dog_cruise_service import machine_dog_cruise_service
+
+        result = await machine_dog_cruise_service.cruise()
+        evidences = []
+        for photo in result.get("photos") or []:
+            if not isinstance(photo, dict) or not photo.get("minio_url"):
+                continue
+            point = photo.get("point") or f"巡检点 {photo.get('index')}"
+            evidences.append({
+                "url": photo["minio_url"],
+                "evidence_type": "ROBOT_IMAGE",
+                "source_type": "ROBOT_DOG",
+                "source_id": str(machine_dog_id),
+                "description": f"机器狗{point}取证",
+                "metadata": {
+                    "action": "machine_dog_dispatch",
+                    "machine_dog_id": machine_dog_id,
+                    "route_id": step.route_id,
+                    "run_id": result.get("run_id"),
+                    "object_name": photo.get("object_name"),
+                    "point": photo.get("point"),
+                },
+            })
+        if not evidences:
+            raise RuntimeError("机器狗巡检未返回 MinIO 取证图片")
         return {
-            "status": "registered",
-            "message": "机器狗巡检任务已登记，等待设备执行",
-            "machine_dog_id": config.get("machine_dog_id"),
+            "status": "completed",
+            "message": f"机器狗全路线完成，已归档 {len(evidences)} 张取证图片",
+            "machine_dog_id": machine_dog_id,
             "route_id": step.route_id,
+            "cruise": result,
+            "evidences": evidences,
             "action_type": step.action_type,
         }
 

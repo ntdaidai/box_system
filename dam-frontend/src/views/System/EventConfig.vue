@@ -394,6 +394,18 @@
                     <el-option v-for="item in staffGroupOptions" :key="item" :label="item" :value="item" />
                   </el-select>
                 </el-form-item>
+                <el-form-item label="处置事件类型">
+                  <el-select v-model="actionForm.staff_event_type" clearable placeholder="自动按当前事件识别">
+                    <el-option label="人员涉水事件" value="PERSON_WADING" />
+                    <el-option label="夜间捕鱼事件" value="NIGHT_FISHING" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="演示自动闭环">
+                  <el-switch v-model="actionForm.staff_demo" active-text="启用" inactive-text="关闭" />
+                </el-form-item>
+                <el-form-item label="任务说明">
+                  <el-input v-model.trim="actionForm.staff_note" maxlength="500" show-word-limit placeholder="可选：留空则使用系统默认说明" />
+                </el-form-item>
               </section>
             </template>
 
@@ -432,7 +444,6 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Aim,
   Bell,
-  Camera,
   Connection,
   Delete,
   EditPen,
@@ -544,6 +555,9 @@ const actionForm = reactive({
   route_id: '',
   machine_dog_id: '',
   staff_group: '',
+  staff_event_type: '',
+  staff_demo: false,
+  staff_note: '',
 })
 
 const flowDraft = reactive({
@@ -604,7 +618,6 @@ const operatorMap = {
 }
 
 const actionIconMap = {
-  camera_snapshot: Camera,
   broadcast: Bell,
   drone_dispatch: Promotion,
   machine_dog_dispatch: Aim,
@@ -613,7 +626,6 @@ const actionIconMap = {
 }
 
 const actionLabelMap = {
-  camera_snapshot: '摄像头抓拍',
   broadcast: '广播驱离',
   drone_dispatch: '无人机巡查',
   machine_dog_dispatch: '机器狗任务',
@@ -632,8 +644,7 @@ const machineDogOptions = [
 ]
 
 const machineDogRouteOptions = [
-  { value: 'route-a', label: '岸线由西向东巡检' },
-  { value: 'route-b', label: '岸线由东向西巡检' },
+  { value: 'all', label: '机器狗全路线' },
 ]
 
 const events = computed(() => config.events)
@@ -1511,6 +1522,13 @@ function openNodeConfig(node) {
   actionForm.staff_group = action.action_type === 'staff_task'
     ? (action.route_id || staffGroupOptions.value[0] || '')
     : ''
+  actionForm.staff_event_type = action.action_type === 'staff_task'
+    ? (action.config_json?.event_type || '')
+    : ''
+  actionForm.staff_demo = action.action_type === 'staff_task' && action.config_json?.demo === true
+  actionForm.staff_note = action.action_type === 'staff_task'
+    ? (action.config_json?.note || '')
+    : ''
 }
 
 function openNodeViewer(node) {
@@ -1549,7 +1567,11 @@ function actionReadonlyFields(action) {
     ]
   }
   if (action.action_type === 'staff_task') {
-    return [{ label: '处置工作组', value: action.route_id || '未选择处置组' }]
+    return [
+      { label: '处置工作组', value: action.route_id || '未选择处置组' },
+      { label: '事件类型', value: action.config_json?.event_type === 'NIGHT_FISHING' ? '夜间捕鱼事件' : action.config_json?.event_type === 'PERSON_WADING' ? '人员涉水事件' : '自动识别' },
+      { label: '执行方式', value: action.config_json?.demo === true ? '演示自动闭环' : '等待人工处置' },
+    ]
   }
   return []
 }
@@ -1577,6 +1599,12 @@ function saveNodeConfig() {
     }
   } else if (action.action_type === 'staff_task') {
     action.route_id = actionForm.staff_group || '安全巡查组'
+    action.config_json = {
+      ...(action.config_json || {}),
+      event_type: actionForm.staff_event_type || null,
+      demo: actionForm.staff_demo === true,
+      note: actionForm.staff_note || null,
+    }
   }
   editingNode.value.title = actionBusinessLabel(action)
   editingNode.value.subtitle = actionBusinessSummary(action)
@@ -1703,7 +1731,6 @@ function actionBusinessSummary(action) {
     return findMachineDog(action.config_json?.machine_dog_id)?.label || '未选择机器狗型号'
   }
   if (action.action_type === 'staff_task') return action.route_id || '未选择处置组'
-  if (action.action_type === 'camera_snapshot') return '自动抓拍留证'
   return action.action_name || '业务动作'
 }
 

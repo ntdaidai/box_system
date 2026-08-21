@@ -128,7 +128,10 @@ docker compose up -d
 
 ## 无人机巡航动作 API
 
-无人机巡航已从测试页面动作中抽成可供 ECA/工作流调用的业务 API。两条固定动作均会产生四张取证图：去程两张、回程两张；照片归档到 MinIO 的
+详细调用文档见：[docs/drone-cruise-api.md](docs/drone-cruise-api.md)。
+
+无人机巡航已从测试页面动作中抽成可供 ECA/工作流调用的业务 API。模拟模式直接从
+`dam-backend/data/drone_pictures` 对应航线目录随机抽取四张图片：去程两张、回程两张；照片归档到 MinIO 的
 `drone-cruises/{route_key}/{run_id}/` 目录，并在接口完成后返回四个 `minio_url`。
 
 ```text
@@ -137,7 +140,7 @@ POST /api/v1/drone/cruises/fishing   # 禁渔航线
 POST /api/v1/drone/cruises/wading    # 禁涉水航线
 ```
 
-请求需要登录凭证：`Authorization: Bearer <JWT>`。默认模拟模式不要求请求体，传空 JSON 即可；也可以用 `duration_seconds`（1~900）调整模拟时长：
+请求需要登录凭证：`Authorization: Bearer <JWT>`。默认模拟模式不要求请求体，传空 JSON 即可；模拟图片会从对应航线的 6 张固定图片中随机抽取 4 张：
 
 ```json
 {}
@@ -156,7 +159,7 @@ POST /api/v1/drone/cruises/wading    # 禁涉水航线
 }
 ```
 
-`fishing` 和 `wading` 会分别读取对应的航线文件配置。接口是同步调用，完成巡航和四张照片的 MinIO 归档后返回 `photos` 和 `image_urls`；默认 `DRONE_CRUISE_EXECUTOR=simulation` 用于当前演示联调，切换为 `real` 后才下发 DJI 航线和拍照指令。
+`fishing` 和 `wading` 在真实模式下分别读取对应的航线文件配置。接口是同步调用，完成巡航和四张照片的 MinIO 归档后返回 `photos` 和 `image_urls`；默认 `DRONE_CRUISE_EXECUTOR=simulation` 使用固定图片联调，切换为 `real` 后才下发 DJI 航线和拍照指令。
 
 ## 安全注意事项
 

@@ -95,6 +95,52 @@
             </div>
           </section>
 
+          <section class="work-card linkage-evidence-card">
+            <header class="card-heading">
+              <div>
+                <span>联动证据</span>
+                <h2>设备与现场处置</h2>
+              </div>
+              <small>{{ linkageEvidenceCount }} / {{ linkageEvidenceCapacity }} 张</small>
+            </header>
+
+            <div v-if="linkageEvidenceGroups.length" class="linkage-evidence-groups">
+              <section v-for="group in linkageEvidenceGroups" :key="group.key" class="linkage-evidence-group">
+                <header>
+                  <strong>{{ group.label }}</strong>
+                  <span>{{ group.items.length }} / {{ group.limit }} 张</span>
+                </header>
+                <div class="review-frame-strip linkage-evidence-strip">
+                  <button
+                    v-for="(item, index) in group.items"
+                    :key="item.id"
+                    type="button"
+                    class="review-frame-item linkage-evidence-item"
+                    @click="openEvidenceItem(item)"
+                  >
+                    <el-image :src="normalizeMediaUrl(item.file_url)" fit="cover" />
+                    <footer>
+                      <span>{{ group.label }}取证 {{ String(index + 1).padStart(2, '0') }}</span>
+                      <time v-if="item.captured_at">{{ formatTime(item.captured_at) }}</time>
+                    </footer>
+                  </button>
+                  <div
+                    v-for="slot in group.slots"
+                    :key="`${group.key}-slot-${slot}`"
+                    class="review-frame-slot"
+                  >
+                    <strong>{{ String(group.items.length + slot).padStart(2, '0') }}</strong>
+                    <span>待归档</span>
+                  </div>
+                </div>
+              </section>
+            </div>
+            <div v-else class="compact-empty">
+              <el-icon><Picture /></el-icon>
+              <span>暂无联动设备取证图片</span>
+            </div>
+          </section>
+
           <section class="work-card log-card">
             <header class="card-heading">
               <div>
@@ -236,7 +282,7 @@
                     class="linkage-complete-button"
                     type="primary"
                     size="small"
-                    @click="operate(module.manualAction)"
+                    @click="module.manualAction === 'SUBMIT_STAFF_RESULT' ? openStaffResultDialog() : operate(module.manualAction)"
                   >
                     {{ module.manualActionLabel }}
                   </el-button>
@@ -326,6 +372,57 @@
       </div>
       <div v-else class="compact-empty">当前节点暂无证据</div>
     </el-drawer>
+
+    <AppDialog
+      v-model="staffResultDialogVisible"
+      class="staff-result-dialog"
+      width="680px"
+      align-center
+      destroy-on-close
+      :close-on-click-modal="false"
+      title="提交现场处置结果"
+      @closed="resetStaffResultForm"
+    >
+      <div class="staff-result-form">
+        <div class="staff-result-hint">请分别上传驱离前、驱离后的现场照片，并填写本次处置说明。</div>
+
+        <div class="staff-result-field">
+          <label>事件类型</label>
+          <el-select v-model="staffResultForm.eventType" class="staff-result-select">
+            <el-option v-for="item in STAFF_TASK_EVENT_TYPES" :key="item.value" :label="item.label" :value="item.value" />
+          </el-select>
+        </div>
+
+        <div class="staff-result-field">
+          <label>处置结果</label>
+          <el-select v-model="staffResultForm.result" class="staff-result-select">
+            <el-option label="已完成驱离" value="DRIVEN_AWAY" />
+            <el-option label="人员自行离开" value="LEFT_BY_SELF" />
+            <el-option label="其他" value="OTHER" />
+          </el-select>
+        </div>
+
+        <div class="staff-result-field">
+          <label>现场照片</label>
+          <div class="staff-result-photo-grid">
+            <label v-for="(label, index) in ['驱离前照片', '驱离后照片']" :key="label" class="staff-result-photo-card">
+              <input type="file" accept="image/jpeg,image/png,image/webp" @change="selectStaffResultPhoto(index, $event)" />
+              <img v-if="staffResultPhotoPreviews[index]" :src="staffResultPhotoPreviews[index]" :alt="label" />
+              <span v-else>{{ label }}<small>点击选择图片</small></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="staff-result-field">
+          <label>处置说明</label>
+          <el-input v-model="staffResultForm.remark" type="textarea" :rows="4" maxlength="500" show-word-limit placeholder="填写现场处置情况" />
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="staffResultDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="staffResultSubmitting" @click="submitStaffResult">提交结果</el-button>
+      </template>
+    </AppDialog>
 
     <AppDialog
       v-model="processDialogVisible"
@@ -423,7 +520,13 @@ import {
   VideoCamera,
   WarningFilled,
 } from '@element-plus/icons-vue'
-import { getIntegrationConfig, getUnifiedSafetyEventDetail, operateUnifiedSafetyEvent } from '@/api/integration'
+import {
+  getIntegrationConfig,
+  getUnifiedSafetyEventDetail,
+  operateUnifiedSafetyEvent,
+  STAFF_TASK_EVENT_TYPES,
+  submitStaffTaskResult,
+} from '@/api/integration'
 import { normalizeMediaUrl } from '@/utils/media'
 
 const route = useRoute()
@@ -447,6 +550,15 @@ const processRouteSelection = ref('')
 const processProgress = ref(0)
 const processElapsed = ref(0)
 let processTimer = null
+const staffResultDialogVisible = ref(false)
+const staffResultSubmitting = ref(false)
+const staffResultForm = reactive({
+  eventType: 'PERSON_WADING',
+  result: 'DRIVEN_AWAY',
+  remark: '',
+})
+const staffResultPhotos = ref([null, null])
+const staffResultPhotoPreviews = ref(['', ''])
 
 const PROCESS_ROUTES = {
   '禁渔航线': [
@@ -494,6 +606,28 @@ const reviewFrames = computed(() => {
   const fallback = evidence.value.filter(isImageEvidence)
   return dedupeEvidenceFrames(frames.length ? frames : fallback).slice(0, 8)
 })
+const linkageEvidenceDefinitions = [
+  { key: 'drone', label: '无人机', limit: 4 },
+  { key: 'machine_dog', label: '机器狗', limit: 4 },
+  { key: 'manual', label: '人工处置', limit: 2 },
+]
+const linkageEvidenceGroups = computed(() => {
+  const activeModules = new Set(actionModules.value.map((module) => module.key))
+  return linkageEvidenceDefinitions
+    .map((definition) => {
+      const items = evidence.value
+        .filter((item) => isImageEvidence(item) && linkageEvidenceKind(item) === definition.key)
+        .slice(0, definition.limit)
+      return {
+        ...definition,
+        items,
+        slots: Math.max(0, definition.limit - items.length),
+      }
+    })
+    .filter((group) => group.items.length || activeModules.has(group.key))
+})
+const linkageEvidenceCount = computed(() => linkageEvidenceGroups.value.reduce((total, group) => total + group.items.length, 0))
+const linkageEvidenceCapacity = computed(() => linkageEvidenceDefinitions.reduce((total, group) => total + group.limit, 0))
 const latestTask = computed(() => detail.tasks[0] || null)
 const isResolved = computed(() => event.value?.state === 'RESOLVED' || ['COMPLETED', 'FALSE_ALARM'].includes(event.value?.status))
 const eventActionConfigs = computed(() => actionConfigs.value.filter((item) => item.event_id === event.value?.event_id && item.enabled))
@@ -822,9 +956,9 @@ function buildActionModule(options) {
     objectValue,
     routeLabel,
     manualAction: options.key === 'manual' && (isTaskWaiting || isTaskRunning)
-      ? (isTaskRunning ? 'COMPLETE_TASK' : 'ACCEPT_TASK')
+      ? (isTaskRunning ? 'SUBMIT_STAFF_RESULT' : 'ACCEPT_TASK')
       : null,
-    manualActionLabel: isTaskRunning ? '完成处置' : '开始处置',
+    manualActionLabel: isTaskRunning ? '提交现场结果' : '开始处置',
     canInspect: ['drone', 'machine_dog'].includes(options.key),
     failureReason: localizeText(failed?.message || ''),
     meta: [
@@ -957,6 +1091,65 @@ function openEvidenceItem(item) {
   evidenceVisible.value = true
 }
 
+function inferStaffEventType() {
+  const existing = String(latestTask.value?.event_type || '').toUpperCase()
+  if (['PERSON_WADING', 'NIGHT_FISHING'].includes(existing)) return existing
+  const text = `${event.value?.event_name || ''} ${event.value?.summary || ''}`
+  return /捕鱼|禁渔|船只/.test(text) ? 'NIGHT_FISHING' : 'PERSON_WADING'
+}
+
+function revokeStaffPhotoPreview(index) {
+  const preview = staffResultPhotoPreviews.value[index]
+  if (preview && preview.startsWith('blob:')) URL.revokeObjectURL(preview)
+  staffResultPhotoPreviews.value[index] = ''
+}
+
+function resetStaffResultForm() {
+  for (let index = 0; index < 2; index += 1) revokeStaffPhotoPreview(index)
+  staffResultPhotos.value = [null, null]
+  staffResultForm.eventType = 'PERSON_WADING'
+  staffResultForm.result = 'DRIVEN_AWAY'
+  staffResultForm.remark = ''
+}
+
+function openStaffResultDialog() {
+  resetStaffResultForm()
+  staffResultForm.eventType = inferStaffEventType()
+  staffResultDialogVisible.value = true
+}
+
+function selectStaffResultPhoto(index, changeEvent) {
+  const file = changeEvent?.target?.files?.[0]
+  if (!file) return
+  revokeStaffPhotoPreview(index)
+  staffResultPhotos.value[index] = file
+  staffResultPhotoPreviews.value[index] = URL.createObjectURL(file)
+}
+
+async function submitStaffResult() {
+  if (staffResultSubmitting.value) return
+  if (staffResultPhotos.value.some((file) => !file)) {
+    ElMessage.warning('请分别上传驱离前和驱离后两张照片')
+    return
+  }
+  const formData = new FormData()
+  formData.append('event_type', staffResultForm.eventType)
+  formData.append('result', staffResultForm.result)
+  formData.append('remark', staffResultForm.remark || '')
+  staffResultPhotos.value.forEach((file) => formData.append('photos', file))
+  staffResultSubmitting.value = true
+  try {
+    await submitStaffTaskResult(event.value.id, formData)
+    ElMessage.success('现场处置结果已提交')
+    staffResultDialogVisible.value = false
+    await loadDetail()
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '现场处置结果提交失败')
+  } finally {
+    staffResultSubmitting.value = false
+  }
+}
+
 async function operate(action) {
   if (!event.value?.id) return
   const riskLevel = action === 'UPGRADE'
@@ -982,7 +1175,10 @@ async function operate(action) {
   }
 }
 
-onBeforeUnmount(stopLinkageProcess)
+onBeforeUnmount(() => {
+  stopLinkageProcess()
+  for (let index = 0; index < 2; index += 1) revokeStaffPhotoPreview(index)
+})
 
 function isFailedStatus(value) {
   return ['FAILED', 'FAIL', 'ERROR'].includes(String(value || '').toUpperCase())
@@ -991,7 +1187,21 @@ function isFailedStatus(value) {
 function isImageEvidence(item) {
   const type = String(item?.evidence_type || '').toUpperCase()
   const url = String(item?.file_url || '').split('?')[0].toLowerCase()
-  return type === 'IMAGE' || /\.(png|jpe?g|webp|gif|bmp)$/.test(url)
+  return type === 'IMAGE' || type.endsWith('_IMAGE') || /\.(png|jpe?g|webp|gif|bmp)$/.test(url)
+}
+
+function linkageEvidenceKind(item) {
+  const source = String(item?.source_type || '').toUpperCase()
+  const type = String(item?.evidence_type || '').toUpperCase()
+  const text = `${item?.description || ''} ${item?.file_url || ''}`.toLowerCase()
+  if (source === 'DRONE' || source === 'UAV' || type.includes('DRONE') || /无人机|drone|uav/.test(text)) return 'drone'
+  if (
+    ['ROBOT_DOG', 'ROBOT', 'MACHINE_DOG'].includes(source)
+    || type.includes('ROBOT')
+    || /机器狗|四足|robot.?dog|machine.?dog/.test(text)
+  ) return 'machine_dog'
+  if (['STAFF', 'MANUAL'].includes(source) || type.includes('STAFF') || /人工处置|现场处置|staff|manual/.test(text)) return 'manual'
+  return ''
 }
 
 function dedupeEvidenceFrames(items) {
@@ -2069,10 +2279,49 @@ loadDetail()
 }
 .evidence-card,
 .log-card,
-.linkage-card {
+.linkage-card,
+.linkage-evidence-card {
   background:
     linear-gradient(180deg, rgba(11, 34, 54, .82), rgba(7, 22, 37, .86)),
     rgba(8, 25, 42, .88);
+}
+.linkage-evidence-groups {
+  margin-top: 16px;
+  display: grid;
+  gap: 14px;
+}
+.linkage-evidence-group {
+  min-width: 0;
+  padding: 12px 12px 0;
+  border: 1px solid rgba(105, 216, 255, .12);
+  border-radius: 8px;
+  background: rgba(4, 15, 26, .28);
+}
+.linkage-evidence-group > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #cfe5f2;
+}
+.linkage-evidence-group > header strong {
+  color: #e9f7ff;
+  font-size: 15px;
+}
+.linkage-evidence-group > header span {
+  color: #7f9eb3;
+  font-size: 12px;
+}
+.linkage-evidence-strip {
+  margin-top: 10px;
+  padding-bottom: 10px;
+}
+.linkage-evidence-item,
+.linkage-evidence-group .review-frame-slot {
+  flex-basis: clamp(190px, 19vw, 280px);
+}
+.linkage-evidence-item footer span {
+  color: #f2fbff;
 }
 .linkage-card {
   padding: 22px;
@@ -2750,6 +2999,74 @@ dd {
   line-height: 1.5;
   background: rgba(4, 13, 22, .34);
 }
+.staff-result-form {
+  display: grid;
+  gap: 18px;
+}
+.staff-result-hint {
+  padding: 12px 14px;
+  border: 1px solid rgba(75, 191, 225, .2);
+  border-radius: 7px;
+  color: #9fc4d9;
+  background: rgba(7, 29, 47, .72);
+  line-height: 1.5;
+}
+.staff-result-field {
+  display: grid;
+  gap: 8px;
+}
+.staff-result-field > label {
+  color: #d9edf8;
+  font-size: 14px;
+  font-weight: 700;
+}
+.staff-result-select {
+  width: 100%;
+}
+.staff-result-photo-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.staff-result-photo-card {
+  min-height: 150px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px dashed rgba(72, 216, 255, .42);
+  border-radius: 8px;
+  color: #8db8cf;
+  background: rgba(5, 23, 38, .72);
+  cursor: pointer;
+  text-align: center;
+}
+.staff-result-photo-card:hover {
+  border-color: rgba(126, 238, 255, .78);
+  background: rgba(8, 39, 59, .82);
+}
+.staff-result-photo-card input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.staff-result-photo-card img {
+  width: 100%;
+  height: 180px;
+  object-fit: cover;
+}
+.staff-result-photo-card span {
+  display: grid;
+  gap: 6px;
+  font-weight: 700;
+}
+.staff-result-photo-card small {
+  color: #6f9cb6;
+  font-size: 12px;
+  font-weight: 400;
+}
 :global(.evidence-drawer.el-drawer) {
   background: #0b1d30;
 }
@@ -3410,6 +3727,9 @@ dd {
   .process-map-stage,
   .process-video-stage {
     height: 260px;
+  }
+  .staff-result-photo-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

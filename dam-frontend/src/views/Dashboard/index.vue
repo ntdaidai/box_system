@@ -522,6 +522,7 @@ const activeRiskModeKey = ref('today')
 const riskFocusIndex = ref(2)
 const trendMode = ref('today')
 const detailTrendMode = ref('today')
+const activeTrendLegend = ref('')
 const currentDate = ref('--')
 const currentTime = ref('--:--:--')
 const currentWeek = ref('--')
@@ -1052,7 +1053,21 @@ function renderTrendChart() {
   if (!chart) return
   chart.setOption({
     color: ['#ff6873', '#41c8ff', '#ffb648', '#38d59c'],
-    tooltip: { ...chartTooltip, trigger: 'axis' },
+    tooltip: {
+      ...chartTooltip,
+      trigger: 'axis',
+      formatter: (params) => {
+        const rows = Array.isArray(params) ? params : [params]
+        const focusedRows = activeTrendLegend.value
+          ? rows.filter((row) => row.seriesName === activeTrendLegend.value)
+          : rows
+        const displayRows = focusedRows.length ? focusedRows : rows
+        return [
+          rows[0]?.axisValue || '',
+          ...displayRows.map((row) => `${row.marker}${row.seriesName} <b>${row.value || 0} 次</b>`),
+        ].join('<br/>')
+      },
+    },
     grid: { left: 28, right: 10, top: 16, bottom: 24 },
     xAxis: {
       type: 'category',
@@ -1084,10 +1099,13 @@ function buildTrendSeries() {
 
 // 悬停图例：复刻"悬停线上"的效果——该线高亮加粗、其他线淡出、并显示对应数据点提示
 function onTrendLegendEnter(name) {
+  activeTrendLegend.value = name
+  renderTrendChart()
   const chart = getChart(trendChartRef.value, 'intrusion-trend')
   if (!chart) return
   const index = buildTrendSeries().findIndex((item) => item.name === name)
   if (index < 0) return
+  chart.dispatchAction({ type: 'downplay', seriesIndex: 'all' })
   chart.dispatchAction({ type: 'highlight', seriesIndex: index })
   // 找到该系列最后一个非零数据点，在那里显示提示，与悬停线上的 tooltip 一致
   const key = ['person', 'boat', 'disaster', 'weather'][index]
@@ -1103,16 +1121,16 @@ function onTrendLegendEnter(name) {
 }
 
 function onTrendLegendLeave() {
+  activeTrendLegend.value = ''
+  renderTrendChart()
   const chart = getChart(trendChartRef.value, 'intrusion-trend')
   if (!chart) return
-  // 恢复全部系列的默认状态并隐藏提示
-  buildTrendSeries().forEach((_, index) => {
-    chart.dispatchAction({ type: 'downplay', seriesIndex: index })
-  })
+  chart.dispatchAction({ type: 'downplay', seriesIndex: 'all' })
   chart.dispatchAction({ type: 'hideTip' })
 }
 
 function buildLineSeries(name, data, color) {
+  const isBlurred = Boolean(activeTrendLegend.value) && activeTrendLegend.value !== name
   return {
     name,
     type: 'line',
@@ -1128,17 +1146,20 @@ function buildLineSeries(name, data, color) {
     lineStyle: {
       width: 2.2,
       color,
-      shadowBlur: 3,
+      opacity: isBlurred ? .14 : 1,
+      shadowBlur: isBlurred ? 0 : 3,
       shadowColor: `${color}55`,
     },
     itemStyle: {
       color: '#061421',
       borderColor: color,
+      opacity: isBlurred ? .14 : 1,
       borderWidth: 2,
       shadowBlur: 3,
       shadowColor: `${color}66`,
     },
     areaStyle: {
+      opacity: isBlurred ? .08 : 1,
       color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
         { offset: 0, color: `${color}30` },
         { offset: 1, color: `${color}00` },
@@ -2859,6 +2880,7 @@ onBeforeUnmount(() => {
 }
 
 .metric-compare > span {
+  transform: translateX(clamp(4px, .28vw, 7px));
   color: #9ed3f5;
   font-size: clamp(12px, .68vw, 14px);
   line-height: 1;

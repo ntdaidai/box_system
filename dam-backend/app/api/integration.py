@@ -7,12 +7,13 @@ import re
 from typing import Any, Literal, Optional
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.cache import invalidate_cache
 from app.core.security import require_auth
 from app.models.broadcast import BroadcastDevice, BroadcastTemplate
 from app.models.camera import Camera
@@ -33,7 +34,15 @@ from minio.error import S3Error
 
 from app.services.minio_service import minio_service
 from app.services.safety_event_operation_service import operate_safety_event as apply_safety_event_operation
+from app.services.safety_event_engine import get_safety_event_engine
+from app.services.safety_event_runtime_service import safety_event_runtime_service
 from app.services.safety_event_ws import safety_event_ws_manager
+from app.services.staff_task_media_service import staff_task_media_service
+from app.services.staff_task_service import (
+    STAFF_EVENT_TYPE_LABELS,
+    normalize_staff_event_type,
+    staff_task_service,
+)
 from app.services.supplemental_context_service import supplemental_context_service
 
 
@@ -41,7 +50,6 @@ router = APIRouter()
 
 RISK_LABELS = {1: "低风险", 2: "中风险", 3: "高风险", "LOW": "低风险", "MEDIUM": "中风险", "HIGH": "高风险"}
 ACTION_LABELS = {
-    "camera_snapshot": "摄像头抓拍",
     "broadcast": "自动广播",
     "drone_dispatch": "无人机派飞取证驱离",
     "machine_dog_dispatch": "机器狗巡检",
@@ -106,6 +114,16 @@ class SafetyEventOperation(BaseModel):
     assignee: Optional[str] = Field(None, max_length=128)
     version: Optional[int] = Field(None, ge=0)
     evidence_url: Optional[str] = Field(None, max_length=1024)
+
+
+class StaffTaskDispatchRequest(BaseModel):
+    """模拟下发现场人员任务时使用的业务参数。"""
+
+    event_type: str = Field(..., max_length=64, description="PERSON_WADING 或 NIGHT_FISHING")
+    assignee: Optional[str] = Field(None, max_length=128)
+    group_name: Optional[str] = Field(None, max_length=128, description="接收任务的处置组")
+    note: str = Field("", max_length=500)
+    demo: bool = Field(False, description="演示模式：自动开始并用固定两张现场图完成任务")
 
 
 class SupplementalContextPayload(BaseModel):
@@ -569,6 +587,13 @@ def update_action_config(
         action_config = row.config_json if isinstance(row.config_json, dict) else {}
         if not action_config.get("machine_dog_id") or not row.route_id:
             raise HTTPException(status_code=400, detail="机器狗巡检必须配置机器狗型号和巡检路线")
+    if action_type == "staff_task":
+        action_config = row.config_json if isinstance(row.config_json, dict) else {}
+        if action_config.get("event_type"):
+            try:
+                normalize_staff_event_type(action_config["event_type"])
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
     db.commit()
     return {"code": 200, "message": "动作配置已保存"}
 
@@ -585,10 +610,26 @@ def create_action_config(
     if payload.action_type not in ACTION_LABELS:
         raise HTTPException(status_code=400, detail="动作类型不支持")
     data = payload.model_dump(exclude_unset=True)
-    if payload.enabled is not False and payload.action_type == "machine_dog_dispatch":
-        action_config = data.get("config_json") if isinstance(data.get("config_json"), dict) else {}
-        if not action_config.get("machine_dog_id") or not data.get("route_id"):
-            raise HTTPException(status_code=400, detail="机器狗巡检必须配置机器狗型号和巡检路线")
+    if payload.enabled is not False:
+        if payload.action_type == "broadcast" and (
+            not data.get("broadcast_device_id") or not data.get("template_id")
+        ):
+            raise HTTPException(status_code=400, detail="自动广播必须配置广播设备和模板")
+        if payload.action_type == "drone_dispatch" and (
+            not data.get("drone_id") or not data.get("route_id")
+        ):
+            raise HTTPException(status_code=400, detail="无人机派飞必须配置无人机和航线")
+        if payload.action_type == "machine_dog_dispatch":
+            action_config = data.get("config_json") if isinstance(data.get("config_json"), dict) else {}
+            if not action_config.get("machine_dog_id") or not data.get("route_id"):
+                raise HTTPException(status_code=400, detail="机器狗巡检必须配置机器狗型号和巡检路线")
+        if payload.action_type == "staff_task":
+            action_config = data.get("config_json") if isinstance(data.get("config_json"), dict) else {}
+            if action_config.get("event_type"):
+                try:
+                    normalize_staff_event_type(action_config["event_type"])
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
     row = EventActionConfig(
         event_id=payload.event_id,
         step_order=payload.step_order,
@@ -793,6 +834,12 @@ def get_safety_event_detail(
         SafetyEventEvidence.event_instance_id == instance.id
     ).order_by(SafetyEventEvidence.captured_at.asc()).all()
     tasks = db.query(SafetyEventTask).filter(SafetyEventTask.event_instance_id == instance.id).order_by(SafetyEventTask.id.desc()).all()
+    task_event_types = {}
+    for timeline_item in reversed(timeline):
+        payload = timeline_item.payload or {}
+        task_id = payload.get("task_id")
+        if task_id and task_id not in task_event_types and payload.get("event_type"):
+            task_event_types[task_id] = payload.get("event_type")
     return {"code": 200, "data": {
         "event": _event_dict(instance, event, db=db),
         "visual_detail": None if not visual else {
@@ -824,13 +871,212 @@ def get_safety_event_detail(
         "risk_escalation": observation.get("risk_escalation"),
         "tasks": [{
             "id": row.id, "assignee": row.assignee, "dispatch_operator": row.dispatch_operator,
+            "assigned_group_id": row.assigned_group_id, "assigned_group_name": row.assigned_group_name,
             "status": row.task_status, "note": row.task_note, "result_type": row.result_type,
             "result_remark": row.result_remark,
+            "event_type": task_event_types.get(row.id),
+            "event_type_label": STAFF_EVENT_TYPE_LABELS.get(task_event_types.get(row.id)),
+            "photo_urls": [item.file_url for item in evidence if item.task_id == row.id and item.evidence_type == "IMAGE"],
             "dispatched_at": row.dispatched_at.isoformat() if row.dispatched_at else None,
             "accepted_at": row.accepted_at.isoformat() if row.accepted_at else None,
             "completed_at": row.completed_at.isoformat() if row.completed_at else None,
         } for row in tasks],
     }}
+
+
+def _staff_task_dict(task: SafetyEventTask, *, event_type: Optional[str] = None) -> dict[str, Any]:
+    canonical_type = None
+    if event_type:
+        try:
+            canonical_type = normalize_staff_event_type(event_type)
+        except ValueError:
+            canonical_type = event_type
+    return {
+        "id": task.id,
+        "assigned_group_id": task.assigned_group_id,
+        "assigned_group_name": task.assigned_group_name,
+        "assignee": task.assignee,
+        "dispatch_operator": task.dispatch_operator,
+        "status": task.task_status,
+        "note": task.task_note,
+        "result_type": task.result_type,
+        "result_remark": task.result_remark,
+        "event_type": canonical_type,
+        "event_type_label": STAFF_EVENT_TYPE_LABELS.get(canonical_type) if canonical_type else None,
+        "dispatched_at": task.dispatched_at.isoformat() if task.dispatched_at else None,
+        "accepted_at": task.accepted_at.isoformat() if task.accepted_at else None,
+        "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+    }
+
+
+async def _broadcast_staff_task_update(
+    db: Session,
+    instance: SafetyEventInstance,
+    *timelines: SafetyEventTimelineLog,
+) -> None:
+    await invalidate_cache("safety_event:*")
+    await safety_event_ws_manager.broadcast({
+        "type": "EVENT_UPDATED",
+        "data": _event_dict(instance, db=db),
+    })
+    for timeline in timelines:
+        await safety_event_ws_manager.broadcast({
+            "type": "EVENT_ACTION_ADDED",
+            "data": safety_event_runtime_service.timeline_dict(timeline),
+        })
+
+
+@router.post("/safety-events/{instance_id}/staff-task/dispatch", summary="模拟下发现场人工处置任务")
+async def dispatch_staff_task(
+    instance_id: int,
+    payload: StaffTaskDispatchRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_auth),
+):
+    instance = db.query(SafetyEventInstance).filter(SafetyEventInstance.id == instance_id).first()
+    if not instance:
+        raise HTTPException(status_code=404, detail="安全事件不存在")
+    operator = str(getattr(user, "real_name", None) or getattr(user, "username", None) or "SYSTEM")
+    try:
+        result = staff_task_service.dispatch_manual_task(
+            db,
+            instance,
+            operator=operator,
+            event_type=payload.event_type,
+            assignee=payload.assignee,
+            group_name=payload.group_name,
+            note=payload.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    demo_result = None
+    demo_timelines = [result["timeline"]]
+    if payload.demo:
+        try:
+            # 演示图片在服务启动初始化阶段已预置到 MinIO；任务下发时只引用固定对象地址。
+            demo_pictures = staff_task_media_service.get_prepared_demo_pictures(
+                result["event_type"]
+            )
+            started = staff_task_service.start_manual_task(
+                db,
+                instance,
+                operator="SYSTEM",
+                event_type=result["event_type"],
+            )
+            demo_result = staff_task_service.complete_demo_task(
+                db,
+                instance,
+                operator="SYSTEM",
+                event_type=result["event_type"],
+                photo_urls=[item["minio_url"] for item in demo_pictures],
+            )
+            demo_result["demo_pictures"] = demo_pictures
+            demo_timelines.extend([started["timeline"], demo_result["timeline"]])
+            # 若任务由联动动作创建，工作流结果已在事件时间线中持久化；
+            # 演示任务完成后即可用归档的现场图生成最终报告。
+            from app.services.eca_engine import eca_engine
+            eca_engine.generate_deferred_event_report(db, instance)
+        except ValueError as exc:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.commit()
+    if payload.demo:
+        get_safety_event_engine().resolve_event(
+            instance.instance_no,
+            reason="staff_demo_completed",
+            now=dt.datetime.now().timestamp(),
+            emit_action=False,
+        )
+    final_result = demo_result or result
+    task = final_result["task"]
+    await _broadcast_staff_task_update(db, instance, *demo_timelines)
+    return {
+        "code": 200,
+        "message": "演示人工处置任务已自动完成" if payload.demo else "人工处置任务已下发",
+        "data": {
+            "event": _event_dict(instance, db=db),
+            "task": _staff_task_dict(task, event_type=final_result["event_type"]),
+            "event_type": final_result["event_type"],
+            "event_type_label": final_result["event_type_label"],
+            "demo": payload.demo,
+            "photo_urls": final_result.get("photo_urls", []),
+            "demo_pictures": final_result.get("demo_pictures", []),
+            "result_remark": task.result_remark,
+            "timeline_item": safety_event_runtime_service.timeline_dict(demo_timelines[-1]),
+        },
+    }
+
+
+@router.post("/safety-events/{instance_id}/staff-task/result", summary="提交现场人工处置结果")
+async def submit_staff_task_result(
+    instance_id: int,
+    event_type: str = Form(..., max_length=64),
+    result: str = Form(..., pattern="^(DRIVEN_AWAY|LEFT_BY_SELF|OTHER)$"),
+    remark: str = Form("", max_length=500),
+    photos: list[UploadFile] = File(default=[]),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_auth),
+):
+    if len(photos or []) != 2:
+        raise HTTPException(status_code=400, detail="现场处置结果需要上传两张图片")
+    instance = db.query(SafetyEventInstance).filter(SafetyEventInstance.id == instance_id).first()
+    if not instance:
+        raise HTTPException(status_code=404, detail="安全事件不存在")
+
+    operator = str(getattr(user, "real_name", None) or getattr(user, "username", None) or "SYSTEM")
+    photo_urls: list[str] = []
+    try:
+        canonical_type = normalize_staff_event_type(event_type)
+        for index, photo in enumerate(photos or []):
+            phase = "before" if index == 0 else "after"
+            photo_urls.append(
+                await staff_task_media_service.save_upload(
+                    str(instance.instance_no), photo, phase=phase
+                )
+            )
+        completed = staff_task_service.complete_manual_task(
+            db,
+            instance,
+            operator=operator,
+            event_type=canonical_type,
+            result=result,
+            result_label={
+                "DRIVEN_AWAY": "已完成驱离",
+                "LEFT_BY_SELF": "人员自行离开",
+                "OTHER": "其他",
+            }[result],
+            remark=remark,
+            photo_urls=photo_urls,
+        )
+        # 联动创建的人工任务会把报告延后到现场人员完成并上传取证图；
+        # 此时生成报告，且报告服务只会选择一张人工联动图展示。
+        from app.services.eca_engine import eca_engine
+        eca_engine.generate_deferred_event_report(db, instance)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    db.commit()
+    get_safety_event_engine().resolve_event(
+        instance.instance_no,
+        reason="staff_completed",
+        now=dt.datetime.now().timestamp(),
+        emit_action=False,
+    )
+    await _broadcast_staff_task_update(db, instance, completed["timeline"])
+    return {
+        "code": 200,
+        "message": "处理结果已提交，事件已闭环",
+        "data": {
+            "event": _event_dict(instance, db=db),
+            "task": _staff_task_dict(completed["task"], event_type=completed["event_type"]),
+            "event_type": completed["event_type"],
+            "event_type_label": completed["event_type_label"],
+            "photo_urls": completed["photo_urls"],
+            "remark": remark,
+            "timeline_item": safety_event_runtime_service.timeline_dict(completed["timeline"]),
+        },
+    }
 
 
 @router.post("/safety-events/{instance_id}/supplemental-context", summary="补充运行状态并结合知识库复核风险")

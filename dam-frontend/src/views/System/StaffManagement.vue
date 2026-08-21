@@ -31,7 +31,7 @@
         </div>
         <div class="tab-actions panel-toolbar">
           <button type="button" class="toolbar-template-entry add-staff-action" @click="openStaffDialog()">
-            <el-icon><User /></el-icon>
+            <el-icon><UserFilled /></el-icon>
             <span>新增人员</span>
           </button>
           <el-select
@@ -205,7 +205,7 @@
 <script setup>
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Minus, Plus, User } from '@element-plus/icons-vue'
+import { Minus, Plus, UserFilled } from '@element-plus/icons-vue'
 import {
   createStaff,
   deleteStaff,
@@ -626,6 +626,11 @@ function closeQrDialog() {
   width: 100%;
 }
 
+.staff-toolbar-card .tab-actions {
+  min-height: 42px;
+  gap: 14px;
+}
+
 .tab-actions {
   flex: 0 0 auto;
   display: flex;
@@ -649,6 +654,7 @@ function closeQrDialog() {
 }
 
 :global(.staff-page .add-staff-action) {
+  flex: 0 0 auto;
   height: 42px;
   display: inline-flex;
   align-items: center;
@@ -685,7 +691,8 @@ function closeQrDialog() {
 }
 
 .group-filter-select {
-  width: 150px;
+  width: 136px;
+  flex: 0 0 auto;
 }
 
 .group-filter-select :deep(.el-select__wrapper) {
@@ -703,6 +710,7 @@ function closeQrDialog() {
 
 .enabled-filter-select {
   width: 116px;
+  flex: 0 0 auto;
 }
 
 .enabled-filter-select :deep(.el-select__wrapper) {

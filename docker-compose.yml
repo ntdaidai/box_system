@@ -60,6 +60,8 @@ services:
         condition: service_started
       dij-mediamtx:
         condition: service_started
+      minio:
+        condition: service_started
     # dai: YOLO 使用 Jetson CUDA；NVIDIA 官方要求 GPU 容器启用 nvidia runtime。
     runtime: nvidia
     healthcheck:
@@ -71,8 +73,7 @@ services:
     # 挂载源码目录，修改后只需 docker compose restart 即可生效
     volumes:
       - ./dam-backend:/app
-      # 无人机模拟巡航从演示视频抽取四张取证图
-      - ./dam-frontend/public/demo:/app/drone-demo:ro
+      # 无人机模拟巡航直接读取后端 data/drone_pictures 下的固定图片
       # 挂载 Jetson 平台工具和设备树，用于读取 GPU/温度/功耗
       - /usr/bin/tegrastats:/usr/bin/tegrastats:ro
       - /usr/sbin/nvidia-smi:/usr/sbin/nvidia-smi:ro
@@ -136,7 +137,7 @@ services:
       CAMERA_WEB_LIVE_USE_SUBSTREAM: "${CAMERA_WEB_LIVE_USE_SUBSTREAM:-false}"
       MINIPROGRAM_LIVE_PUBLISH_BASE_URL: "${MINIPROGRAM_LIVE_PUBLISH_BASE_URL:-rtmp://127.0.0.1:1936}"
       MINIPROGRAM_LIVE_PUBLIC_BASE_URL: "${MINIPROGRAM_LIVE_PUBLIC_BASE_URL:-rtmp://192.168.31.52:1936}"
-      MINIPROGRAM_LIVE_STARTUP_GRACE_SECONDS: "${MINIPROGRAM_LIVE_STARTUP_GRACE_SECONDS:-2.0}"
+      MINIPROGRAM_LIVE_STARTUP_GRACE_SECONDS: "${MINIPROGRAM_LIVE_STARTUP_GRACE_SECONDS:-0.5}"
       # WebRTC Streamer 仅监听宿主机回环地址，信令通过后端认证代理。
       WEBRTC_STREAMER_URL: "${WEBRTC_STREAMER_URL:-http://127.0.0.1:8002}"
       WEBRTC_STREAM_OPTIONS: "${WEBRTC_STREAM_OPTIONS:-rtptransport=tcp&timeout=10}"
@@ -154,8 +155,10 @@ services:
       DRONE_CRUISE_WADING_FILE_ID: "${DRONE_CRUISE_WADING_FILE_ID:-}"
       DRONE_CRUISE_PAYLOAD_INDEX: "${DRONE_CRUISE_PAYLOAD_INDEX:-88-0-0}"
       DRONE_CRUISE_OBJECT_PREFIX: "${DRONE_CRUISE_OBJECT_PREFIX:-drone-cruises}"
-      DRONE_CRUISE_FISHING_VIDEO: "${DRONE_CRUISE_FISHING_VIDEO:-/app/drone-demo/fishing.mp4}"
-      DRONE_CRUISE_WADING_VIDEO: "${DRONE_CRUISE_WADING_VIDEO:-/app/drone-demo/wading.mp4}"
+      DRONE_CRUISE_DEMO_OBJECT_PREFIX: "${DRONE_CRUISE_DEMO_OBJECT_PREFIX:-drone-cruises/demo}"
+      DRONE_CRUISE_PICTURE_ROOT: "${DRONE_CRUISE_PICTURE_ROOT:-/app/data/drone_pictures}"
+      STAFF_TASK_DEMO_PICTURE_ROOT: "${STAFF_TASK_DEMO_PICTURE_ROOT:-/app/data/worker_pictures}"
+      STAFF_TASK_DEMO_OBJECT_PREFIX: "${STAFF_TASK_DEMO_OBJECT_PREFIX:-safety-events/demo-field-images}"
       # OnlyOffice / 文档服务
       APP_PORT: "${APP_PORT:-8090}"
       PUBLIC_HOST: "${PUBLIC_HOST:-192.168.31.52}"

@@ -48,6 +48,23 @@ export function operateUnifiedSafetyEvent(id, data) {
   return request.post(`/v1/integration/safety-events/${id}/operation`, data)
 }
 
+// 现场人工处置的演示下发：事件类型必须明确区分人员涉水与夜间捕鱼。
+export const STAFF_TASK_EVENT_TYPES = Object.freeze([
+  { value: 'PERSON_WADING', label: '人员涉水事件' },
+  { value: 'NIGHT_FISHING', label: '夜间捕鱼事件' },
+])
+
+export function dispatchStaffTask(id, data) {
+  return request.post(`/v1/integration/safety-events/${id}/staff-task/dispatch`, data)
+}
+
+export function submitStaffTaskResult(id, formData) {
+  return request.post(`/v1/integration/safety-events/${id}/staff-task/result`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 60000,
+  })
+}
+
 export function submitSafetyEventSupplementalContext(id, data) {
   return request.post(`/v1/integration/safety-events/${id}/supplemental-context`, data, {
     timeout: 60000,

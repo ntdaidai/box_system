@@ -22,6 +22,7 @@ from app.api import (
     integration,
     knowledge,
     drone,
+    machine_dog,
 )
 from app.core.config import settings
 from app.core.database import SessionLocal
@@ -36,6 +37,8 @@ from app.services.drone_adapter import drone_dispatch_service
 from app.services.safety_event_engine import safety_event_bus
 from app.services.safety_event_ws import safety_event_ws_manager
 from app.services.staff_task_service import staff_task_service
+from app.services.staff_task_media_service import staff_task_media_service
+from app.services.drone_cruise_service import drone_cruise_service
 from app.services.patrol_report_scheduler import patrol_report_scheduler
 from app.services.local_inference_service import local_inference_service
 from app.services.qwen_camera_screening import qwen_camera_screening_service
@@ -86,10 +89,31 @@ async def lifespan(app: FastAPI):
 
     # 连接 MinIO
     from app.services.minio_service import minio_service
+    for attempt in range(10):
+        try:
+            minio_service.connect()
+        except Exception as e:
+            logger.warning(f"MinIO 连接失败（第 {attempt + 1}/10 次）: {e}")
+        if minio_service.client:
+            break
+        if attempt < 9:
+            await asyncio.sleep(2)
+    if not minio_service.client:
+        logger.warning("MinIO 连接失败，图片上传功能将不可用")
     try:
-        minio_service.connect()
+        demo_catalog = await staff_task_media_service.prepare_demo_pictures()
+        logger.info(
+            f"人工处置演示图片已完成 MinIO 预置：{', '.join(f'{event_type}={len(items)}' for event_type, items in demo_catalog.items())}"
+        )
     except Exception as e:
-        logger.warning(f"MinIO 连接失败，图片上传功能将不可用: {e}")
+        logger.warning(f"人工处置演示图片预置失败，演示任务暂不可用: {e}")
+    try:
+        drone_catalog = await drone_cruise_service.prepare_simulation_pictures()
+        logger.info(
+            f"无人机演示图片已完成 MinIO 预置：{', '.join(f'{route_key}={len(items)}' for route_key, items in drone_catalog.items())}"
+        )
+    except Exception as e:
+        logger.warning(f"无人机演示图片预置失败，模拟巡航暂不可用: {e}")
 
     # 初始化本地推理服务
     try:
@@ -213,6 +237,7 @@ app.include_router(local_inference.router, prefix="/api/v1/local-inference", tag
 app.include_router(model_library.router, prefix="/api/v1/model-library", tags=["模型库"])
 app.include_router(knowledge.router, prefix="/api/v1/knowledge", tags=["知识库"])
 app.include_router(drone.router, prefix="/api/v1/drone", tags=["无人机巡航"])
+app.include_router(machine_dog.router, prefix="/api/v1/machine-dog", tags=["机器狗巡检"])
 app.include_router(miniprogram.router, prefix="/api/miniprogram/v1", tags=["微信小程序V1"])
 app.include_router(onlyoffice.router)
 app.include_router(patrol_report.router)

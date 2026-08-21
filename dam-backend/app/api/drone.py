@@ -7,6 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.core.config import settings
 from app.core.security import require_auth
 from app.schemas.common import Result
 from app.services.drone_cruise_service import DroneCruiseError, drone_cruise_service
@@ -24,15 +25,6 @@ class DroneCruiseRequest(BaseModel):
     payload_index: Optional[str] = Field(None, min_length=1, max_length=64)
     rth_altitude: int = Field(50, ge=20, le=500)
     min_battery_capacity: int = Field(50, ge=0, le=100)
-    # 仅 simulation 使用，便于接口联调时缩短演示时间。
-    duration_seconds: Optional[float] = Field(None, ge=1, le=900)
-
-
-def _http_client(request: Request):
-    client = getattr(request.app.state, "http_client", None)
-    if client is None:
-        raise HTTPException(status_code=503, detail="无人机 HTTP 服务尚未就绪")
-    return client
 
 
 @router.get("/routes", response_model=Result)
@@ -44,11 +36,14 @@ async def list_cruise_routes(_user=Depends(require_auth)):
 @router.post("/cruises/{route_key}", response_model=Result)
 async def execute_cruise(
     route_key: str,
+    request: Request,
     payload: DroneCruiseRequest = DroneCruiseRequest(),
-    client=Depends(_http_client),
     _user=Depends(require_auth),
 ):
     """执行一条巡航并返回去程两张、回程两张 MinIO 地址。"""
+    client = getattr(request.app.state, "http_client", None)
+    if settings.DRONE_CRUISE_EXECUTOR == "real" and client is None:
+        raise HTTPException(status_code=503, detail="无人机 HTTP 服务尚未就绪")
     try:
         result = await drone_cruise_service.cruise(
             route_key,

@@ -261,13 +261,15 @@
         </div>
         <div class="video-stage">
           <video
-            v-if="videoUrl"
+            v-if="isDogRunning"
+            :key="selectedDog?.id || activeDog?.id || 'machine-dog-walking'"
             class="video-stream"
             :src="videoUrl"
             autoplay
             muted
             loop
             playsinline
+            preload="auto"
             controls
           ></video>
           <div v-else class="video-placeholder">
@@ -571,7 +573,8 @@ const selectedPresetRouteId = ref(
 const selectedWaypointIds = ref([...presetRoutes.value[0].points])
 const deviceFilter = ref('all')
 const routeMapRouteId = ref(presetRoutes.value[0]?.id || '')
-const videoUrl = ref('')
+// 机器狗巡检中的实时画面。文件由部署产物提供，任务运行时循环播放。
+const videoUrl = '/demo/mashiondag_walking.mp4'
 // 初始无巡检任务，机器狗停在充电区待命，点击"开始巡检"后从充电区出发巡检
 const activeTask = ref(null)
 
@@ -675,6 +678,9 @@ const activeDog = computed(() => {
   if (!activeTask.value) return null
   return machineDogs.value.find((dog) => dog.id === activeTask.value.dogId) || null
 })
+const isDogRunning = computed(() =>
+  selectedDog.value?.status === 'running' || activeDog.value?.status === 'running'
+)
 const selectedWaypoints = computed(() =>
   selectedWaypointIds.value.map((id) => waypoints.find((point) => point.id === id)).filter(Boolean)
 )

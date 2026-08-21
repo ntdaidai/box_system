@@ -18,6 +18,8 @@ class SafetyEventTask(Base):
         unique=True,
         index=True,
     )
+    assigned_group_id = Column(String(64), nullable=True, index=True)
+    assigned_group_name = Column(String(128), nullable=True, index=True)
     assignee = Column(String(128), nullable=True)
     dispatch_operator = Column(String(128), nullable=False)
     task_status = Column(String(32), nullable=False, default="DISPATCHED", index=True)

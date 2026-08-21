@@ -87,8 +87,8 @@ export function request({ url, method = 'GET', data, header }) {
   })
 }
 
-export function uploadFieldResult({ eventId, filePath, result, remark, operator }) {
-  const requestUrl = miniApiUrl(`/events/${encodeURIComponent(eventId)}/field-result`)
+export function uploadFieldPhoto({ eventId, filePath, phase, eventType, operator }) {
+  const requestUrl = miniApiUrl(`/events/${encodeURIComponent(eventId)}/field-photo`)
   return new Promise((resolve, reject) => {
     uni.uploadFile({
       url: requestUrl,
@@ -97,8 +97,8 @@ export function uploadFieldResult({ eventId, filePath, result, remark, operator 
       name: 'photo',
       header: authHeader(),
       formData: {
-        result,
-        remark: remark || '',
+        phase,
+        event_type: eventType,
         operator: operator || ''
       },
       success(res) {
@@ -111,19 +111,33 @@ export function uploadFieldResult({ eventId, filePath, result, remark, operator 
         try {
           body = JSON.parse(res.data || '{}')
         } catch (error) {
-          reject(new Error('处理结果响应无效'))
+          reject(new Error('现场照片响应无效'))
           return
         }
         if (res.statusCode >= 200 && res.statusCode < 300 && body.code === 200) {
           resolve(body.data || {})
           return
         }
-        reject(new Error(body.detail || body.message || `提交失败 ${res.statusCode}`))
+        reject(new Error(body.detail || body.message || `上传失败 ${res.statusCode}`))
       },
       fail(err) {
         reject(new Error(`${err.errMsg || '上传失败'}：${requestUrl}`))
       }
     })
+  })
+}
+
+export function confirmFieldResult({ eventId, result, remark, operator, eventType, photoUrls }) {
+  return request({
+    url: `/events/${encodeURIComponent(eventId)}/field-result/confirm`,
+    method: 'POST',
+    data: {
+      result,
+      remark: remark || '',
+      operator: operator || '',
+      event_type: eventType,
+      photo_urls: photoUrls
+    }
   })
 }
 

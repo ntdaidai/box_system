@@ -68,6 +68,14 @@
           @tap="previewEvidence(item)"
         >
           <image v-if="isImageEvidence(item)" :src="absoluteEvidenceUrl(item.url)" mode="aspectFill" />
+          <video
+            v-else-if="isVideoEvidence(item)"
+            class="evidence-video"
+            :src="absoluteEvidenceUrl(item.url)"
+            controls
+            show-center-play-btn
+            object-fit="contain"
+          />
           <view v-else class="evidence-file">{{ item.evidence_type }}</view>
           <text>{{ item.description || '现场证据' }}</text>
         </view>
@@ -262,10 +270,10 @@ export default {
           this.videoText = this.streamUrl ? '正在连接实时视频流' : '实时快照模式'
         })
         .catch(() => {
-          this.snapshotUrl = ''
+          this.snapshotUrl = `${absoluteUrl(`/api/miniprogram/v1/events/${encodeURIComponent(this.eventId)}/snapshot.jpg`)}?t=${Date.now()}`
           this.streamUrl = ''
           this.liveFallback = true
-          this.videoText = '当前摄像头暂未返回实时画面'
+          this.videoText = '实时视频不可用，已切换快照预览'
         })
     },
 
@@ -279,6 +287,10 @@ export default {
 
     isImageEvidence(item) {
       return String(item.evidence_type || '').toUpperCase() === 'IMAGE'
+    },
+
+    isVideoEvidence(item) {
+      return String(item.evidence_type || '').toUpperCase() === 'VIDEO'
     },
 
     previewEvidence(item) {
@@ -587,6 +599,7 @@ export default {
 }
 
 .evidence-item image,
+.evidence-item video,
 .evidence-file {
   width: 220rpx;
   height: 150rpx;

@@ -148,6 +148,22 @@ class MinioService:
             logger.error(f"文件上传异常: {e}")
             return None
 
+    def object_url(self, object_name: str) -> str:
+        """返回对象的稳定访问地址，不执行上传。"""
+        scheme = "https" if settings.MINIO_SECURE else "http"
+        clean_name = object_name.strip("/")
+        return f"{scheme}://{settings.MINIO_ENDPOINT}/{self.bucket_name}/{clean_name}"
+
+    def object_exists(self, object_name: str) -> bool:
+        """检查对象是否已存在于 MinIO。"""
+        if not self.client:
+            return False
+        try:
+            self.client.stat_object(self.bucket_name, object_name.strip("/"))
+            return True
+        except Exception:
+            return False
+
     def upload_file(
         self,
         file_path: str,

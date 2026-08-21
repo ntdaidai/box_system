@@ -4,10 +4,61 @@ import AutoImport from 'unplugin-auto-import/vite'
 import Components from 'unplugin-vue-components/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 import path from 'path'
+import fs from 'fs'
+
+const machineDogVideoPath = path.resolve(__dirname, 'dist/demo/mashiondag_walking.mp4')
+
+function serveMachineDogVideo() {
+  return {
+    name: 'serve-machine-dog-video',
+    configureServer(server) {
+      server.middlewares.use('/demo/mashiondag_walking.mp4', (req, res, next) => {
+        if (!['GET', 'HEAD'].includes(req.method) || !fs.existsSync(machineDogVideoPath)) {
+          next()
+          return
+        }
+
+        const size = fs.statSync(machineDogVideoPath).size
+        const range = req.headers.range
+        const match = range && range.match(/bytes=(\d*)-(\d*)/)
+        let start = 0
+        let end = size - 1
+
+        if (match) {
+          if (match[1]) start = Number(match[1])
+          if (match[2]) end = Number(match[2])
+          if (!match[1] && match[2]) start = Math.max(0, size - Number(match[2]))
+          end = Math.min(end, size - 1)
+          if (start > end || start >= size) {
+            res.statusCode = 416
+            res.setHeader('Content-Range', `bytes */${size}`)
+            res.end()
+            return
+          }
+          res.statusCode = 206
+          res.setHeader('Content-Range', `bytes ${start}-${end}/${size}`)
+        } else {
+          res.statusCode = 200
+        }
+
+        res.setHeader('Content-Type', 'video/mp4')
+        res.setHeader('Accept-Ranges', 'bytes')
+        res.setHeader('Content-Length', String(end - start + 1))
+        res.setHeader('Cache-Control', 'no-cache')
+        if (req.method === 'HEAD') {
+          res.end()
+          return
+        }
+        fs.createReadStream(machineDogVideoPath, { start, end }).pipe(res)
+      })
+    },
+  }
+}
 
 export default defineConfig({
   cacheDir: process.env.VITE_CACHE_DIR || 'node_modules/.vite',
   plugins: [
+    serveMachineDogVideo(),
     vue(),
     AutoImport({
       resolvers: [ElementPlusResolver()],
@@ -84,5 +135,9 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/onlyoffice/, ''),
       },
     },
+  },
+  // 部署目录中包含机器狗测试视频等外部静态资源，构建时不要清空 dist。
+  build: {
+    emptyOutDir: false,
   },
 })

@@ -55,6 +55,11 @@ from app.services.safety_event_operation_service import (
 )
 from app.services.timeline_text import truncate
 from app.services.safety_event_ws import safety_event_ws_manager
+from app.services.staff_task_service import (
+    STAFF_EVENT_TYPE_LABELS,
+    normalize_staff_event_type,
+)
+from app.services.staff_task_media_service import staff_task_media_service
 from app.services.wechat_subscription_service import (
     WeChatSubscriptionError,
     wechat_subscription_service,
@@ -164,6 +169,14 @@ class EventOperationRequest(BaseModel):
     staff_id: Optional[int] = None
     openid: Optional[str] = Field(None, max_length=128)
     remark: Optional[str] = Field(None, max_length=500)
+
+
+class ConfirmFieldResultRequest(BaseModel):
+    result: str = Field(..., pattern="^(DRIVEN_AWAY|LEFT_BY_SELF|OTHER)$")
+    remark: str = Field("", max_length=500)
+    operator: Optional[str] = Field(None, max_length=128)
+    event_type: str = Field(..., max_length=64)
+    photo_urls: list[str] = Field(..., min_length=2, max_length=2)
 
 
 def _timestamp(value: Optional[dt.datetime]) -> Optional[float]:
@@ -359,7 +372,10 @@ def _business_status(event: SafetyEventInstance, task: Optional[SafetyEventTask]
     if _is_resolved(event):
         return "completed"
     task_status = (task.task_status or "").upper() if task else ""
-    if event.status == "PROCESSING" or task_status in {"ACCEPTED", "PROCESSING", "WAITING_ACCEPT", "DISPATCHED"}:
+    # WAITING_ACCEPT/DISPATCHED 表示任务已下发但还没人接，仍属于“待处理”。
+    if task_status in {"WAITING_ACCEPT", "DISPATCHED"}:
+        return "pending"
+    if event.status == "PROCESSING" or task_status in {"ACCEPTED", "PROCESSING"}:
         return "processing"
     return "pending"
 
@@ -418,8 +434,11 @@ def _mini_event(
     business_status = _business_status(event, task)
     task_info = _event_task_info(db, event)
     operator = _staff_operator(staff, "")
-    is_my_task = bool(operator and task and task.assignee == operator)
     camera = camera if camera and str(camera.id) == str(base.get("camera_id")) else None
+    task_group_name = _task_group_name(task, base, camera)
+    is_my_assignee = bool(operator and task and task.assignee == operator)
+    is_my_group_task = _is_my_group_task(staff, task, base, camera, business_status)
+    is_my_task = is_my_assignee or is_my_group_task
     install_address = getattr(camera, "install_address", None)
     latitude = getattr(camera, "latitude", None)
     longitude = getattr(camera, "longitude", None)
@@ -447,10 +466,18 @@ def _mini_event(
         "longitude": longitude,
         "completed_at": completed_at,
         "completed_time": completed_at,
+        "assigned_group_id": getattr(task, "assigned_group_id", None) if task else None,
+        "assigned_group_name": task_group_name or None,
         "is_my_task": is_my_task,
-        "can_accept": business_status == "pending",
-        "can_false_alarm": business_status == "pending",
-        "can_start_manual": status == "WAITING_MANUAL" and base.get("risk_level") == RISK_HIGH,
+        "is_my_assignee": is_my_assignee,
+        "is_my_group_task": is_my_group_task,
+        "can_accept": business_status == "pending" and _staff_group_matches(staff, task_group_name),
+        "can_false_alarm": business_status == "pending" and _staff_group_matches(staff, task_group_name),
+        "can_start_manual": (
+            status == "WAITING_MANUAL"
+            and base.get("risk_level") == RISK_HIGH
+            and _staff_group_matches(staff, task_group_name)
+        ),
         "can_submit_result": business_status == "processing" and (is_my_task or not task or not task.assignee),
     }
 
@@ -597,29 +624,45 @@ def _event_group_name(event_data: dict, camera: Optional[Camera]) -> str:
     return (
         str(visual.get("group_name") or observation.get("group_name") or "").strip()
         or getattr(camera, "group_name", None)
-        or "默认处置组"
+        or ""
     )
 
 
-def _group_visible(event_data: dict, camera: Optional[Camera], staff: Optional[MiniProgramStaff]) -> bool:
-    if not staff:
-        return True
-    staff_group = (staff.group_name or "").strip()
-    if not staff_group or staff_group == "默认处置组":
-        return True
-    event_group = _event_group_name(event_data, camera)
-    if event_group == staff_group:
-        return True
-    point_text = " ".join(
-        str(value or "")
-        for value in (
-            event_data.get("camera_name"),
-            event_data.get("monitor_point"),
-            getattr(camera, "install_address", None),
-            getattr(camera, "description", None),
-        )
+def _task_group_name(
+    task: Optional[SafetyEventTask],
+    event_data: dict,
+    camera: Optional[Camera],
+) -> str:
+    """返回任务实际接收组；旧任务没有组字段时回退到事件携带的组。"""
+    return (
+        str(getattr(task, "assigned_group_name", None) or "").strip()
+        or _event_group_name(event_data, camera)
     )
-    return staff_group in point_text
+
+
+def _staff_group_matches(staff: Optional[MiniProgramStaff], group_name: str) -> bool:
+    """无组任务对所有人可接；有组任务只允许同组人员接受。"""
+    group_name = str(group_name or "").strip()
+    staff_group = str(getattr(staff, "group_name", None) or "").strip()
+    if not group_name or not staff_group:
+        return True
+    return group_name == staff_group
+
+
+def _is_my_group_task(
+    staff: Optional[MiniProgramStaff],
+    task: Optional[SafetyEventTask],
+    event_data: dict,
+    camera: Optional[Camera],
+    business_status: str,
+) -> bool:
+    if business_status != "pending" or not task:
+        return False
+    if task.task_status not in {"WAITING_ACCEPT", "DISPATCHED"}:
+        return False
+    group_name = _task_group_name(task, event_data, camera)
+    # 没有明确接收组的历史任务不标记为某个人的组任务，但仍然可查看和接受。
+    return bool(group_name) and _staff_group_matches(staff, group_name)
 
 
 def _apply_event_filters(
@@ -633,7 +676,7 @@ def _apply_event_filters(
     if business_status == "pending":
         query = query.filter(
             SafetyEventInstance.state != STATE_RESOLVED,
-            SafetyEventInstance.status.notin_(["PROCESSING", "COMPLETED", "FALSE_ALARM"]),
+            SafetyEventInstance.status.notin_(["COMPLETED", "FALSE_ALARM"]),
         )
     elif business_status == "processing":
         query = query.filter(
@@ -687,9 +730,31 @@ def _load_event_rows(
     result = []
     camera_cache: dict[str, Optional[Camera]] = {}
     operator = _staff_operator(staff, "")
+    event_ids = [row.id for row in rows]
+    task_cache: dict[int, Optional[SafetyEventTask]] = {}
+    if event_ids:
+        task_rows = (
+            db.query(SafetyEventTask)
+            .filter(SafetyEventTask.event_instance_id.in_(event_ids))
+            .order_by(SafetyEventTask.id.desc())
+            .all()
+        )
+        for task in task_rows:
+            task_cache.setdefault(task.event_instance_id, task)
     for row in rows:
-        data = safety_event_runtime_service.event_dict(db, row)
-        camera_id = str(data.get("camera_id") or "")
+        observation = dict(row.latest_observation or {})
+        visual = observation.get("visual") if isinstance(observation.get("visual"), dict) else {}
+        camera_id = str(visual.get("camera_id") or row.source_id or "")
+        # 列表和统计只需要轻量字段；完整事件详情留到当前页的 10 条记录再加载，
+        # 避免每个事件重复查询事件定义、任务和证据造成首页数秒级延迟。
+        data = {
+            "camera_id": camera_id,
+            "camera_name": visual.get("camera_name"),
+            "event_name": row.summary,
+            "event_type": row.event_category,
+            "risk_level": row.risk_level,
+            "latest_observation": observation,
+        }
         if camera_id not in camera_cache:
             camera_cache[camera_id] = (
                 db.query(Camera).filter(Camera.id == int(camera_id)).first()
@@ -710,9 +775,10 @@ def _load_event_rows(
             )
             if point.strip() not in point_text and point.strip() not in row.instance_no:
                 continue
-        if not _group_visible(data, camera, staff):
-            continue
-        task = _current_task(db, row.id)
+        task = task_cache.get(row.id)
+        if business_status in {"pending", "processing", "completed"}:
+            if _business_status(row, task) != business_status:
+                continue
         if only_mine and operator:
             if not task or task.assignee != operator:
                 continue
@@ -730,8 +796,12 @@ def _sort_event_rows(
     risk_rank = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
 
     def sort_key(item):
-        row, data, _camera, task = item
-        own_rank = 0 if business_status == "processing" and task and task.assignee == operator else 1
+        row, data, camera, task = item
+        own_rank = 0 if (
+            business_status == "processing"
+            and task
+            and task.assignee == operator
+        ) or _is_my_group_task(staff, task, data, camera, business_status) else 1
         return (
             own_rank,
             risk_rank.get(data.get("risk_level"), 3),
@@ -781,33 +851,16 @@ def _normalized_photo_type(content_type: Optional[str], filename: Optional[str])
     return "image/jpeg"
 
 
-async def _save_field_photo(event_id: str, photo: UploadFile) -> str:
-    allowed_types = {"image/jpeg", "image/png", "image/webp", "application/octet-stream"}
-    if photo.content_type not in allowed_types:
-        raise HTTPException(status_code=400, detail="现场照片仅支持 JPG、PNG、WEBP")
-    content = await photo.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="现场照片不能为空")
-    if len(content) > 10 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="现场照片不能超过 10MB")
-
-    filename = _safe_filename(photo.filename, photo.content_type)
-    content_type = _normalized_photo_type(photo.content_type, photo.filename)
-    captured_day = dt.datetime.now().strftime("%Y-%m-%d")
-    object_name = f"safety-events/field-images/{captured_day}/{event_id}/{filename}"
-    url = minio_service.upload_bytes(
-        content,
-        object_name=object_name,
-        content_type=content_type,
-    )
-    if url:
-        return url
-
-    directory = Path(__file__).resolve().parents[2] / "data" / "field-results" / event_id
-    directory.mkdir(parents=True, exist_ok=True)
-    target = directory / filename
-    target.write_bytes(content)
-    return str(target)
+async def _save_field_photo(
+    event_id: str,
+    photo: UploadFile,
+    *,
+    phase: Optional[str] = None,
+) -> str:
+    try:
+        return await staff_task_media_service.save_upload(event_id, photo, phase=phase)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 async def _broadcast_updates(db: Session, event: SafetyEventInstance, *timeline_items: dict) -> None:
@@ -1189,8 +1242,18 @@ async def get_camera_snapshot(camera_id: str):
     )
 
 
+def _mini_rtmp_public_base(request: Request) -> str:
+    """让小程序拿到与 API 相同的 Jetson 地址，避免换网后仍返回旧 RTMP IP。"""
+    forwarded_host = (request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
+    host = forwarded_host or request.headers.get("host") or ""
+    host = host.split(":", 1)[0].strip()
+    if host and not re.fullmatch(r"(?:localhost|127\.0\.0\.1|0\.0\.0\.0)", host, re.IGNORECASE):
+        return f"rtmp://{host}:1936"
+    return settings.MINIPROGRAM_LIVE_PUBLIC_BASE_URL
+
+
 @router.get("/cameras/{camera_id}/video", response_model=MiniResponse, summary="小程序摄像头实时视频")
-async def get_camera_video(camera_id: str):
+async def get_camera_video(request: Request, camera_id: str):
     db = SessionLocal()
     try:
         row = db.query(Camera).filter(Camera.id == int(camera_id), Camera.enabled == True).first() if str(camera_id).isdigit() else None  # noqa: E712
@@ -1201,7 +1264,10 @@ async def get_camera_video(camera_id: str):
         db.close()
     try:
         relay = await asyncio.to_thread(
-            camera_live_relay_manager.ensure, camera_id, source
+            camera_live_relay_manager.ensure,
+            camera_id,
+            source,
+            _mini_rtmp_public_base(request),
         )
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -1349,7 +1415,7 @@ async def get_event_detail(
 
 
 @router.get("/events/{event_id}/video", response_model=MiniResponse, summary="小程序事件实时视频")
-async def get_event_video(event_id: str):
+async def get_event_video(request: Request, event_id: str):
     db = SessionLocal()
     try:
         event = _get_event_or_404(db, event_id)
@@ -1360,7 +1426,10 @@ async def get_event_video(event_id: str):
             raise HTTPException(status_code=404, detail="摄像头不存在")
         try:
             relay = await asyncio.to_thread(
-                camera_live_relay_manager.ensure, camera_id, camera_source_from_row(camera)
+                camera_live_relay_manager.ensure,
+                camera_id,
+                camera_source_from_row(camera),
+                _mini_rtmp_public_base(request),
             )
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -1440,8 +1509,18 @@ async def accept_event_task(request: Request, event_id: str, payload: EventOpera
         event = _get_event_or_404(db, event_id)
         if _is_resolved(event):
             raise HTTPException(status_code=409, detail="事件已结束，不能接收任务")
+        event_data = safety_event_runtime_service.event_dict(db, event)
+        camera_id = str(event_data.get("camera_id") or "")
+        camera = (
+            db.query(Camera).filter(Camera.id == int(camera_id)).first()
+            if camera_id.isdigit()
+            else None
+        )
         task = safety_event_runtime_service.latest_task(db, event.id)
         operator = _staff_operator(staff)
+        task_group_name = _task_group_name(task, event_data, camera)
+        if task and not _staff_group_matches(staff, task_group_name):
+            raise HTTPException(status_code=403, detail=f"该任务分配给{task_group_name}，当前人员不属于该组")
         now = dt.datetime.now()
         if task and task.assignee and task.assignee != operator and task.task_status in {"ACCEPTED", "PROCESSING"}:
             raise HTTPException(status_code=409, detail=f"事件已由{task.assignee}处理")
@@ -1452,6 +1531,8 @@ async def accept_event_task(request: Request, event_id: str, payload: EventOpera
                 task_status="WAITING_ACCEPT",
                 task_note="小程序接收时自动创建",
                 dispatched_at=now,
+                assigned_group_id=staff.group_id if staff else None,
+                assigned_group_name=staff.group_name if staff else None,
             )
             db.add(task)
             db.flush()
@@ -1517,60 +1598,56 @@ async def mark_event_false_alarm(request: Request, event_id: str, payload: Event
         db.close()
 
 
-@router.post("/events/{event_id}/field-result", response_model=MiniResponse, summary="小程序提交现场处理结果")
-async def submit_field_result(
-    event_id: str,
-    result: str = Form(..., pattern="^(DRIVEN_AWAY|LEFT_BY_SELF|OTHER)$"),
-    remark: str = Form("", max_length=500),
-    operator: Optional[str] = Form(None, max_length=128),
-    photo: UploadFile = File(...),
-):
-    db = SessionLocal()
-    try:
-        event = _get_event_or_404(db, event_id)
-        if _is_resolved(event):
-            raise HTTPException(status_code=409, detail="事件已结束，不能重复提交")
-        task = safety_event_runtime_service.latest_task(db, event.id)
-        if not task or task.task_status not in {"ACCEPTED", "PROCESSING"}:
-            raise HTTPException(status_code=409, detail="事件尚未进入人工处理")
-
-        now = dt.datetime.now()
-        operator_name = _operator_name(db, operator)
-        photo_url = await _save_field_photo(event_id, photo)
-        result_label = RESULT_LABELS[result]
-        task.task_status = "COMPLETED"
-        task.completed_at = now
-        task.result_type = result
-        task.result_remark = remark
-        event.status = "COMPLETED"
-        event.state = STATE_RESOLVED
-        event.resolved_at = now
-        event.resolve_reason = "staff_completed"
-        event.version = (event.version or 0) + 1
-        log = safety_event_runtime_service.append_timeline(
-            db,
-            event,
-            action_key=safety_event_runtime_service.new_action_key("field-result"),
-            log_type="RESOLVE",
-            trigger_type="MANUAL",
-            status="SUCCESS",
-            message=truncate(
-                f"{operator_name} 提交现场处理结果：{result_label}，事件已闭环"
-                f"（备注：{remark or '无'}）"
-            ),
-            operator=operator_name,
-            payload={
-                "instance_no": event.instance_no,
-                "canonical_action_type": "STAFF_COMPLETED",
-                "from_status": "PROCESSING",
-                "to_status": "COMPLETED",
-                "result": result,
-                "result_label": result_label,
-                "remark": remark,
-                "task_id": task.id,
-            },
-            create_time=now,
-        )
+def _complete_field_result(
+    db: Session,
+    event: SafetyEventInstance,
+    task: SafetyEventTask,
+    *,
+    result: str,
+    remark: str,
+    operator_name: str,
+    canonical_event_type: str,
+    photo_urls: list[str],
+) -> SafetyEventTimelineLog:
+    now = dt.datetime.now()
+    result_label = RESULT_LABELS[result]
+    task.task_status = "COMPLETED"
+    task.completed_at = now
+    task.result_type = result
+    task.result_remark = remark
+    event.status = "COMPLETED"
+    event.state = STATE_RESOLVED
+    event.resolved_at = now
+    event.resolve_reason = "staff_completed"
+    event.version = (event.version or 0) + 1
+    log = safety_event_runtime_service.append_timeline(
+        db,
+        event,
+        action_key=safety_event_runtime_service.new_action_key("field-result"),
+        log_type="RESOLVE",
+        trigger_type="MANUAL",
+        status="SUCCESS",
+        message=truncate(
+            f"{operator_name} 提交现场处理结果：{result_label}，事件已闭环"
+            f"（备注：{remark or '无'}）"
+        ),
+        operator=operator_name,
+        payload={
+            "instance_no": event.instance_no,
+            "canonical_action_type": "STAFF_COMPLETED",
+            "from_status": "PROCESSING",
+            "to_status": "COMPLETED",
+            "result": result,
+            "result_label": result_label,
+            "remark": remark,
+            "task_id": task.id,
+            "event_type": canonical_event_type,
+            "event_type_label": STAFF_EVENT_TYPE_LABELS[canonical_event_type],
+            "photo_urls": photo_urls,
+        },
+        create_time=now,
+    )
+    for index, photo_url in enumerate(photo_urls, 1):
         safety_event_runtime_service.add_evidence(
             db,
             event,
@@ -1580,14 +1657,102 @@ async def submit_field_result(
             source_type="STAFF",
             source_id=operator_name,
             file_url=photo_url,
-            description="人工现场处置照片",
+            description=f"人工现场处置照片（{'驱离前' if index == 1 else '驱离后'}）",
+            metadata={
+                "event_type": canonical_event_type,
+                "event_type_label": STAFF_EVENT_TYPE_LABELS[canonical_event_type],
+                "photo_index": index,
+                "phase": "before" if index == 1 else "after",
+            },
             captured_at=now,
         )
+    return log
+
+
+def _field_result_task_or_409(db: Session, event_id: str) -> tuple[SafetyEventInstance, SafetyEventTask]:
+    event = _get_event_or_404(db, event_id)
+    if _is_resolved(event):
+        raise HTTPException(status_code=409, detail="事件已结束，不能重复提交")
+    task = safety_event_runtime_service.latest_task(db, event.id)
+    if not task or task.task_status not in {"ACCEPTED", "PROCESSING"}:
+        raise HTTPException(status_code=409, detail="事件尚未进入人工处理")
+    return event, task
+
+
+@router.post("/events/{event_id}/field-photo", response_model=MiniResponse, summary="小程序上传驱离前后现场照片")
+async def upload_field_photo(
+    event_id: str,
+    phase: str = Form(..., pattern="^(before|after)$"),
+    event_type: str = Form(..., max_length=64),
+    operator: Optional[str] = Form(None, max_length=128),
+    photo: UploadFile = File(...),
+):
+    db = SessionLocal()
+    try:
+        event, _task = _field_result_task_or_409(db, event_id)
+        try:
+            canonical_event_type = normalize_staff_event_type(event_type)
+            photo_url = await _save_field_photo(
+                str(event.instance_no), photo, phase=phase
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return MiniResponse(data={
+            "photo_url": photo_url,
+            "phase": phase,
+            "event_type": canonical_event_type,
+            "event_type_label": STAFF_EVENT_TYPE_LABELS[canonical_event_type],
+            "operator": _operator_name(db, operator),
+        }, message=f"{'驱离前' if phase == 'before' else '驱离后'}照片已上传")
+    finally:
+        db.close()
+
+
+@router.post("/events/{event_id}/field-result", response_model=MiniResponse, summary="小程序提交驱离前后现场处理结果")
+async def submit_field_result(
+    event_id: str,
+    result: str = Form(..., pattern="^(DRIVEN_AWAY|LEFT_BY_SELF|OTHER)$"),
+    remark: str = Form("", max_length=500),
+    operator: Optional[str] = Form(None, max_length=128),
+    event_type: str = Form(..., max_length=64),
+    photos: list[UploadFile] = File(default=[]),
+    photo: Optional[UploadFile] = File(None),
+):
+    db = SessionLocal()
+    try:
+        event, task = _field_result_task_or_409(db, event_id)
+        uploads = [*(photos or []), *([photo] if photo else [])]
+        if len(uploads) != 2:
+            raise HTTPException(status_code=400, detail="请分别上传驱离前和驱离后两张照片")
+        try:
+            canonical_event_type = normalize_staff_event_type(event_type)
+            photo_urls = [
+                await _save_field_photo(
+                    str(event.instance_no), item,
+                    phase="before" if index == 0 else "after",
+                )
+                for index, item in enumerate(uploads)
+            ]
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        operator_name = _operator_name(db, operator)
+        log = _complete_field_result(
+            db,
+            event,
+            task,
+            result=result,
+            remark=remark,
+            operator_name=operator_name,
+            canonical_event_type=canonical_event_type,
+            photo_urls=photo_urls,
+        )
+        from app.services.eca_engine import eca_engine
+        eca_engine.generate_deferred_event_report(db, event)
         db.commit()
         get_safety_event_engine().resolve_event(
             event_id,
             reason="staff_completed",
-            now=now.timestamp(),
+            now=dt.datetime.now().timestamp(),
             emit_action=False,
         )
         timeline_item = _log_to_timeline(log)
@@ -1596,7 +1761,58 @@ async def submit_field_result(
         return MiniResponse(data={
             "event": _mini_event(db, event),
             "timeline": [timeline_item],
-            "photo_url": photo_url,
+            "photo_url": photo_urls[0],
+            "photo_urls": photo_urls,
+            "event_type": canonical_event_type,
+            "event_type_label": STAFF_EVENT_TYPE_LABELS[canonical_event_type],
+        }, message="处理结果已提交，事件已闭环")
+    finally:
+        db.close()
+
+
+@router.post("/events/{event_id}/field-result/confirm", response_model=MiniResponse, summary="小程序确认驱离前后现场处理结果")
+async def confirm_field_result(event_id: str, payload: ConfirmFieldResultRequest):
+    db = SessionLocal()
+    try:
+        event, task = _field_result_task_or_409(db, event_id)
+        if len(payload.photo_urls) != 2:
+            raise HTTPException(status_code=400, detail="请提供驱离前和驱离后两张照片")
+        try:
+            canonical_event_type = normalize_staff_event_type(payload.event_type)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if any("safety-events/field-images/" not in str(url) for url in payload.photo_urls):
+            raise HTTPException(status_code=400, detail="现场照片不是人工处置图片路径")
+        operator_name = _operator_name(db, payload.operator)
+        log = _complete_field_result(
+            db,
+            event,
+            task,
+            result=payload.result,
+            remark=payload.remark,
+            operator_name=operator_name,
+            canonical_event_type=canonical_event_type,
+            photo_urls=payload.photo_urls,
+        )
+        from app.services.eca_engine import eca_engine
+        eca_engine.generate_deferred_event_report(db, event)
+        db.commit()
+        get_safety_event_engine().resolve_event(
+            event_id,
+            reason="staff_completed",
+            now=dt.datetime.now().timestamp(),
+            emit_action=False,
+        )
+        timeline_item = _log_to_timeline(log)
+        await invalidate_cache("safety_event:*")
+        await _broadcast_updates(db, event, timeline_item)
+        return MiniResponse(data={
+            "event": _mini_event(db, event),
+            "timeline": [timeline_item],
+            "photo_url": payload.photo_urls[0],
+            "photo_urls": payload.photo_urls,
+            "event_type": canonical_event_type,
+            "event_type_label": STAFF_EVENT_TYPE_LABELS[canonical_event_type],
         }, message="处理结果已提交，事件已闭环")
     finally:
         db.close()

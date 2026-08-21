@@ -60,13 +60,19 @@ class CameraLiveRelayManager:
             raise ValueError("摄像头 ID 格式无效")
         return f"cameras/{camera_id}"
 
-    def playback_url(self, camera_id: str) -> str:
-        return f"{settings.MINIPROGRAM_LIVE_PUBLIC_BASE_URL}/{self._path(camera_id)}"
+    def playback_url(self, camera_id: str, public_base_url: Optional[str] = None) -> str:
+        base_url = (public_base_url or settings.MINIPROGRAM_LIVE_PUBLIC_BASE_URL).rstrip("/")
+        return f"{base_url}/{self._path(camera_id)}"
 
     def publish_url(self, camera_id: str) -> str:
         return f"{settings.MINIPROGRAM_LIVE_PUBLISH_BASE_URL}/{self._path(camera_id)}"
 
-    def ensure(self, camera_id: str, source: str) -> dict:
+    def ensure(
+        self,
+        camera_id: str,
+        source: str,
+        public_base_url: Optional[str] = None,
+    ) -> dict:
         if not settings.MINIPROGRAM_LIVE_ENABLED:
             raise RuntimeError("小程序实时视频转流未启用")
         if not source.lower().startswith(("rtsp://", "rtsps://")):
@@ -77,7 +83,7 @@ class CameraLiveRelayManager:
         with self._lock:
             entry = self._entries.get(camera_id)
             if entry and entry.source == preview_source and entry.process.poll() is None:
-                return self.status(camera_id)
+                return self.status(camera_id, public_base_url=public_base_url)
             if entry:
                 self._stop_entry(camera_id, entry)
 
@@ -124,9 +130,9 @@ class CameraLiveRelayManager:
             raise RuntimeError("实时视频转流启动失败，请检查摄像头或流媒体服务")
 
         logger.info(f"小程序实时视频转流已启动: camera={camera_id}")
-        return self.status(camera_id)
+        return self.status(camera_id, public_base_url=public_base_url)
 
-    def status(self, camera_id: str) -> dict:
+    def status(self, camera_id: str, public_base_url: Optional[str] = None) -> dict:
         camera_id = str(camera_id)
         with self._lock:
             entry: Optional[RelayEntry] = self._entries.get(camera_id)
@@ -134,7 +140,7 @@ class CameraLiveRelayManager:
             return {
                 "camera_id": camera_id,
                 "running": running,
-                "stream_url": self.playback_url(camera_id),
+                "stream_url": self.playback_url(camera_id, public_base_url=public_base_url),
                 "started_at": entry.started_at if running and entry else None,
             }
 

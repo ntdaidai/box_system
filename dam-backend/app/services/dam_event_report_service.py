@@ -581,7 +581,14 @@ class DamEventReportService:
         )
         visual = self.visual_snapshot(instance, timeline)
         camera = self.find_camera(db, instance, visual)
-        image_items = self.collect_image_items(workflow_payload, visual, evidence)
+        # 联动设备一次任务可能归档多张取证图（无人机 4 张、机器狗 3 张）。
+        # 报告只展示一张代表性联动图，其余仅保存在事件证据库供追溯下载。
+        linkage_report_image = self.select_linkage_report_image(evidence)
+        image_items = (
+            [linkage_report_image]
+            if linkage_report_image
+            else self.collect_image_items(workflow_payload, visual, evidence)
+        )
         video_items = self.collect_video_items(workflow_payload, visual, evidence)
         selected_text = self.clean_report_text(selected["text"])
         workflow_insight = self.workflow_insight(workflow_payload, visual, selected_text)
@@ -1451,7 +1458,9 @@ class DamEventReportService:
         ):
             self.extend_image_media_items(candidates, self.find_nested_values(workflow_payload, key))
         for row in evidence:
-            if str(row.evidence_type or "").upper() in {"IMAGE", "CAMERA_SNAPSHOT", "DRONE_IMAGE", "STAFF_IMAGE"}:
+            if str(row.evidence_type or "").upper() in {
+                "IMAGE", "CAMERA_SNAPSHOT", "DRONE_IMAGE", "ROBOT_IMAGE", "STAFF_IMAGE",
+            }:
                 candidates.append({"url": row.file_url, "caption": row.description or "事件图像"})
         items = [
             item
@@ -1460,6 +1469,34 @@ class DamEventReportService:
         ]
         items.sort(key=lambda item: self.image_media_priority(item))
         return items[:8]
+
+    @staticmethod
+    def select_linkage_report_image(
+        evidence: list[SafetyEventEvidence],
+    ) -> Optional[dict[str, Any]]:
+        """Pick one physical-action image for report display.
+
+        Device actions retain every returned image in ``safety_event_evidence``.
+        This method deliberately exposes only the earliest action image in the
+        rendered report, so a multi-photo cruise does not crowd the document.
+        """
+        linkage_types = {"DRONE_IMAGE", "ROBOT_IMAGE", "STAFF_IMAGE"}
+        linkage_sources = {"DRONE", "UAV", "ROBOT_DOG", "ROBOT", "STAFF"}
+        for row in evidence:
+            if (
+                str(row.evidence_type or "").upper() not in linkage_types
+                and str(row.source_type or "").upper() not in linkage_sources
+            ):
+                continue
+            if not row.file_url:
+                continue
+            return {
+                "url": row.file_url,
+                "caption": row.description or "联动设备代表性取证图",
+                "source": "linkage_action_representative",
+                "role": "linkage_representative",
+            }
+        return None
 
     def extend_image_media_items(self, items: list[dict[str, Any]], value: Any) -> None:
         if not value:

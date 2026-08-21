@@ -77,7 +77,6 @@ def action_label(action_type) -> str:
         "drone_dispatch": "无人机派飞取证驱离",
         "machine_dog_dispatch": "机器狗巡检",
         "staff_task": "生成人工处置任务",
-        "camera_snapshot": "摄像头抓拍",
         # 广播服务
         "AUTO_BROADCAST": "系统自动广播",
         "MANUAL_BROADCAST": "人工广播",

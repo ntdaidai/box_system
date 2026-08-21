@@ -151,7 +151,7 @@ async def operate_safety_event(
             task.task_status = "WAITING_ACCEPT"
             task.task_note = reason or task.task_note
             task.dispatched_at = now
-            event.status = "PROCESSING"
+            event.status = "PENDING"
         elif action == "ACCEPT_TASK":
             if task and task.task_status not in {"WAITING_ACCEPT", "DISPATCHED"}:
                 raise HTTPException(status_code=409, detail="当前任务不能重复接单")

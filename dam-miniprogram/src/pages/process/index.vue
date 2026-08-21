@@ -10,18 +10,23 @@
 
     <view class="section">
       <view class="section-title">现场照片</view>
-      <view v-if="photoPath" class="photo-preview">
-        <image :src="photoPath" mode="aspectFill" />
+      <view class="photo-hint">请分别提交驱离前和驱离后的现场照片</view>
+      <view class="photo-grid">
+        <view v-for="(label, index) in photoLabels" :key="label" class="photo-slot">
+          <view v-if="photoPaths[index]" class="photo-preview">
+            <image :src="photoPaths[index]" mode="aspectFill" />
+          </view>
+          <view v-else class="photo-empty">{{ label }}</view>
+          <button
+            class="ghost-btn"
+            :loading="watermarkingIndex === index"
+            :disabled="watermarkingIndex !== -1 || submitting"
+            @tap="choosePhoto(index)"
+          >
+            {{ photoPaths[index] ? '重新选择' : `上传${label}` }}
+          </button>
+        </view>
       </view>
-      <view v-else class="photo-empty">到达现场后拍摄处置照片</view>
-      <button
-        class="ghost-btn"
-        :loading="watermarking"
-        :disabled="watermarking || submitting"
-        @tap="choosePhoto"
-      >
-        拍照上传
-      </button>
     </view>
 
     <view class="section">
@@ -48,7 +53,7 @@
     <button
       class="primary-btn submit-btn"
       :loading="submitting"
-      :disabled="submitting || !photoPath"
+      :disabled="submitting || !photosReady()"
       @tap="submitResult"
     >
       提交处理结果
@@ -64,7 +69,7 @@
 </template>
 
 <script>
-import { request, uploadFieldResult } from '../../utils/request'
+import { confirmFieldResult, request, uploadFieldPhoto } from '../../utils/request'
 import { riskClass } from '../../utils/format'
 import { readCache } from '../../utils/cache'
 
@@ -75,11 +80,14 @@ export default {
       event: null,
       staff: null,
       riskClassName: '',
-      photoPath: '',
+      photoPaths: ['', ''],
+      photoUrls: ['', ''],
+      photoLabels: ['驱离前照片', '驱离后照片'],
+      eventType: 'PERSON_WADING',
       result: 'DRIVEN_AWAY',
       remark: '',
       submitting: false,
-      watermarking: false,
+      watermarkingIndex: -1,
       watermarkCanvasWidth: 320,
       watermarkCanvasHeight: 240,
       resultOptions: [
@@ -104,6 +112,8 @@ export default {
           const event = data.event
           this.event = event
           this.riskClassName = riskClass(event.risk_level)
+          const eventText = `${event.event_type || ''} ${event.event_name || ''} ${event.summary || ''}`
+          this.eventType = /捕鱼|禁渔|船只/.test(eventText) ? 'NIGHT_FISHING' : 'PERSON_WADING'
           if (event.mini_status === 'RESOLVED') {
             uni.showToast({ title: '事件已完成', icon: 'none' })
             uni.redirectTo({
@@ -116,7 +126,7 @@ export default {
         })
     },
 
-    choosePhoto() {
+    choosePhoto(index) {
       uni.chooseMedia({
         count: 1,
         mediaType: ['image'],
@@ -124,17 +134,17 @@ export default {
         success: (res) => {
           const file = res.tempFiles && res.tempFiles[0]
           if (file && file.tempFilePath) {
-            this.watermarking = true
+            this.watermarkingIndex = index
             this.applyPhotoWatermark(file.tempFilePath)
               .then((path) => {
-                this.photoPath = path
+                this.photoPaths.splice(index, 1, path)
               })
               .catch(() => {
-                this.photoPath = file.tempFilePath
+                this.photoPaths.splice(index, 1, file.tempFilePath)
                 uni.showToast({ title: '水印生成失败，已保留原图', icon: 'none' })
               })
               .finally(() => {
-                this.watermarking = false
+                this.watermarkingIndex = -1
               })
           }
         }
@@ -211,20 +221,36 @@ export default {
       this.remark = event.detail.value
     },
 
+    photosReady() {
+      return this.photoPaths.every((path) => Boolean(path))
+    },
+
     submitResult() {
       if (this.submitting) return
-      if (!this.photoPath) {
-        uni.showToast({ title: '请先拍照上传', icon: 'none' })
+      if (this.photoPaths.some((path) => !path)) {
+        uni.showToast({ title: '请上传驱离前和驱离后两张照片', icon: 'none' })
         return
       }
       this.submitting = true
-      uploadFieldResult({
+      const operator = this.staff?.display_name || '现场处置员'
+      Promise.all(this.photoPaths.map((filePath, index) => uploadFieldPhoto({
         eventId: this.eventId,
-        filePath: this.photoPath,
-        result: this.result,
-        remark: this.remark,
-        operator: this.staff?.display_name || '现场处置员'
-      })
+        filePath,
+        phase: index === 0 ? 'before' : 'after',
+        eventType: this.eventType,
+        operator
+      })))
+        .then((uploads) => {
+          this.photoUrls = uploads.map((item) => item.photo_url)
+          return confirmFieldResult({
+            eventId: this.eventId,
+            result: this.result,
+            remark: this.remark,
+            operator,
+            eventType: this.eventType,
+            photoUrls: this.photoUrls
+          })
+        })
         .then(() => {
           uni.showToast({ title: '已提交', icon: 'success' })
           uni.redirectTo({
@@ -293,6 +319,22 @@ export default {
   margin-bottom: 16rpx;
 }
 
+.photo-hint {
+  margin: -4rpx 0 16rpx;
+  color: #6c7a80;
+  font-size: 24rpx;
+}
+
+.photo-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16rpx;
+}
+
+.photo-slot {
+  min-width: 0;
+}
+
 .photo-preview,
 .photo-empty {
   width: 100%;
@@ -313,6 +355,9 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
+  text-align: center;
+  padding: 18rpx;
+  box-sizing: border-box;
 }
 
 .result-option {
@@ -349,5 +394,11 @@ export default {
   top: -9999px;
   opacity: 0;
   pointer-events: none;
+}
+
+@media (max-width: 420px) {
+  .photo-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

@@ -238,13 +238,20 @@ class EcaDamWorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 self.db,
             )
 
-        self.assertEqual(returned, result)
-        row = self.db.query(SafetyEventTimelineLog).one()
+        # 工作流只返回报告所需的 payload；事件动作全部完成后才由 ECA
+        # 调用 generate_dam_event_report，避免报告遗漏设备联动取证。
+        self.assertEqual(returned["event_type"], result["event_type"])
+        row = self.db.query(SafetyEventTimelineLog).filter(
+            SafetyEventTimelineLog.action_key == "dam-workflow-execute:EVT_20260804_test"
+        ).one()
         self.assertEqual(row.log_type, "DAM_WORKFLOW")
         self.assertEqual(row.status, "SUCCESS")
         self.assertEqual(row.payload["event_type"], "滑坡")
         self.assertEqual(len(row.payload["final_dag"]["nodes"]), 2)
-        self.assertEqual(row.payload["execution_result"]["status"], "success")
+        self.assertEqual(
+            row.payload["execution_result"]["status"],
+            returned["execution_result"]["status"],
+        )
         self.assertIsNone(row.payload["execution_error"])
 
 

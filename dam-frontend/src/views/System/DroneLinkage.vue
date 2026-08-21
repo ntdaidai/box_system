@@ -253,11 +253,13 @@
               <video
                 v-if="testing && demoVideoSrc"
                 :key="testWaylineId"
+                ref="testVideoRef"
                 :src="demoVideoSrc"
                 class="video-stream"
                 autoplay
                 muted
                 loop
+                preload="auto"
                 playsinline
               ></video>
               <div v-else class="video-placeholder">
@@ -419,7 +421,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Close, MapLocation, VideoCamera,
@@ -499,7 +501,7 @@ const loading = ref(false)
 const deviceLoading = ref(false)
 const authError = ref('')
 
-// 演示视频映射：固定演示航线 → 本地演示视频（点击开始后播放，模拟真实视频流）
+// 测试演示只使用前端本地视频，不调用后端巡航 API，也不读取 MinIO 图片。
 const DEMO_VIDEO_MAP = {
   '禁渔航线': '/demo/fishing.mp4',
   '禁涉水航线': '/demo/wading.mp4',
@@ -640,6 +642,7 @@ const testDialogVisible = ref(false)
 const testingDevice = ref(null)
 const testWaylineId = ref('')
 const testing = ref(false)
+const testVideoRef = ref(null)
 
 const activeRoute = computed(() => ROUTES[testWaylineId.value] || null)
 const activeRouteName = computed(() => activeRoute.value?.name || '当前航线')
@@ -968,7 +971,7 @@ function toggleEnabled(row, value) {
 }
 
 // ========== 测试弹窗 ==========
-async function openTestDialog(row) {
+function openTestDialog(row) {
   testingDevice.value = row
   testWaylineId.value = ''
   testDialogVisible.value = true
@@ -983,10 +986,14 @@ function handleStartTest() {
   }
   startLocalAnimation(route)
   testing.value = true
+  nextTick(() => {
+    testVideoRef.value?.play?.().catch(() => {})
+  })
 }
 
 function handleStopTest() {
   stopLocalAnimation()
+  testVideoRef.value?.pause?.()
   testing.value = false
 }
 
@@ -1329,20 +1336,39 @@ async function refreshCurrent() {
 .list-pagination :deep(.el-pager li.is-active) { border-color: #4ba7e6; color: #fff; background: #3f95d7; }
 
 /* ===== 测试弹窗 ===== */
-.drone-test-dialog :deep(.el-dialog) {
+:global(.drone-test-dialog.app-dialog-panel) {
+  height: min(760px, calc(100vh - 24px));
   background: #0a1c2e;
   border: 1px solid rgba(93, 184, 225, 0.25);
   border-radius: 12px;
 }
-.drone-test-dialog :deep(.el-dialog__title) { color: #f3f8fd; font-weight: 800; }
-.drone-test-dialog :deep(.el-dialog__header) { border-bottom: 1px solid rgba(93, 184, 225, 0.15); }
-.test-layout { display: flex; flex-direction: column; gap: 10px; }
+:global(.drone-test-dialog .app-dialog__title) { color: #f3f8fd; font-weight: 800; }
+:global(.drone-test-dialog .app-dialog__header) { border-bottom: 1px solid rgba(93, 184, 225, 0.15); }
+:global(.drone-test-dialog .app-dialog__body) {
+  overflow: hidden;
+  padding: 12px;
+}
+.test-layout {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
 
 .test-toolbar {
+  position: relative;
+  z-index: 40;
+  flex: 0 0 auto;
+  min-height: 46px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
+  padding: 7px 10px;
+  border: 1px solid rgba(93, 184, 225, .18);
+  border-radius: 8px;
+  background: rgba(7, 31, 50, .86);
   flex-wrap: wrap;
 }
 .test-device { display: flex; flex-direction: column; gap: 3px; }
@@ -1352,10 +1378,11 @@ async function refreshCurrent() {
 .toolbar-label { color: #a9c7de; font-size: 13px; font-weight: 700; }
 .wayline-select { width: 240px; }
 .test-body {
+  min-height: 0;
+  flex: 1 1 auto;
   display: grid;
   grid-template-columns: 3fr 2fr;
   gap: 10px;
-  min-height: 420px;
 }
 .test-map {
   position: relative;
@@ -1617,7 +1644,7 @@ async function refreshCurrent() {
 .wayline-camera-point,
 .wayline-landmark {
   position: absolute;
-  /* 地标是可点击的最上层交互点，航线线条仍位于区域层之上。 */
+  /* 地标位于区域层之上，航线线条保持最上层。 */
   z-index: 20;
   appearance: none;
   -webkit-appearance: none;

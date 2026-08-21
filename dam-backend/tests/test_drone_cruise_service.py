@@ -1,5 +1,7 @@
 import asyncio
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from app.core.config import settings
@@ -44,22 +46,35 @@ class DroneCruiseServiceTests(unittest.TestCase):
             uploaded.append((data, object_name, content_type))
             return f"http://minio.test/dam/{object_name}"
 
-        with patch.object(settings, "DRONE_CRUISE_EXECUTOR", "simulation"), \
-             patch.object(settings, "DRONE_CRUISE_SIMULATION_DURATION_SECONDS", 1.0), \
-             patch.object(settings, "DRONE_CRUISE_TIMEOUT_SECONDS", 10.0), \
-             patch.object(settings, "DRONE_CRUISE_POLL_SECONDS", 0.01), \
-             patch.object(settings, "DRONE_CRUISE_FISHING_VIDEO", "/tmp/demo-fishing.mp4"), \
-             patch.object(service, "_read_video_frame", return_value=b"jpeg"), \
-             patch.object(minio_service, "upload_bytes", side_effect=upload):
-            result = asyncio.run(service.cruise("fishing", {}, FakeHttpClient()))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            for route_dir in ("nofishing", "nowater"):
+                picture_dir = Path(temp_dir) / route_dir
+                picture_dir.mkdir()
+                for index in range(1, 7):
+                    (picture_dir / f"{route_dir}-{index}.png").write_bytes(
+                        f"image-{route_dir}-{index}".encode()
+                    )
+
+            with patch.object(settings, "DRONE_CRUISE_EXECUTOR", "simulation"), \
+                 patch.object(settings, "DRONE_CRUISE_PICTURE_ROOT", temp_dir), \
+                 patch.object(settings, "DRONE_CRUISE_DEMO_OBJECT_PREFIX", "drone-cruises/demo"), \
+                 patch.object(minio_service, "client", object()), \
+                 patch.object(minio_service, "object_exists", return_value=False), \
+                 patch.object(minio_service, "upload_bytes", side_effect=upload):
+                asyncio.run(service.prepare_simulation_pictures())
+                result = asyncio.run(service.cruise("fishing", {}, FakeHttpClient()))
+                second_result = asyncio.run(service.cruise("fishing", {}, FakeHttpClient()))
 
         self.assertEqual(result["photo_count"], 4)
         self.assertEqual([item["phase"] for item in result["photos"]], [
             "outbound", "outbound", "return", "return"
         ])
         self.assertEqual(result["image_urls"], [item["minio_url"] for item in result["photos"]])
-        self.assertEqual(len(uploaded), 4)
-        self.assertTrue(all(name.startswith("drone-cruises/fishing/") for _, name, _ in uploaded))
+        self.assertEqual(second_result["photo_count"], 4)
+        self.assertEqual(len(uploaded), 12)
+        self.assertTrue(all(name.startswith("drone-cruises/demo/") for _, name, _ in uploaded))
+        self.assertEqual(len({item["source_file_name"] for item in result["photos"]}), 4)
+        self.assertTrue(all(name.endswith(".png") for _, name, _ in uploaded))
 
 
 if __name__ == "__main__":

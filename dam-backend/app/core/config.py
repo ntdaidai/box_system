@@ -142,7 +142,7 @@ class Settings:
     VIDEO_DETECTION_FPS: float = float(_get_env("VIDEO_DETECTION_FPS", "2"))
 
     # ── 无人机巡航动作 ────────────────────────────────────────
-    # simulation 使用 DJI Cloud API 自带的模拟飞行并从演示视频抽帧；
+    # simulation 启动时把后端 data/drone_pictures 中的固定图片预置到 MinIO；
     # real 使用 DJI 航线任务，并要求航线内/任务过程中产生四张照片。
     DRONE_CRUISE_EXECUTOR: str = _get_env("DRONE_CRUISE_EXECUTOR", "simulation").lower()
     DJI_CLOUD_API_BASE_URL: str = _get_env(
@@ -155,9 +155,6 @@ class Settings:
     DRONE_CRUISE_FISHING_FILE_ID: str = _get_env("DRONE_CRUISE_FISHING_FILE_ID", "").strip()
     DRONE_CRUISE_WADING_FILE_ID: str = _get_env("DRONE_CRUISE_WADING_FILE_ID", "").strip()
     DRONE_CRUISE_PAYLOAD_INDEX: str = _get_env("DRONE_CRUISE_PAYLOAD_INDEX", "88-0-0").strip()
-    DRONE_CRUISE_SIMULATION_DURATION_SECONDS: float = float(
-        _get_env("DRONE_CRUISE_SIMULATION_DURATION_SECONDS", "30")
-    )
     DRONE_CRUISE_TIMEOUT_SECONDS: float = float(
         _get_env("DRONE_CRUISE_TIMEOUT_SECONDS", "900")
     )
@@ -167,14 +164,33 @@ class Settings:
     DRONE_CRUISE_OBJECT_PREFIX: str = _get_env(
         "DRONE_CRUISE_OBJECT_PREFIX", "drone-cruises"
     ).strip("/")
-    DRONE_CRUISE_FISHING_VIDEO: str = _get_env(
-        "DRONE_CRUISE_FISHING_VIDEO",
-        "/home/jetson/box_system/dam-frontend/public/demo/fishing.mp4",
+    DRONE_CRUISE_DEMO_OBJECT_PREFIX: str = _get_env(
+        "DRONE_CRUISE_DEMO_OBJECT_PREFIX", "drone-cruises/demo"
+    ).strip("/")
+    DRONE_CRUISE_PICTURE_ROOT: str = _get_env(
+        "DRONE_CRUISE_PICTURE_ROOT",
+        os.path.join(BASE_DIR, "data", "drone_pictures"),
     )
-    DRONE_CRUISE_WADING_VIDEO: str = _get_env(
-        "DRONE_CRUISE_WADING_VIDEO",
-        "/home/jetson/box_system/dam-frontend/public/demo/wading.mp4",
+
+    # ── 机器狗路线测试动作 ──────────────────────────────────
+    # 第一版从 data/frone_pictures/dogtake 读取三张路线测试照片。
+    MACHINE_DOG_CRUISE_PICTURE_ROOT: str = _get_env(
+        "MACHINE_DOG_CRUISE_PICTURE_ROOT",
+        os.path.join(BASE_DIR, "data", "frone_pictures"),
     )
+    MACHINE_DOG_CRUISE_OBJECT_PREFIX: str = _get_env(
+        "MACHINE_DOG_CRUISE_OBJECT_PREFIX", "machine-dog-cruises"
+    ).strip("/")
+
+    # ── 现场人员处置演示 ────────────────────────────────────
+    STAFF_TASK_DEMO_PICTURE_ROOT: str = _get_env(
+        "STAFF_TASK_DEMO_PICTURE_ROOT",
+        os.path.join(BASE_DIR, "data", "worker_pictures"),
+    )
+    STAFF_TASK_DEMO_OBJECT_PREFIX: str = _get_env(
+        "STAFF_TASK_DEMO_OBJECT_PREFIX",
+        "safety-events/demo-field-images",
+    ).strip("/")
 
     # ── IoTDB ─────────────────────────────────────────────────
     IOTDB_HOST: str = _get_env("IOTDB_HOST", "127.0.0.1")
@@ -308,7 +324,7 @@ class Settings:
         "MINIPROGRAM_LIVE_PUBLIC_BASE_URL", f"rtmp://{PUBLIC_HOST}:1936"
     ).rstrip("/")
     MINIPROGRAM_LIVE_STARTUP_GRACE_SECONDS: float = float(
-        _get_env("MINIPROGRAM_LIVE_STARTUP_GRACE_SECONDS", "2.0")
+        _get_env("MINIPROGRAM_LIVE_STARTUP_GRACE_SECONDS", "0.5")
     )
     FFMPEG_BIN: str = _get_env("FFMPEG_BIN", "ffmpeg")
     # 摄像头 Web 管理界面代理总开关：false 时不监听 1234x 端口，避免暴露摄像头管理页
