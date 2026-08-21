@@ -16,6 +16,7 @@ from app.services.safety_event_runtime_service import safety_event_runtime_servi
 STAFF_EVENT_TYPE_LABELS = {
     "PERSON_WADING": "人员涉水事件",
     "NIGHT_FISHING": "夜间捕鱼事件",
+    "FLOOD_EVENT": "洪水事件",
 }
 
 STAFF_EVENT_TYPE_ALIASES = {
@@ -32,6 +33,14 @@ STAFF_EVENT_TYPE_ALIASES = {
     "夜间捕鱼事件": "NIGHT_FISHING",
     "非法捕鱼": "NIGHT_FISHING",
     "禁渔事件": "NIGHT_FISHING",
+    "FLOOD_EVENT": "FLOOD_EVENT",
+    "FLOOD": "FLOOD_EVENT",
+    "FLOOD_WARNING": "FLOOD_EVENT",
+    "FLOOD_HIGH": "FLOOD_EVENT",
+    "洪水": "FLOOD_EVENT",
+    "洪水事件": "FLOOD_EVENT",
+    "洪涝": "FLOOD_EVENT",
+    "洪涝事件": "FLOOD_EVENT",
 }
 
 
@@ -40,7 +49,7 @@ def normalize_staff_event_type(value: str) -> str:
     text = str(value or "").strip()
     canonical = STAFF_EVENT_TYPE_ALIASES.get(text.upper(), STAFF_EVENT_TYPE_ALIASES.get(text))
     if not canonical:
-        raise ValueError("人工处置事件类型仅支持 PERSON_WADING 或 NIGHT_FISHING")
+        raise ValueError("人工处置事件类型仅支持 PERSON_WADING、NIGHT_FISHING 或 FLOOD_EVENT")
     return canonical
 
 
@@ -100,6 +109,7 @@ class StaffTaskService:
         remarks = {
             "PERSON_WADING": "已完成现场核查，人员已成功驱离，并已上传驱离前后照片。",
             "NIGHT_FISHING": "已完成现场核查，夜间捕鱼行为已成功制止并驱离，并已上传驱离前后照片。",
+            "FLOOD_EVENT": "已完成洪水现场核查和应急处置，并已上传处置前后照片。",
         }
         return self.complete_manual_task(
             db,

@@ -670,9 +670,8 @@ class BroadcastService:
                 db.flush()
                 changed = True
             else:
-                if device.name != "一号点广播":
-                    device.name = "一号点广播"
-                    changed = True
+                # Existing device metadata belongs to the operator. Only keep the
+                # runtime audio target in sync with deployment settings.
                 if (device.config_json or {}).get("alsa_device") != settings.BROADCAST_USB_ALSA_DEVICE:
                     device.config_json = usb_config
                     changed = True
@@ -783,6 +782,11 @@ class BroadcastService:
         *,
         one_touch: bool,
     ) -> None:
+        # Configured ECA steps have one canonical timeline record emitted by the
+        # workflow executor. Manual and standalone automatic broadcasts retain
+        # their own execution log.
+        if command.get("suppress_timeline"):
+            return
         event_id = command.get("event_id")
         if not event_id:
             return

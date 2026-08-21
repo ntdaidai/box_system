@@ -98,7 +98,6 @@
             <video
               ref="videoRef"
               :src="videoUrl"
-              controls
               playsinline
               @loadedmetadata="handleVideoMetadata"
               @ended="handleVideoEnded"

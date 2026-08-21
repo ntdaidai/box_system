@@ -1265,7 +1265,9 @@ class ECAEngine:
         for row in execution_result.get("node_results") or []:
             if not isinstance(row, dict):
                 continue
-            if str(row.get("node_id") or "") not in {"action_report", "action_reasoning"}:
+            # action_reasoning is the edge-side model. It is the fallback source,
+            # not evidence that the cloud review completed successfully.
+            if str(row.get("node_id") or "") != "action_report":
                 continue
             if str(row.get("status") or "").lower() != "success":
                 continue
@@ -1911,6 +1913,10 @@ class ECAEngine:
                 "trigger_type": "AUTO",
                 "operator": "SYSTEM",
                 "risk_level": instance.risk_level if instance else None,
+                # The ECA executor writes the canonical action timeline entry
+                # after this call succeeds. Avoid a second broadcast-service log
+                # for the same configured action.
+                "suppress_timeline": True,
             },
         )
         if not result.get("success"):
@@ -1950,7 +1956,8 @@ class ECAEngine:
         config = self._action_config(step)
         event_type = self._staff_event_type(event, config)
         canonical_type = normalize_staff_event_type(event_type)
-        group_name = str(config.get("group_name") or step.route_id or "").strip() or None
+        # 历史动作可能未保存分组；统一兜底到默认处置组，避免生成无人接收的任务。
+        group_name = str(config.get("group_name") or step.route_id or "").strip() or "安全巡查组"
         operator = str(config.get("operator") or "SYSTEM")
         dispatched = staff_task_service.dispatch_manual_task(
             db,
@@ -1966,9 +1973,17 @@ class ECAEngine:
         if demo:
             # 演示图片在服务启动时已预置到 MinIO，这里只引用固定对象地址。
             demo_pictures = staff_task_media_service.get_prepared_demo_pictures(canonical_type)
+            # 与集成接口保持一致：先展示待处理，再展示处理中，最后返回固定现场证据。
+            db.commit()
+            total_delay = max(float(settings.STAFF_TASK_DEMO_DELAY_SECONDS), 0.0)
+            waiting_delay = total_delay / 2
+            processing_delay = total_delay - waiting_delay
+            await asyncio.sleep(waiting_delay)
             staff_task_service.start_manual_task(
                 db, instance, operator="SYSTEM", event_type=canonical_type
             )
+            db.commit()
+            await asyncio.sleep(processing_delay)
             final = staff_task_service.complete_demo_task(
                 db,
                 instance,
@@ -2001,6 +2016,9 @@ class ECAEngine:
             return configured
         event_code = str(getattr(event, "event_code", "") or "").upper()
         category = str(getattr(event, "event_category", "") or "").upper()
+        event_name = str(getattr(event, "event_name", "") or "")
+        if "FLOOD" in event_code or "FLOOD" in category or "洪水" in event_name or "洪涝" in event_name:
+            return "FLOOD_EVENT"
         if "FISH" in event_code or "BOAT" in event_code or "FISH" in category:
             return "NIGHT_FISHING"
         if "PERSON" in event_code or "PERSON" in category:
@@ -2101,17 +2119,22 @@ class ECAEngine:
     ) -> Dict[str, Any]:
         """Run the documented machine-dog route and return its MinIO evidences."""
         config = self._action_config(step)
-        machine_dog_id = config.get("machine_dog_id")
-        route_id = str(step.route_id or "").strip().lower()
-        if not machine_dog_id or not route_id:
+        machine_dog_id = str(config.get("machine_dog_id") or "").strip()
+        if not machine_dog_id or not step.route_id:
             raise ValueError("机器狗巡检必须配置机器狗型号和巡检路线")
-        if route_id not in {
-            "all", "巡检路线", "机器狗全路线",
-            # 兼容配置页旧版本留下的两条逻辑路线；设备 API 现统一执行 all。
-            "route-a", "route-b", "岸线由西向东巡检", "岸线由东向西巡检",
-        }:
-            raise ValueError("机器狗巡检 route_id 仅支持 all（机器狗全路线）")
-        from app.services.machine_dog_cruise_service import machine_dog_cruise_service
+        from app.services.machine_dog_cruise_service import (
+            MACHINE_DOG_DEVICE_ID,
+            MachineDogCruiseError,
+            machine_dog_cruise_service,
+            normalize_machine_dog_route,
+        )
+
+        if machine_dog_id != MACHINE_DOG_DEVICE_ID:
+            raise ValueError(f"机器狗巡检仅支持已配置设备 {MACHINE_DOG_DEVICE_ID}")
+        try:
+            route_id = normalize_machine_dog_route(step.route_id)
+        except MachineDogCruiseError as exc:
+            raise ValueError(str(exc)) from exc
 
         result = await machine_dog_cruise_service.cruise()
         evidences = []
@@ -2128,7 +2151,7 @@ class ECAEngine:
                 "metadata": {
                     "action": "machine_dog_dispatch",
                     "machine_dog_id": machine_dog_id,
-                    "route_id": step.route_id,
+                    "route_id": route_id,
                     "run_id": result.get("run_id"),
                     "object_name": photo.get("object_name"),
                     "point": photo.get("point"),
@@ -2138,9 +2161,9 @@ class ECAEngine:
             raise RuntimeError("机器狗巡检未返回 MinIO 取证图片")
         return {
             "status": "completed",
-            "message": f"机器狗全路线完成，已归档 {len(evidences)} 张取证图片",
+            "message": f"机器狗{result.get('route_name') or route_id}完成，已归档 {len(evidences)} 张取证图片",
             "machine_dog_id": machine_dog_id,
-            "route_id": step.route_id,
+            "route_id": route_id,
             "cruise": result,
             "evidences": evidences,
             "action_type": step.action_type,

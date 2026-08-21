@@ -311,12 +311,12 @@
                   <span>选择事件触发后使用的设备与模板</span>
                 </div>
                 <el-form-item label="广播设备" required>
-                  <el-select v-model="actionForm.broadcast_device_id" placeholder="请选择广播设备" clearable>
+                  <el-select v-model="actionForm.broadcast_device_id" popper-class="flow-inspector-popper" placeholder="请选择广播设备" clearable>
                     <el-option v-for="item in enabledBroadcastDevices" :key="item.id" :label="item.name" :value="item.id" />
                   </el-select>
                 </el-form-item>
                 <el-form-item label="播报模板" required>
-                  <el-select v-model="actionForm.template_id" placeholder="请选择播报模板" clearable>
+                  <el-select v-model="actionForm.template_id" popper-class="flow-inspector-popper" placeholder="请选择播报模板" clearable>
                     <el-option v-for="item in enabledBroadcastTemplates" :key="item.id" :label="item.name" :value="item.id" />
                   </el-select>
                 </el-form-item>
@@ -351,13 +351,13 @@
                   <strong>无人机任务</strong>
                   <span>设置响应事件的设备与巡查航线</span>
                 </div>
-                <el-form-item label="无人机型号">
-                  <el-select v-model="actionForm.drone_id" filterable allow-create default-first-option placeholder="选择无人机型号">
+                <el-form-item label="无人机型号" required>
+                  <el-select v-model="actionForm.drone_id" popper-class="flow-inspector-popper" filterable allow-create default-first-option placeholder="选择无人机型号">
                     <el-option v-for="item in droneOptions" :key="item.value" :label="item.label" :value="item.value" />
                   </el-select>
                 </el-form-item>
-                <el-form-item label="航线">
-                  <el-select v-model="actionForm.route_id" filterable allow-create default-first-option placeholder="选择或输入航线">
+                <el-form-item label="航线" required>
+                  <el-select v-model="actionForm.route_id" popper-class="flow-inspector-popper" placeholder="请选择巡查航线">
                     <el-option v-for="item in routeOptions" :key="item.value" :label="item.label" :value="item.value" />
                   </el-select>
                 </el-form-item>
@@ -368,15 +368,15 @@
               <section class="inspector-section">
                 <div class="section-heading">
                   <strong>机器狗任务</strong>
-                  <span>设置响应事件的机器狗型号与巡检路线</span>
+                  <span>当前设备固定执行 9号检测区域巡检路线并返回 4 张取证图</span>
                 </div>
                 <el-form-item label="机器狗型号" required>
-                  <el-select v-model="actionForm.machine_dog_id" placeholder="请选择机器狗型号" clearable>
+                  <el-select v-model="actionForm.machine_dog_id" popper-class="flow-inspector-popper" placeholder="请选择机器狗型号" clearable>
                     <el-option v-for="item in machineDogOptions" :key="item.value" :label="item.label" :value="item.value" />
                   </el-select>
                 </el-form-item>
                 <el-form-item label="巡检路线" required>
-                  <el-select v-model="actionForm.route_id" placeholder="请选择巡检路线" clearable>
+                  <el-select v-model="actionForm.route_id" popper-class="flow-inspector-popper" placeholder="请选择巡检路线" clearable>
                     <el-option v-for="item in machineDogRouteOptions" :key="item.value" :label="item.label" :value="item.value" />
                   </el-select>
                 </el-form-item>
@@ -390,14 +390,15 @@
                   <span>设置负责接收任务的处置工作组</span>
                 </div>
                 <el-form-item label="处置工作组">
-                  <el-select v-model="actionForm.staff_group" filterable allow-create default-first-option placeholder="选择或输入处置组">
+                  <el-select v-model="actionForm.staff_group" popper-class="flow-inspector-popper" filterable allow-create default-first-option placeholder="选择或输入处置组">
                     <el-option v-for="item in staffGroupOptions" :key="item" :label="item" :value="item" />
                   </el-select>
                 </el-form-item>
                 <el-form-item label="处置事件类型">
-                  <el-select v-model="actionForm.staff_event_type" clearable placeholder="自动按当前事件识别">
+                  <el-select v-model="actionForm.staff_event_type" popper-class="flow-inspector-popper" clearable placeholder="自动按当前事件识别">
                     <el-option label="人员涉水事件" value="PERSON_WADING" />
                     <el-option label="夜间捕鱼事件" value="NIGHT_FISHING" />
+                    <el-option label="洪水事件" value="FLOOD_EVENT" />
                   </el-select>
                 </el-form-item>
                 <el-form-item label="演示自动闭环">
@@ -472,20 +473,20 @@ import {
   getBoundDevices,
   getCurrentWorkspace,
   getDroneDevices,
-  getWaylineFiles,
 } from '@/api/drone'
 import { getStaffList } from '@/api/staff'
 
 const DIJ_USERNAME = 'adminPC'
 const DIJ_PASSWORD = 'adminPC'
+const DEFAULT_STAFF_GROUP = '安全巡查组'
 const FALLBACK_DRONE_OPTIONS = [
-  { value: 'mock-drone-001', label: 'M30T · 御3行业版-1号' },
-  { value: 'mock-drone-002', label: 'M350 · M350 RTK-2号' },
-  { value: 'mock-drone-003', label: 'P4RTK · 精灵4 RTK-3号' },
+  { value: 'mock-drone-001', label: '御3行业版-1号' },
+  { value: 'mock-drone-002', label: 'M350 RTK-2号' },
+  { value: 'mock-drone-003', label: '精灵4 RTK-3号' },
 ]
 const FALLBACK_DRONE_ROUTE_OPTIONS = [
-  { value: '禁渔航线', label: '禁渔航线' },
-  { value: '禁涉水航线', label: '禁涉水航线' },
+  { value: 'fishing', label: '禁渔航线' },
+  { value: 'wading', label: '禁涉水航线' },
 ]
 
 const FLOW_STAGE_WIDTH = 1180
@@ -534,7 +535,6 @@ const config = reactive({
 })
 
 const configuredDroneOptions = ref([...FALLBACK_DRONE_OPTIONS])
-const configuredDroneRouteOptions = ref([...FALLBACK_DRONE_ROUTE_OPTIONS])
 const configuredStaffGroups = ref([])
 
 const ruleForm = reactive({
@@ -640,11 +640,11 @@ const addActionOptions = [
 ]
 
 const machineDogOptions = [
-  { value: 'dog-01', label: 'Unitree Lite 3' },
+  { value: 'dog-01', label: '绝影 Lite 3' },
 ]
 
 const machineDogRouteOptions = [
-  { value: 'all', label: '机器狗全路线' },
+  { value: 'all', label: '9号检测区域巡检路线' },
 ]
 
 const events = computed(() => config.events)
@@ -694,16 +694,12 @@ const droneOptions = computed(() => mergeConfiguredOptions(
   configuredDroneOptions.value,
   uniqueActionValues('drone_id').map((value) => ({ value, label: value })),
 ))
-const routeOptions = computed(() => mergeConfiguredOptions(
-  configuredDroneRouteOptions.value,
-  config.action_configs
-    .filter((item) => item.action_type === 'drone_dispatch')
-    .map((item) => item.route_id)
-    .filter(Boolean)
-    .map((value) => ({ value, label: value })),
-))
+// ECA 后端只支持两条预置航线。不能把历史保存值或 DJI 文件列表直接
+// 拼进下拉框，否则旧中文名称和内部 key（如 wading）会显示成重复航线。
+const routeOptions = computed(() => FALLBACK_DRONE_ROUTE_OPTIONS)
 const staffGroupOptions = computed(() => {
   const values = [
+    DEFAULT_STAFF_GROUP,
     ...configuredStaffGroups.value,
     ...config.action_configs
     .filter((item) => item.action_type === 'staff_task')
@@ -844,25 +840,11 @@ async function loadDroneLinkageOptions() {
     const deviceOptions = devices
       .filter((item) => item.device_sn)
       .map((item) => {
-        const model = item.device_model || item.model || item.product_name || item.device_sn
         const name = item.nickname || item.device_name || item.deviceCallsign || item.device_sn
-        return { value: item.device_sn, label: model === name ? model : `${model} · ${name}` }
+        return { value: item.device_sn, label: name }
       })
     if (deviceOptions.length) configuredDroneOptions.value = mergeConfiguredOptions(deviceOptions)
 
-    try {
-      const waylineRes = await getWaylineFiles(workspaceId, { page: 1, page_size: 100 })
-      const waylines = waylineRes.data?.list || waylineRes.data?.items || waylineRes.data || []
-      const routeOptions = waylines
-        .map((item) => {
-          const name = item.name || item.filename || item.file_name || item.wayline_name
-          return name ? { value: item.id || item.wayline_id || name, label: name } : null
-        })
-        .filter(Boolean)
-      if (routeOptions.length) configuredDroneRouteOptions.value = mergeConfiguredOptions(routeOptions)
-    } catch {
-      // DJI 航线接口不可用时使用无人机页面的预设航线。
-    }
   } catch {
     // DJI 服务不可用时使用与无人机页面一致的演示选项。
   }
@@ -1517,10 +1499,14 @@ function openNodeConfig(node) {
   actionForm.repeat_interval_seconds = Number(action.repeat_interval_seconds || 60)
   actionForm.max_executions = Math.max(1, Number(action.max_executions || 1))
   actionForm.drone_id = action.drone_id || ''
-  actionForm.route_id = action.route_id || ''
+  actionForm.route_id = action.action_type === 'drone_dispatch'
+    ? normalizeDroneRouteId(action.route_id)
+    : action.action_type === 'machine_dog_dispatch'
+      ? normalizeMachineDogRouteId(action.route_id)
+      : (action.route_id || '')
   actionForm.machine_dog_id = action.config_json?.machine_dog_id || ''
   actionForm.staff_group = action.action_type === 'staff_task'
-    ? (action.route_id || staffGroupOptions.value[0] || '')
+    ? (action.route_id || DEFAULT_STAFF_GROUP)
     : ''
   actionForm.staff_event_type = action.action_type === 'staff_task'
     ? (action.config_json?.event_type || '')
@@ -1557,19 +1543,19 @@ function actionReadonlyFields(action) {
   if (action.action_type === 'drone_dispatch') {
     return [
       { label: '无人机型号', value: findConfiguredOption(droneOptions.value, action.drone_id)?.label || action.drone_id || '未选择无人机型号' },
-      { label: '航线', value: findConfiguredOption(routeOptions.value, action.route_id)?.label || action.route_id || '未选择航线' },
+      { label: '航线', value: findConfiguredOption(routeOptions.value, normalizeDroneRouteId(action.route_id))?.label || action.route_id || '未选择航线' },
     ]
   }
   if (action.action_type === 'machine_dog_dispatch') {
     return [
       { label: '机器狗型号', value: findMachineDog(action.config_json?.machine_dog_id)?.label || '未选择机器狗型号' },
-      { label: '巡检路线', value: findMachineDogRoute(action.route_id)?.label || action.route_id || '未选择巡检路线' },
+      { label: '巡检路线', value: findMachineDogRoute(normalizeMachineDogRouteId(action.route_id))?.label || action.route_id || '未选择巡检路线' },
     ]
   }
   if (action.action_type === 'staff_task') {
     return [
       { label: '处置工作组', value: action.route_id || '未选择处置组' },
-      { label: '事件类型', value: action.config_json?.event_type === 'NIGHT_FISHING' ? '夜间捕鱼事件' : action.config_json?.event_type === 'PERSON_WADING' ? '人员涉水事件' : '自动识别' },
+      { label: '事件类型', value: action.config_json?.event_type === 'NIGHT_FISHING' ? '夜间捕鱼事件' : action.config_json?.event_type === 'PERSON_WADING' ? '人员涉水事件' : action.config_json?.event_type === 'FLOOD_EVENT' ? '洪水事件' : '自动识别' },
       { label: '执行方式', value: action.config_json?.demo === true ? '演示自动闭环' : '等待人工处置' },
     ]
   }
@@ -1589,16 +1575,24 @@ function saveNodeConfig() {
     action.repeat_interval_seconds = actionForm.repeat_mode === 'repeat' ? clampNumber(actionForm.repeat_interval_seconds, 1, 86400) : 60
     action.max_executions = actionForm.repeat_mode === 'repeat' ? clampNumber(actionForm.max_executions, 2, 100) : 1
   } else if (action.action_type === 'drone_dispatch') {
+    if (!actionForm.drone_id || !actionForm.route_id) {
+      ElMessage.warning('请先选择无人机型号和航线')
+      return
+    }
     action.drone_id = actionForm.drone_id || null
-    action.route_id = actionForm.route_id || null
+    action.route_id = normalizeDroneRouteId(actionForm.route_id) || null
   } else if (action.action_type === 'machine_dog_dispatch') {
-    action.route_id = actionForm.route_id || null
+    if (!actionForm.machine_dog_id || !actionForm.route_id) {
+      ElMessage.warning('请先选择机器狗型号和巡检路线')
+      return
+    }
+    action.route_id = normalizeMachineDogRouteId(actionForm.route_id) || null
     action.config_json = {
       ...(action.config_json || {}),
       machine_dog_id: actionForm.machine_dog_id || null,
     }
   } else if (action.action_type === 'staff_task') {
-    action.route_id = actionForm.staff_group || '安全巡查组'
+    action.route_id = actionForm.staff_group || DEFAULT_STAFF_GROUP
     action.config_json = {
       ...(action.config_json || {}),
       event_type: actionForm.staff_event_type || null,
@@ -1668,6 +1662,17 @@ function validateFlowDraft() {
     selectedNodeId.value = invalidBroadcast.id
     openNodeConfig(invalidBroadcast)
     ElMessage.warning('请完善广播动作的设备和播报模板')
+    return false
+  }
+  const invalidDrone = flowDraft.nodes.find((node) => (
+    node.kind === 'action'
+    && node.action?.action_type === 'drone_dispatch'
+    && (!node.action?.drone_id || !node.action?.route_id)
+  ))
+  if (invalidDrone) {
+    selectedNodeId.value = invalidDrone.id
+    openNodeConfig(invalidDrone)
+    ElMessage.warning('请完善无人机任务的型号和航线')
     return false
   }
   const invalidMachineDog = flowDraft.nodes.find((node) => (
@@ -1744,10 +1749,10 @@ function actionBusinessDetail(action) {
       : `${templateText} · 单次`
   }
   if (action.action_type === 'drone_dispatch') {
-    return findConfiguredOption(routeOptions.value, action.route_id)?.label || action.route_id || '未选择航线'
+    return findConfiguredOption(routeOptions.value, normalizeDroneRouteId(action.route_id))?.label || action.route_id || '未选择航线'
   }
   if (action.action_type === 'machine_dog_dispatch') {
-    return findMachineDogRoute(action.route_id)?.label || '未选择巡检路线'
+    return findMachineDogRoute(normalizeMachineDogRouteId(action.route_id))?.label || '未选择巡检路线'
   }
   return ''
 }
@@ -1770,6 +1775,35 @@ function findMachineDog(id) {
 
 function findMachineDogRoute(id) {
   return machineDogRouteOptions.find((item) => item.value === id)
+}
+
+function normalizeDroneRouteId(routeId) {
+  const value = String(routeId || '').trim().toLowerCase()
+  const aliases = {
+    fishing: 'fishing',
+    '禁渔': 'fishing',
+    '禁渔航线': 'fishing',
+    wading: 'wading',
+    '涉水': 'wading',
+    '禁涉水': 'wading',
+    '禁涉水航线': 'wading',
+  }
+  return aliases[value] || value
+}
+
+function normalizeMachineDogRouteId(routeId) {
+  const value = String(routeId || '').trim().toLowerCase()
+  const aliases = {
+    all: 'all',
+    '机器狗全路线': 'all',
+    '9号检测区域巡检路线': 'all',
+    '巡检路线': 'all',
+    'route-a': 'all',
+    'route-b': 'all',
+    '岸线由西向东巡检': 'all',
+    '岸线由东向西巡检': 'all',
+  }
+  return aliases[value] || value
 }
 
 function uniqueActionValues(field) {
@@ -2893,6 +2927,11 @@ onBeforeUnmount(() => {
 .inspector-form :deep(.el-select),
 .inspector-form :deep(.el-input) {
   width: 100%;
+}
+
+/* 自定义弹窗层级高于 Element 默认浮层，下拉菜单必须显式浮在弹窗之上。 */
+:global(.flow-inspector-popper) {
+  z-index: 3501 !important;
 }
 
 .inspector-form {

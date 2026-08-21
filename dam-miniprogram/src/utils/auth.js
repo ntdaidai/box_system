@@ -25,8 +25,15 @@ export function isLoggedIn() {
 }
 
 export function logout() {
-  setToken('')
-  setStaff(null)
+  try {
+    uni.removeStorageSync('dam_mini_cache:mini-token')
+    uni.removeStorageSync('dam_mini_cache:mini-staff')
+    uni.removeStorageSync('mini_openid')
+  } catch (error) {
+    setToken('')
+    setStaff(null)
+  }
+  uni.$emit('mini-auth-changed', { loggedIn: false, staff: null })
 }
 
 /**
@@ -67,6 +74,7 @@ export function scanQrLogin() {
           } catch (error) {
             // 忽略存储失败
           }
+          uni.$emit('mini-auth-changed', { loggedIn: true, staff: data.staff })
           resolve(data.staff)
         } catch (error) {
           reject(error)

@@ -1,6 +1,6 @@
 # 机器狗路线测试 API
 
-机器狗当前只有一条固定的全路线。接口调用后执行该路线，读取
+机器狗当前只有一条固定的“9号检测区域巡检路线”。接口调用后执行该路线，读取
 `dam-backend/data/frone_pictures/dogtake/` 下的四张测试照片，上传到 MinIO，
 完成后返回四张照片地址。
 
@@ -9,7 +9,7 @@
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `GET` | `/api/v1/machine-dog/routes` | 查询唯一机器狗路线 |
-| `POST` | `/api/v1/machine-dog/cruises/all` | 执行全路线并返回四张照片 |
+| `POST` | `/api/v1/machine-dog/cruises/all` | 执行 9 号检测区域巡检路线并返回四张照片 |
 
 接口需要登录认证：
 
@@ -25,18 +25,18 @@ curl -X POST "<BASE_URL>/api/v1/machine-dog/cruises/all" \
   -H "Authorization: Bearer <JWT_TOKEN>"
 ```
 
-请求体为空即可，不需要传路线参数。接口内部固定执行 `all` 路线。
+请求体为空即可，不需要传路线参数。接口内部固定执行 `all`（9号检测区域巡检路线）。
 
 ## 成功响应
 
 ```json
 {
   "code": 200,
-  "message": "机器狗全路线完成，已归档 4 张照片",
+  "message": "9号检测区域巡检路线完成，已归档 4 张照片",
   "data": {
     "run_id": "all_3e1b2c...",
     "route_key": "all",
-    "route_name": "机器狗全路线",
+    "route_name": "9号检测区域巡检路线",
     "executor": "simulation",
     "photo_count": 4,
     "photos": [

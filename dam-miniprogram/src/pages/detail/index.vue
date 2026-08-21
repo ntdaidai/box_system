@@ -2,10 +2,12 @@
   <view class="page detail-page">
     <view v-if="event" class="summary">
       <view class="summary-top">
-        <view class="status-text">{{ event.business_status_label || event.mini_status_label }}</view>
-        <view class="risk-pill" :class="riskClassName">{{ event.risk_level_label }}</view>
+        <view class="event-title">{{ event.event_type }}</view>
+        <view class="summary-status">
+          <view class="risk-pill" :class="riskClassName">{{ event.risk_level_label }}</view>
+          <view class="status-text">{{ event.business_status_label || event.mini_status_label }}</view>
+        </view>
       </view>
-      <view class="event-title">{{ event.event_type }}</view>
       <view class="info-grid">
         <view>
           <text>监控点</text>
@@ -27,28 +29,29 @@
     </view>
 
     <view class="section">
-      <view class="section-title">实时视频</view>
+      <view class="section-title">监控视频</view>
       <view class="video-box">
-        <live-player
-          v-if="streamUrl && !liveFallback"
-          :key="livePlayerKey"
+        <video
+          v-if="demoVideoUrl"
           class="video-frame"
-          :src="streamUrl"
-          mode="live"
+          :src="demoVideoUrl"
           autoplay
+          loop
           muted
-          object-fit="contain"
-          :min-cache="0.5"
-          :max-cache="1.5"
-          @statechange="handleLiveStateChange"
-          @error="handleLiveError"
+          :controls="false"
+          :show-center-play-btn="false"
+          :show-play-btn="false"
+          :show-fullscreen-btn="false"
+          :show-mute-btn="false"
+          :show-progress="false"
+          :enable-progress-gesture="false"
+          :vslide-gesture="false"
+          object-fit="cover"
+          @play="handleVideoPlay"
+          @error="handleVideoError"
         />
-        <image v-else-if="snapshotUrl" class="video-frame" :src="snapshotUrl" mode="aspectFit" />
-        <view v-else class="video-empty">正在建立视频链路</view>
-      </view>
-      <view class="video-footer">
-        <text>{{ videoText }}</text>
-        <button class="mini-btn" @tap="refreshSnapshot">刷新画面</button>
+        <view v-else class="video-empty">正在准备监控录像</view>
+        <view v-if="videoError" class="video-error">{{ videoError }}</view>
       </view>
     </view>
 
@@ -153,8 +156,12 @@
       <view v-else class="timeline">
         <view v-for="item in timeline" :key="item.action_id" class="timeline-item">
           <view class="dot"></view>
-          <view class="timeline-time">{{ item.timeText }}</view>
-          <view class="timeline-message">{{ item.message }}</view>
+          <view class="timeline-head">
+            <view class="timeline-stage">{{ item.stageText }}</view>
+            <view class="timeline-time">{{ item.timeText }}</view>
+          </view>
+          <view class="timeline-title">{{ item.titleText }}</view>
+          <view v-if="item.messageText" class="timeline-message">{{ item.messageText }}</view>
         </view>
       </view>
     </view>
@@ -166,6 +173,7 @@ import { absoluteUrl, request, uploadBroadcastAudio } from '../../utils/request'
 import { formatDateTime, formatDuration, formatTime, riskClass } from '../../utils/format'
 import { subscribeRiskAlert } from '../../utils/subscribe'
 import { WS_BASE_URL } from '../../utils/config'
+import { prepareDemoVideo } from '../../utils/demo-video'
 import { readCache, writeCache } from '../../utils/cache'
 
 export default {
@@ -180,11 +188,8 @@ export default {
       riskClassName: '',
       startTime: '--',
       durationText: '--',
-      snapshotUrl: '',
-      streamUrl: '',
-      liveFallback: false,
-      livePlayerKey: 0,
-      videoText: '正在连接实时视频',
+      demoVideoUrl: '',
+      videoError: '',
       broadcasting: false,
       recordingBroadcast: false,
       broadcastRecorder: null,
@@ -203,9 +208,9 @@ export default {
   onLoad(options) {
     this.eventId = options?.event_id || ''
     this.staff = readCache('mini-staff', null)
+    this.prepareMonitorVideo()
     this.restoreCachedDetail()
     this.loadDetail()
-    this.loadVideo()
     this.connectEventSocket()
     this.prepareBroadcastRecorder()
   },
@@ -219,10 +224,31 @@ export default {
   },
 
   onPullDownRefresh() {
-    Promise.all([this.loadDetail(), this.loadVideo()]).finally(() => uni.stopPullDownRefresh())
+    this.loadDetail().finally(() => uni.stopPullDownRefresh())
   },
 
   methods: {
+    prepareMonitorVideo() {
+      this.videoError = ''
+      return prepareDemoVideo()
+        .then((filePath) => {
+          this.demoVideoUrl = filePath
+        })
+        .catch((error) => {
+          this.videoError = error.message || '监控录像初始化失败'
+        })
+    },
+
+    handleVideoPlay() {
+      this.videoError = ''
+    },
+
+    handleVideoError(event) {
+      const message = event?.detail?.errMsg || '监控录像播放失败'
+      this.videoError = message
+      console.error('[detail-video] playback failed', event?.detail || event)
+    },
+
     restoreCachedDetail() {
       if (!this.eventId) return
       const cached = readCache(`event-detail:${this.eventId}`, null)
@@ -232,10 +258,18 @@ export default {
 
     applyDetailData(data) {
       const event = data.event
-      const timeline = (data.timeline || []).map((item) => ({
-        ...item,
-        timeText: item.timeText || formatTime(item.created_at)
-      }))
+      const latestByAction = new Map()
+      ;(data.timeline || []).forEach((item) => {
+        latestByAction.set(item.action_id || item.id, item)
+      })
+      const timeline = Array.from(latestByAction.values())
+        .sort((left, right) => {
+          const leftReport = String(left.log_type || '').toUpperCase() === 'REPORT'
+          const rightReport = String(right.log_type || '').toUpperCase() === 'REPORT'
+          if (leftReport !== rightReport) return leftReport ? 1 : -1
+          return Number(left.created_at || 0) - Number(right.created_at || 0)
+        })
+        .map(this.decorateTimeline)
       this.event = event
       this.staff = data.staff || this.staff
       if (this.staff) writeCache('mini-staff', this.staff)
@@ -259,26 +293,40 @@ export default {
         })
     },
 
-    loadVideo() {
-      if (!this.eventId) return Promise.resolve()
-      return request({ url: `/events/${encodeURIComponent(this.eventId)}/video` })
-        .then((data) => {
-          this.snapshotUrl = `${absoluteUrl(data.snapshot_url)}?t=${Date.now()}`
-          this.streamUrl = data.stream_url || ''
-          this.liveFallback = !this.streamUrl
-          this.livePlayerKey += 1
-          this.videoText = this.streamUrl ? '正在连接实时视频流' : '实时快照模式'
-        })
-        .catch(() => {
-          this.snapshotUrl = `${absoluteUrl(`/api/miniprogram/v1/events/${encodeURIComponent(this.eventId)}/snapshot.jpg`)}?t=${Date.now()}`
-          this.streamUrl = ''
-          this.liveFallback = true
-          this.videoText = '实时视频不可用，已切换快照预览'
-        })
+    decorateTimeline(item) {
+      const logType = String(item.log_type || '').toUpperCase()
+      const stage = String(item.stage || this.stageForLogType(logType)).toUpperCase()
+      const titleText = item.title || ({
+        TRIGGER: '事件触发',
+        RISK_CHANGE: '风险变化',
+        ACTION: '联动动作',
+        MANUAL: '人工处置',
+        REPORT: '处置报告',
+        RESOLVE: '事件闭环',
+        SYSTEM: '系统记录'
+      }[logType] || '处置记录')
+      const message = String(item.message || '').trim()
+      return {
+        ...item,
+        stageText: ({
+          TRIGGER: '事件触发',
+          DISPATCH: '联动下发',
+          PROCESSING: '人工处置',
+          REPORT: '报告生成',
+          CLOSE: '闭环归档'
+        }[stage] || '处置记录'),
+        titleText,
+        messageText: message && message !== titleText ? message : '',
+        timeText: item.timeText || formatTime(item.created_at)
+      }
     },
 
-    refreshSnapshot() {
-      this.loadVideo()
+    stageForLogType(logType) {
+      if (logType === 'TRIGGER') return 'TRIGGER'
+      if (['ACTION', 'RISK_CHANGE', 'DAM_WORKFLOW', 'WORKFLOW', 'SYSTEM'].includes(logType)) return 'DISPATCH'
+      if (logType === 'REPORT') return 'REPORT'
+      if (logType === 'RESOLVE') return 'CLOSE'
+      return 'PROCESSING'
     },
 
     absoluteEvidenceUrl(url) {
@@ -301,30 +349,6 @@ export default {
       })
     },
 
-    handleLiveStateChange(event) {
-      const code = Number(event?.detail?.code || 0)
-      if (code === 2004) {
-        this.liveFallback = false
-        this.videoText = '实时视频已连接'
-      } else if (code === 2103) {
-        this.videoText = '实时视频正在重连'
-      } else if (code < 0) {
-        this.enableSnapshotFallback('实时视频中断，已切换快照预览')
-      }
-    },
-
-    handleLiveError() {
-      this.enableSnapshotFallback('实时视频播放失败，已切换快照预览')
-    },
-
-    enableSnapshotFallback(message) {
-      this.liveFallback = true
-      this.videoText = message
-      if (this.eventId) {
-        this.snapshotUrl = `${absoluteUrl(`/api/miniprogram/v1/events/${encodeURIComponent(this.eventId)}/snapshot.jpg`)}?t=${Date.now()}`
-      }
-    },
-
     connectEventSocket() {
       if (!this.eventId) return
       this.socketTask = uni.connectSocket({
@@ -341,7 +365,6 @@ export default {
         const eventId = payload.data && payload.data.event_id
         if (eventId === this.eventId) {
           this.loadDetail()
-          this.loadVideo()
         }
       })
     },
@@ -460,10 +483,18 @@ export default {
 
 .summary-top {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 16rpx;
   margin-bottom: 18rpx;
+}
+
+.summary-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8rpx;
+  flex-shrink: 0;
 }
 
 .risk-pill {
@@ -478,15 +509,16 @@ export default {
 .status-text {
   color: #263940;
   font-weight: 600;
-  text-align: left;
-  min-width: 0;
-  flex: 1;
+  text-align: right;
+  font-size: 25rpx;
 }
 
 .event-title {
+  min-width: 0;
+  flex: 1;
   font-size: 36rpx;
   font-weight: 700;
-  margin-bottom: 18rpx;
+  line-height: 52rpx;
 }
 
 .info-grid {
@@ -550,30 +582,19 @@ export default {
   color: #b6c8ce;
 }
 
-.video-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16rpx;
-  margin-top: 14rpx;
-}
-
-.video-footer text {
-  flex: 1;
-  min-width: 0;
-  color: #6c7a80;
-  font-size: 24rpx;
-  line-height: 34rpx;
-}
-
-.mini-btn {
-  width: 156rpx;
-  height: 58rpx;
-  line-height: 58rpx;
-  padding: 0;
-  background: #e7eff1;
-  color: #0f4c5c;
-  font-size: 24rpx;
+.video-error {
+  position: absolute;
+  left: 24rpx;
+  right: 24rpx;
+  bottom: 20rpx;
+  z-index: 5;
+  padding: 10rpx 14rpx;
+  border-radius: 6rpx;
+  background: rgba(130, 22, 22, 0.82);
+  color: #fff;
+  font-size: 22rpx;
+  line-height: 32rpx;
+  text-align: center;
 }
 
 .action-panel,
@@ -689,14 +710,36 @@ export default {
   background: #0f6b7a;
 }
 
+.timeline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16rpx;
+  margin-bottom: 6rpx;
+}
+
+.timeline-stage {
+  color: #0f6b7a;
+  font-size: 23rpx;
+  font-weight: 700;
+}
+
 .timeline-time {
   color: #6c7a80;
-  font-size: 24rpx;
-  margin-bottom: 4rpx;
+  font-size: 22rpx;
+  flex-shrink: 0;
+}
+
+.timeline-title {
+  color: #172026;
+  font-size: 27rpx;
+  font-weight: 700;
+  line-height: 40rpx;
 }
 
 .timeline-message {
-  color: #172026;
+  color: #52656c;
+  margin-top: 4rpx;
   line-height: 42rpx;
   white-space: pre-line;
 }

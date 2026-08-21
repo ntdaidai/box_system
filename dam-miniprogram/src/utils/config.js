@@ -14,6 +14,9 @@ export const DEMO_EVENT_TARGETS = {
   processing: 3
 }
 
+// 展示阶段统一使用随小程序打包的监控录像，后续只需替换这个文件或地址。
+export const DEMO_MONITOR_VIDEO = '/static/fixed-monitor-video.mp4'
+
 export function withApiOrigin(path) {
   if (!path) return ''
   const rawPath = String(path).trim()

@@ -52,6 +52,7 @@ export function operateUnifiedSafetyEvent(id, data) {
 export const STAFF_TASK_EVENT_TYPES = Object.freeze([
   { value: 'PERSON_WADING', label: '人员涉水事件' },
   { value: 'NIGHT_FISHING', label: '夜间捕鱼事件' },
+  { value: 'FLOOD_EVENT', label: '洪水事件' },
 ])
 
 export function dispatchStaffTask(id, data) {

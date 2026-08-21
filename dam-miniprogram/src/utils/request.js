@@ -1,6 +1,7 @@
 import { MINI_API_BASE, withApiOrigin } from './config'
 
 const TOKEN_STORAGE_KEY = 'dam_mini_cache:mini-token'
+let unauthorizedPrompting = false
 
 function readAuthToken() {
   try {
@@ -14,6 +15,7 @@ function clearLoginState() {
   try {
     uni.removeStorageSync(TOKEN_STORAGE_KEY)
     uni.removeStorageSync('dam_mini_cache:mini-staff')
+    uni.removeStorageSync('mini_openid')
   } catch (error) {
     // 忽略存储清理失败
   }
@@ -21,19 +23,22 @@ function clearLoginState() {
 
 function handleUnauthorized() {
   clearLoginState()
+  uni.$emit('mini-auth-changed', { loggedIn: false, staff: null })
+  if (unauthorizedPrompting) return
+  unauthorizedPrompting = true
   uni.showModal({
     title: '登录已失效',
-    content: '账号可能已被管理员移除，请重新扫码登录',
-    confirmText: '去扫码',
+    content: '原绑定人员可能已被管理员删除，本机登录已经清除。',
+    confirmText: '前往登录',
+    cancelText: '退出登录',
     success: (res) => {
       if (res.confirm) {
-        import('./auth')
-          .then((mod) => mod.scanQrLogin())
-          .catch((err) => {
-            uni.showToast({ title: err.message || '扫码失败', icon: 'none' })
-          })
+        uni.switchTab({ url: '/pages/profile/index' })
       }
     },
+    complete: () => {
+      unauthorizedPrompting = false
+    }
   })
 }
 

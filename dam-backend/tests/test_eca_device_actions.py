@@ -19,6 +19,7 @@ from app.models.safety_event_task import SafetyEventTask
 from app.services.eca_engine import ECAEngine
 from app.services.dam_event_report_service import DamEventReportService
 from app.services.safety_event_runtime_service import safety_event_runtime_service
+from app.services.staff_task_media_service import StaffTaskMediaService
 
 
 class EcaDeviceActionTests(unittest.IsolatedAsyncioTestCase):
@@ -107,7 +108,8 @@ class EcaDeviceActionTests(unittest.IsolatedAsyncioTestCase):
             event_id=1,
             step_order=1,
             action_type="machine_dog_dispatch",
-            route_id="all",
+            # 兼容旧流程编辑器保存的逻辑路线，运行时应规范为唯一的 all 路线。
+            route_id="route-a",
             config_json={"machine_dog_id": "dog-01"},
         )
         with patch(
@@ -117,6 +119,8 @@ class EcaDeviceActionTests(unittest.IsolatedAsyncioTestCase):
             result = await ECAEngine().execute_machine_dog_step(step, {}, self.db)
 
         self.assertEqual(len(result["evidences"]), 4)
+        self.assertEqual(result["route_id"], "all")
+        self.assertTrue(all(item["metadata"]["route_id"] == "all" for item in result["evidences"]))
         ECAEngine._persist_action_evidences(self.db, self.instance, result)
         self.db.commit()
         rows = self.db.query(SafetyEventEvidence).all()
@@ -165,6 +169,69 @@ class EcaDeviceActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["event_type"], "PERSON_WADING")
         self.assertEqual(task.task_status, "WAITING_ACCEPT")
         self.assertEqual(task.assigned_group_name, "现场处置一组")
+
+    async def test_staff_action_without_group_uses_default_group(self):
+        event = EventLibrary(
+            id=1,
+            event_name="人员涉水",
+            event_code="PERSON_HIGH",
+            event_category="PERSON_SAFETY",
+            risk_level=2,
+            is_activate=True,
+        )
+        self.db.add(event)
+        self.db.commit()
+        step = EventActionConfig(
+            event_id=1,
+            step_order=1,
+            action_type="staff_task",
+            config_json={},
+        )
+
+        await ECAEngine().execute_staff_task_step(
+            step,
+            {"event_instance_id": self.instance.id},
+            self.db,
+            event,
+        )
+
+        task = self.db.query(SafetyEventTask).one()
+        self.assertEqual(task.assigned_group_name, "安全巡查组")
+
+    def test_staff_action_infers_flood_event_type(self):
+        event = EventLibrary(
+            id=1,
+            event_name="库区洪水预警",
+            event_code="FLOOD_WARNING",
+            event_category="NATURAL_DISASTER",
+            risk_level=3,
+            is_activate=True,
+        )
+
+        self.assertEqual(ECAEngine._staff_event_type(event, {}), "FLOOD_EVENT")
+
+    def test_flood_demo_selects_two_of_four_prepared_minio_pictures(self):
+        service = StaffTaskMediaService()
+        pictures = [
+            {
+                "object_name": f"safety-events/demo-field-images/flood-event/picture-{index}.png",
+                "minio_url": f"http://minio.test/flood/{index}.png",
+                "source_file_name": f"flood-{index}.png",
+            }
+            for index in range(1, 5)
+        ]
+        service._prepared_demo_pictures = {"FLOOD_EVENT": pictures}
+        with patch(
+            "app.services.staff_task_media_service.random.sample",
+            return_value=[pictures[3], pictures[1]],
+        ):
+            selected = service.get_prepared_demo_pictures("FLOOD_EVENT")
+
+        self.assertEqual([item["phase"] for item in selected], ["before", "after"])
+        self.assertEqual(
+            [item["minio_url"] for item in selected],
+            ["http://minio.test/flood/4.png", "http://minio.test/flood/2.png"],
+        )
 
     def test_completed_staff_task_can_generate_deferred_report_from_workflow_log(self):
         event = EventLibrary(

@@ -75,7 +75,6 @@
             v-if="videoUrl"
             ref="videoRef"
             :src="videoUrl"
-            controls
             playsinline
           />
           <button v-else class="empty-stage" type="button" @click="openVideoPicker">

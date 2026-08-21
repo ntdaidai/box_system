@@ -101,7 +101,7 @@
     </section>
 
     <!-- 测试弹窗 -->
-    <AppDialog
+    <el-dialog
       v-model="testDialogVisible"
       title="无人机测试 · 航线巡检"
       width="92%"
@@ -109,6 +109,8 @@
       class="drone-test-dialog"
       destroy-on-close
       :close-on-click-modal="false"
+      @opened="startDefaultTest"
+      @closed="handleStopTest"
     >
       <div class="test-layout">
         <!-- 顶部工具条 -->
@@ -146,7 +148,12 @@
 
         <!-- 主体：左地图 右视频 -->
         <div class="test-body">
-          <div class="test-map wayline-map-stage test-wayline-map-stage" ref="mapRef">
+          <div
+            class="test-map wayline-map-stage test-wayline-map-stage"
+            ref="mapRef"
+            @selectstart.prevent
+            @dragstart.prevent
+          >
             <img src="/dam.png" alt="大藤峡航线图" draggable="false" />
             <svg
               v-if="selectedWaylineMapRegionPath"
@@ -215,6 +222,7 @@
             <button
               type="button"
               class="wayline-landmark airport"
+              :class="{ active: Boolean(selectedWaylineRouteName) }"
               style="left: 94.9%; top: 24.9%;"
             >
               <span class="wayline-landmark-mark" aria-hidden="true"></span>
@@ -223,6 +231,7 @@
             <button
               type="button"
               class="wayline-landmark"
+              :class="{ active: selectedWaylineRouteName === '禁渔航线' }"
               style="left: 47.4%; top: 58.1%;"
             >
               <span class="wayline-landmark-mark" aria-hidden="true"></span>
@@ -231,6 +240,7 @@
             <button
               type="button"
               class="wayline-landmark"
+              :class="{ active: selectedWaylineRouteName === '禁涉水航线' }"
               style="left: 96.3%; top: 54.3%;"
             >
               <span class="wayline-landmark-mark" aria-hidden="true"></span>
@@ -261,6 +271,7 @@
                 loop
                 preload="auto"
                 playsinline
+                @canplay="ensureTestVideoPlayback"
               ></video>
               <div v-else class="video-placeholder">
                 <el-icon :size="36"><VideoCamera /></el-icon>
@@ -271,7 +282,7 @@
           </div>
         </div>
       </div>
-    </AppDialog>
+    </el-dialog>
 
     <!-- 航线大图弹窗（对标感知源“查看点位图”的图片方式展示） -->
     <AppDialog
@@ -281,7 +292,7 @@
       width="95vw"
       align-center
     >
-      <div class="wayline-map-stage">
+      <div class="wayline-map-stage" @selectstart.prevent @dragstart.prevent>
         <img src="/dam.png" alt="大藤峡摄像头点位总览" draggable="false" />
         <svg
           v-if="selectedWaylineMapRegionPath"
@@ -366,6 +377,7 @@
         <button
           type="button"
           class="wayline-landmark airport"
+          :class="{ active: Boolean(selectedWaylineRouteName) }"
           style="left: 94.9%; top: 24.9%;"
         >
           <span class="wayline-landmark-mark" aria-hidden="true"></span>
@@ -374,6 +386,7 @@
         <button
           type="button"
           class="wayline-landmark"
+          :class="{ active: selectedWaylineRouteName === '禁渔航线' }"
           style="left: 47.4%; top: 58.1%;"
         >
           <span class="wayline-landmark-mark" aria-hidden="true"></span>
@@ -382,6 +395,7 @@
         <button
           type="button"
           class="wayline-landmark"
+          :class="{ active: selectedWaylineRouteName === '禁涉水航线' }"
           style="left: 96.3%; top: 54.3%;"
         >
           <span class="wayline-landmark-mark" aria-hidden="true"></span>
@@ -543,7 +557,8 @@ const pagedDevices = computed(() => {
 // 列表 = DJI 真实飞行器 + WS 在线状态 + 绑定机场
 const devices = computed(() =>
   djiDrones.value.map((d) => {
-    const online = onlineSet.has(d.device_sn) || d.status === 'online' || d.online === true
+    // 当前为演示环境，列表统一展示为在线；实时遥测数据仍照常更新。
+    const online = true
     const runtime = MOCK_DEVICE_RUNTIME[d.device_sn] || {
       description: `${d.device_model || '无人机'}巡检设备`,
       battery: 78,
@@ -853,7 +868,7 @@ function connectWebSocket() {
 // ========== 航线大图弹窗 ==========
 const waylineMapVisible = ref(false)
 const waylineRoutes = Object.values(ROUTES)
-const selectedWaylineMapPointNo = ref(5)
+const selectedWaylineMapPointNo = ref(null)
 const selectedWaylineRouteName = ref('')
 const selectedWaylineMapRegionPath = computed(() => (
   waylineCameraRegionPaths[selectedWaylineMapPointNo.value]
@@ -867,9 +882,12 @@ function routePolyline(route) {
   return (route.waypoints || []).map((p) => `${p.x},${p.y}`).join(' ')
 }
 function openWaylineMap() {
+  selectedWaylineMapPointNo.value = null
+  selectedWaylineRouteName.value = ''
   waylineMapVisible.value = true
 }
 function selectWaylineRoute(routeName) {
+  selectedWaylineMapPointNo.value = null
   selectedWaylineRouteName.value = selectedWaylineRouteName.value === routeName ? '' : routeName
 }
 function selectWaylineMapPoint(pointNo) {
@@ -972,9 +990,18 @@ function toggleEnabled(row, value) {
 
 // ========== 测试弹窗 ==========
 function openTestDialog(row) {
+  stopLocalAnimation()
+  testVideoRef.value?.pause?.()
+  testing.value = false
+  selectedWaylineMapPointNo.value = null
+  selectedWaylineRouteName.value = ''
   testingDevice.value = row
-  testWaylineId.value = ''
+  testWaylineId.value = '禁渔航线'
   testDialogVisible.value = true
+}
+
+function startDefaultTest() {
+  if (!testing.value && ROUTES[testWaylineId.value]) handleStartTest()
 }
 
 // 点击开始：左侧显示选中航线 + 右侧演示视频（模拟真实视频流，无进度条）
@@ -987,7 +1014,14 @@ function handleStartTest() {
   startLocalAnimation(route)
   testing.value = true
   nextTick(() => {
-    testVideoRef.value?.play?.().catch(() => {})
+    ensureTestVideoPlayback()
+  })
+}
+
+function ensureTestVideoPlayback() {
+  if (!testing.value) return
+  testVideoRef.value?.play?.().catch((error) => {
+    console.warn('[无人机测试] 演示视频播放失败:', error)
   })
 }
 
@@ -1336,39 +1370,20 @@ async function refreshCurrent() {
 .list-pagination :deep(.el-pager li.is-active) { border-color: #4ba7e6; color: #fff; background: #3f95d7; }
 
 /* ===== 测试弹窗 ===== */
-:global(.drone-test-dialog.app-dialog-panel) {
-  height: min(760px, calc(100vh - 24px));
+.drone-test-dialog :deep(.el-dialog) {
   background: #0a1c2e;
   border: 1px solid rgba(93, 184, 225, 0.25);
   border-radius: 12px;
 }
-:global(.drone-test-dialog .app-dialog__title) { color: #f3f8fd; font-weight: 800; }
-:global(.drone-test-dialog .app-dialog__header) { border-bottom: 1px solid rgba(93, 184, 225, 0.15); }
-:global(.drone-test-dialog .app-dialog__body) {
-  overflow: hidden;
-  padding: 12px;
-}
-.test-layout {
-  height: 100%;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
+.drone-test-dialog :deep(.el-dialog__title) { color: #f3f8fd; font-weight: 800; }
+.drone-test-dialog :deep(.el-dialog__header) { border-bottom: 1px solid rgba(93, 184, 225, 0.15); }
+.test-layout { display: flex; flex-direction: column; gap: 10px; }
 
 .test-toolbar {
-  position: relative;
-  z-index: 40;
-  flex: 0 0 auto;
-  min-height: 46px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  padding: 7px 10px;
-  border: 1px solid rgba(93, 184, 225, .18);
-  border-radius: 8px;
-  background: rgba(7, 31, 50, .86);
   flex-wrap: wrap;
 }
 .test-device { display: flex; flex-direction: column; gap: 3px; }
@@ -1378,11 +1393,10 @@ async function refreshCurrent() {
 .toolbar-label { color: #a9c7de; font-size: 13px; font-weight: 700; }
 .wayline-select { width: 240px; }
 .test-body {
-  min-height: 0;
-  flex: 1 1 auto;
   display: grid;
   grid-template-columns: 3fr 2fr;
   gap: 10px;
+  min-height: 420px;
 }
 .test-map {
   position: relative;
@@ -1467,13 +1481,15 @@ async function refreshCurrent() {
   position: absolute;
   left: 10px;
   bottom: 10px;
-  z-index: 14;
+  z-index: 30;
   display: flex;
   gap: 14px;
   align-items: center;
   padding: 6px 10px;
   border-radius: 6px;
   background: rgba(4, 16, 26, 0.78);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .34);
+  backdrop-filter: blur(4px);
   font-size: 12px;
   color: #9fc3da;
 }
@@ -1499,7 +1515,7 @@ async function refreshCurrent() {
   background: #040d16;
   border: 1px solid rgba(93, 184, 225, 0.17);
 }
-.video-stream { width: 100%; height: 100%; object-fit: contain; }
+.video-stream { width: 100%; height: 100%; object-fit: fill; }
 .video-placeholder {
   display: flex;
   flex-direction: column;
@@ -1550,7 +1566,20 @@ async function refreshCurrent() {
   height: 100%;
   display: block;
   object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
   filter: saturate(1.08) contrast(1.06) brightness(0.76);
+}
+.wayline-map-stage.test-wayline-map-stage > img {
+  object-fit: fill;
+}
+.wayline-map-stage,
+.wayline-map-stage * {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 .wayline-camera-region-layer {
   position: absolute;
@@ -1592,7 +1621,7 @@ async function refreshCurrent() {
 .wayline-map-svg {
   position: absolute;
   inset: 0;
-  z-index: 16;
+  z-index: 24;
   width: 100%;
   height: 100%;
   pointer-events: none;
@@ -1639,12 +1668,13 @@ async function refreshCurrent() {
   stroke-width: 0.4;
   vector-effect: non-scaling-stroke;
   filter: drop-shadow(0 0 5px rgba(72, 216, 255, 0.75));
-  pointer-events: all;
+  /* 起终点由地图上的真实地标图标表达，避免圆点在非等比 SVG 中拉伸成白色椭圆底盘。 */
+  display: none;
+  pointer-events: none;
 }
 .wayline-camera-point,
 .wayline-landmark {
   position: absolute;
-  /* 地标位于区域层之上，航线线条保持最上层。 */
   z-index: 20;
   appearance: none;
   -webkit-appearance: none;
@@ -1675,86 +1705,83 @@ async function refreshCurrent() {
   box-shadow: 0 0 0 10px rgba(72, 216, 255, .24), 0 0 24px rgba(72, 216, 255, .88);
 }
 .wayline-landmark {
+  z-index: 26;
   transform: translate(-50%, -50%);
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  width: 92px;
-  height: 92px;
+  gap: 2px;
   padding: 0;
   border: 0;
-  border-radius: 50%;
+  border-radius: 0;
   background: transparent;
   color: #e9faff;
   box-shadow: none;
   white-space: nowrap;
-  cursor: default;
-  transition: transform .2s ease;
+  cursor: pointer;
+  transition: transform .2s ease, background .2s ease, box-shadow .2s ease, border-color .2s ease;
 }
 .wayline-landmark::before {
-  content: '';
-  position: absolute;
-  z-index: 0;
-  top: 50%;
-  left: 50%;
-  width: 92px;
-  height: 40px;
-  transform: translate(-50%, -50%);
-  border: 1px solid rgba(190, 249, 255, .72);
-  border-radius: 50%;
-  background: rgba(147, 239, 255, .72);
-  box-shadow: inset 0 0 12px rgba(255, 255, 255, .42), 0 0 15px rgba(72, 216, 255, .68);
+  content: none !important;
+  display: none !important;
+  border: 0 !important;
+  background: none !important;
+  box-shadow: none !important;
 }
 .wayline-landmark > * { position: relative; z-index: 1; }
 .wayline-landmark-mark {
   position: relative;
-  width: 68px;
-  height: 68px;
+  width: 23px;
+  height: 23px;
   display: block;
-  border: 2px solid rgba(88, 226, 255, .92);
-  border-radius: 50%;
-  background: radial-gradient(circle at 48% 35%, #154c61 0, #092d3d 52%, #031923 100%);
-  box-shadow: 0 0 0 5px rgba(20, 140, 172, .24), 0 0 22px rgba(72, 216, 255, .92), 0 3px 8px rgba(0, 0, 0, .75);
-}
-.wayline-landmark-mark::before {
-  content: '';
-  position: absolute;
-  top: 9px;
-  left: 50%;
-  width: 24px;
-  height: 24px;
-  transform: translateX(-50%) rotate(-45deg);
-  border: 3px solid #78eaff;
+  border: 2px solid #aaf5ff;
   border-radius: 50% 50% 50% 0;
-  background: transparent;
-  box-shadow: 0 0 8px rgba(72, 216, 255, .76);
+  background: linear-gradient(145deg, #52e4ff, #087da8);
+  box-shadow: 0 0 10px rgba(72, 216, 255, .8), 0 2px 5px rgba(0, 0, 0, .72);
+  transform: rotate(-45deg);
 }
 .wayline-landmark-mark::after {
   content: '';
   position: absolute;
-  top: 17px;
-  left: 50%;
   width: 7px;
   height: 7px;
-  transform: translateX(-50%);
+  top: 6px;
+  left: 6px;
   border-radius: 50%;
-  background: #b8f7ff;
-  box-shadow: 0 0 0 2px rgba(226, 252, 255, .82), 0 0 8px rgba(72, 216, 255, .92);
+  background: #063747;
+  box-shadow: 0 0 0 2px rgba(226, 252, 255, .82);
 }
 .wayline-landmark > span:not(.wayline-landmark-mark) {
-  position: absolute;
-  top: 53px;
-  left: 50%;
-  z-index: 2;
-  transform: translateX(-50%);
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 900;
-  color: #f3fdff;
-  text-shadow: 0 1px 4px rgba(0, 0, 0, .96);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .85);
 }
-.wayline-landmark:hover {
-  transform: translate(-50%, -50%) scale(1.16);
+.wayline-landmark:hover,
+.wayline-landmark.active {
+  transform: translate(-50%, -50%) scale(1.32);
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+.wayline-landmark:hover .wayline-landmark-mark,
+.wayline-landmark.active .wayline-landmark-mark {
+  box-shadow: 0 0 0 5px rgba(72, 216, 255, .2), 0 0 26px rgba(72, 216, 255, .98), 0 2px 5px rgba(0, 0, 0, .72);
+}
+.wayline-landmark.airport:hover,
+.wayline-landmark.airport.active {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+.wayline-landmark.airport .wayline-landmark-mark {
+  border-color: #fff0b0;
+  background: linear-gradient(145deg, #ffe184, #bd7710);
+  box-shadow: 0 0 10px rgba(255, 209, 102, .82), 0 2px 5px rgba(0, 0, 0, .72);
+}
+.wayline-landmark.airport .wayline-landmark-mark::after { background: #6b4308; }
+.wayline-landmark.airport:hover .wayline-landmark-mark,
+.wayline-landmark.airport.active .wayline-landmark-mark {
+  box-shadow: 0 0 0 5px rgba(255, 209, 102, .2), 0 0 26px rgba(255, 209, 102, .98), 0 2px 5px rgba(0, 0, 0, .72);
 }
 .legend-route-swatch {
   width: 14px;

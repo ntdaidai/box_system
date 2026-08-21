@@ -173,7 +173,7 @@ class Settings:
     )
 
     # ── 机器狗路线测试动作 ──────────────────────────────────
-    # 第一版从 data/frone_pictures/dogtake 读取三张路线测试照片。
+    # 第一版从 data/frone_pictures/dogtake 读取四张路线测试照片。
     MACHINE_DOG_CRUISE_PICTURE_ROOT: str = _get_env(
         "MACHINE_DOG_CRUISE_PICTURE_ROOT",
         os.path.join(BASE_DIR, "data", "frone_pictures"),
@@ -191,6 +191,9 @@ class Settings:
         "STAFF_TASK_DEMO_OBJECT_PREFIX",
         "safety-events/demo-field-images",
     ).strip("/")
+    STAFF_TASK_DEMO_DELAY_SECONDS: float = float(
+        _get_env("STAFF_TASK_DEMO_DELAY_SECONDS", "10")
+    )
 
     # ── IoTDB ─────────────────────────────────────────────────
     IOTDB_HOST: str = _get_env("IOTDB_HOST", "127.0.0.1")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import re
 from typing import Any, Literal, Optional
@@ -14,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.cache import invalidate_cache
+from app.core.config import settings
 from app.core.security import require_auth
 from app.models.broadcast import BroadcastDevice, BroadcastTemplate
 from app.models.camera import Camera
@@ -33,6 +35,11 @@ from app.models.user import User
 from minio.error import S3Error
 
 from app.services.minio_service import minio_service
+from app.services.machine_dog_cruise_service import (
+    MACHINE_DOG_DEVICE_ID,
+    MachineDogCruiseError,
+    normalize_machine_dog_route,
+)
 from app.services.safety_event_operation_service import operate_safety_event as apply_safety_event_operation
 from app.services.safety_event_engine import get_safety_event_engine
 from app.services.safety_event_runtime_service import safety_event_runtime_service
@@ -62,6 +69,28 @@ EVENT_CATEGORY_LABELS = {
     "PERSON_SAFETY": "人员安全",
     "ILLEGAL_FISHING": "非法捕鱼",
 }
+
+
+def _normalize_machine_dog_action_config(
+    config_json: Optional[dict[str, Any]],
+    route_id: Optional[str],
+) -> tuple[dict[str, Any], str]:
+    """Validate persisted ECA configuration against the actual single-route API."""
+    config = dict(config_json) if isinstance(config_json, dict) else {}
+    machine_dog_id = str(config.get("machine_dog_id") or "").strip()
+    if not machine_dog_id or not route_id:
+        raise HTTPException(status_code=400, detail="机器狗巡检必须配置机器狗型号和巡检路线")
+    if machine_dog_id != MACHINE_DOG_DEVICE_ID:
+        raise HTTPException(
+            status_code=400,
+            detail=f"机器狗巡检仅支持已配置设备 {MACHINE_DOG_DEVICE_ID}",
+        )
+    try:
+        normalized_route = normalize_machine_dog_route(route_id)
+    except MachineDogCruiseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    config["machine_dog_id"] = machine_dog_id
+    return config, normalized_route
 
 
 class ConditionConfigUpdate(BaseModel):
@@ -119,7 +148,7 @@ class SafetyEventOperation(BaseModel):
 class StaffTaskDispatchRequest(BaseModel):
     """模拟下发现场人员任务时使用的业务参数。"""
 
-    event_type: str = Field(..., max_length=64, description="PERSON_WADING 或 NIGHT_FISHING")
+    event_type: str = Field(..., max_length=64, description="PERSON_WADING、NIGHT_FISHING 或 FLOOD_EVENT")
     assignee: Optional[str] = Field(None, max_length=128)
     group_name: Optional[str] = Field(None, max_length=128, description="接收任务的处置组")
     note: str = Field("", max_length=500)
@@ -584,16 +613,20 @@ def update_action_config(
         if not row.drone_id or not row.route_id:
             raise HTTPException(status_code=400, detail="无人机派飞必须配置无人机和航线")
     if will_be_enabled and action_type == "machine_dog_dispatch":
-        action_config = row.config_json if isinstance(row.config_json, dict) else {}
-        if not action_config.get("machine_dog_id") or not row.route_id:
-            raise HTTPException(status_code=400, detail="机器狗巡检必须配置机器狗型号和巡检路线")
+        row.config_json, row.route_id = _normalize_machine_dog_action_config(
+            row.config_json,
+            row.route_id,
+        )
     if action_type == "staff_task":
-        action_config = row.config_json if isinstance(row.config_json, dict) else {}
+        action_config = dict(row.config_json) if isinstance(row.config_json, dict) else {}
         if action_config.get("event_type"):
             try:
-                normalize_staff_event_type(action_config["event_type"])
+                action_config["event_type"] = normalize_staff_event_type(action_config["event_type"])
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # 旧配置可能没有保存工作组；保持人工任务始终有可接收的默认组。
+        row.route_id = str(row.route_id or "").strip() or "安全巡查组"
+        row.config_json = action_config
     db.commit()
     return {"code": 200, "message": "动作配置已保存"}
 
@@ -620,16 +653,19 @@ def create_action_config(
         ):
             raise HTTPException(status_code=400, detail="无人机派飞必须配置无人机和航线")
         if payload.action_type == "machine_dog_dispatch":
-            action_config = data.get("config_json") if isinstance(data.get("config_json"), dict) else {}
-            if not action_config.get("machine_dog_id") or not data.get("route_id"):
-                raise HTTPException(status_code=400, detail="机器狗巡检必须配置机器狗型号和巡检路线")
+            data["config_json"], data["route_id"] = _normalize_machine_dog_action_config(
+                data.get("config_json"),
+                data.get("route_id"),
+            )
         if payload.action_type == "staff_task":
-            action_config = data.get("config_json") if isinstance(data.get("config_json"), dict) else {}
+            action_config = dict(data.get("config_json") or {}) if isinstance(data.get("config_json"), dict) else {}
             if action_config.get("event_type"):
                 try:
-                    normalize_staff_event_type(action_config["event_type"])
+                    action_config["event_type"] = normalize_staff_event_type(action_config["event_type"])
                 except ValueError as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
+            data["route_id"] = str(data.get("route_id") or "").strip() or "安全巡查组"
+            data["config_json"] = action_config
     row = EventActionConfig(
         event_id=payload.event_id,
         step_order=payload.step_order,
@@ -958,12 +994,22 @@ async def dispatch_staff_task(
             demo_pictures = staff_task_media_service.get_prepared_demo_pictures(
                 result["event_type"]
             )
+            # 先提交并广播待处理状态，让 Web/小程序和轮询方看到真实的任务等待阶段。
+            db.commit()
+            await _broadcast_staff_task_update(db, instance, result["timeline"])
+            total_delay = max(float(settings.STAFF_TASK_DEMO_DELAY_SECONDS), 0.0)
+            waiting_delay = total_delay / 2
+            processing_delay = total_delay - waiting_delay
+            await asyncio.sleep(waiting_delay)
             started = staff_task_service.start_manual_task(
                 db,
                 instance,
                 operator="SYSTEM",
                 event_type=result["event_type"],
             )
+            db.commit()
+            await _broadcast_staff_task_update(db, instance, started["timeline"])
+            await asyncio.sleep(processing_delay)
             demo_result = staff_task_service.complete_demo_task(
                 db,
                 instance,
@@ -980,17 +1026,20 @@ async def dispatch_staff_task(
         except ValueError as exc:
             db.rollback()
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-    db.commit()
     if payload.demo:
+        db.commit()
         get_safety_event_engine().resolve_event(
             instance.instance_no,
             reason="staff_demo_completed",
             now=dt.datetime.now().timestamp(),
             emit_action=False,
         )
+        await _broadcast_staff_task_update(db, instance, demo_result["timeline"])
+    else:
+        db.commit()
+        await _broadcast_staff_task_update(db, instance, result["timeline"])
     final_result = demo_result or result
     task = final_result["task"]
-    await _broadcast_staff_task_update(db, instance, *demo_timelines)
     return {
         "code": 200,
         "message": "演示人工处置任务已自动完成" if payload.demo else "人工处置任务已下发",

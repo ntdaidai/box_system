@@ -77,6 +77,7 @@ export default {
   data() {
     return {
       eventId: '',
+      demoMode: false,
       event: null,
       staff: null,
       riskClassName: '',
@@ -100,6 +101,7 @@ export default {
 
   onLoad(options) {
     this.eventId = options?.event_id || ''
+    this.demoMode = options?.demo === '1'
     this.staff = readCache('mini-staff', null)
     this.loadDetail()
   },
@@ -107,6 +109,19 @@ export default {
   methods: {
     loadDetail() {
       if (!this.eventId) return
+      if (this.demoMode) {
+        const cached = readCache(`demo-event:${this.eventId}`, null)
+        this.event = cached || {
+          event_id: this.eventId,
+          event_type: '人员涉水处置中',
+          monitor_point: '9号监测点',
+          risk_level: 'HIGH',
+          risk_level_label: '高'
+        }
+        this.riskClassName = riskClass(this.event.risk_level)
+        this.eventType = 'PERSON_WADING'
+        return
+      }
       request({ url: `/events/${encodeURIComponent(this.eventId)}` })
         .then((data) => {
           const event = data.event
@@ -232,6 +247,15 @@ export default {
         return
       }
       this.submitting = true
+      if (this.demoMode) {
+        uni.showModal({
+          title: '演示提交成功',
+          content: '本次提交仅用于页面演示，没有写入后台。',
+          showCancel: false
+        })
+        this.submitting = false
+        return
+      }
       const operator = this.staff?.display_name || '现场处置员'
       Promise.all(this.photoPaths.map((filePath, index) => uploadFieldPhoto({
         eventId: this.eventId,

@@ -18,14 +18,35 @@ from app.services.minio_service import minio_service
 
 MACHINE_DOG_ROUTE = {
     "route_key": "all",
-    "name": "机器狗全路线",
+    "name": "9号检测区域巡检路线",
     "photo_plan": ["巡检点 1", "巡检点 2", "巡检点 3", "巡检点 4"],
+}
+MACHINE_DOG_DEVICE_ID = "dog-01"
+MACHINE_DOG_ROUTE_ALIASES = {
+    "all": MACHINE_DOG_ROUTE["route_key"],
+    "机器狗全路线": MACHINE_DOG_ROUTE["route_key"],
+    "9号检测区域巡检路线": MACHINE_DOG_ROUTE["route_key"],
+    "巡检路线": MACHINE_DOG_ROUTE["route_key"],
+    # 流程编辑器早期曾展示两条逻辑路线；保留兼容，但统一执行唯一的 all 路线。
+    "route-a": MACHINE_DOG_ROUTE["route_key"],
+    "route-b": MACHINE_DOG_ROUTE["route_key"],
+    "岸线由西向东巡检": MACHINE_DOG_ROUTE["route_key"],
+    "岸线由东向西巡检": MACHINE_DOG_ROUTE["route_key"],
 }
 SUPPORTED_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 class MachineDogCruiseError(RuntimeError):
     """机器狗路线测试失败。"""
+
+
+def normalize_machine_dog_route(route_id: str | None) -> str:
+    """将历史配置统一为当前唯一可执行的机器狗路线。"""
+    value = str(route_id or "").strip().lower()
+    route_key = MACHINE_DOG_ROUTE_ALIASES.get(value)
+    if not route_key:
+        raise MachineDogCruiseError("机器狗巡检 route_id 仅支持 all（9号检测区域巡检路线）")
+    return route_key
 
 
 class MachineDogCruiseService:
@@ -42,7 +63,7 @@ class MachineDogCruiseService:
         }]
 
     async def cruise(self) -> dict[str, Any]:
-        """执行固定全路线并返回四张归档照片。"""
+        """执行 9 号检测区域固定巡检路线并返回四张归档照片。"""
         async with self._lock:
             run_id = f"all_{uuid.uuid4().hex}"
             pictures = self._select_pictures()

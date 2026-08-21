@@ -1,8 +1,12 @@
 <script>
 import { isLoggedIn, scanQrLogin } from './utils/auth'
+import { prepareDemoVideo } from './utils/demo-video'
 
 export default {
   onLaunch(options) {
+    prepareDemoVideo().catch((error) => {
+      console.error('[demo-video] launch prepare failed', error)
+    })
     const eventId = options?.query?.event_id
     if (!isLoggedIn()) {
       this.promptScanLogin()

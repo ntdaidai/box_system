@@ -63,7 +63,7 @@
         :key="item.event_id"
         class="event-card"
         :class="{ mine: item.is_my_task, demo: item.is_demo }"
-        @tap="openDetail(item.event_id)"
+        @tap="openDetail(item)"
       >
         <view class="card-head">
           <view class="event-title-wrap">
@@ -105,6 +105,9 @@
 
         <view v-if="activeTab === 'processing' && item.is_my_assignee" class="mine-tag">我的处理中</view>
         <view v-if="activeTab === 'pending' && item.is_my_group_task" class="mine-tag">本组待处理</view>
+        <view v-if="activeTab === 'processing' && item.can_submit_result" class="card-actions single">
+          <button class="primary-btn card-btn" @tap.stop="openDetail(item)">进入现场处理</button>
+        </view>
         <view v-if="activeTab === 'pending' && item.can_accept" class="card-actions">
           <button class="primary-btn card-btn" @tap.stop="acceptEvent(item)">接受任务</button>
           <button class="ghost-btn card-btn" @tap.stop="markFalseAlarm(item)">标记误报</button>
@@ -145,7 +148,7 @@ export default {
         point: '',
         date: ''
       },
-      cameraOptions: ['全部点位'],
+      cameraOptions: ['全部监测点'],
       selectedPointIndex: 0,
       summary: {
         today_high: 0,
@@ -170,7 +173,7 @@ export default {
     },
 
     pointFilterLabel() {
-      return this.cameraOptions[this.selectedPointIndex] || '全部点位'
+      return this.cameraOptions[this.selectedPointIndex] || '全部监测点'
     },
 
     // 总页数，每页 10 条
@@ -264,12 +267,12 @@ export default {
           const names = (data.items || [])
             .map((item) => item.camera_name || item.name || item.id)
             .filter(Boolean)
-          this.cameraOptions = ['全部点位', ...names]
+          this.cameraOptions = ['全部监测点', ...names]
           const currentIndex = this.cameraOptions.indexOf(this.filters.point)
           this.selectedPointIndex = currentIndex > -1 ? currentIndex : 0
         })
         .catch(() => {
-          this.cameraOptions = ['全部点位']
+          this.cameraOptions = ['全部监测点']
           this.selectedPointIndex = 0
         })
     },
@@ -360,8 +363,8 @@ export default {
       const now = Math.floor(Date.now() / 1000)
       const currentGroup = this.staff?.group_name || '九号点位组'
       const otherGroup = currentGroup === '九号点位组' ? '三号点位组' : '九号点位组'
-      const currentName = this.staff?.display_name || '现场处置员'
-      const sameGroupName = currentName === '九号点位值班员' ? '一号点位值班员' : '组内其他处置员'
+      const currentName = '9号点位值班员1'
+      const sameGroupName = '9号点位值班员2'
       const base = (eventId, title, groupName, extra = {}) => ({
         id: eventId,
         event_id: eventId,
@@ -395,28 +398,28 @@ export default {
 
       if (status === 'pending') {
         return [
-          base('DEMO_PENDING_GROUP_01', '人员进入高风险区域（演示）', currentGroup, { age: 480 }),
-          base('DEMO_PENDING_GROUP_02', '船只靠近禁入水域（演示）', currentGroup, { risk_level: 'MEDIUM', age: 960 }),
-          base('DEMO_PENDING_OTHER_GROUP', '夜间非法捕鱼告警（演示）', otherGroup, { age: 1440 })
+          base('DEMO_PENDING_GROUP_01', '人员进入高风险区域', currentGroup, { age: 480 }),
+          base('DEMO_PENDING_GROUP_02', '船只靠近禁入水域', currentGroup, { risk_level: 'MEDIUM', age: 960 }),
+          base('DEMO_PENDING_OTHER_GROUP', '夜间非法捕鱼告警', otherGroup, { age: 1440 })
         ].map(this.decorateEvent)
       }
 
       return [
-        base('DEMO_PROCESSING_ME', '人员涉水处置中（演示）', currentGroup, {
+        base('DEMO_PROCESSING_ME', '人员涉水处置中', currentGroup, {
           assignee: currentName,
           handler_name: currentName,
           age: 360,
           duration: 180
         }),
-        base('DEMO_PROCESSING_GROUP', '库区船只核查中（演示）', currentGroup, {
+        base('DEMO_PROCESSING_GROUP', '库区船只核查中', currentGroup, {
           assignee: sameGroupName,
           handler_name: sameGroupName,
           age: 720,
           duration: 540
         }),
-        base('DEMO_PROCESSING_OTHER_GROUP', '坝区人员巡查中（演示）', otherGroup, {
-          assignee: '三号点位值班员',
-          handler_name: '三号点位值班员',
+        base('DEMO_PROCESSING_OTHER_GROUP', '坝区人员巡查中', otherGroup, {
+          assignee: '3号点位值班员1',
+          handler_name: '3号点位值班员1',
           age: 1080,
           duration: 780
         })
@@ -478,6 +481,10 @@ export default {
     },
 
     markFalseAlarm(item) {
+      if (item.is_demo) {
+        uni.showToast({ title: '演示任务，仅用于展示', icon: 'none' })
+        return
+      }
       uni.showModal({
         title: '标记误报',
         content: '确认将该事件标记为误报？',
@@ -537,9 +544,20 @@ export default {
         })
     },
 
-    openDetail(eventId) {
-      if (String(eventId).startsWith('DEMO_')) {
-        uni.showToast({ title: '演示事件暂无详情', icon: 'none' })
+    openDetail(item) {
+      const eventId = item?.event_id || item
+      if (item?.is_demo) {
+        if (item.business_status === 'processing' && item.is_my_assignee) {
+          writeCache(`demo-event:${eventId}`, item)
+          uni.navigateTo({
+            url: `/pages/process/index?demo=1&event_id=${encodeURIComponent(eventId)}`
+          })
+          return
+        }
+        uni.showToast({
+          title: item.business_status === 'processing' ? '该任务由其他人员处理中' : '演示待处理任务',
+          icon: 'none'
+        })
         return
       }
       uni.navigateTo({
@@ -851,6 +869,10 @@ export default {
   grid-template-columns: 1fr 1fr;
   gap: 12rpx;
   margin-top: 18rpx;
+}
+
+.card-actions.single {
+  grid-template-columns: 1fr;
 }
 
 .card-btn {

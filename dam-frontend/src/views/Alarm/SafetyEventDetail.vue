@@ -63,7 +63,7 @@
             </dl>
           </section>
 
-          <section class="work-card evidence-card" :class="{ empty: !reviewFrames.length }">
+          <section class="work-card evidence-card linkage-evidence-card" :class="{ empty: !reviewFrames.length }">
             <header class="card-heading">
               <div>
                 <span>现场证据</span>
@@ -89,55 +89,42 @@
                 <span>待归档</span>
               </div>
             </div>
-            <div v-else class="compact-empty">
+            <div v-else class="linkage-evidence-empty">
               <el-icon><Picture /></el-icon>
-              <span>暂无 Qwen4B 抽取帧</span>
+              <div>
+                <strong>暂无现场图片</strong>
+                <span>暂无 Qwen4B 抽取帧</span>
+              </div>
             </div>
           </section>
 
           <section class="work-card linkage-evidence-card">
             <header class="card-heading">
-              <div>
-                <span>联动证据</span>
-                <h2>设备与现场处置</h2>
-              </div>
-              <small>{{ linkageEvidenceCount }} / {{ linkageEvidenceCapacity }} 张</small>
+              <div><span>联动证据</span></div>
+              <small>{{ linkageEvidenceCount }} 张</small>
             </header>
 
-            <div v-if="linkageEvidenceGroups.length" class="linkage-evidence-groups">
-              <section v-for="group in linkageEvidenceGroups" :key="group.key" class="linkage-evidence-group">
-                <header>
-                  <strong>{{ group.label }}</strong>
-                  <span>{{ group.items.length }} / {{ group.limit }} 张</span>
-                </header>
-                <div class="review-frame-strip linkage-evidence-strip">
-                  <button
-                    v-for="(item, index) in group.items"
-                    :key="item.id"
-                    type="button"
-                    class="review-frame-item linkage-evidence-item"
-                    @click="openEvidenceItem(item)"
-                  >
-                    <el-image :src="normalizeMediaUrl(item.file_url)" fit="cover" />
-                    <footer>
-                      <span>{{ group.label }}取证 {{ String(index + 1).padStart(2, '0') }}</span>
-                      <time v-if="item.captured_at">{{ formatTime(item.captured_at) }}</time>
-                    </footer>
-                  </button>
-                  <div
-                    v-for="slot in group.slots"
-                    :key="`${group.key}-slot-${slot}`"
-                    class="review-frame-slot"
-                  >
-                    <strong>{{ String(group.items.length + slot).padStart(2, '0') }}</strong>
-                    <span>待归档</span>
-                  </div>
-                </div>
-              </section>
+            <div v-if="linkageEvidenceItems.length" class="review-frame-strip linkage-evidence-strip">
+              <button
+                v-for="(item, index) in linkageEvidenceItems"
+                :key="item.id"
+                type="button"
+                class="review-frame-item linkage-evidence-item"
+                @click="openEvidenceItem(item)"
+              >
+                <el-image :src="normalizeMediaUrl(item.file_url)" fit="cover" />
+                <footer>
+                  <span><b :class="`linkage-source-${item.linkage_kind}`">{{ item.linkage_label }}</b>取证 {{ String(index + 1).padStart(2, '0') }}</span>
+                  <time v-if="item.captured_at">{{ formatTime(item.captured_at) }}</time>
+                </footer>
+              </button>
             </div>
-            <div v-else class="compact-empty">
+            <div v-else class="linkage-evidence-empty">
               <el-icon><Picture /></el-icon>
-              <span>暂无联动设备取证图片</span>
+              <div>
+                <strong>暂无联动图片</strong>
+                <span>开始联动后将自动归档设备与人工处置图片</span>
+              </div>
             </div>
           </section>
 
@@ -424,10 +411,10 @@
       </template>
     </AppDialog>
 
-    <AppDialog
+    <el-dialog
       v-model="processDialogVisible"
       class="linkage-process-dialog drone-test-dialog"
-      width="94%"
+      width="92%"
       align-center
       destroy-on-close
       :close-on-click-modal="false"
@@ -435,51 +422,25 @@
       @closed="stopLinkageProcess"
     >
       <div v-if="processModule" class="test-layout">
-        <div class="test-toolbar">
-          <div class="test-device">
-            <strong>{{ processModule.objectValue }}</strong>
-          </div>
-          <div class="test-wayline">
-            <span class="toolbar-label">选择航线</span>
-            <el-select
-              v-model="processRouteSelection"
-              class="wayline-select"
-              popper-class="drone-filter-popper"
-              filterable
-              clearable
-            >
-              <el-option v-for="name in processRouteOptions" :key="name" :label="name" :value="name" />
-            </el-select>
-            <el-button
-              v-if="!processRunning"
-              :icon="VideoCamera"
-              type="primary"
-              :disabled="!processRouteSelection"
-              @click="startLinkageProcess"
-            >开始</el-button>
-            <el-button v-else :icon="Close" @click="stopLinkageProcess">停止</el-button>
-          </div>
-        </div>
-
         <div class="test-body">
-          <div class="test-map wayline-map-stage test-wayline-map-stage">
+          <div class="test-map wayline-map-stage test-wayline-map-stage" @selectstart.prevent @dragstart.prevent>
             <img src="/dam.png" alt="大藤峡航线图" draggable="false" />
             <svg v-if="processRoutePoints.length" class="wayline-map-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
               <polyline class="wayline-map-route route-glow tone-0" :points="processRoutePolyline" />
               <polyline class="wayline-map-route tone-0" :points="processRoutePolyline" />
-              <circle
-                v-for="(point, index) in processRoutePoints"
-                :key="`process-point-${index}`"
-                class="wayline-map-point"
-                :class="{ endpoint: index === 0 || index === processRoutePoints.length - 1 }"
-                :cx="point.x"
-                :cy="point.y"
-                :r="index === 0 || index === processRoutePoints.length - 1 ? 2.2 : 1.7"
-              />
             </svg>
-            <div class="process-wayline-landmark airport" style="left: 94.9%; top: 24.9%;">机场点</div>
-            <div class="process-wayline-landmark" style="left: 47.4%; top: 58.1%;">禁渔点</div>
-            <div class="process-wayline-landmark" style="left: 96.3%; top: 54.3%;">禁涉水点</div>
+            <div class="process-wayline-landmark airport" style="left: 94.9%; top: 24.9%;">
+              <span class="process-wayline-landmark-mark" aria-hidden="true"></span>
+              <span>机场点</span>
+            </div>
+            <div class="process-wayline-landmark" style="left: 47.4%; top: 58.1%;">
+              <span class="process-wayline-landmark-mark" aria-hidden="true"></span>
+              <span>禁渔点</span>
+            </div>
+            <div class="process-wayline-landmark" style="left: 96.3%; top: 54.3%;">
+              <span class="process-wayline-landmark-mark" aria-hidden="true"></span>
+              <span>禁涉水点</span>
+            </div>
             <div class="drone-marker process-unit-marker" :style="{ left: `${processMarkerPoint.x}%`, top: `${processMarkerPoint.y}%` }">
               <div class="marker-pulse"></div>
               <img :src="processModule.key === 'drone' ? '/drone-icon.png' : '/waypoint.png'" alt="执行设备" class="marker-icon" />
@@ -492,25 +453,35 @@
 
           <div class="test-video">
             <div class="video-stage">
-              <video :key="processRouteSelection" :src="processVideoSrc" class="video-stream" autoplay muted loop playsinline></video>
-              <div class="process-video-label"><span>LIVE</span><strong>{{ processModule.objectValue }}</strong></div>
+              <video
+                :key="processRouteSelection"
+                ref="processVideoRef"
+                :src="processVideoSrc"
+                class="video-stream"
+                autoplay
+                muted
+                loop
+                preload="auto"
+                playsinline
+                @canplay="ensureProcessVideoPlayback"
+              ></video>
+              <div class="process-video-label"><strong>{{ processEventLabel }}</strong></div>
               <div class="scan-grid"></div>
             </div>
           </div>
         </div>
       </div>
-    </AppDialog>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ArrowLeft,
   CircleCheckFilled,
-  Close,
   Connection,
   Document,
   Microphone,
@@ -549,6 +520,7 @@ const processRunning = ref(false)
 const processRouteSelection = ref('')
 const processProgress = ref(0)
 const processElapsed = ref(0)
+const processVideoRef = ref(null)
 let processTimer = null
 const staffResultDialogVisible = ref(false)
 const staffResultSubmitting = ref(false)
@@ -585,9 +557,11 @@ const displayedTimeline = computed(() => {
     if (!latestByAction.has(key)) order.push(key)
     latestByAction.set(key, item)
   })
-  return order
+  const entries = order
     .map((key) => latestByAction.get(key))
     .filter(Boolean)
+  return entries
+    .filter((item) => !isLegacyDuplicateBroadcastLog(item, entries))
     .sort((left, right) => {
       const leftReport = String(left?.log_type || '').toUpperCase() === 'REPORT'
       const rightReport = String(right?.log_type || '').toUpperCase() === 'REPORT'
@@ -611,23 +585,17 @@ const linkageEvidenceDefinitions = [
   { key: 'machine_dog', label: '机器狗', limit: 4 },
   { key: 'manual', label: '人工处置', limit: 2 },
 ]
-const linkageEvidenceGroups = computed(() => {
-  const activeModules = new Set(actionModules.value.map((module) => module.key))
-  return linkageEvidenceDefinitions
-    .map((definition) => {
-      const items = evidence.value
-        .filter((item) => isImageEvidence(item) && linkageEvidenceKind(item) === definition.key)
-        .slice(0, definition.limit)
-      return {
-        ...definition,
-        items,
-        slots: Math.max(0, definition.limit - items.length),
-      }
-    })
-    .filter((group) => group.items.length || activeModules.has(group.key))
-})
-const linkageEvidenceCount = computed(() => linkageEvidenceGroups.value.reduce((total, group) => total + group.items.length, 0))
-const linkageEvidenceCapacity = computed(() => linkageEvidenceDefinitions.reduce((total, group) => total + group.limit, 0))
+const linkageEvidenceItems = computed(() => linkageEvidenceDefinitions.flatMap((definition) => {
+  return evidence.value
+    .filter((item) => isImageEvidence(item) && linkageEvidenceKind(item) === definition.key)
+    .slice(0, definition.limit)
+    .map((item) => ({
+      ...item,
+      linkage_kind: definition.key,
+      linkage_label: definition.label,
+    }))
+}))
+const linkageEvidenceCount = computed(() => linkageEvidenceItems.value.length)
 const latestTask = computed(() => detail.tasks[0] || null)
 const isResolved = computed(() => event.value?.state === 'RESOLVED' || ['COMPLETED', 'FALSE_ALARM'].includes(event.value?.status))
 const eventActionConfigs = computed(() => actionConfigs.value.filter((item) => item.event_id === event.value?.event_id && item.enabled))
@@ -638,11 +606,25 @@ const eventKind = computed(() => {
 })
 const eventKindLabel = computed(() => ({ vision: '视觉事件', sensor: '传感器事件', generic: '统一事件' })[eventKind.value])
 const showRightRail = computed(() => Boolean(event.value))
-const processRouteOptions = computed(() => {
-  const current = processModule.value?.routeLabel
-  const defaults = processModule.value?.key === 'machine_dog' ? ['巡检路线'] : ['禁渔航线', '禁涉水航线']
-  return [...new Set([current, ...defaults].filter((value) => value && !['未指定路线', '未记录'].includes(value)))]
+const processEventText = computed(() => {
+  const eventText = [
+  event.value?.event_name,
+  event.value?.summary,
+  event.value?.event_code,
+  event.value?.event_category,
+  event.value?.event_type,
+  visualDetail.value?.event_type,
+  visualDetail.value?.target_type,
+  ].filter(Boolean).join(' ').trim()
+  return (eventText || processModule.value?.routeLabel || '').toLowerCase()
 })
+const processEventIsWading = computed(() => /涉水|wading|person/.test(processEventText.value))
+const processEventRouteName = computed(() => processEventIsWading.value ? '禁涉水航线' : '禁渔航线')
+const processEventLabel = computed(() => (
+  event.value?.event_name
+  || event.value?.summary
+  || (processEventIsWading.value ? '禁涉水事件' : '禁渔事件')
+))
 const processRoutePoints = computed(() => {
   return PROCESS_ROUTES[processRouteSelection.value]
     || PROCESS_ROUTES[processModule.value?.key]
@@ -651,12 +633,7 @@ const processRoutePoints = computed(() => {
 const processRoutePolyline = computed(() => processRoutePoints.value.map((point) => `${point.x},${point.y}`).join(' '))
 const processMarkerPoint = computed(() => pointAtRoute(processRoutePoints.value, processProgress.value))
 const processDialogTitle = computed(() => processModule.value?.key === 'machine_dog' ? '机器狗测试 · 路线巡检' : '无人机测试 · 航线巡检')
-const processVideoSrc = computed(() => {
-  const text = `${processRouteSelection.value || ''} ${processModule.value?.routeLabel || ''} ${processModule.value?.objectValue || ''}`.toLowerCase()
-  return text.includes('涉水') || text.includes('wading') || processModule.value?.key === 'machine_dog'
-    ? '/demo/wading.mp4'
-    : '/demo/fishing.mp4'
-})
+const processVideoSrc = computed(() => processEventIsWading.value ? '/demo/wading.mp4' : '/demo/fishing.mp4')
 const processElapsedText = computed(() => {
   const minutes = Math.floor(processElapsed.value / 60)
   const seconds = String(processElapsed.value % 60).padStart(2, '0')
@@ -1043,9 +1020,7 @@ function pointAtRoute(points, progress) {
 
 function openLinkageProcess(module) {
   processModule.value = module
-  processRouteSelection.value = module.routeLabel && !['未指定路线', '未记录'].includes(module.routeLabel)
-    ? module.routeLabel
-    : (module.key === 'machine_dog' ? '巡检路线' : '禁渔航线')
+  processRouteSelection.value = module.key === 'machine_dog' ? '巡检路线' : processEventRouteName.value
   processProgress.value = 0
   processElapsed.value = 0
   processDialogVisible.value = true
@@ -1054,6 +1029,7 @@ function openLinkageProcess(module) {
 
 function startLinkageProcess() {
   processRunning.value = true
+  nextTick(() => ensureProcessVideoPlayback())
   clearInterval(processTimer)
   processTimer = setInterval(() => {
     processProgress.value = (processProgress.value + 0.006) % 1
@@ -1061,8 +1037,16 @@ function startLinkageProcess() {
   }, 1000)
 }
 
+function ensureProcessVideoPlayback() {
+  if (!processRunning.value) return
+  processVideoRef.value?.play?.().catch((error) => {
+    console.warn('[事件详情] 演示视频播放失败:', error)
+  })
+}
+
 function stopLinkageProcess() {
   processRunning.value = false
+  processVideoRef.value?.pause?.()
   clearInterval(processTimer)
   processTimer = null
 }
@@ -1093,8 +1077,9 @@ function openEvidenceItem(item) {
 
 function inferStaffEventType() {
   const existing = String(latestTask.value?.event_type || '').toUpperCase()
-  if (['PERSON_WADING', 'NIGHT_FISHING'].includes(existing)) return existing
+  if (['PERSON_WADING', 'NIGHT_FISHING', 'FLOOD_EVENT'].includes(existing)) return existing
   const text = `${event.value?.event_name || ''} ${event.value?.summary || ''}`
+  if (/洪水|洪涝|flood/i.test(text)) return 'FLOOD_EVENT'
   return /捕鱼|禁渔|船只/.test(text) ? 'NIGHT_FISHING' : 'PERSON_WADING'
 }
 
@@ -1291,7 +1276,7 @@ function logMessage(item) {
       const size = workflowSizeText(p)
       return size ? `系统已根据事件信息生成处置流程，包含${size}。` : '系统正在根据事件信息生成处置流程。'
     }
-    if (p.fallback_used === true) return '智能分析结果未完整返回，系统已切换到备用分析路径继续完成处置。'
+    if (workflowFallbackUsed(p)) return '云端结果复核未成功返回，系统已切换到本地备用分析路径继续完成处置。'
     if (status === 'RUNNING') return '系统正在执行已生成的处置流程，逐步完成分析任务。'
     if (status === 'FAILED') return '处置流程执行未完成，请检查当前节点的执行情况。'
     return '处置流程已执行完成，分析结果已交给后续报告环节。'
@@ -1438,6 +1423,37 @@ function parsePayload(payload) {
   }
 }
 
+function hasCloudReviewFailure(payload) {
+  const nodeResults = payload?.execution_result?.node_results
+  if (!Array.isArray(nodeResults)) return false
+  return nodeResults.some((node) => {
+    if (String(node?.node_id || '') !== 'action_report') return false
+    return !['success', 'skipped'].includes(String(node?.status || '').toLowerCase())
+  })
+}
+
+function workflowFallbackUsed(payload) {
+  return payload?.fallback_used === true || payload?.fallback_used === 'true' || hasCloudReviewFailure(payload)
+}
+
+// 旧版 ECA 自动广播会同时写入广播服务记录和流程步骤记录；详情只保留后者。
+function isLegacyDuplicateBroadcastLog(item, entries) {
+  const key = String(item?.action_key || '')
+  const payload = parsePayload(item?.payload)
+  if (!key.startsWith('manual-broadcast:') || payload.action_type !== 'AUTO_BROADCAST') return false
+
+  const timestamp = new Date(item?.create_time || item?.created_at || 0).getTime()
+  return entries.some((candidate) => {
+    const candidateKey = String(candidate?.action_key || '')
+    const candidatePayload = parsePayload(candidate?.payload)
+    if (!candidateKey.startsWith('eca-step:') || candidatePayload.action_type !== 'broadcast') return false
+    const candidateTimestamp = new Date(candidate?.create_time || candidate?.created_at || 0).getTime()
+    return Number.isFinite(timestamp)
+      && Number.isFinite(candidateTimestamp)
+      && Math.abs(candidateTimestamp - timestamp) <= 2 * 60 * 1000
+  })
+}
+
 // 动作执行结果 -> 可读文本
 function resultStatusText(result) {
   if (!result) return ''
@@ -1469,11 +1485,11 @@ function logDetailFields(item) {
     push('目标类型', p.target_type ? targetLabel(p.target_type) : '')
     if (p.confidence != null) push('置信度', Number(p.confidence).toFixed(2))
   } else if (type === 'DAM_WORKFLOW') {
-    if (!isWorkflowPlanning(item) && p.fallback_used != null) {
+    if (!isWorkflowPlanning(item) && (p.fallback_used != null || hasCloudReviewFailure(p))) {
       push(
         '处置结果来源',
-        p.fallback_used
-          ? '智能分析结果未完整返回，系统已启用备用分析路径继续生成处置结果。'
+        workflowFallbackUsed(p)
+          ? '云端结果复核未成功返回，系统已启用本地备用分析路径继续生成处置结果。'
           : '已使用智能分析结果完成处置，未启用备用分析路径。',
       )
     }
@@ -1494,13 +1510,16 @@ function logDetailFields(item) {
     const stepCount = nestedSteps.length
       ? (resourceInfo.executed_steps_count ?? nestedSteps.length)
       : p.step_count
+    const successfulCount = nestedSteps.length
+      ? nestedSteps.filter((step) => step && step.success === true).length
+      : (p.success_count ?? Math.max(0, Number(stepCount || 0) - Number(p.failure_count || 0) - Number(p.skipped_count || 0)))
     const skippedCount = nestedSteps.length || Object.keys(resourceInfo).length
       ? (resourceInfo.skipped_steps_count ?? p.skipped_count ?? 0)
       : p.skipped_count
     const failureCount = nestedSteps.length
       ? Math.max(nestedFailed, resourceInfo.failure_count ?? 0)
       : p.failure_count
-    if (stepCount != null) push('执行统计', `成功 ${stepCount} / 跳过 ${skippedCount ?? 0} / 失败 ${failureCount ?? 0}`)
+    if (stepCount != null) push('执行统计', `成功 ${successfulCount} / 跳过 ${skippedCount ?? 0} / 失败 ${failureCount ?? 0}`)
     if (p.channels?.length) push('通知渠道', p.channels.join('、'))
     push('失败原因', p.error)
   } else if (type === 'SUPPLEMENTAL_CONTEXT') {
@@ -2285,43 +2304,74 @@ loadDetail()
     linear-gradient(180deg, rgba(11, 34, 54, .82), rgba(7, 22, 37, .86)),
     rgba(8, 25, 42, .88);
 }
-.linkage-evidence-groups {
-  margin-top: 16px;
-  display: grid;
-  gap: 14px;
-}
-.linkage-evidence-group {
-  min-width: 0;
-  padding: 12px 12px 0;
-  border: 1px solid rgba(105, 216, 255, .12);
-  border-radius: 8px;
-  background: rgba(4, 15, 26, .28);
-}
-.linkage-evidence-group > header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  color: #cfe5f2;
-}
-.linkage-evidence-group > header strong {
-  color: #e9f7ff;
-  font-size: 15px;
-}
-.linkage-evidence-group > header span {
-  color: #7f9eb3;
-  font-size: 12px;
-}
 .linkage-evidence-strip {
-  margin-top: 10px;
-  padding-bottom: 10px;
+  margin-top: 16px;
 }
-.linkage-evidence-item,
-.linkage-evidence-group .review-frame-slot {
-  flex-basis: clamp(190px, 19vw, 280px);
+.linkage-evidence-item {
+  flex-basis: clamp(220px, 23vw, 320px);
 }
 .linkage-evidence-item footer span {
   color: #f2fbff;
+}
+.linkage-evidence-item footer b {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  margin-right: 6px;
+  padding: 0 7px;
+  border: 1px solid rgba(105, 216, 255, .28);
+  border-radius: 999px;
+  color: #9bdff6;
+  background: rgba(6, 37, 55, .78);
+  font-size: 11px;
+  font-weight: 800;
+  vertical-align: 1px;
+}
+.linkage-evidence-item footer b.linkage-source-machine_dog {
+  border-color: rgba(126, 226, 189, .28);
+  color: #94e4c2;
+  background: rgba(10, 53, 48, .72);
+}
+.linkage-evidence-item footer b.linkage-source-manual {
+  border-color: rgba(255, 189, 101, .28);
+  color: #ffd09a;
+  background: rgba(73, 47, 20, .68);
+}
+.linkage-evidence-empty {
+  min-height: 112px;
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 24px;
+  border: 1px dashed rgba(105, 216, 255, .3);
+  border-radius: 8px;
+  color: #8eb2c8;
+  background: rgba(4, 15, 26, .26);
+}
+.linkage-evidence-empty .el-icon {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(105, 216, 255, .34);
+  border-radius: 10px;
+  color: #69d8ff;
+  background: rgba(8, 47, 68, .5);
+  font-size: 21px;
+}
+.linkage-evidence-empty div {
+  display: grid;
+  gap: 5px;
+}
+.linkage-evidence-empty strong {
+  color: #eaf7fc;
+  font-size: 16px;
+}
+.linkage-evidence-empty span {
+  color: #7fa5bd;
+  font-size: 13px;
 }
 .linkage-card {
   padding: 22px;
@@ -2354,7 +2404,7 @@ dd {
   line-height: 1.45;
 }
 .evidence-card.empty {
-  padding-bottom: 14px;
+  padding-bottom: 20px;
 }
 .review-frame-strip {
   margin-top: 16px;
@@ -3333,7 +3383,7 @@ dd {
   background-size: 28px 28px;
 }
 :global(.drone-test-dialog.el-dialog) {
-  max-width: 1680px;
+  max-width: calc(100vw - 32px);
   border: 1px solid rgba(72, 216, 255, .32);
   border-radius: 10px;
   background: #203f65;
@@ -3355,7 +3405,7 @@ dd {
 .test-layout {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0;
 }
 .test-toolbar {
   display: flex;
@@ -3390,8 +3440,9 @@ dd {
 .test-body {
   display: grid;
   grid-template-columns: 3fr 2fr;
-  gap: 14px;
-  min-height: 520px;
+  gap: 10px;
+  height: 420px;
+  min-height: 420px;
 }
 .test-map {
   position: relative;
@@ -3413,7 +3464,11 @@ dd {
   width: 100%;
   height: 100%;
   display: block;
-  object-fit: contain;
+  object-fit: fill;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
   filter: saturate(1.08) contrast(1.06) brightness(.76);
 }
 .wayline-map-svg {
@@ -3449,19 +3504,57 @@ dd {
   position: absolute;
   z-index: 18;
   transform: translate(-50%, -50%);
-  padding: 4px 7px;
-  border: 1px solid rgba(72, 216, 255, .65);
-  border-radius: 5px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 0;
+  border: 0;
   color: #e9f7ff;
   font-size: 11px;
   font-weight: 800;
   white-space: nowrap;
-  background: rgba(5, 31, 48, .82);
-  box-shadow: 0 0 12px rgba(72, 216, 255, .26);
+  background: transparent;
+  box-shadow: none;
 }
 .process-wayline-landmark.airport {
-  border-color: rgba(255, 209, 102, .72);
   color: #fff0bd;
+}
+.process-wayline-landmark-mark {
+  position: relative;
+  width: 23px;
+  height: 23px;
+  display: block;
+  border: 2px solid #aaf5ff;
+  border-radius: 50% 50% 50% 0;
+  background: linear-gradient(145deg, #52e4ff, #087da8);
+  box-shadow: 0 0 10px rgba(72, 216, 255, .8), 0 2px 5px rgba(0, 0, 0, .72);
+  transform: rotate(-45deg);
+}
+.process-wayline-landmark-mark::after {
+  content: '';
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #063747;
+  box-shadow: 0 0 0 2px rgba(226, 252, 255, .82);
+}
+.process-wayline-landmark.airport .process-wayline-landmark-mark {
+  border-color: #fff0b0;
+  background: linear-gradient(145deg, #ffe184, #bd7710);
+  box-shadow: 0 0 10px rgba(255, 209, 102, .82), 0 2px 5px rgba(0, 0, 0, .72);
+}
+.process-wayline-landmark.airport .process-wayline-landmark-mark::after {
+  background: #6b4308;
+  box-shadow: 0 0 0 2px rgba(255, 248, 218, .86);
+}
+.process-wayline-landmark > span:last-child {
+  font-size: 11px;
+  font-weight: 900;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .85);
 }
 .process-unit-marker {
   position: absolute;
@@ -3539,7 +3632,7 @@ dd {
   width: 100%;
   height: 100%;
   display: block;
-  object-fit: contain;
+  object-fit: fill;
 }
 .process-video-label {
   position: absolute;
@@ -3549,7 +3642,7 @@ dd {
   right: 14px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   color: #f3f8fd;
   text-shadow: 0 1px 3px rgba(0, 0, 0, .75);
 }

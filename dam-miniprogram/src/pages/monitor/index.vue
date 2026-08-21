@@ -2,7 +2,7 @@
   <view class="page monitor-page">
     <view class="video-panel">
       <view class="section-head">
-        <text>点位实时视频</text>
+        <text>点位监控画面</text>
         <text>{{ selectedCameraStatus }}</text>
       </view>
 
@@ -29,19 +29,28 @@
       </view>
 
       <view class="video-box">
-        <!-- live-player 直接播放实时视频流（RTMP），不走快照轮询 -->
-        <live-player
+        <video
           v-if="streamUrl"
           :key="livePlayerKey"
           class="video-frame"
           :src="streamUrl"
-          mode="live"
           autoplay
-          object-fit="contain"
-          @statechange="handleLiveStateChange"
-          @error="handleLiveError"
+          loop
+          muted
+          :controls="false"
+          :show-center-play-btn="false"
+          :show-play-btn="false"
+          :show-fullscreen-btn="false"
+          :show-mute-btn="false"
+          :show-progress="false"
+          :enable-progress-gesture="false"
+          :vslide-gesture="false"
+          object-fit="cover"
+          @play="handleVideoPlay"
+          @error="handleVideoError"
         />
         <view v-else class="video-empty">{{ videoText }}</view>
+        <view v-if="videoError" class="video-error">{{ videoError }}</view>
         <view v-if="showAssistBox && selectedCamera.id" class="assist-overlay">
           <view
             v-for="zone in assistZones"
@@ -123,6 +132,7 @@
 <script>
 import { request, uploadBroadcastAudio } from '../../utils/request'
 import { readCache, writeCache } from '../../utils/cache'
+import { prepareDemoVideo } from '../../utils/demo-video'
 
 export default {
   data() {
@@ -134,7 +144,8 @@ export default {
       videoLoading: false,
       streamUrl: '',
       livePlayerKey: 0,
-      videoText: '正在加载摄像头',
+      videoText: '正在准备监控录像',
+      videoError: '',
       cameraBroadcasting: false,
       recordingBroadcast: false,
       broadcastRecorder: null,
@@ -169,17 +180,9 @@ export default {
 
   onLoad() {
     this.restoreCachedCameras()
+    this.prepareMonitorVideo()
     this.loadCameras(true)
     this.prepareBroadcastRecorder()
-  },
-
-  onShow() {
-    if (this.selectedCamera.id && !this.streamUrl) this.openSelectedCamera(false)
-  },
-
-  onHide() {
-    // 页面隐藏时停止播放，返回后再重新连接
-    this.streamUrl = ''
   },
 
   onUnload() {
@@ -195,7 +198,6 @@ export default {
       const cached = readCache('cameras', [])
       if (!cached.length) return
       this.cameras = cached
-      this.videoText = '正在连接实时画面'
     },
 
     loadCameras(autoStart = false) {
@@ -233,56 +235,46 @@ export default {
     selectCameraByIndex(index) {
       if (index === this.selectedCameraIndex && this.streamUrl) return
       this.selectedCameraIndex = index
-      this.streamUrl = ''
-      this.videoText = '正在切换点位'
       this.openSelectedCamera(true)
     },
 
     openSelectedCamera(showToast) {
-      if (!this.selectedCamera.id) {
-        this.streamUrl = ''
-        this.videoText = this.loadError || '暂无可选摄像头'
-        return Promise.resolve()
-      }
       return this.loadLiveStream(showToast)
     },
 
     loadLiveStream(showToast = false) {
-      const cameraId = this.selectedCamera.id
-      if (!cameraId || this.videoLoading) return Promise.resolve()
+      if (this.videoLoading) return Promise.resolve()
       this.videoLoading = true
-      return request({ url: `/cameras/${encodeURIComponent(cameraId)}/video` })
-        .then((data) => {
-          // live-player 直接播放实时视频流（RTMP）
-          this.streamUrl = data.stream_url || ''
+      this.videoError = ''
+      return prepareDemoVideo()
+        .then((filePath) => {
+          this.streamUrl = filePath
           this.livePlayerKey += 1
-          this.videoText = this.streamUrl ? '正在连接实时视频流' : '当前摄像头暂未返回实时画面'
+          this.videoText = '监控录像循环播放'
+          if (showToast) uni.showToast({ title: '画面已刷新', icon: 'none' })
         })
         .catch((error) => {
           this.streamUrl = ''
-          this.videoText = error.message || '当前摄像头暂未返回实时画面'
-          if (showToast) {
-            uni.showToast({ title: this.videoText, icon: 'none' })
-          }
+          this.videoText = error.message || '监控录像初始化失败'
+          this.videoError = this.videoText
         })
         .finally(() => {
           this.videoLoading = false
         })
     },
 
-    handleLiveStateChange(event) {
-      const code = Number(event?.detail?.code || 0)
-      if (code === 2004) {
-        this.videoText = '实时视频已连接'
-      } else if (code === 2103) {
-        this.videoText = '实时视频正在重连'
-      } else if (code < 0) {
-        this.videoText = '实时视频连接失败'
-      }
+    prepareMonitorVideo() {
+      return this.loadLiveStream(false)
     },
 
-    handleLiveError() {
-      this.videoText = '实时视频播放失败'
+    handleVideoPlay() {
+      this.videoError = ''
+    },
+
+    handleVideoError(event) {
+      const message = event?.detail?.errMsg || '监控录像播放失败'
+      this.videoError = message
+      console.error('[monitor-video] playback failed', event?.detail || event)
     },
 
     toggleAssistBox() {
@@ -510,6 +502,21 @@ export default {
   text-align: center;
   padding: 0 24rpx;
   box-sizing: border-box;
+}
+
+.video-error {
+  position: absolute;
+  left: 24rpx;
+  right: 24rpx;
+  bottom: 20rpx;
+  z-index: 5;
+  padding: 10rpx 14rpx;
+  border-radius: 6rpx;
+  background: rgba(130, 22, 22, 0.82);
+  color: #fff;
+  font-size: 22rpx;
+  line-height: 32rpx;
+  text-align: center;
 }
 
 .video-actions {

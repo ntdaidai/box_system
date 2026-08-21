@@ -159,6 +159,7 @@ services:
       DRONE_CRUISE_PICTURE_ROOT: "${DRONE_CRUISE_PICTURE_ROOT:-/app/data/drone_pictures}"
       STAFF_TASK_DEMO_PICTURE_ROOT: "${STAFF_TASK_DEMO_PICTURE_ROOT:-/app/data/worker_pictures}"
       STAFF_TASK_DEMO_OBJECT_PREFIX: "${STAFF_TASK_DEMO_OBJECT_PREFIX:-safety-events/demo-field-images}"
+      STAFF_TASK_DEMO_DELAY_SECONDS: "${STAFF_TASK_DEMO_DELAY_SECONDS:-10}"
       # OnlyOffice / 文档服务
       APP_PORT: "${APP_PORT:-8090}"
       PUBLIC_HOST: "${PUBLIC_HOST:-192.168.31.52}"

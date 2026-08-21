@@ -60,10 +60,8 @@
 
     <AppDialog v-model="routeMapVisible" title="巡检路线" width="92%" align-center class="dog-route-dialog">
       <div class="route-map-toolbar">
-        <span>选择路线</span>
-        <el-select v-model="routeMapRouteId" class="route-map-select">
-          <el-option v-for="route in presetRoutes" :key="route.id" :label="route.name" :value="route.id" />
-        </el-select>
+        <span>固定巡检路线</span>
+        <strong>{{ routeMapRoute?.name || '9号检测区域巡检路线' }}</strong>
       </div>
       <div class="route-map-stage">
         <img src="/9point.png" alt="巡检路线图" draggable="false" />
@@ -116,9 +114,6 @@
             <span class="panel-kicker">巡检任务</span>
             <h3>路线编排</h3>
           </div>
-          <el-button class="route-manage-btn" :icon="EditPen" size="small" @click="openRouteEditor">
-            路线管理
-          </el-button>
         </div>
 
         <div class="control-grid">
@@ -131,18 +126,10 @@
               :disabled="dog.status === 'offline'"
             />
           </el-select>
-          <el-select
-            v-model="selectedPresetRouteId"
-            class="route-picker"
-            placeholder="选择预设路线"
-            @change="applyPresetRoute"
-          >
-            <el-option v-for="route in presetRoutes" :key="route.id" :label="route.name" :value="route.id" />
-          </el-select>
+          <div class="route-picker fixed-route-picker">{{ presetRoutes[0]?.name || '9号检测区域巡检路线' }}</div>
           <el-button class="ctrl-btn" :icon="VideoPlay" type="primary" :disabled="!canStartTask" @click="startInspection">
             开始巡检
           </el-button>
-          <el-button class="ctrl-btn" :icon="RefreshLeft" @click="resetRoute">重置路线</el-button>
         </div>
 
         <div class="selected-route">
@@ -270,7 +257,6 @@
             loop
             playsinline
             preload="auto"
-            controls
           ></video>
           <div v-else class="video-placeholder">
             <el-icon :size="36"><VideoCamera /></el-icon>
@@ -431,12 +417,10 @@ import {
   Aim,
   Bottom,
   Close,
-  EditPen,
   Lightning,
   MapLocation,
   Menu,
   Plus,
-  RefreshLeft,
   Top,
   VideoCamera,
   VideoPlay,
@@ -463,13 +447,13 @@ const waypoints = [
 // 机器狗充电区（标记图紫色区域，全局坐标）
 const chargeZone = { x: 82, y: 36.2 }
 
-// 路线数据持久化：编辑后的路线保存到 localStorage，刷新页面后保持
+// 机器狗接口当前只支持固定的 all 全路线；清理旧版多路线本地缓存，
+// 避免页面展示出后端无法执行的 route-a / route-b。
 const ROUTE_STORAGE_KEY = 'machine-dog-preset-routes-v1'
 const SELECTED_ROUTE_STORAGE_KEY = 'machine-dog-selected-route-v1'
-// 默认路线（首次访问或点击「恢复默认」时使用）
+// 固定路线
 const DEFAULT_PRESET_ROUTES = [
-  { id: 'route-a', name: '岸线由西向东巡检', points: ['p1', 'p2', 'p3'] },
-  { id: 'route-b', name: '岸线由东向西巡检', points: ['p3', 'p2', 'p1'] },
+  { id: 'all', name: '9号检测区域巡检路线', points: ['p1', 'p2', 'p3'] },
 ]
 
 function cloneDefaultRoutes() {
@@ -477,15 +461,8 @@ function cloneDefaultRoutes() {
 }
 
 function loadStoredRoutes() {
-  try {
-    const raw = localStorage.getItem(ROUTE_STORAGE_KEY)
-    if (raw) {
-      const parsed = JSON.parse(raw)
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed
-    }
-  } catch (e) {
-    // 存储数据损坏时回退默认路线
-  }
+  localStorage.removeItem(ROUTE_STORAGE_KEY)
+  localStorage.removeItem(SELECTED_ROUTE_STORAGE_KEY)
   return cloneDefaultRoutes()
 }
 
@@ -1139,6 +1116,17 @@ onBeforeUnmount(() => {
 .control-grid .route-picker {
   flex: 0 1 260px;
   min-width: 0;
+}
+
+.fixed-route-picker {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 12px;
+  color: #d7f3ff;
+  border: 1px solid rgba(69, 215, 255, .28);
+  border-radius: 6px;
+  background: rgba(8, 39, 58, .58);
 }
 
 .control-grid .ctrl-btn {
@@ -2386,7 +2374,13 @@ onBeforeUnmount(() => {
 }
 .dog-route-dialog :deep(.el-dialog__header) { border-bottom: 1px solid rgba(93, 184, 225, .15); }
 .route-map-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; color: #a9c7de; font-size: 13px; font-weight: 700; }
+.route-map-toolbar strong { color: #d7f3ff; }
 .route-map-select { width: 260px; }
+
+:global(.dog-route-popper),
+:global(.dog-select-popper) {
+  z-index: 3501 !important;
+}
 .route-map-stage {
   position: relative;
   overflow: hidden;
@@ -2536,6 +2530,11 @@ onBeforeUnmount(() => {
 .dog-edit-dialog :deep(.el-textarea__inner::placeholder) { color: #a5b8c7; }
 
 /* 测试页：上方任务合并为一个区块，下方地图与实时画面对半 */
+:global(.dog-test-dialog.app-dialog-panel) {
+  width: min(1920px, calc(100vw - 64px)) !important;
+  max-width: calc(100vw - 64px) !important;
+}
+
 .dog-test-dialog .command-panel {
   display: block;
   padding: 10px;

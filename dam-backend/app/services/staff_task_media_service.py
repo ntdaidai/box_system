@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import asyncio
 import mimetypes
+import random
 import uuid
 from pathlib import Path
 from typing import Any
@@ -87,6 +88,7 @@ class StaffTaskMediaService:
         event_sources = {
             "PERSON_WADING": "nowater",
             "NIGHT_FISHING": "nofishing",
+            "FLOOD_EVENT": "flood",
         }
         prepared: dict[str, list[dict[str, str]]] = {}
         for event_type, folder_name in event_sources.items():
@@ -96,13 +98,17 @@ class StaffTaskMediaService:
                 for path in picture_dir.iterdir()
                 if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
             ) if picture_dir.is_dir() else []
-            if len(pictures) < 2:
-                raise ValueError(f"人工处置演示图片不足，需要两张：{picture_dir}")
+            required_count = 4 if event_type == "FLOOD_EVENT" else 2
+            if len(pictures) < required_count:
+                raise ValueError(f"人工处置演示图片不足，需要 {required_count} 张：{picture_dir}")
 
             event_slug = event_type.lower().replace("_", "-")
             result: list[dict[str, str]] = []
-            for phase, picture_path in zip(("before", "after"), pictures[:2]):
+            for index, picture_path in enumerate(pictures[:required_count], 1):
                 suffix = picture_path.suffix.lower() or ".jpg"
+                # 洪水演示要预置四张候选图，每次任务再从中抽取两张；其余
+                # 事件仍保留稳定的 before/after 对象名以兼容已有数据。
+                phase = ("before", "after")[index - 1] if required_count == 2 else f"picture-{index}"
                 object_name = (
                     f"{settings.STAFF_TASK_DEMO_OBJECT_PREFIX}/"
                     f"{event_slug}/{phase}{suffix}"
@@ -135,9 +141,13 @@ class StaffTaskMediaService:
         """只读取已预置的 MinIO 地址，不读取本地文件，也不执行上传。"""
         canonical_type = str(event_type or "").strip().upper()
         pictures = self._prepared_demo_pictures.get(canonical_type)
-        if not pictures or len(pictures) != 2:
+        if not pictures or len(pictures) < 2:
             raise ValueError("人工处置演示图片尚未预置到 MinIO，请先执行演示图片初始化")
-        return [dict(item) for item in pictures]
+        selected = random.sample(pictures, 2) if canonical_type == "FLOOD_EVENT" else pictures[:2]
+        return [
+            {**item, "phase": phase}
+            for phase, item in zip(("before", "after"), selected)
+        ]
 
 
 staff_task_media_service = StaffTaskMediaService()
