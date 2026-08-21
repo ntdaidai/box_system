@@ -5,11 +5,14 @@ import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import 'element-plus/dist/index.css'
 import App from './App.vue'
+import AppDialog from './components/AppDialog.vue'
 import router from './router'
 import './styles/index.scss'
 import './styles/element-override.scss'
 
 const app = createApp(App)
+
+app.component('AppDialog', AppDialog)
 
 // 注册 Element Plus
 app.use(ElementPlus, { locale: zhCn, size: 'default', zIndex: 3000 })

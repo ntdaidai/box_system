@@ -157,10 +157,10 @@ def build_period_report_context(
     for instance in instances:
         definition = definitions.get(instance.current_event_id)
         source = sources.get(instance.data_source_id)
-        visual = visual_snapshot(instance)
         task = tasks.get(instance.id)
         timeline = timeline_by_instance.get(instance.id, [])
         evidence = evidence_by_instance.get(instance.id, [])
+        visual = visual_snapshot(instance, timeline)
         risk = normalize_risk(instance.max_risk_level or instance.risk_level)
         source_type = str(instance.source_type or getattr(source, "source_type", "") or "").lower()
         closed_at_cutoff = bool(instance.resolved_at and instance.resolved_at < until)
@@ -169,6 +169,21 @@ def build_period_report_context(
             if str(row.evidence_type or "").upper()
             in {"IMAGE", "CAMERA_SNAPSHOT", "DRONE_IMAGE", "STAFF_IMAGE"}
         ]
+        report_digest = build_event_report_digest(
+            instance=instance,
+            definition=definition,
+            visual=visual,
+            timeline=timeline,
+            evidence=evidence,
+            include_images=include_evidence_content,
+        )
+        fallback_handling = handling_summary(instance, timeline, task, until)
+        fallback_conclusion = fallback_event_conclusion(
+            instance,
+            visual,
+            fallback_handling,
+            until,
+        )
         events.append({
             "id": instance.id,
             "instance_no": instance.instance_no,
@@ -178,13 +193,23 @@ def build_period_report_context(
             "source_label": SOURCE_NAMES.get(source_type, source_type or "其他来源"),
             "location": event_location(source, visual),
             "occur_time": instance.started_at.strftime("%H:%M:%S"),
-            "key_observation": key_observation(instance, visual, timeline),
+            "key_observation": user_facing_observation(instance, visual, timeline),
             "result_label": result_label(instance, until),
-            "handling_summary": handling_summary(instance, timeline, task, until),
+            # The period report retains actual completed actions here.  The
+            # event-report's long narrative is used for conclusion/risk, so we
+            # do not repeat the same model text in multiple table rows.
+            "handling_summary": fallback_handling,
+            "report_conclusion": report_digest.get("conclusion") or fallback_conclusion,
+            "risk_assessment": report_digest.get("risk_assessment") or user_facing_observation(instance, visual, timeline),
+            "response_plan": report_digest.get("response_plan") or "保持事件取证和现场复核，按风险等级完成后续闭环。",
             "completed_at": completed_at_text(instance, task, until),
             "summary": instance.summary or getattr(definition, "description", None) or "—",
-            "evidence_count": len(image_evidence),
-            "evidence_images": load_evidence_images(image_evidence) if include_evidence_content else [],
+            "evidence_count": max(len(image_evidence), report_digest.get("evidence_count", 0)),
+            "evidence_images": (
+                report_digest.get("evidence_images")
+                if include_evidence_content and report_digest.get("evidence_images")
+                else (load_evidence_images(image_evidence) if include_evidence_content else [])
+            ),
             "closed_at_cutoff": closed_at_cutoff,
         })
 
@@ -388,7 +413,19 @@ def normalize_risk(value: Any) -> str:
     return {"3": "HIGH", "2": "MEDIUM", "1": "LOW", "高": "HIGH", "中": "MEDIUM", "低": "LOW"}.get(text, "LOW")
 
 
-def visual_snapshot(instance: SafetyEventInstance) -> dict[str, Any]:
+def visual_snapshot(
+    instance: SafetyEventInstance,
+    timeline: Optional[list[SafetyEventTimelineLog]] = None,
+) -> dict[str, Any]:
+    # The trigger image describes the event.  The latest observation can be a
+    # recovery frame that no longer contains the target.
+    for row in timeline or []:
+        if str(row.log_type or "").upper() != "TRIGGER" or not isinstance(row.payload, dict):
+            continue
+        observation = row.payload.get("observation")
+        visual = observation.get("visual") if isinstance(observation, dict) else None
+        if isinstance(visual, dict):
+            return dict(visual)
     observation = dict(instance.latest_observation or {})
     visual = observation.get("visual")
     return dict(visual) if isinstance(visual, dict) else {}
@@ -448,6 +485,162 @@ def key_observation(
         and not isinstance(value, (dict, list))
     ]
     return "｜".join(f"{key}：{value}" for key, value in fallback[:3]) or "—"
+
+
+def user_facing_observation(
+    instance: SafetyEventInstance,
+    visual: dict[str, Any],
+    timeline: list[SafetyEventTimelineLog],
+) -> str:
+    """Prefer the qwen screening finding over internal model identifiers."""
+    screening = visual.get("screening") if isinstance(visual.get("screening"), dict) else {}
+    for key in ("qwen_summary", "summary", "screening_note"):
+        value = str(screening.get(key) or "").strip()
+        if value:
+            return value
+    return key_observation(instance, visual, timeline)
+
+
+def fallback_event_conclusion(
+    instance: SafetyEventInstance,
+    visual: dict[str, Any],
+    handling: str,
+    cutoff: dt.datetime,
+) -> str:
+    observation = user_facing_observation(instance, visual, [])
+    if result_label(instance, cutoff) == "已闭环":
+        return f"{observation}。事件已完成处置并闭环。" if observation != "—" else "事件已完成处置并闭环。"
+    if handling and handling not in {"—", "待处理", "持续处置中"}:
+        return f"{observation}。当前处置进展：{handling}" if observation != "—" else handling
+    return observation if observation != "—" else "事件正在核验和处置中。"
+
+
+def compact_report_text(value: Any, limit: int = 260) -> str:
+    text = " ".join(str(value or "").split()).strip()
+    if not text or text == "—":
+        return ""
+    return text if len(text) <= limit else f"{text[:limit].rstrip()}…"
+
+
+def workflow_payload_from_timeline(timeline: list[SafetyEventTimelineLog]) -> dict[str, Any]:
+    for row in reversed(timeline):
+        payload = row.payload if isinstance(row.payload, dict) else {}
+        if str(row.log_type or "").upper() == "DAM_WORKFLOW" and payload.get("execution_result"):
+            return payload
+    return {}
+
+
+def build_event_report_digest(
+    *,
+    instance: SafetyEventInstance,
+    definition: Optional[EventLibrary],
+    visual: dict[str, Any],
+    timeline: list[SafetyEventTimelineLog],
+    evidence: list[SafetyEventEvidence],
+    include_images: bool,
+) -> dict[str, Any]:
+    """Reuse the event-report interpretation in daily/weekly/monthly reports.
+
+    The period report is a user-facing digest, rather than a copy of low-level
+    qwen model fields.  Rebuilding this compact view from the completed
+    workflow also supports reports generated before image/video evidence was
+    persisted to ``safety_event_evidence``.
+    """
+    workflow_payload = workflow_payload_from_timeline(timeline)
+    if not workflow_payload or not definition:
+        return {}
+    try:
+        # Delayed import prevents the event-report service's document-storage
+        # helper from creating an import cycle at application startup.
+        from app.services.dam_event_report_service import dam_event_report_service
+
+        selected = dam_event_report_service.select_llm_report(workflow_payload)
+        if not selected:
+            return {}
+        selected_text = dam_event_report_service.clean_report_text(str(selected.get("text") or ""))
+        insight = dam_event_report_service.workflow_insight(workflow_payload, visual, selected_text)
+        cloud_note = (
+            "云端增强暂不可用，本结论基于本地智能分析结果整理。"
+            if selected.get("source") == "qwen4b" and selected.get("cloud_error")
+            else ""
+        )
+        scene = compact_report_text(
+            dam_event_report_service.final_report_field(selected, "detailed_scene_analysis", ""),
+            180,
+        )
+        risk = compact_report_text(dam_event_report_service.final_report_field(
+            selected,
+            "risk_reasoning",
+            insight.get("raw_excerpt") or "",
+        ), 180)
+        response_plan = compact_report_text(
+            dam_event_report_service.final_report_field(
+                selected,
+                "response_plan",
+                "保持事件取证和现场复核，按风险等级完成后续闭环。",
+            ),
+            220,
+        )
+        image_items: list[dict[str, Any]] = []
+        video_items: list[dict[str, Any]] = []
+        evidence_images: list[dict[str, Any]] = []
+        if include_images:
+            image_items = dam_event_report_service.collect_image_items(workflow_payload, visual, evidence)
+            video_items = dam_event_report_service.collect_video_items(workflow_payload, visual, evidence)
+            def load_image_items(items: list[dict[str, Any]]) -> None:
+                for item in items[:2]:
+                    image_url = str(item.get("url") or "")
+                    content = dam_event_report_service.read_minio_or_http_bytes(image_url)
+                    if content:
+                        evidence_images.append({
+                            "content": content,
+                            "description": item.get("caption") or "事件证据关键帧",
+                            "captured_at": "",
+                        })
+                    if item.get("source") == "legacy_video_frame_fallback":
+                        try:
+                            Path(image_url).unlink(missing_ok=True)
+                        except OSError:
+                            pass
+
+            load_image_items(image_items)
+            # A workflow can retain stale remote image URLs.  In that case the
+            # archived qwen video is still the authoritative evidence source.
+            if not evidence_images and video_items:
+                fallback_frames = dam_event_report_service.extract_frame_items_from_videos(
+                    video_items,
+                    event_name=getattr(definition, "event_name", None) or instance.summary or "安全事件",
+                    analysis_text=selected_text,
+                    workflow_insight=insight,
+                )
+                image_items = fallback_frames
+                load_image_items(fallback_frames)
+        handling = dam_event_report_service.handling_summary(
+            instance=instance,
+            event=definition,
+            visual=visual,
+            selected=selected,
+            selected_text=selected_text,
+            workflow_insight=insight,
+            image_items=image_items,
+            video_items=video_items,
+        )
+        risk_assessment = "；".join(value for value in (scene, risk) if value and value != "—")
+        return {
+            "conclusion": compact_report_text(
+                dam_event_report_service.build_conclusion(selected, insight, cloud_note),
+                260,
+            ),
+            "handling_summary": compact_report_text(handling, 360),
+            "risk_assessment": risk_assessment,
+            "response_plan": response_plan,
+            "evidence_images": evidence_images,
+            "evidence_count": len(evidence_images) or len(image_items) or len(video_items),
+        }
+    except Exception:
+        # A period report must still be generated when historic workflow data
+        # is incomplete; the event's basic facts remain available as fallback.
+        return {}
 
 
 def result_label(instance: SafetyEventInstance, cutoff: dt.datetime) -> str:

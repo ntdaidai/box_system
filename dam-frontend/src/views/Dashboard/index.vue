@@ -412,7 +412,7 @@
 import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import * as echarts from 'echarts'
-import { BellFilled, CircleCheckFilled, Connection, Pouring, Promotion, Ship, UserFilled, WarningFilled } from '@element-plus/icons-vue'
+import { CircleCheckFilled, Clock, Connection, Lightning, Promotion, Ship, UserFilled, WarningFilled } from '@element-plus/icons-vue'
 import { getUnifiedSafetyEventDetail, getUnifiedSafetyEventStatistics, getUnifiedSafetyEvents } from '@/api/integration'
 import { getDeviceStatus } from '@/api/sensor'
 import { getCameraList } from '@/api/camera'
@@ -457,6 +457,7 @@ const riskModes = [
   { key: 'today', label: '今日', compareLabel: '较昨日' },
   { key: 'week', label: '本周', compareLabel: '较上周' },
   { key: 'month', label: '本月', compareLabel: '较上月' },
+  { key: 'year', label: '今年', compareLabel: '较去年' },
 ]
 
 const riskLevels = [
@@ -468,10 +469,10 @@ const riskLevels = [
 const todayMetricIcons = {
   person: markRaw(UserFilled),
   boat: markRaw(Ship),
-  disaster: markRaw(Pouring),
-  other: markRaw(BellFilled),
+  disaster: markRaw(WarningFilled),
+  other: markRaw(Lightning),
   handled: markRaw(CircleCheckFilled),
-  unhandled: markRaw(WarningFilled),
+  unhandled: markRaw(Clock),
 }
 
 const todayMetricTones = {
@@ -639,6 +640,7 @@ const riskDistribution = computed(() => {
     today: build('today', 'yesterday'),
     week: build('week', 'lastWeek'),
     month: build('month', 'lastMonth'),
+    year: build('year', 'lastYear'),
   }
 })
 
@@ -1605,10 +1607,11 @@ function rangeStart(type) {
     start.setDate(1)
     if (type === 'lastMonth') start.setMonth(start.getMonth() - 1)
   }
-  if (type === 'year') {
+  if (type === 'year' || type === 'lastYear') {
     start.setHours(0, 0, 0, 0)
     start.setDate(1)
     start.setMonth(0)
+    if (type === 'lastYear') start.setFullYear(start.getFullYear() - 1)
   }
   return start
 }
@@ -1626,6 +1629,9 @@ function rangeEnd(type) {
   if (type === 'lastMonth') {
     const start = rangeStart('month')
     return start
+  }
+  if (type === 'lastYear') {
+    return new Date(rangeStart('year').getTime() - 1)
   }
   return end
 }

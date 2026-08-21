@@ -1,8 +1,8 @@
 <template>
   <div class="device-admin">
-    <header class="admin-header">
+    <header class="admin-header system-page-header">
       <div class="title-block">
-        <h2>感知源管理</h2>
+        <h2>感知管理</h2>
         <p>统一维护系统感知源设备和运行状态</p>
       </div>
       <div class="status-summary" aria-label="感知源统计">
@@ -111,7 +111,7 @@
       />
     </section>
 
-    <el-dialog v-model="cameraDialog" :title="editingCamera ? '编辑摄像头' : '添加摄像头'" width="680px" class="camera-config-dialog" destroy-on-close>
+    <AppDialog v-model="cameraDialog" :title="editingCamera ? '编辑摄像头' : '添加摄像头'" width="680px" class="camera-config-dialog" destroy-on-close>
       <el-form label-position="top">
         <div class="form-grid two">
           <el-form-item label="名称">
@@ -161,9 +161,9 @@
         <el-button :icon="Connection" :loading="testing" @click="testConnection">测试连接</el-button>
         <el-button type="primary" :icon="Check" :loading="saving" :disabled="!connectionVerified" @click="saveCamera">保存</el-button>
       </template>
-    </el-dialog>
+    </AppDialog>
 
-    <el-dialog
+    <AppDialog
       v-model="mapDialogVisible"
       class="camera-map-dialog"
       title="摄像头点位图"
@@ -226,7 +226,7 @@
           <span>{{ point.no }}</span>
         </button>
       </div>
-    </el-dialog>
+    </AppDialog>
   </div>
 </template>
 
@@ -518,7 +518,10 @@ async function saveCamera() {
 
 async function removeCamera(row) {
   try {
-    await ElMessageBox.confirm(`确认删除“${row.name}”？`, '删除摄像头', { type: 'warning' })
+    await ElMessageBox.confirm(`确认删除“${row.name}”？`, '删除摄像头', {
+      type: 'warning',
+      customClass: 'delete-confirm-box',
+    })
     await deleteCameraDevice(String(row.id))
     ElMessage.success('摄像头已删除')
     await loadCurrent()

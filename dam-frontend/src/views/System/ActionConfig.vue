@@ -1,6 +1,6 @@
 <template>
   <div class="action-config-page">
-    <header class="page-header">
+    <header class="page-header system-page-header">
       <div>
         <p>系统管理 / 规则管理</p>
         <h2>动作配置</h2>
@@ -197,7 +197,10 @@ async function addAction(event) {
 
 async function removeAction(row) {
   try {
-    await ElMessageBox.confirm('确认删除该动作配置？', '删除动作', { type: 'warning' })
+    await ElMessageBox.confirm('确认删除该动作配置？', '删除动作', {
+      type: 'warning',
+      customClass: 'delete-confirm-box',
+    })
     await deleteActionConfig(row.id)
     ElMessage.success('动作已删除')
     await loadConfig()

@@ -273,13 +273,13 @@
             </header>
             <div class="action-context">
               <strong>{{ primaryAction.title }}</strong>
-              <p>{{ primaryAction.hint }}</p>
+              <p v-if="event.state === 'ACTIVE'">{{ primaryAction.hint }}</p>
             </div>
             <div class="decision-actions">
               <el-button
                 v-if="primaryAction.action"
                 type="primary"
-                size="large"
+                class="archive-primary-action"
                 :disabled="primaryAction.disabled"
                 @click="operate(primaryAction.action)"
               >
@@ -295,9 +295,6 @@
               >
                 {{ button.label }}
               </el-button>
-            </div>
-            <div v-if="event.state !== 'ACTIVE'" class="closed-note">
-              {{ archivedReason }}
             </div>
           </section>
         </aside>
@@ -330,7 +327,7 @@
       <div v-else class="compact-empty">当前节点暂无证据</div>
     </el-drawer>
 
-    <el-dialog
+    <AppDialog
       v-model="processDialogVisible"
       class="linkage-process-dialog drone-test-dialog"
       width="94%"
@@ -405,7 +402,7 @@
           </div>
         </div>
       </div>
-    </el-dialog>
+    </AppDialog>
   </div>
 </template>
 
@@ -1608,6 +1605,7 @@ function localizeText(value) {
     ['staff_task', '人工处置任务'],
     ['manual-operation', '人工操作'],
     ['manual operation', '人工操作'],
+    ['eca flow completed', '事件处置流程已完成'],
   ]
   replacements.forEach(([from, to]) => {
     text = text.replaceAll(from, to)
@@ -1964,7 +1962,7 @@ loadDetail()
 .workspace-grid {
   margin-top: 18px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 460px;
+  grid-template-columns: minmax(0, 1fr) clamp(320px, 24vw, 400px);
   gap: 16px;
   align-items: start;
 }
@@ -2719,13 +2717,30 @@ dd {
 }
 .decision-actions {
   margin-top: 14px;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-start;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 .decision-actions .el-button {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  padding: 0 8px;
   margin-left: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(12px, .78vw, 14px);
+  white-space: nowrap;
+}
+.decision-actions .el-button.archive-primary-action.is-disabled {
+  --el-button-disabled-bg-color: #9ecfff;
+  --el-button-disabled-border-color: #9ecfff;
+  --el-button-disabled-text-color: #ffffff;
+  color: #ffffff !important;
+  border-color: #9ecfff !important;
+  background: #9ecfff !important;
+  opacity: 1;
 }
 .closed-note {
   margin-top: 14px;
@@ -3265,6 +3280,11 @@ dd {
     margin: 0 auto;
   }
 }
+@media (max-width: 1800px) and (min-width: 1281px) {
+  .workspace-grid {
+    grid-template-columns: minmax(0, 1fr) 340px;
+  }
+}
 @media (max-width: 1280px) {
   .workspace-grid {
     grid-template-columns: 1fr;
@@ -3374,7 +3394,8 @@ dd {
     grid-template-columns: 1fr;
   }
   .decision-actions .el-button {
-    flex: 1;
+    padding: 0 6px;
+    font-size: 12px;
   }
   .linkage-count {
     font-size: 17px;

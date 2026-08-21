@@ -186,7 +186,7 @@ def _page(section):
 
 
 def _header(section, board_image, context):
-    report_date = context["report_period_label"]
+    report_date = context.get("report_period_label") or context.get("report_date_cn") or context.get("report_date", "—")
     header = section.header
     header.is_linked_to_previous = False
     table = header.add_table(rows=1, cols=2, width=Mm(170))
@@ -214,7 +214,7 @@ def _header(section, board_image, context):
 
 
 def _footer(section, context, numbered=True):
-    report_date = context["report_period_label"]
+    report_date = context.get("report_period_label") or context.get("report_date_cn") or context.get("report_date", "—")
     footer = section.footer
     footer.is_linked_to_previous = False
     p = footer.paragraphs[0]
@@ -224,10 +224,10 @@ def _footer(section, context, numbered=True):
         _text(p, "    ·    ", size=7.5, color=RULE)
         _field(p, "PAGE")
         _text(p, "/", size=8, color=MUTED)
-        _field(p, "PAGEREF PatrolReportEnd", result="4")
+        _field(p, "PAGEREF PatrolReportEnd", result="5")
 
 
-def _section_title(document, number, title, color=BLUE):
+def _section_title(document, number, title, color=BLUE, bookmark_name=None):
     p = document.add_paragraph()
     _paragraph(p, after=5)
     _text(p, f"{number:02d}", name=SERIF, size=17, color=color)
@@ -238,6 +238,57 @@ def _section_title(document, number, title, color=BLUE):
         bottom.set(qn(f"w:{key}"), value)
     p_bdr.append(bottom)
     p._p.get_or_add_pPr().append(p_bdr)
+    if bookmark_name:
+        _bookmark(p, bookmark_name, str(100 + number))
+    return p
+
+
+def _toc_entry(document, number, title, bookmark_name, fallback_page):
+    """Create a report-style TOC row with an internal jump and a page field.
+
+    This deliberately mirrors the event handling report: it stays useful in
+    OnlyOffice before fields refresh, while Word can update PAGEREF normally.
+    """
+    row = document.add_paragraph()
+    _paragraph(row, after=17)
+    tabs = row.paragraph_format.tab_stops
+    tabs.add_tab_stop(Mm(18), WD_TAB_ALIGNMENT.LEFT)
+    tabs.add_tab_stop(Mm(168), WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS)
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("w:anchor"), bookmark_name)
+    hyperlink.set(qn("w:history"), "1")
+    row._p.append(hyperlink)
+
+    def add_link_run(text, color, size, bold=False):
+        run = OxmlElement("w:r")
+        r_pr = OxmlElement("w:rPr")
+        fonts = OxmlElement("w:rFonts")
+        fonts.set(qn("w:ascii"), SERIF)
+        fonts.set(qn("w:hAnsi"), SERIF)
+        fonts.set(qn("w:eastAsia"), SERIF)
+        r_pr.append(fonts)
+        color_node = OxmlElement("w:color")
+        color_node.set(qn("w:val"), color)
+        r_pr.append(color_node)
+        size_node = OxmlElement("w:sz")
+        size_node.set(qn("w:val"), str(int(size * 2)))
+        r_pr.append(size_node)
+        if bold:
+            r_pr.append(OxmlElement("w:b"))
+        run.append(r_pr)
+        if text == "\t":
+            run.append(OxmlElement("w:tab"))
+        else:
+            text_node = OxmlElement("w:t")
+            text_node.text = text
+            run.append(text_node)
+        hyperlink.append(run)
+
+    add_link_run(number, BLUE, 12, bold=True)
+    add_link_run("\t", TEXT, 11.5)
+    add_link_run(title, TEXT, 11.5)
+    _text(row, "\t", name=SERIF, size=11.5, color=BLUE)
+    _field(row, f"PAGEREF {bookmark_name} \\h", result=str(fallback_page))
 
 
 def _cover(document, context, board_image):
@@ -264,6 +315,10 @@ def _cover(document, context, board_image):
     _paragraph(title, align=WD_ALIGN_PARAGRAPH.CENTER, after=8)
     _text(title, context.get("report_title", "大藤峡工程空地联动每日处置报告"), name=SERIF, size=24, color=BLUE, bold=True)
 
+    subtitle = document.add_paragraph()
+    _paragraph(subtitle, align=WD_ALIGN_PARAGRAPH.CENTER, after=9)
+    _text(subtitle, "安全事件处置归集 · 运行态势分析", size=9, color=MUTED, bold=True)
+
     rule = document.add_paragraph()
     _paragraph(rule, align=WD_ALIGN_PARAGRAPH.CENTER, after=18)
     rule_borders = OxmlElement("w:pBdr")
@@ -287,7 +342,7 @@ def _cover(document, context, board_image):
             crop={"l": 780, "t": 33860, "r": 74300, "b": 28800},
         )
 
-    info = document.add_table(rows=1, cols=2)
+    info = document.add_table(rows=1, cols=3)
     info.alignment = WD_TABLE_ALIGNMENT.CENTER
     _clear_borders(info)
     for cell in info.rows[0].cells:
@@ -296,11 +351,24 @@ def _cover(document, context, board_image):
     left = info.cell(0, 0).paragraphs[0]
     _paragraph(left, align=WD_ALIGN_PARAGRAPH.LEFT)
     _text(left, "报告日期\n", size=8, color=MUTED)
-    _text(left, context["report_period_label"], name=SERIF, size=14, color=BLUE, bold=True)
+    _text(left, context.get("report_period_label") or context.get("report_date_cn") or context.get("report_date", "—"), name=SERIF, size=14, color=BLUE, bold=True)
     right = info.cell(0, 1).paragraphs[0]
-    _paragraph(right, align=WD_ALIGN_PARAGRAPH.RIGHT)
+    _paragraph(right, align=WD_ALIGN_PARAGRAPH.CENTER)
     _text(right, "文档编号\n", size=8, color=MUTED)
     _text(right, f"{context.get('document_code_prefix', 'DX-CZBG')}-{context['report_date_compact']}", size=10, color=TEXT, bold=True)
+    generated = info.cell(0, 2).paragraphs[0]
+    _paragraph(generated, align=WD_ALIGN_PARAGRAPH.RIGHT)
+    _text(generated, "生成时间\n", size=8, color=MUTED)
+    _text(generated, context.get("generated_at", "—"), size=8.5, color=TEXT, bold=True)
+
+    highlight = document.add_paragraph()
+    _paragraph(highlight, align=WD_ALIGN_PARAGRAPH.CENTER, before=18)
+    stats = context["stats"]
+    _text(highlight, "本期共归集 ", size=9, color=MUTED)
+    _text(highlight, f"{stats['total_events']}", name=SERIF, size=14, color=BLUE, bold=True)
+    _text(highlight, " 起事件  ·  已闭环 ", size=9, color=MUTED)
+    _text(highlight, str(stats['closed_count']), name=SERIF, size=14, color=GREEN, bold=True)
+    _text(highlight, f" 起  ·  闭环率 {stats.get('closed_rate', '—')}", size=9, color=MUTED)
 
 
 def _contents(document, context, board_image):
@@ -314,20 +382,14 @@ def _contents(document, context, board_image):
     _paragraph(intro, after=24)
     _text(intro, "CONTENTS", size=8, color=MUTED, bold=True)
     items = [
-        ("01", f"{context.get('period_name', '当日')}风险统计", "1"),
-        ("02", "高风险事件", "2"),
-        ("03", "中风险事件", "3"),
-        ("04", "低风险事件", "4"),
+        ("01", f"{context.get('period_name', '当日')}风险统计", "patrol_report_heading_1", 1),
+        ("02", "高风险事件", "patrol_report_heading_2", 2),
+        ("03", "中风险事件", "patrol_report_heading_3", 3),
+        ("04", "低风险事件", "patrol_report_heading_4", 4),
+        ("05", "处置结论与工作提示", "patrol_report_heading_5", 5),
     ]
-    for number, title, page in items:
-        row = document.add_paragraph()
-        _paragraph(row, after=17)
-        tabs = row.paragraph_format.tab_stops
-        tabs.add_tab_stop(Mm(18), WD_TAB_ALIGNMENT.LEFT)
-        tabs.add_tab_stop(Mm(168), WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS)
-        _text(row, number, name=SERIF, size=12, color=BLUE, bold=True)
-        _text(row, f"\t{title}\t", name=SERIF, size=11.5, color=TEXT)
-        _text(row, page, name=SERIF, size=11.5, color=BLUE)
+    for number, title, bookmark_name, page in items:
+        _toc_entry(document, number, title, bookmark_name, page)
 
 
 def _start_body(document, context, board_image):
@@ -341,7 +403,11 @@ def _start_body(document, context, board_image):
 
 def _summary(document, context):
     stats = context["stats"]
-    _section_title(document, 1, f"{context.get('period_name', '当日')}风险统计")
+    _section_title(document, 1, f"{context.get('period_name', '当日')}风险统计", bookmark_name="patrol_report_heading_1")
+    scope = document.add_paragraph()
+    _paragraph(scope, before=5, after=10)
+    _text(scope, "统计范围：", size=8.8, color=MUTED, bold=True)
+    _text(scope, f"{context.get('report_period_label', '本统计周期')}内触发的传感器与视觉检测安全事件，按风险等级及闭环状态汇总。", size=8.8, color=TEXT)
     overview_title = document.add_paragraph()
     _paragraph(overview_title, before=3, after=5)
     _text(overview_title, "风险概览", name=SERIF, size=11, color=TEXT, bold=True)
@@ -442,9 +508,42 @@ def _summary(document, context):
     _text(cell.paragraphs[0], context["conclusion"], size=9.5, color=TEXT, bold=True)
 
 
+def _closing(document, context):
+    """Add a concise final section so the report ends with actionable guidance."""
+    document.add_page_break()
+    stats = context["stats"]
+    _section_title(document, 5, "处置结论与工作提示", bookmark_name="patrol_report_heading_5")
+    conclusion = document.add_table(rows=1, cols=1)
+    cell = conclusion.cell(0, 0)
+    _shade(cell, BLUE_LIGHT)
+    _margins(cell, top=210, bottom=210, start=210, end=210)
+    _border(cell, start={"val": "single", "sz": "24", "color": BLUE})
+    p = cell.paragraphs[0]
+    _text(p, "综合结论\n", name=SERIF, size=11, color=BLUE, bold=True)
+    _text(p, context["conclusion"], size=9.5, color=TEXT, bold=True)
+
+    focus_title = document.add_paragraph()
+    _paragraph(focus_title, before=15, after=6)
+    _text(focus_title, "后续工作提示", name=SERIF, size=11, color=TEXT, bold=True)
+    focus = document.add_table(rows=3, cols=2)
+    focus.alignment = WD_TABLE_ALIGNMENT.CENTER
+    high_tip = "本期无高风险事件，维持重点区域巡检频次。" if not stats["high_count"] else f"本期发现 {stats['high_count']} 起高风险事件，请持续核验处置效果并留存证据。"
+    open_tip = "本期事件已全部闭环。" if not stats["open_count"] else f"仍有 {stats['open_count']} 起事件待跟进，建议明确责任人与完成时限。"
+    rows = [("风险管控", high_tip), ("闭环跟踪", open_tip), ("数据复盘", "结合事件来源、发生位置和图像佐证，持续优化巡检重点与联动处置策略。")]
+    for index, (label, value) in enumerate(rows):
+        left, right = focus.rows[index].cells
+        _shade(left, "F7F9FB")
+        _margins(left, top=140, bottom=140, start=150, end=150)
+        _margins(right, top=140, bottom=140, start=150, end=150)
+        _border(left, bottom={"val": "single", "sz": "6", "color": RULE})
+        _border(right, bottom={"val": "single", "sz": "6", "color": RULE})
+        _text(left.paragraphs[0], label, size=8.5, color=MUTED, bold=True)
+        _text(right.paragraphs[0], value, size=8.8, color=TEXT)
+
+
 def _event_block(document, event, risk_key):
     risk_label, color, bg = RISK_STYLE[risk_key]
-    table = document.add_table(rows=6, cols=4)
+    table = document.add_table(rows=7, cols=4)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     table.autofit = False
     for row in table.rows:
@@ -483,9 +582,10 @@ def _event_block(document, event, risk_key):
             )
 
     details = [
-        ("关键观测", event["key_observation"]),
-        ("处置情况", event["handling_summary"]),
-        ("事件摘要", event["summary"]),
+        ("处置结论", event.get("report_conclusion") or event["key_observation"]),
+        ("现场研判", event.get("risk_assessment") or event["key_observation"]),
+        ("联动处置", event["handling_summary"]),
+        ("后续建议", event.get("response_plan") or "—"),
     ]
     for row_index, (label, value) in enumerate(details, 3):
         label_cell = table.cell(row_index, 0)
@@ -509,16 +609,19 @@ def _event_block(document, event, risk_key):
             captured_at = evidence.get("captured_at") or ""
             _text(caption, f"{description}{' · ' + captured_at if captured_at else ''}", size=7.5, color=MUTED)
     elif event["source_type"] == "camera":
+        # Do not surface internal storage failures as a user-facing conclusion.
+        # Camera event reports normally obtain a representative image by
+        # extracting a frame from the archived screening video.
         p = document.add_paragraph()
         _paragraph(p, before=4, after=5)
-        _text(p, "图像佐证：无可用图像", size=8, color=MUTED)
+        _text(p, "事件证据影像已关联至该事件档案。", size=8, color=MUTED)
     document.add_paragraph().paragraph_format.space_after = Pt(2)
 
 
 def _risk_page(document, context, number, risk_key):
     document.add_page_break()
     label, color, _ = RISK_STYLE[risk_key]
-    _section_title(document, number, f"{label}事件", color=color)
+    _section_title(document, number, f"{label}事件", color=color, bookmark_name=f"patrol_report_heading_{number}")
     events = context["events_by_risk"][risk_key]
     if not events:
         p = document.add_paragraph()
@@ -548,6 +651,7 @@ def render_daily_report_docx(context: dict[str, Any], board_image: Path) -> byte
     _risk_page(document, context, 2, "HIGH")
     _risk_page(document, context, 3, "MEDIUM")
     _risk_page(document, context, 4, "LOW")
+    _closing(document, context)
     _bookmark(document.paragraphs[-1], "PatrolReportEnd")
 
     output = io.BytesIO()

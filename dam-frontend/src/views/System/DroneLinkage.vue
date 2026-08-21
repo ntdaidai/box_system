@@ -1,7 +1,7 @@
 <!-- 无人机设备（联动系统）- 直连 DJI 真实设备，对标广播设备页样式 -->
 <template>
   <div class="linkage-drone-page">
-    <header class="page-header">
+    <header class="page-header system-page-header">
       <div>
         <h2>无人机设备</h2>
         <p>展示无人机与绑定机场，选择航线测试自动巡检；航线以地图总览方式查看</p>
@@ -101,7 +101,7 @@
     </section>
 
     <!-- 测试弹窗 -->
-    <el-dialog
+    <AppDialog
       v-model="testDialogVisible"
       title="无人机测试 · 航线巡检"
       width="92%"
@@ -269,10 +269,10 @@
           </div>
         </div>
       </div>
-    </el-dialog>
+    </AppDialog>
 
     <!-- 航线大图弹窗（对标感知源“查看点位图”的图片方式展示） -->
-    <el-dialog
+    <AppDialog
       v-model="waylineMapVisible"
       class="wayline-map-dialog"
       title="航线总览图"
@@ -392,10 +392,10 @@
           <span class="legend-item"><i class="legend-line tone-1"></i>禁涉水航线</span>
         </div>
       </div>
-    </el-dialog>
+    </AppDialog>
 
     <!-- 编辑无人机弹窗 -->
-    <el-dialog
+    <AppDialog
       v-model="editDialogVisible"
       title="编辑无人机设备"
       width="520px"
@@ -414,7 +414,7 @@
         <el-button @click="editDialogVisible = false">取消</el-button>
         <el-button type="primary" @click="saveEdit">保存</el-button>
       </template>
-    </el-dialog>
+    </AppDialog>
   </div>
 </template>
 
@@ -632,7 +632,7 @@ function bindDockName(drone) {
 
   if (dock) return dockDisplayName(dock)
   const demo = MOCK_DRONES.find((item) => item.device_sn === droneSn)
-  return demo?.dockName || '未绑定机场'
+  return demo?.dockName || '九号监测点机场'
 }
 
 // ========== 测试弹窗 ==========
@@ -852,7 +852,6 @@ const waylineMapVisible = ref(false)
 const waylineRoutes = Object.values(ROUTES)
 const selectedWaylineMapPointNo = ref(5)
 const selectedWaylineRouteName = ref('')
-const selectedWaylineLandmark = ref('')
 const selectedWaylineMapRegionPath = computed(() => (
   waylineCameraRegionPaths[selectedWaylineMapPointNo.value]
   || regionPathFromWaylinePoint(waylineCameraPoints.find((point) => point.no === selectedWaylineMapPointNo.value))
@@ -869,9 +868,6 @@ function openWaylineMap() {
 }
 function selectWaylineRoute(routeName) {
   selectedWaylineRouteName.value = selectedWaylineRouteName.value === routeName ? '' : routeName
-}
-function selectWaylineLandmark(landmark) {
-  selectedWaylineLandmark.value = selectedWaylineLandmark.value === landmark ? '' : landmark
 }
 function selectWaylineMapPoint(pointNo) {
   selectedWaylineMapPointNo.value = selectedWaylineMapPointNo.value === pointNo ? null : pointNo
@@ -954,7 +950,10 @@ function saveEdit() {
 }
 
 function confirmDeleteDevice(row) {
-  ElMessageBox.confirm(`确认删除无人机「${row.device_name}」？`, '删除设备', { type: 'warning' })
+  ElMessageBox.confirm(`确认删除无人机「${row.device_name}」？`, '删除设备', {
+    type: 'warning',
+    customClass: 'delete-confirm-box',
+  })
     .then(() => {
       djiDrones.value = djiDrones.value.filter((d) => d.device_sn !== row.device_sn)
       ElMessage.success('设备已删除')
@@ -1653,89 +1652,82 @@ async function refreshCurrent() {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
+  justify-content: center;
+  width: 92px;
+  height: 92px;
   padding: 0;
   border: 0;
-  border-radius: 0;
+  border-radius: 50%;
   background: transparent;
   color: #e9faff;
   box-shadow: none;
   white-space: nowrap;
-  cursor: pointer;
-  transition: transform .2s ease, background .2s ease, box-shadow .2s ease, border-color .2s ease;
+  cursor: default;
+  transition: transform .2s ease;
 }
 .wayline-landmark::before {
   content: '';
   position: absolute;
   z-index: 0;
-  top: 10px;
+  top: 50%;
   left: 50%;
-  width: 58px;
-  height: 22px;
-  transform: translateX(-50%);
-  border: 1px solid rgba(112, 229, 255, .48);
+  width: 92px;
+  height: 40px;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(190, 249, 255, .72);
   border-radius: 50%;
-  background: rgba(7, 36, 49, .78);
-  box-shadow: inset 0 0 0 1px rgba(112, 229, 255, .10), 0 0 13px rgba(72, 216, 255, .36);
+  background: rgba(147, 239, 255, .72);
+  box-shadow: inset 0 0 12px rgba(255, 255, 255, .42), 0 0 15px rgba(72, 216, 255, .68);
 }
 .wayline-landmark > * { position: relative; z-index: 1; }
 .wayline-landmark-mark {
   position: relative;
-  width: 23px;
-  height: 23px;
+  width: 68px;
+  height: 68px;
   display: block;
-  border: 2px solid #aaf5ff;
+  border: 2px solid rgba(88, 226, 255, .92);
+  border-radius: 50%;
+  background: radial-gradient(circle at 48% 35%, #154c61 0, #092d3d 52%, #031923 100%);
+  box-shadow: 0 0 0 5px rgba(20, 140, 172, .24), 0 0 22px rgba(72, 216, 255, .92), 0 3px 8px rgba(0, 0, 0, .75);
+}
+.wayline-landmark-mark::before {
+  content: '';
+  position: absolute;
+  top: 9px;
+  left: 50%;
+  width: 24px;
+  height: 24px;
+  transform: translateX(-50%) rotate(-45deg);
+  border: 3px solid #78eaff;
   border-radius: 50% 50% 50% 0;
-  background: linear-gradient(145deg, #52e4ff, #087da8);
-  box-shadow: 0 0 10px rgba(72, 216, 255, .8), 0 2px 5px rgba(0, 0, 0, .72);
-  transform: rotate(-45deg);
+  background: transparent;
+  box-shadow: 0 0 8px rgba(72, 216, 255, .76);
 }
 .wayline-landmark-mark::after {
   content: '';
   position: absolute;
+  top: 17px;
+  left: 50%;
   width: 7px;
   height: 7px;
-  top: 6px;
-  left: 6px;
+  transform: translateX(-50%);
   border-radius: 50%;
-  background: #063747;
-  box-shadow: 0 0 0 2px rgba(226, 252, 255, .82);
+  background: #b8f7ff;
+  box-shadow: 0 0 0 2px rgba(226, 252, 255, .82), 0 0 8px rgba(72, 216, 255, .92);
 }
 .wayline-landmark > span:not(.wayline-landmark-mark) {
-  font-size: 11px;
+  position: absolute;
+  top: 53px;
+  left: 50%;
+  z-index: 2;
+  transform: translateX(-50%);
+  font-size: 13px;
   font-weight: 900;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, .85);
+  color: #f3fdff;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, .96);
 }
-.wayline-landmark:hover,
-.wayline-landmark.active {
-  transform: translate(-50%, -50%) scale(1.32);
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
-}
-.wayline-landmark:hover .wayline-landmark-mark,
-.wayline-landmark.active .wayline-landmark-mark {
-  box-shadow: 0 0 0 5px rgba(72, 216, 255, .2), 0 0 26px rgba(72, 216, 255, .98), 0 2px 5px rgba(0, 0, 0, .72);
-}
-.wayline-landmark.airport:hover,
-.wayline-landmark.airport.active {
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
-}
-.wayline-landmark.airport .wayline-landmark-mark {
-  border-color: #fff0b0;
-  background: linear-gradient(145deg, #ffe184, #bd7710);
-  box-shadow: 0 0 10px rgba(255, 209, 102, .82), 0 2px 5px rgba(0, 0, 0, .72);
-}
-.wayline-landmark.airport::before {
-  border-color: rgba(255, 218, 133, .52);
-  box-shadow: inset 0 0 0 1px rgba(255, 218, 133, .10), 0 0 13px rgba(255, 209, 102, .34);
-}
-.wayline-landmark.airport .wayline-landmark-mark::after { background: #6b4308; }
-.wayline-landmark.airport:hover .wayline-landmark-mark,
-.wayline-landmark.airport.active .wayline-landmark-mark {
-  box-shadow: 0 0 0 5px rgba(255, 209, 102, .2), 0 0 26px rgba(255, 209, 102, .98), 0 2px 5px rgba(0, 0, 0, .72);
+.wayline-landmark:hover {
+  transform: translate(-50%, -50%) scale(1.16);
 }
 .legend-route-swatch {
   width: 14px;

@@ -1,6 +1,6 @@
 <template>
   <div class="linkage-page">
-    <header class="page-header">
+    <header class="page-header system-page-header">
       <div>
         <h2>广播设备</h2>
         <p>管理广播设备与播报模板，供事件联动策略调用</p>
@@ -174,7 +174,7 @@
       </template>
     </section>
 
-    <el-dialog
+    <AppDialog
       v-model="deviceDialogVisible"
       :title="deviceDialogTitle"
       width="560px"
@@ -199,9 +199,9 @@
         <el-button @click="deviceDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="savingDevice" @click="submitDevice">保存</el-button>
       </template>
-    </el-dialog>
+    </AppDialog>
 
-    <el-dialog
+    <AppDialog
       v-model="templateDialogVisible"
       :title="templateDialogTitle"
       width="620px"
@@ -238,9 +238,9 @@
         <el-button @click="templateDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="savingTemplate" @click="submitTemplate">保存</el-button>
       </template>
-    </el-dialog>
+    </AppDialog>
 
-    <el-dialog
+    <AppDialog
       v-model="testDialogVisible"
       title="测试广播播放"
       width="560px"
@@ -255,7 +255,7 @@
           <el-select
             v-model="testTemplateId"
             class="template-test-select"
-            popper-class="broadcast-filter-popper"
+            popper-class="broadcast-filter-popper broadcast-test-template-popper"
             placeholder="请选择测试模板"
           >
             <el-option
@@ -271,7 +271,7 @@
         <el-button @click="testDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="testSubmitting" @click="submitTestBroadcast">开始测试</el-button>
       </template>
-    </el-dialog>
+    </AppDialog>
   </div>
 </template>
 
@@ -538,7 +538,10 @@ async function submitTestBroadcast() {
 
 async function confirmDeleteDevice(row) {
   try {
-    await ElMessageBox.confirm(`确认删除广播设备「${row.name}」？`, '删除设备', { type: 'warning' })
+    await ElMessageBox.confirm(`确认删除广播设备「${row.name}」？`, '删除设备', {
+      type: 'warning',
+      customClass: 'delete-confirm-box',
+    })
     const res = await deleteBroadcastDevice(row.id)
     ElMessage.success(res.message || '广播设备已删除')
     await loadBroadcast()
@@ -613,7 +616,10 @@ async function toggleTemplateEnabled(row, enabled) {
 
 async function confirmDeleteTemplate(row) {
   try {
-    await ElMessageBox.confirm(`确认删除播报模板「${row.name}」？`, '删除模板', { type: 'warning' })
+    await ElMessageBox.confirm(`确认删除播报模板「${row.name}」？`, '删除模板', {
+      type: 'warning',
+      customClass: 'delete-confirm-box',
+    })
     const res = await deleteBroadcastTemplate(row.id)
     ElMessage.success(res.message || '广播模板已删除')
     await loadBroadcast()
@@ -1101,6 +1107,21 @@ onMounted(refreshCurrent)
   border-radius: 10px;
   background: #1d426a;
 }
+:global(.broadcast-config-dialog) {
+  border-color: rgba(97, 167, 214, .40);
+  border-radius: 10px;
+  background: #1d426a;
+}
+:global(.broadcast-config-dialog .app-dialog__header) {
+  min-height: 58px;
+  padding: 0 20px 0 24px;
+}
+:global(.broadcast-config-dialog .app-dialog__body) {
+  padding: 18px 24px 8px;
+}
+:global(.broadcast-config-dialog .app-dialog__footer) {
+  padding: 12px 24px 20px;
+}
 :global(.broadcast-config-dialog .el-dialog__header) {
   position: relative;
   min-height: 58px;
@@ -1201,6 +1222,11 @@ onMounted(refreshCurrent)
   border: 1px solid rgba(72, 216, 255, .28);
   background: #082033;
   box-shadow: 0 16px 36px rgba(0, 7, 18, .38);
+}
+:global(.broadcast-test-template-popper.el-select__popper),
+:global(.broadcast-test-template-popper.el-popper) {
+  /* AppDialog 的遮罩层为 3400，下拉面板必须位于其上方。 */
+  z-index: 3600 !important;
 }
 :global(.broadcast-filter-popper .el-popper__arrow::before) {
   border-color: rgba(72, 216, 255, .28);

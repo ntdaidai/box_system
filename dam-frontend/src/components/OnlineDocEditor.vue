@@ -1,6 +1,6 @@
 <template>
   <div class="online-doc-editor">
-    <el-dialog
+    <AppDialog
       v-model="visible"
       :title="dialogTitle"
       width="90%"
@@ -46,7 +46,7 @@
           </el-button>
         </div>
       </template>
-    </el-dialog>
+    </AppDialog>
   </div>
 </template>
 

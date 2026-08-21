@@ -1,6 +1,6 @@
 <template>
   <div class="config-page" :class="{ embedded }">
-    <header v-if="!embedded" class="page-header">
+    <header v-if="!embedded" class="page-header system-page-header">
       <div>
         <p>系统管理 / 联动规则</p>
         <h2>联动规则配置</h2>
@@ -276,7 +276,10 @@ async function addAction(event) {
 
 async function removeAction(row) {
   try {
-    await ElMessageBox.confirm('确认删除该动作配置？', '删除动作', { type: 'warning' })
+    await ElMessageBox.confirm('确认删除该动作配置？', '删除动作', {
+      type: 'warning',
+      customClass: 'delete-confirm-box',
+    })
     await deleteActionConfig(row.id)
     ElMessage.success('动作已删除')
     await loadConfig()

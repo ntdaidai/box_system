@@ -2,9 +2,8 @@
   <div class="screening-page">
     <header class="page-header admin-header">
       <div class="page-header-copy">
-        <span class="page-kicker"><i class="kicker-dot"></i>CONTROL ROOM / VIDEO ANALYSIS</span>
         <div class="title-block">
-          <h2>视频检测工作台</h2>
+          <h2>视频测试工作台</h2>
           <p>上传现场视频，预览检测区域并追踪风险事件的完整处置链路</p>
         </div>
       </div>
@@ -125,15 +124,30 @@
             <span>复核帧</span>
             <b>{{ evidenceFrames.length }} / {{ FRAME_COUNT }} 帧</b>
           </div>
-          <div class="frame-strip">
-            <figure v-for="(frame, index) in evidenceFrames" :key="frame.id">
+          <div v-if="evidenceFrames.length" class="frame-strip">
+            <figure
+              v-for="(frame, index) in evidenceFrames"
+              :key="frame.id"
+              class="frame-card"
+              :class="{ 'is-clickable': !frame.failed }"
+              :tabindex="frame.failed ? undefined : 0"
+              role="button"
+              :aria-label="frame.failed ? `复核帧 ${index + 1} 加载失败` : `查看${frame.label || `复核帧 ${index + 1}`}大图`"
+              @click="openFramePreview(frame)"
+              @keydown.enter.prevent="openFramePreview(frame)"
+              @keydown.space.prevent="openFramePreview(frame)"
+            >
               <img v-if="!frame.failed" :src="frame.url" :alt="`模型复核帧 ${index + 1}`" @error="markFrameFailed(frame)" />
               <div v-else class="frame-error">复核帧加载失败</div>
+              <i v-if="!frame.failed" class="frame-zoom-hint" aria-hidden="true">查看大图</i>
               <span>{{ frame.label || `复核帧 ${String(index + 1).padStart(2, '0')}` }}</span>
             </figure>
-            <div v-for="slot in Math.max(0, FRAME_COUNT - evidenceFrames.length)" :key="`slot-${slot}`" class="frame-slot">
-              <b>{{ String(evidenceFrames.length + slot).padStart(2, '0') }}</b>
-              <span>{{ frameSlotLabel }}</span>
+          </div>
+          <div v-else class="frame-empty-state">
+            <span class="frame-empty-icon" aria-hidden="true">＋</span>
+            <div>
+              <strong>暂无复核帧</strong>
+              <p>{{ frameEmptyLabel }}</p>
             </div>
           </div>
         </div>
@@ -201,7 +215,7 @@
       </aside>
     </section>
 
-    <el-dialog
+    <AppDialog
       v-model="zoneDialogVisible"
       title="选择检测区域"
       width="560px"
@@ -217,7 +231,6 @@
           border
         >
           <strong>{{ zone.zone_name }}</strong>
-          <small>{{ zoneTypeLabel(zone.zone_type) }}</small>
         </el-radio>
       </el-radio-group>
       <el-empty v-if="!zones.length" description="当前摄像头暂无已配置区域" />
@@ -225,15 +238,38 @@
         <el-button @click="zoneDialogVisible = false">取消</el-button>
         <el-button type="primary" :disabled="!selectedZone" @click="zoneDialogVisible = false">确认区域</el-button>
       </template>
-    </el-dialog>
+    </AppDialog>
 
-    <el-dialog
+    <AppDialog
+      v-model="framePreviewVisible"
+      title="复核帧预览"
+      width="min(1100px, calc(100vw - 48px))"
+      class="frame-preview-dialog"
+      @closed="handleFramePreviewClosed"
+    >
+      <div v-if="selectedFrame && !selectedFrame.failed" class="frame-preview-stage">
+        <img :src="selectedFrame.url" :alt="selectedFrame.label || '复核帧大图'" @error="markFrameFailed(selectedFrame)" />
+      </div>
+      <div v-else class="frame-preview-empty">复核帧加载失败，请稍后重试</div>
+      <template #footer>
+        <div class="frame-preview-footer">
+          <span>{{ selectedFrame?.label || '复核帧' }}</span>
+          <el-button @click="framePreviewVisible = false">关闭</el-button>
+        </div>
+      </template>
+    </AppDialog>
+
+    <AppDialog
       v-model="supplementDialogVisible"
       title="选择特殊工况"
       width="520px"
       class="supplement-dialog"
     >
-      <el-form label-position="top">
+      <div class="supplement-dialog__intro">
+        <span class="supplement-dialog__eyebrow">SIMULATION CONTEXT</span>
+        <p>补充本次模拟的运行背景，系统会将其纳入风险研判，不会改变已保存的配置。</p>
+      </div>
+      <el-form class="supplement-form" label-position="top">
         <el-form-item label="特殊工况">
           <el-select v-model="supplementForm.context_type" style="width: 100%" @change="handleSpecialContextTypeChange">
             <el-option label="库坝正在泄洪" value="DAM_DISCHARGE" />
@@ -260,15 +296,20 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="supplementDialogVisible = false">取消</el-button>
-        <el-button type="info" plain @click="clearSpecialContext">
-          本次不使用
-        </el-button>
-        <el-button type="warning" @click="applySpecialContext">
-          应用到本次模拟
-        </el-button>
+        <div class="supplement-dialog__footer-actions">
+          <span>仅作用于当前视频模拟</span>
+          <div>
+            <el-button text @click="supplementDialogVisible = false">取消</el-button>
+            <el-button plain @click="clearSpecialContext">
+              本次不使用
+            </el-button>
+            <el-button type="primary" @click="applySpecialContext">
+              应用到本次模拟
+            </el-button>
+          </div>
+        </div>
       </template>
-    </el-dialog>
+    </AppDialog>
   </div>
 </template>
 
@@ -305,6 +346,8 @@ const videoFile = ref(null)
 // 视频输入完成时刻（选择本地视频成功时记录，流程节点显示固定时间，避免随轮询重算跳动）
 const videoUploadedAt = ref(0)
 const evidenceFrames = ref([])
+const framePreviewVisible = ref(false)
+const selectedFrame = ref(null)
 const simulationActive = ref(false)
 const screening = ref(false)
 const result = ref(null)
@@ -352,9 +395,9 @@ const mediaStatus = computed(() => {
   if (videoUrl.value) return '视频已就绪'
   return '等待输入'
 })
-const frameSlotLabel = computed(() => {
-  if (screening.value || result.value?.event_instance_id) return '等待复核帧'
-  return '待生成'
+const frameEmptyLabel = computed(() => {
+  if (screening.value || result.value?.event_instance_id) return '分析完成后将在这里展示真实取证图像'
+  return '开始模拟后自动生成真实取证图像'
 })
 const riskLabel = computed(() => labelForRisk(result.value?.risk_level))
 const riskTag = computed(() => tagForRisk(result.value?.risk_level))
@@ -672,15 +715,6 @@ function openZoneDialog() {
   zoneDialogVisible.value = true
 }
 
-function zoneTypeLabel(type) {
-  return ({
-    PERSON_LOW: '禁闯入区',
-    PERSON_MEDIUM: '禁亲水区',
-    PERSON_HIGH: '禁涉水区',
-    FISHING: '禁捕区',
-  })[type] || '检测区域'
-}
-
 function handleVideoMetadata() {
   const width = Number(videoRef.value?.videoWidth)
   const height = Number(videoRef.value?.videoHeight)
@@ -906,6 +940,16 @@ function markFrameFailed(frame) {
   frame.failed = true
 }
 
+function openFramePreview(frame) {
+  if (!frame || frame.failed || !frame.url) return
+  selectedFrame.value = frame
+  framePreviewVisible.value = true
+}
+
+function handleFramePreviewClosed() {
+  selectedFrame.value = null
+}
+
 function openEventDetail(id) {
   if (!id) return
   router.push({ name: 'AlarmSafetyEventDetail', params: { id } })
@@ -1074,24 +1118,7 @@ onMounted(loadCameras)
   min-width: 0;
   position: relative;
   z-index: 1;
-  display: grid;
-  gap: 10px;
-}
-.page-kicker {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: #7dcce5;
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: .16em;
-}
-.kicker-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #42c6a6;
-  box-shadow: 0 0 0 4px rgba(66, 198, 166, .12), 0 0 12px rgba(66, 198, 166, .5);
+  display: block;
 }
 .page-header-meta {
   position: relative;
@@ -1345,9 +1372,171 @@ h3 {
   display: grid;
   gap: 3px;
 }
-.zone-picker-list small {
-  color: #7892a7;
+/* 特殊工况是一次性研判输入：以更明亮的表单卡片区分于普通确认弹窗。 */
+:global(.supplement-dialog.app-dialog-panel) {
+  --dialog-border: rgba(93, 202, 236, .44);
+  border-radius: 18px;
+  background:
+    linear-gradient(145deg, rgba(18, 59, 86, .99), rgba(8, 29, 46, .99) 56%, rgba(6, 24, 39, .99));
+  box-shadow: 0 28px 82px rgba(0, 5, 14, .58), inset 0 1px 0 rgba(220, 249, 255, .12);
+}
+:global(.supplement-dialog .app-dialog__header) {
+  min-height: 72px;
+  padding: 0 20px 0 24px;
+  border-bottom-color: rgba(127, 213, 239, .18);
+  background:
+    radial-gradient(circle at 0 0, rgba(80, 206, 235, .16), transparent 36%),
+    linear-gradient(90deg, rgba(31, 91, 126, .82), rgba(15, 53, 80, .58));
+}
+:global(.supplement-dialog .app-dialog__title) {
+  color: #f5fbff;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -.02em;
+}
+:global(.supplement-dialog .app-dialog__close) {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  color: #abd8ed;
+}
+:global(.supplement-dialog .app-dialog__body) {
+  padding: 22px 24px 18px;
+  background: linear-gradient(180deg, rgba(7, 30, 48, .24), rgba(5, 24, 39, .06));
+}
+.supplement-dialog__intro {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 18px;
+  padding: 13px 15px;
+  border: 1px solid rgba(112, 204, 232, .18);
+  border-radius: 12px;
+  background: linear-gradient(100deg, rgba(46, 126, 158, .18), rgba(16, 57, 82, .12));
+}
+.supplement-dialog__eyebrow {
+  color: #76d9ed;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .14em;
+}
+.supplement-dialog__intro p {
+  margin: 0;
+  color: #b6d2e0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.supplement-form :deep(.el-form-item) {
+  margin-bottom: 16px;
+}
+.supplement-form :deep(.el-form-item:last-child) {
+  margin-bottom: 0;
+}
+.supplement-form :deep(.el-form-item__label) {
+  height: auto;
+  margin-bottom: 7px;
+  color: #d9edf6;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.supplement-form :deep(.el-input__wrapper),
+.supplement-form :deep(.el-select__wrapper) {
+  min-height: 42px;
+  border: 1px solid rgba(94, 178, 210, .34);
+  border-radius: 10px;
+  background: rgba(4, 24, 40, .72);
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, .2) !important;
+}
+.supplement-form :deep(.el-textarea__inner) {
+  min-height: 104px !important;
+  padding: 11px 12px;
+  border: 1px solid rgba(94, 178, 210, .34);
+  border-radius: 10px;
+  color: #eaf7fd;
+  background: rgba(4, 24, 40, .72);
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, .2) !important;
+  line-height: 1.55;
+}
+.supplement-form :deep(.el-input__inner),
+.supplement-form :deep(.el-select__selected-item),
+.supplement-form :deep(.el-textarea__inner) {
+  color: #eaf7fd !important;
+  font-weight: 600;
+}
+.supplement-form :deep(.el-input__inner::placeholder),
+.supplement-form :deep(.el-textarea__inner::placeholder) {
+  color: #6f99ad;
+  font-weight: 400;
+}
+.supplement-form :deep(.el-input__wrapper:hover),
+.supplement-form :deep(.el-select__wrapper:hover),
+.supplement-form :deep(.el-textarea__inner:hover) {
+  border-color: rgba(111, 215, 240, .62);
+}
+.supplement-form :deep(.el-input__wrapper.is-focus),
+.supplement-form :deep(.el-select__wrapper.is-focused),
+.supplement-form :deep(.is-focus .el-input__wrapper),
+.supplement-form :deep(.is-focused .el-select__wrapper),
+.supplement-form :deep(.el-textarea__inner:focus) {
+  border-color: #63d1ed;
+  box-shadow: 0 0 0 3px rgba(78, 201, 233, .12) !important;
+}
+.supplement-form :deep(.el-input__count) {
+  color: #89aaba;
+  background: transparent;
+}
+:global(.supplement-dialog .app-dialog__footer) {
+  min-height: 78px;
+  padding: 14px 24px;
+  border-top-color: rgba(127, 213, 239, .15);
+  background: rgba(3, 20, 33, .46);
+}
+.supplement-dialog__footer-actions {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.supplement-dialog__footer-actions > span {
+  color: #7899ac;
   font-size: 12px;
+}
+.supplement-dialog__footer-actions > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+:global(.supplement-dialog .app-dialog__footer .el-button) {
+  min-width: auto;
+  height: 38px;
+  padding: 0 15px;
+  border-radius: 9px;
+  font-weight: 700;
+}
+:global(.supplement-dialog .app-dialog__footer .el-button--default) {
+  color: #c3e0ed;
+  border-color: rgba(102, 184, 214, .38);
+  background: rgba(35, 93, 121, .32);
+}
+:global(.supplement-dialog .app-dialog__footer .el-button.is-text) {
+  padding-right: 8px;
+  padding-left: 8px;
+  color: #99c7d9;
+}
+:global(.supplement-dialog .app-dialog__footer .el-button.is-text:hover) {
+  color: #e7f8ff;
+  background: rgba(106, 194, 224, .1);
+}
+:global(.supplement-dialog .app-dialog__footer .el-button--primary) {
+  border-color: transparent;
+  color: #041923;
+  background: linear-gradient(135deg, #71d7ed, #3eaece);
+  box-shadow: 0 7px 16px rgba(42, 163, 196, .25);
+}
+:global(.supplement-dialog .app-dialog__footer .el-button--primary:hover) {
+  color: #02131b;
+  background: linear-gradient(135deg, #93e5f5, #54c5e2);
 }
 .empty-stage {
   display: grid;
@@ -1406,8 +1595,7 @@ h3 {
   scrollbar-width: thin;
   scrollbar-color: rgba(79, 208, 232, .42) rgba(8, 24, 39, .6);
 }
-.frame-strip figure,
-.frame-slot {
+.frame-strip figure {
   flex: 0 0 clamp(190px, 22vw, 280px);
   aspect-ratio: 16 / 9;
   border: 1px solid rgba(77, 132, 161, .42);
@@ -1421,6 +1609,47 @@ h3 {
   overflow: hidden;
   background: #02070d;
   box-shadow: 0 6px 16px rgba(0, 0, 0, .16);
+}
+.frame-card.is-clickable {
+  cursor: zoom-in;
+  transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
+}
+.frame-card.is-clickable:hover,
+.frame-card.is-clickable:focus-visible {
+  border-color: rgba(105, 221, 241, .82);
+  box-shadow: 0 0 0 3px rgba(79, 208, 232, .12), 0 10px 24px rgba(0, 0, 0, .28);
+  outline: none;
+  transform: translateY(-2px);
+}
+.frame-card.is-clickable img {
+  transition: transform .25s ease, filter .25s ease;
+}
+.frame-card.is-clickable:hover img,
+.frame-card.is-clickable:focus-visible img {
+  filter: brightness(1.08);
+  transform: scale(1.035);
+}
+.frame-zoom-hint {
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  padding: 4px 7px;
+  border: 1px solid rgba(180, 241, 252, .25);
+  border-radius: 5px;
+  color: #d9f7ff;
+  background: rgba(1, 19, 31, .68);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-3px);
+  transition: opacity .2s ease, transform .2s ease;
+}
+.frame-card.is-clickable:hover .frame-zoom-hint,
+.frame-card.is-clickable:focus-visible .frame-zoom-hint {
+  opacity: 1;
+  transform: translateY(0);
 }
 .frame-strip img {
   width: 100%;
@@ -1446,22 +1675,84 @@ h3 {
   background: rgba(0,0,0,.68);
   font-size: 10px;
 }
-.frame-slot {
+.frame-empty-state {
+  display: flex;
+  min-height: 92px;
+  align-items: center;
+  gap: 12px;
+  padding: 0 18px;
+  border: 1px dashed rgba(77, 151, 180, .34);
+  border-radius: 10px;
+  background: linear-gradient(100deg, rgba(11, 40, 61, .58), rgba(7, 25, 41, .48));
+}
+.frame-empty-icon {
   display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
   place-items: center;
-  align-content: center;
-  gap: 6px;
-  color: #3c5b70;
-  background: linear-gradient(145deg, rgba(12, 42, 63, .76), rgba(8, 25, 41, .84));
+  border: 1px solid rgba(84, 202, 228, .3);
+  border-radius: 9px;
+  color: #75d6eb;
+  background: rgba(52, 154, 183, .12);
+  font-size: 21px;
+  font-weight: 300;
 }
-.frame-slot b {
-  font-size: 18px;
-  font-weight: 800;
+.frame-empty-state strong {
+  display: block;
+  color: #c7dfeb;
+  font-size: 13px;
 }
-.frame-slot span {
-  color: #607f94;
+.frame-empty-state p {
+  margin: 4px 0 0;
+  color: #7898aa;
   font-size: 11px;
-  font-weight: 600;
+}
+:global(.frame-preview-dialog.app-dialog-panel) {
+  border-radius: 16px;
+  background: linear-gradient(145deg, rgba(13, 43, 65, .99), rgba(5, 21, 35, .99));
+}
+:global(.frame-preview-dialog .app-dialog__body) {
+  padding: 18px;
+  background: rgba(2, 12, 21, .7);
+}
+.frame-preview-stage {
+  display: grid;
+  min-height: min(520px, calc(100vh - 220px));
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(96, 193, 220, .28);
+  border-radius: 11px;
+  background:
+    linear-gradient(135deg, rgba(16, 50, 71, .7), rgba(2, 13, 23, .88)),
+    #02070d;
+}
+.frame-preview-stage img {
+  display: block;
+  width: 100%;
+  max-height: calc(100vh - 220px);
+  object-fit: contain;
+}
+.frame-preview-empty {
+  display: grid;
+  min-height: 260px;
+  place-items: center;
+  color: #88a9ba;
+  font-size: 13px;
+}
+.frame-preview-footer {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.frame-preview-footer > span {
+  overflow: hidden;
+  color: #a9c9d7;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .result-panel {
   min-height: 620px;
@@ -1930,6 +2221,13 @@ h3 {
   .frame-strip figure,
   .frame-slot {
     flex-basis: 78vw;
+  }
+  .supplement-dialog__footer-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .supplement-dialog__footer-actions > div {
+    justify-content: flex-end;
   }
 }
 </style>

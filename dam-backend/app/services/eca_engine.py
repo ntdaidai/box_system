@@ -834,6 +834,8 @@ class ECAEngine:
                     instance,
                     sensor_data,
                 )
+            elif event and instance.source_type == "camera":
+                self._archive_camera_event_video_evidence(db, instance, sensor_data)
             sensor_data = dict(sensor_data or {})
             sensor_data["event_instance_id"] = instance.id
             sensor_data["instance_no"] = instance.instance_no
@@ -946,6 +948,55 @@ class ECAEngine:
         enriched["evidence_video_status"] = "READY"
         enriched["evidence_video"] = media_object
         return enriched
+
+    def _archive_camera_event_video_evidence(
+        self,
+        db: Session,
+        instance: SafetyEventInstance,
+        camera_data: Dict[str, Any],
+    ) -> None:
+        """Persist the qwen screening clip as event evidence.
+
+        The screening service stores its raw video URL in the observation so
+        the workflow can analyse it.  Persisting the same reference here makes
+        it available to event reports and period reports after the live camera
+        state has changed.
+        """
+        video_url = self._event_video_reference(camera_data)
+        if not video_url:
+            return
+        visual = camera_data.get("visual") if isinstance(camera_data.get("visual"), dict) else {}
+        camera_id = visual.get("camera_id") or instance.source_id
+        safety_event_runtime_service.add_evidence(
+            db,
+            instance,
+            file_url=video_url,
+            evidence_type="VIDEO",
+            source_type="CAMERA",
+            source_id=str(camera_id or ""),
+            description="Qwen 初筛事件证据视频",
+            metadata={"source": "qwen_camera_screening"},
+            captured_at=instance.started_at,
+        )
+
+    @staticmethod
+    def _event_video_reference(camera_data: Dict[str, Any]) -> Optional[str]:
+        for key in ("source_video_url", "video_url"):
+            value = camera_data.get(key)
+            if isinstance(value, str) and value:
+                return value
+        for key in ("video_urls", "videos", "media_objects"):
+            value = camera_data.get(key)
+            if not isinstance(value, list):
+                continue
+            for item in value:
+                if isinstance(item, str) and item:
+                    return item
+                if isinstance(item, dict):
+                    candidate = item.get("path") or item.get("url") or item.get("video_url")
+                    if candidate:
+                        return str(candidate)
+        return None
 
     @staticmethod
     def _has_video_evidence(sensor_data: Dict[str, Any]) -> bool:

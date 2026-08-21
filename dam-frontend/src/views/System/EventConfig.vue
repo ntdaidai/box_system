@@ -1,6 +1,6 @@
 <template>
   <div class="event-config-page">
-    <header class="page-header">
+    <header class="page-header system-page-header">
       <div class="title-block">
         <h2>事件配置</h2>
         <p>统一维护系统预置事件、触发参数和联动流程</p>
@@ -166,7 +166,7 @@
       />
     </section>
 
-    <el-dialog
+    <AppDialog
       v-model="flowDialogVisible"
       class="flow-workspace-dialog"
       width="min(1400px, 90vw)"
@@ -412,16 +412,16 @@
           </el-form>
         </aside>
       </div>
-    </el-dialog>
+    </AppDialog>
 
-    <el-dialog v-model="addNodeDialogVisible" title="添加联动动作" width="460px" destroy-on-close>
+    <AppDialog v-model="addNodeDialogVisible" title="添加联动动作" width="460px" destroy-on-close>
       <div class="add-action-grid">
         <button v-for="item in addActionOptions" :key="item.type" type="button" @click="addActionNode(item.type)">
           <el-icon><component :is="item.icon" /></el-icon>
           <span>{{ item.label }}</span>
         </button>
       </div>
-    </el-dialog>
+    </AppDialog>
   </div>
 </template>
 
@@ -2407,11 +2407,12 @@ onBeforeUnmount(() => {
 
 .config-table-head,
 .config-row {
-  min-width: 1460px;
+  min-width: 1375px;
   display: grid;
-  grid-template-columns: 210px 108px 116px minmax(360px, 1fr) 116px 116px 96px 248px;
+  grid-template-columns: minmax(160px, max-content) 108px 108px minmax(320px, 420px) 104px 104px 88px 224px;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
+  justify-content: space-between;
   text-align: center;
 }
 
@@ -2462,6 +2463,7 @@ onBeforeUnmount(() => {
 
 .event-name-cell strong {
   display: block;
+  max-width: 100%;
   overflow: hidden;
   color: #f3f8fd;
   font-size: 14px;
@@ -2658,8 +2660,7 @@ onBeforeUnmount(() => {
   background: #0b2238;
 }
 
-:deep(.flow-workspace-dialog.el-dialog),
-.flow-workspace-dialog :deep(.el-dialog) {
+:global(.flow-workspace-dialog) {
   height: min(820px, 88vh);
   display: flex;
   flex-direction: column;
@@ -2669,16 +2670,14 @@ onBeforeUnmount(() => {
   background: #071422;
 }
 
-:deep(.flow-workspace-dialog.el-dialog) .el-dialog__header,
-.flow-workspace-dialog :deep(.el-dialog__header) {
+:global(.flow-workspace-dialog .app-dialog__header) {
   flex: none;
   padding: 14px 16px;
   margin: 0;
   border-bottom: 1px solid rgba(112, 157, 190, .16);
 }
 
-:deep(.flow-workspace-dialog.el-dialog) .el-dialog__body,
-.flow-workspace-dialog :deep(.el-dialog__body) {
+:global(.flow-workspace-dialog .app-dialog__body) {
   flex: 1;
   min-height: 0;
   padding: 0;
@@ -3015,7 +3014,8 @@ onBeforeUnmount(() => {
 @media (max-width: 1280px) {
   .config-table-head,
   .config-row {
-    grid-template-columns: minmax(140px, 1fr) 86px 96px minmax(230px, 1.6fr) 86px 86px 74px 176px;
+    min-width: 1260px;
+    grid-template-columns: minmax(140px, max-content) 92px 96px minmax(280px, 360px) 88px 88px 74px 190px;
     gap: 8px;
   }
 }
@@ -3033,7 +3033,7 @@ onBeforeUnmount(() => {
 
   .config-table-head,
   .config-row {
-    min-width: 980px;
+    min-width: 1260px;
   }
 
   .flow-workspace-body.with-inspector {

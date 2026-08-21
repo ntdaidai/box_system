@@ -1,6 +1,6 @@
 <template>
   <div class="zone-config-page">
-    <header class="config-header">
+    <header class="config-header system-page-header">
       <div class="title-block">
         <h2>区域配置</h2>
         <p>维护摄像头监测区域、画框边界和启用状态</p>
@@ -100,9 +100,10 @@
       />
     </section>
 
-    <el-dialog
+    <AppDialog
       v-model="drawDialogVisible"
       append-to-body
+      align-center
       :class="['zone-draw-dialog', { 'is-view-mode': editorMode === 'view' }]"
       :title="drawDialogTitle"
       :width="editorMode === 'view' ? '1240px' : '1320px'"
@@ -341,14 +342,61 @@
       <template #footer>
         <span></span>
       </template>
-    </el-dialog>
+    </AppDialog>
+
+    <Transition name="zone-delete-fade">
+      <div
+        v-if="deleteDialogVisible && deleteTarget"
+        class="zone-delete-overlay"
+        role="presentation"
+        @click.self="cancelDelete"
+        @keydown.esc.window="cancelDelete"
+      >
+        <section
+          class="zone-delete-dialog"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="zone-delete-title"
+          aria-describedby="zone-delete-description"
+          @click.stop
+        >
+          <header class="zone-delete-header">
+            <div>
+              <span class="zone-delete-kicker"><i aria-hidden="true"></i>危险操作</span>
+              <h3 id="zone-delete-title">删除区域</h3>
+            </div>
+            <button type="button" class="zone-delete-close" aria-label="关闭" @click="cancelDelete">×</button>
+          </header>
+          <div class="zone-delete-content">
+            <span class="zone-delete-icon" aria-hidden="true">!</span>
+            <div class="zone-delete-copy">
+              <p id="zone-delete-description">
+                确认要删除这个区域吗？
+              </p>
+              <div class="zone-delete-target">
+                <span>待删除区域</span>
+                <strong>{{ deleteTarget.zone_name || zoneTypeText(deleteTarget.zone_type) }}</strong>
+              </div>
+              <small>删除后将从当前摄像头配置中移除，且无法恢复。</small>
+            </div>
+          </div>
+          <footer class="zone-delete-actions">
+            <button type="button" class="zone-delete-cancel" :disabled="deleteSubmitting" @click="cancelDelete">取消</button>
+            <button type="button" class="zone-delete-confirm" :disabled="deleteSubmitting" @click="confirmDeleteZone">
+              <span v-if="deleteSubmitting" class="zone-delete-spinner" aria-hidden="true"></span>
+              {{ deleteSubmitting ? '删除中…' : '确认删除' }}
+            </button>
+          </footer>
+        </section>
+      </div>
+    </Transition>
   </div>
 </template>
 
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import {
   Check, EditPen, Loading, Plus,
 } from '@element-plus/icons-vue'
@@ -374,6 +422,9 @@ const rectFirstPoint = ref(null)
 const rectPreview = ref(null)
 const saving = ref(false)
 const drawDialogVisible = ref(false)
+const deleteDialogVisible = ref(false)
+const deleteTarget = ref(null)
+const deleteSubmitting = ref(false)
 const editorMode = ref('')
 const draftZone = ref(null)
 const zonePage = ref(1)
@@ -788,23 +839,36 @@ function endDrag() {
   dragging.value = null
 }
 
-async function deleteZone(zoneId) {
+function deleteZone(zoneId) {
   const target = zones.value.find((zone) => zone.id === zoneId)
-  if (!target) return
-  try {
-    await ElMessageBox.confirm(`确认删除“${target.zone_name || zoneTypeText(target.zone_type)}”？`, '删除区域', { type: 'warning' })
-  } catch {
-    return
-  }
+  if (!target || deleteSubmitting.value) return
+  deleteTarget.value = target
+  deleteDialogVisible.value = true
+}
+
+function cancelDelete() {
+  if (deleteSubmitting.value) return
+  deleteDialogVisible.value = false
+  deleteTarget.value = null
+}
+
+async function confirmDeleteZone() {
+  const target = deleteTarget.value
+  if (!target || deleteSubmitting.value) return
+  deleteSubmitting.value = true
+  deleteDialogVisible.value = false
+  deleteTarget.value = null
   currentCameraId.value = String(target.camera_id || currentCameraId.value)
   const previousZones = cloneZones(zones.value)
-  zones.value = zones.value.filter((zone) => zone.id !== zoneId)
+  zones.value = zones.value.filter((zone) => zone.id !== target.id)
   selectedZoneId.value = zones.value[0]?.id || ''
   if (!selectedZoneId.value) drawing.value = false
   try {
     await saveZones({ includeDraft: false, closeOnSuccess: false })
   } catch {
     zones.value = previousZones
+  } finally {
+    deleteSubmitting.value = false
   }
 }
 
@@ -1747,6 +1811,225 @@ onMounted(async () => {
   padding-top: 12px;
   border-top: 1px solid rgba(80, 165, 200, 0.14);
 }
+.zone-delete-overlay {
+  position: fixed;
+  z-index: 3000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(2, 12, 22, 0.74);
+}
+.zone-delete-dialog {
+  width: min(540px, calc(100vw - 40px));
+  overflow: hidden;
+  border: 1px solid #30495e;
+  border-radius: 10px;
+  background: #0b2033;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.46);
+}
+.zone-delete-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 22px 26px 18px;
+  border-bottom: 1px solid #20394d;
+  background: #10283d;
+}
+.zone-delete-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 7px;
+  color: #f07b89;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+}
+.zone-delete-kicker i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ef7180;
+}
+.zone-delete-header h3 {
+  margin: 0;
+  color: #f3f8fd;
+  font-size: 24px;
+  line-height: 1.15;
+  font-weight: 900;
+}
+.zone-delete-close {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  margin: -1px -4px 0 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #89a5b8;
+  background: transparent;
+  font: 300 27px/1 Arial, sans-serif;
+  cursor: pointer;
+  transition: color .2s ease, border-color .2s ease, background .2s ease;
+}
+.zone-delete-close:hover,
+.zone-delete-close:focus-visible {
+  border-color: rgba(141, 220, 240, 0.28);
+  color: #e9fbff;
+  background: rgba(141, 220, 240, 0.10);
+  outline: none;
+}
+.zone-delete-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 24px 26px 26px;
+}
+.zone-delete-icon {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  margin-top: 1px;
+  border: 1px solid #d9a65d;
+  border-radius: 50%;
+  color: #142435;
+  background: #f3b65e;
+  font-size: 21px;
+  font-weight: 900;
+  line-height: 1;
+}
+.zone-delete-copy {
+  min-width: 0;
+  flex: 1;
+}
+.zone-delete-content p {
+  margin: 0;
+  color: #e7f4fc;
+  font-size: 17px;
+  line-height: 1.4;
+  font-weight: 800;
+  word-break: break-word;
+}
+.zone-delete-target {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  max-width: 100%;
+  margin-top: 10px;
+  padding: 6px 10px;
+  border: 1px solid #345067;
+  border-radius: 5px;
+  background: #102b40;
+}
+.zone-delete-target span {
+  flex: 0 0 auto;
+  color: #a8bac6;
+  font-size: 11px;
+  font-weight: 800;
+}
+.zone-delete-target strong {
+  overflow: hidden;
+  color: #e2edf3;
+  font-size: 13px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zone-delete-content small {
+  display: block;
+  margin-top: 10px;
+  color: #829eaf;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.zone-delete-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 15px 26px 20px;
+  border-top: 1px solid #20394d;
+  background: #091b2b;
+}
+.zone-delete-actions button {
+  min-width: 96px;
+  height: 40px;
+  padding: 0 18px;
+  border: 1px solid;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 900;
+  cursor: pointer;
+  transition: border-color .2s ease, color .2s ease, background .2s ease, transform .2s ease;
+}
+.zone-delete-actions button:not(:disabled):active {
+  transform: translateY(1px);
+}
+.zone-delete-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.zone-delete-cancel {
+  border-color: #456176;
+  color: #b5cbd8;
+  background: #112e45;
+}
+.zone-delete-cancel:hover:not(:disabled),
+.zone-delete-cancel:focus-visible {
+  border-color: #6c92aa;
+  color: #e8f8ff;
+  background: #183b56;
+  outline: none;
+}
+.zone-delete-confirm {
+  border-color: #b84c61;
+  color: #fff1f3;
+  background: #8f304b;
+  box-shadow: none;
+}
+.zone-delete-confirm:hover:not(:disabled),
+.zone-delete-confirm:focus-visible {
+  border-color: #d06a7a;
+  background: #a33a55;
+  outline: none;
+}
+.zone-delete-spinner {
+  width: 13px;
+  height: 13px;
+  display: inline-block;
+  margin-right: 7px;
+  border: 2px solid rgba(255, 241, 243, 0.36);
+  border-top-color: #fff1f3;
+  border-radius: 50%;
+  vertical-align: -2px;
+  animation: zone-delete-spin .7s linear infinite;
+}
+@keyframes zone-delete-spin {
+  to { transform: rotate(360deg); }
+}
+.zone-delete-fade-enter-active,
+.zone-delete-fade-leave-active {
+  transition: opacity .2s ease;
+}
+.zone-delete-fade-enter-active .zone-delete-dialog,
+.zone-delete-fade-leave-active .zone-delete-dialog {
+  transition: transform .2s ease, opacity .2s ease;
+}
+.zone-delete-fade-enter-from,
+.zone-delete-fade-leave-to {
+  opacity: 0;
+}
+.zone-delete-fade-enter-from .zone-delete-dialog,
+.zone-delete-fade-leave-to .zone-delete-dialog {
+  opacity: 0;
+  transform: translateY(10px) scale(.98);
+}
 :global(.zone-config-select-popper.el-select__popper) {
   border: 1px solid rgba(72, 216, 255, 0.28);
   background: #082033;
@@ -1779,7 +2062,7 @@ onMounted(async () => {
   width: min(1320px, calc(100vw - 48px)) !important;
   max-width: calc(100vw - 48px);
   max-height: calc(100vh - 48px);
-  margin: 24px auto !important;
+  margin: auto !important;
   overflow: hidden;
 }
 :global(.zone-draw-dialog.is-view-mode.el-dialog) {
@@ -1824,5 +2107,10 @@ onMounted(async () => {
   .zone-filter-toolbar {
     grid-template-columns: 1fr;
   }
+  .zone-delete-overlay { padding: 16px; }
+  .zone-delete-header { padding: 22px 20px 18px; }
+  .zone-delete-content { gap: 13px; padding: 22px 20px; }
+  .zone-delete-actions { padding: 15px 20px 20px; }
+  .zone-delete-actions button { flex: 1; min-width: 0; }
 }
 </style>

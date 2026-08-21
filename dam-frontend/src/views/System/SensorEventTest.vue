@@ -2,9 +2,8 @@
   <div class="sensor-test-page">
     <header class="page-header admin-header">
       <div class="page-header-copy">
-        <span class="page-kicker"><i class="kicker-dot"></i>CONTROL ROOM / SENSOR SIGNAL</span>
         <div class="title-block">
-          <h2>传感器事件测试</h2>
+          <h2>传感器测试工作台</h2>
           <p>模拟现场传感器信号，验证 ECA 规则与后续联动处置链路</p>
         </div>
       </div>
@@ -650,24 +649,7 @@ onMounted(loadCameras)
   min-width: 0;
   position: relative;
   z-index: 1;
-  display: grid;
-  gap: 10px;
-}
-.page-kicker {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: #7dcce5;
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: .16em;
-}
-.kicker-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #42c6a6;
-  box-shadow: 0 0 0 4px rgba(66, 198, 166, .12), 0 0 12px rgba(66, 198, 166, .5);
+  display: block;
 }
 .page-header-meta {
   position: relative;
@@ -752,7 +734,8 @@ h3 {
 }
 .workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(420px, .85fr);
+  /* 与视频测试页保持同一主栏比例，保证“触发参数”和“摄像头画面模拟”对齐。 */
+  grid-template-columns: minmax(0, 1.55fr) minmax(380px, .9fr);
   gap: 18px;
   margin-top: 18px;
 }
@@ -1363,7 +1346,7 @@ h3 {
   color: #ffd6db;
   background: rgba(255, 107, 120, .12);
 }
-@media (max-width: 1200px) {
+@media (max-width: 1180px) {
   .workspace {
     grid-template-columns: 1fr;
   }

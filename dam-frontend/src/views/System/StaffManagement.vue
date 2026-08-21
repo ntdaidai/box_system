@@ -1,6 +1,6 @@
 <template>
   <div class="staff-page">
-    <header class="page-header staff-overview-bar">
+    <header class="page-header staff-overview-bar system-page-header">
       <div class="title-block">
         <h2>现场人员</h2>
         <p>维护小程序现场处置人员</p>
@@ -117,7 +117,7 @@
     </section>
 
     <!-- 新增 / 编辑人员弹窗 -->
-    <el-dialog
+    <AppDialog
       v-model="staffDialogVisible"
       class="staff-config-dialog"
       :title="staffForm.id ? '编辑人员' : '新增人员'"
@@ -176,10 +176,10 @@
         <el-button @click="staffDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="submitStaff">保存</el-button>
       </template>
-    </el-dialog>
+    </AppDialog>
 
     <!-- 登录码弹窗 -->
-    <el-dialog
+    <AppDialog
       v-model="qrVisible"
       class="qr-dialog"
       :title="`登录码 · ${qrStaff?.display_name || ''}`"
@@ -198,7 +198,7 @@
       <template #footer>
         <el-button type="primary" :loading="qrRefreshing" @click="refreshLoginCode">刷新登录码</el-button>
       </template>
-    </el-dialog>
+    </AppDialog>
   </div>
 </template>
 
@@ -311,6 +311,7 @@ async function removeGroup() {
       type: 'warning',
       confirmButtonText: '删除',
       cancelButtonText: '取消',
+      customClass: 'delete-confirm-box',
     })
     if (serverGroups.value.includes(groupName)) {
       await deleteStaffGroup(groupName)
@@ -411,6 +412,7 @@ async function confirmDeleteStaff(row) {
         type: 'warning',
         confirmButtonText: '删除',
         cancelButtonText: '取消',
+        customClass: 'delete-confirm-box',
       }
     )
     await deleteStaff(row.id)

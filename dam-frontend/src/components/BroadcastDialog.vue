@@ -1,5 +1,5 @@
 <template>
-  <el-dialog
+  <AppDialog
     v-model="visible"
     title="一键喊话"
     width="480px"
@@ -40,7 +40,7 @@
         </button>
       </section>
     </div>
-  </el-dialog>
+  </AppDialog>
 </template>
 
 <script setup>

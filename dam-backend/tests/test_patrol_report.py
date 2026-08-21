@@ -25,6 +25,9 @@ def _event(risk, *, source_type="sensor", evidence_images=None):
         "key_observation": "置信度：95%" if source_type == "camera" else "风速：18.6m/s",
         "result_label": "已闭环",
         "handling_summary": "处置完成",
+        "report_conclusion": "事件已完成核验与处置闭环。",
+        "risk_assessment": "已完成风险研判，现场风险受控。",
+        "response_plan": "持续跟踪现场状态，必要时升级处置。",
         "completed_at": "08:45:00",
         "summary": "事件已完成处置",
         "evidence_images": evidence_images or [],
@@ -109,11 +112,15 @@ def test_docx_omits_preview_copy_and_embeds_visual_evidence():
     assert "样式演示" not in document_xml
     assert "HIGH / 高风险" not in document_xml
     assert "高风险" in document_xml
+    assert "处置结论" in document_xml
+    assert "现场研判" in document_xml
+    assert "联动处置" in document_xml
+    assert "图像佐证：无可用图像" not in document_xml
     assert "图像佐证" in document_xml
     assert "<w:noProof" in document_xml
     assert 'w:name="PatrolReportEnd"' in document_xml
     assert "PAGE" in footer_xml
     assert "PAGEREF PatrolReportEnd" in footer_xml
-    assert "<w:t>4</w:t>" in footer_xml
+    assert "<w:t>5</w:t>" in footer_xml
     assert header_xml.count('w:vAlign w:val="bottom"') == 2
     assert len(media) >= 2

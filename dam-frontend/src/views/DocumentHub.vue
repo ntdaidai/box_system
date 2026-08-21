@@ -236,7 +236,7 @@
       </div>
     </section>
 
-    <el-dialog
+    <AppDialog
       v-model="exportFormatDialogVisible"
       class="export-format-dialog"
       title="选择导出格式"
@@ -275,9 +275,9 @@
           开始导出
         </el-button>
       </template>
-    </el-dialog>
+    </AppDialog>
 
-    <el-dialog
+    <AppDialog
       v-model="previewDialogVisible"
       class="document-preview-dialog"
       fullscreen
@@ -303,7 +303,7 @@
           :user="currentUser"
         />
       </div>
-    </el-dialog>
+    </AppDialog>
   </div>
 </template>
 
@@ -998,7 +998,8 @@ const deleteDoc = async (doc) => {
       {
         confirmButtonText: '删除',
         cancelButtonText: '取消',
-        type: 'warning'
+        type: 'warning',
+        customClass: 'delete-confirm-box',
       }
     )
 

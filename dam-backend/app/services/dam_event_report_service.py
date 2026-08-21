@@ -1660,8 +1660,11 @@ class DamEventReportService:
         image_items: list[dict[str, Any]],
         video_items: list[dict[str, Any]],
     ) -> Optional[Path]:
+        # 优先使用 4B 选出的代表帧；早期 qwen_camera_screening 事件只留存
+        # 证据视频时，``image_items`` 已由视频兜底抽帧补齐，不能因此让正式
+        # 事件报告显示“未获取到可嵌入图像”。
         qwen_items = [item for item in image_items if self.image_media_priority(item) in {0, 1}]
-        return self.download_first_image(qwen_items)
+        return self.download_first_image(qwen_items or image_items)
 
     def extract_frame_items_from_videos(
         self,

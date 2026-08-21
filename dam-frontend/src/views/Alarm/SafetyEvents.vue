@@ -32,7 +32,6 @@
         />
       </el-select>
       <el-select
-        v-if="query.source_type === 'sensor' || (query.source_type === 'camera' && query.source_id)"
         v-model="query.event_category"
         placeholder="全部事件类型"
         @change="onCategoryChange"
@@ -46,7 +45,6 @@
         />
       </el-select>
       <el-select
-        v-if="hasCategory"
         v-model="query.risk_level"
         placeholder="全部风险等级"
         @change="onRiskChange"
@@ -57,7 +55,6 @@
         <el-option label="高风险" value="HIGH" />
       </el-select>
       <el-select
-        v-if="hasRisk"
         v-model="query.status"
         placeholder="全部处置状态"
         @change="reloadFromFirstPage"
@@ -87,8 +84,10 @@
         @clear="reloadFromFirstPage"
         @keyup.enter="reloadFromFirstPage"
       />
-      <el-button type="primary" :icon="Search" @click="reloadFromFirstPage">查询</el-button>
-      <el-button class="refresh-button" :icon="Refresh" :loading="loading" @click="loadEvents">刷新</el-button>
+      <div class="filter-actions">
+        <el-button type="primary" :icon="Search" @click="reloadFromFirstPage">查询</el-button>
+        <el-button v-if="hasActiveFilters" class="reset-button" @click="resetFilters">重置筛选</el-button>
+      </div>
     </section>
 
     <section class="table-panel" :class="{ 'is-empty': !items.length }" v-loading="loading">
@@ -180,7 +179,7 @@
 import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowRight, BellFilled, Clock, Finished, Refresh, Search, WarningFilled } from '@element-plus/icons-vue'
+import { ArrowRight, BellFilled, Clock, Finished, Search, WarningFilled } from '@element-plus/icons-vue'
 import { getCameraList } from '@/api/camera'
 import { getUnifiedSafetyEventCategories, getUnifiedSafetyEvents } from '@/api/integration'
 
@@ -198,6 +197,7 @@ const overview = ref({
   low: 0,
   closed: 0,
 })
+let latestLoadRequestId = 0
 const query = reactive({
   status: 'all',
   risk_level: 'all',
@@ -229,12 +229,14 @@ const overviewCards = computed(() => [
 ])
 
 async function loadEvents() {
+  const requestId = ++latestLoadRequestId
   loading.value = true
   try {
     const [listResult, overviewResult] = await Promise.allSettled([
       getUnifiedSafetyEvents(buildEventQueryParams(), { silentError: true }),
       fetchOverviewCounts(),
     ])
+    if (requestId !== latestLoadRequestId) return
     if (listResult.status === 'rejected') throw listResult.reason
     items.value = listResult.value.data?.items || []
     total.value = listResult.value.data?.total || 0
@@ -242,9 +244,10 @@ async function loadEvents() {
       overview.value = overviewResult.value
     }
   } catch (error) {
+    if (requestId !== latestLoadRequestId) return
     ElMessage.error(error.response?.data?.detail || '告警数据暂时不可达，请检查后端服务')
   } finally {
-    loading.value = false
+    if (requestId === latestLoadRequestId) loading.value = false
   }
 }
 
@@ -309,41 +312,50 @@ function reloadFromFirstPage() {
   loadEvents()
 }
 
-// 事件类型选项：传感器分支仅「极端天气」，摄像头分支按接口动态列表
-const categoryOptions = computed(() =>
-  query.source_type === 'sensor'
-    ? [{ value: 'environment', label: '极端天气' }]
-    : eventTypeOptions.value,
-)
+function resetFilters() {
+  Object.assign(query, {
+    status: 'all',
+    risk_level: 'all',
+    source_type: 'all',
+    event_category: 'all',
+    event_date: '',
+    source_id: '',
+    start_time: '',
+    end_time: '',
+    keyword: '',
+    page: 1,
+  })
+  dateRange.value = []
+  loadEvents()
+}
 
-// 下一级筛选框是否出现：上一级已选择时逐级展开
-const hasCategory = computed(() => query.event_category && query.event_category !== 'all')
-const hasRisk = computed(() => query.risk_level && query.risk_level !== 'all')
+// 事件类型选项：传感器有固定的「极端天气」，全部来源时合并动态选项，避免条件被来源选择隐藏。
+const categoryOptions = computed(() => {
+  const sensorCategory = { value: 'environment', label: '极端天气' }
+  if (query.source_type === 'sensor') return [sensorCategory]
+  if (query.source_type !== 'all') return eventTypeOptions.value
+  return [
+    sensorCategory,
+    ...eventTypeOptions.value.filter((item) => item.value !== sensorCategory.value),
+  ]
+})
 
-// 级联：选择上一级时清空所有下游筛选并回到第一页
+// 来源仅联动摄像头选择，其余筛选条件可以独立组合，避免筛选器逐级跳动。
 function onSourceTypeChange() {
   query.source_id = ''
   query.event_category = 'all'
-  query.risk_level = 'all'
-  query.status = 'all'
   reloadFromFirstPage()
 }
 
 function onCameraChange() {
-  query.event_category = 'all'
-  query.risk_level = 'all'
-  query.status = 'all'
   reloadFromFirstPage()
 }
 
 function onCategoryChange() {
-  query.risk_level = 'all'
-  query.status = 'all'
   reloadFromFirstPage()
 }
 
 function onRiskChange() {
-  query.status = 'all'
   reloadFromFirstPage()
 }
 
@@ -471,12 +483,6 @@ loadEvents()
   padding: 22px;
   color: #d9e8f8;
   background: #071422;
-}
-.filters {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
 }
 .alarm-overview {
   display: grid;
@@ -629,8 +635,25 @@ loadEvents()
 .filters :deep(.el-input__inner::placeholder) {
   color: #d9e8f8;
 }
-.refresh-button {
+.filter-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
   margin-left: auto;
+}
+.filter-actions .el-button {
+  margin-left: 0;
+}
+.reset-button {
+  border-color: rgba(104, 161, 200, .4);
+  color: #aac3d5;
+  background: rgba(19, 46, 70, .72);
+}
+.reset-button:not(:disabled):hover {
+  border-color: rgba(87, 190, 255, .72);
+  color: #e3f4ff;
+  background: rgba(27, 69, 99, .92);
 }
 .table-panel {
   margin-top: 18px;
@@ -788,13 +811,17 @@ loadEvents()
     grid-template-columns: 1fr;
   }
   .filters .el-select,
-  .filters .event-date-picker,
+  .filters .date-range-picker,
   .filters .el-input {
     width: 100%;
     max-width: none;
   }
-  .refresh-button {
+  .filter-actions {
+    width: 100%;
     margin-left: 0;
+  }
+  .filter-actions .el-button {
+    flex: 1;
   }
 }
 </style>

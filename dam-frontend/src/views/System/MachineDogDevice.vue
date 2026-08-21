@@ -1,11 +1,11 @@
 <template>
   <div class="machine-dog-page">
-    <header class="page-header">
+    <header class="page-header system-page-header">
       <div>
         <h2>机器狗设备</h2>
         <p>选择机器狗进入测试，查看实时监控与巡检任务</p>
       </div>
-      <div class="status-summary compact-summary" aria-label="机器狗设备统计">
+      <div class="status-summary" aria-label="机器狗设备统计">
         <div class="metric"><i class="dot total"></i><strong class="metric-num">{{ machineDogs.length }}</strong><span class="metric-label">总数</span></div>
         <div class="metric"><i class="dot online"></i><strong class="metric-num">{{ dogOnlineCount }}</strong><span class="metric-label">在线</span></div>
         <div class="metric"><i class="dot offline"></i><strong class="metric-num">{{ dogOfflineCount }}</strong><span class="metric-label">离线</span></div>
@@ -34,6 +34,7 @@
           <div class="col-desc">设备描述</div>
           <div class="col-runtime">电量</div>
           <div class="col-status">状态</div>
+          <div class="col-enabled">是否启用</div>
           <div class="col-actions">操作</div>
         </div>
         <article v-for="dog in filteredDogs" :key="dog.id" class="device-row" :class="dog.status === 'offline' ? 'is-offline' : 'is-online'">
@@ -41,15 +42,23 @@
           <div class="col-desc device-description"><span>{{ dog.description }}</span></div>
           <div class="col-runtime device-runtime"><strong>{{ dog.battery }}%</strong></div>
           <div class="col-status"><span class="status-pill" :class="dog.status === 'offline' ? 'is-offline' : 'is-online'">{{ dog.status === 'offline' ? '离线' : '在线' }}</span></div>
+          <div class="col-enabled">
+            <el-switch
+              :model-value="dog.enabled !== false"
+              @change="(value) => toggleEnabled(dog, value)"
+            />
+          </div>
           <div class="col-actions list-actions">
             <el-button class="test-action" @click="openTestDialog(dog)">测试</el-button>
+            <el-button class="edit-action" @click="openEditDialog(dog)">编辑</el-button>
+            <el-button class="delete-action" @click="confirmDeleteDog(dog)">删除</el-button>
           </div>
         </article>
         <div v-if="!filteredDogs.length" class="empty-list">暂无匹配的机器狗设备</div>
       </div>
     </section>
 
-    <el-dialog v-model="routeMapVisible" title="巡检路线" width="92%" align-center class="dog-route-dialog">
+    <AppDialog v-model="routeMapVisible" title="巡检路线" width="92%" align-center class="dog-route-dialog">
       <div class="route-map-toolbar">
         <span>选择路线</span>
         <el-select v-model="routeMapRouteId" class="route-map-select">
@@ -72,10 +81,32 @@
         </span>
         <span class="route-map-charge" :style="{ left: `${chargeZone.x}%`, top: `${chargeZone.y}%` }">充电区</span>
       </div>
-    </el-dialog>
+    </AppDialog>
+
+    <!-- 编辑机器狗设备弹窗 -->
+    <AppDialog
+      v-model="editDialogVisible"
+      title="编辑机器狗设备"
+      width="520px"
+      class="broadcast-config-dialog dog-edit-dialog"
+      destroy-on-close
+    >
+      <el-form label-position="top" @submit.prevent>
+        <el-form-item label="设备名称" required>
+          <el-input v-model.trim="editForm.device_name" maxlength="64" placeholder="请输入设备名称" />
+        </el-form-item>
+        <el-form-item label="设备描述">
+          <el-input v-model.trim="editForm.device_desc" type="textarea" :rows="3" maxlength="200" placeholder="请输入设备描述" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="saveEdit">保存</el-button>
+      </template>
+    </AppDialog>
 
     <!-- 测试弹窗：原调度工作台移入此处，视频作为主要内容展示 -->
-    <el-dialog v-model="testDialogVisible" :title="`${testingDog?.name || '机器狗'} · 测试`" width="94%" align-center class="dog-test-dialog" destroy-on-close :close-on-click-modal="false">
+    <AppDialog v-model="testDialogVisible" :title="`${testingDog?.name || '机器狗'} · 测试`" width="94%" align-center class="dog-test-dialog" destroy-on-close :close-on-click-modal="false">
 
     <section class="command-panel">
       <div class="task-command-section">
@@ -249,9 +280,9 @@
       </aside>
     </section>
 
-    </el-dialog>
+    </AppDialog>
 
-    <el-dialog v-model="routeManagerVisible" title="路线管理" width="620px" class="route-editor">
+    <AppDialog v-model="routeManagerVisible" title="路线管理" width="620px" class="route-editor">
       <!-- 视图一：路线列表 -->
       <template v-if="!routeFormVisible">
         <div class="route-manager-list">
@@ -343,7 +374,7 @@
           </el-button>
         </template>
       </template>
-    </el-dialog>
+    </AppDialog>
 
     <el-drawer
       v-model="deviceDrawerVisible"
@@ -392,8 +423,8 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Aim,
   Bottom,
@@ -479,6 +510,7 @@ const machineDogs = ref([
     model: 'Unitree Lite 3',
     description: '四足巡检机器狗，支持路线巡检与实时视频回传',
     status: 'idle',
+    enabled: true,
     battery: 92,
     signal: 95,
     location: '充电区',
@@ -523,8 +555,11 @@ const deviceFilterOptions = [
 
 const deviceDrawerVisible = ref(false)
 const testDialogVisible = ref(false)
+const editDialogVisible = ref(false)
 const routeMapVisible = ref(false)
 const testingDog = ref(null)
+const editingDog = ref(null)
+const editForm = reactive({ device_name: '', device_desc: '' })
 const selectedDeviceId = ref('dog-01')
 const selectedPresetRouteId = ref(
   (() => {
@@ -771,9 +806,19 @@ function useRoute(route) {
 }
 
 // 删除路线（至少保留一条）
-function deleteRoute(route) {
+async function deleteRoute(route) {
   if (presetRoutes.value.length <= 1) {
     ElMessage.warning('至少需要保留一条路线')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(`确认删除路线「${route.name}」？`, '删除路线', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      customClass: 'delete-confirm-box',
+    })
+  } catch {
     return
   }
   presetRoutes.value = presetRoutes.value.filter((item) => item.id !== route.id)
@@ -880,6 +925,52 @@ function openTestDialog(dog) {
   testingDog.value = dog
   selectedDeviceId.value = dog.id
   testDialogVisible.value = true
+}
+
+function openEditDialog(dog) {
+  editingDog.value = dog
+  editForm.device_name = dog.name || ''
+  editForm.device_desc = dog.description || ''
+  editDialogVisible.value = true
+}
+
+function saveEdit() {
+  if (!editingDog.value) return
+  const name = editForm.device_name.trim()
+  if (!name) {
+    ElMessage.warning('请输入设备名称')
+    return
+  }
+  const index = machineDogs.value.findIndex((item) => item.id === editingDog.value.id)
+  if (index >= 0) {
+    machineDogs.value[index] = {
+      ...machineDogs.value[index],
+      name,
+      description: editForm.device_desc.trim(),
+    }
+  }
+  editDialogVisible.value = false
+  ElMessage.success('设备信息已更新')
+}
+
+function confirmDeleteDog(dog) {
+  ElMessageBox.confirm(`确认删除机器狗「${dog.name}」？`, '删除设备', {
+    type: 'warning',
+    customClass: 'delete-confirm-box',
+  }).then(() => {
+    if (activeTask.value?.dogId === dog.id) {
+      ElMessage.warning('当前设备正在执行任务，无法删除')
+      return
+    }
+    machineDogs.value = machineDogs.value.filter((item) => item.id !== dog.id)
+    if (selectedDeviceId.value === dog.id) selectedDeviceId.value = machineDogs.value[0]?.id || ''
+    ElMessage.success('设备已删除')
+  }).catch(() => {})
+}
+
+function toggleEnabled(dog, value) {
+  const index = machineDogs.value.findIndex((item) => item.id === dog.id)
+  if (index >= 0) machineDogs.value[index].enabled = value
 }
 
 function openRouteMap() {
@@ -2338,13 +2429,13 @@ onBeforeUnmount(() => {
   box-shadow: inset 0 1px 0 rgba(147, 206, 241, .08);
 }
 .machine-dog-page .page-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
-.machine-dog-page .status-summary { display: flex; justify-content: flex-end; align-items: center; }
+.machine-dog-page .status-summary { display: flex; justify-content: flex-end; align-items: center; gap: 0; }
 .machine-dog-page .metric { min-width: 96px; display: inline-flex; align-items: baseline; gap: 8px; padding: 8px 18px; white-space: nowrap; }
 .machine-dog-page .metric + .metric { border-left: 1px solid rgba(96, 151, 191, .18); }
 .machine-dog-page .metric .dot { width: 8px; height: 8px; flex: 0 0 auto; align-self: center; border-radius: 50%; background: #8db2c8; }
 .machine-dog-page .metric .dot.total { box-shadow: 0 0 8px rgba(141, 178, 200, .75); }
 .machine-dog-page .metric .dot.online { background: #48e6bf; box-shadow: 0 0 8px rgba(72, 230, 191, .75); }
-.machine-dog-page .metric .dot.offline { background: #8494a3; }
+.machine-dog-page .metric .dot.offline { background: #ff5b68; box-shadow: 0 0 8px rgba(255, 91, 104, .72); }
 .machine-dog-page .metric-num { color: #f2fbff; font-size: 22px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
 .machine-dog-page .metric-label { color: #8db2c8; font-size: 12px; }
 .machine-dog-page .page-header h2 { margin: 0; color: #f3f8fd; font-size: 25px; }
@@ -2373,7 +2464,7 @@ onBeforeUnmount(() => {
   display: grid;
   align-items: center;
   gap: 14px;
-  grid-template-columns: minmax(190px, 1.05fr) minmax(300px, 1.35fr) 150px 100px 120px;
+  grid-template-columns: minmax(190px, 1.05fr) minmax(280px, 1.3fr) 110px 100px 110px 300px;
 }
 .machine-dog-page .dog-resource-card .device-list-header-row {
   min-height: 48px;
@@ -2402,12 +2493,41 @@ onBeforeUnmount(() => {
 .machine-dog-page .dog-resource-card .device-runtime { display: grid; gap: 5px; justify-items: center; text-align: center; }
 .machine-dog-page .dog-resource-card .device-runtime strong { min-width: 48px; font-size: 14px; text-align: center; }
 .machine-dog-page .dog-resource-card .col-status { display: grid; justify-items: center; text-align: center; }
+.machine-dog-page .dog-resource-card .col-enabled { display: grid; justify-items: center; text-align: center; }
+.machine-dog-page .dog-resource-card .col-enabled :deep(.el-switch__core) { border-color: rgba(120, 153, 176, .34); background: rgba(96, 118, 134, .38); }
+.machine-dog-page .dog-resource-card .col-enabled :deep(.el-switch.is-checked .el-switch__core) { border-color: rgba(64, 158, 255, .66); background: #409eff; }
 .machine-dog-page .dog-resource-card .status-pill { display: inline-flex; align-items: center; justify-content: center; height: 24px; padding: 0 10px; border: 1px solid rgba(235, 124, 133, .34); border-radius: 4px; font-size: 13px; font-weight: 600; line-height: 1; }
 .machine-dog-page .dog-resource-card .status-pill.is-online { border-color: rgba(92, 215, 154, .34); color: #81efad; background: rgba(48, 154, 118, .18); }
 .machine-dog-page .dog-resource-card .status-pill.is-offline { border-color: rgba(235, 124, 133, .34); color: #ffabb5; background: rgba(142, 48, 62, .18); }
 .machine-dog-page .dog-resource-card .list-actions { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: nowrap; }
 .machine-dog-page .dog-resource-card .list-actions :deep(.el-button) { width: auto; height: 34px; min-height: 34px; margin: 0; padding: 0 16px; border-radius: 5px; font-size: 13px; font-weight: 800; }
 .machine-dog-page .dog-resource-card .list-actions :deep(.test-action) { border-color: rgba(82, 178, 143, .54); color: #b9f1d8; background: rgba(30, 103, 78, .42); }
+.machine-dog-page .dog-resource-card .list-actions :deep(.edit-action) { border-color: rgba(66, 164, 224, .50); color: #d5f0ff; background: rgba(29, 91, 133, .70); }
+.machine-dog-page .dog-resource-card .list-actions :deep(.delete-action) { border-color: rgba(226, 88, 109, .46); color: #ffb1bd; background: rgba(128, 36, 54, .48); }
+.machine-dog-page .dog-resource-card .list-actions :deep(.test-action:hover) { border-color: rgba(82, 178, 143, .70); color: #e3fff1; background: rgba(36, 123, 92, .52); }
+.machine-dog-page .dog-resource-card .list-actions :deep(.edit-action:hover) { border-color: rgba(66, 164, 224, .72); color: #effaff; background: rgba(33, 107, 156, .82); }
+.machine-dog-page .dog-resource-card .list-actions :deep(.delete-action:hover) { border-color: rgba(226, 88, 109, .68); color: #ffd5dd; background: rgba(144, 42, 62, .62); }
+
+/* 与广播设备页保持一致，避免 Element Plus 默认按钮主题覆盖设备操作色 */
+:global(.machine-dog-page .list-actions .el-button.test-action) { border-color: rgba(82, 178, 143, .54) !important; color: #b9f1d8 !important; background: rgba(30, 103, 78, .42) !important; }
+:global(.machine-dog-page .list-actions .el-button.edit-action) { border-color: rgba(66, 164, 224, .50) !important; color: #d5f0ff !important; background: rgba(29, 91, 133, .70) !important; }
+:global(.machine-dog-page .list-actions .el-button.delete-action) { border-color: rgba(226, 88, 109, .46) !important; color: #ffb1bd !important; background: rgba(128, 36, 54, .48) !important; }
+:global(.machine-dog-page .list-actions .el-button.test-action:hover) { border-color: rgba(82, 178, 143, .72) !important; color: #e3fff1 !important; background: rgba(36, 123, 92, .56) !important; }
+:global(.machine-dog-page .list-actions .el-button.edit-action:hover) { border-color: rgba(66, 164, 224, .72) !important; color: #effaff !important; background: rgba(33, 107, 156, .82) !important; }
+:global(.machine-dog-page .list-actions .el-button.delete-action:hover) { border-color: rgba(226, 88, 109, .68) !important; color: #ffd5dd !important; background: rgba(144, 42, 62, .62) !important; }
+
+/* 编辑弹窗沿用广播设备页的深蓝表单配色 */
+:global(.dog-edit-dialog) { border-color: rgba(97, 167, 214, .40); border-radius: 10px; background: #1d426a; }
+:global(.dog-edit-dialog .app-dialog__header) { min-height: 58px; padding: 0 20px 0 24px; }
+:global(.dog-edit-dialog .app-dialog__body) { padding: 18px 24px 8px; }
+:global(.dog-edit-dialog .app-dialog__footer) { padding: 12px 24px 20px; }
+.dog-edit-dialog :deep(.el-form-item__label) { margin-bottom: 8px; color: #e2f0fb !important; font-size: 15px; font-weight: 700; }
+.dog-edit-dialog :deep(.el-input__wrapper),
+.dog-edit-dialog :deep(.el-textarea__inner) { background: #092034; box-shadow: inset 0 0 0 1px rgba(36, 128, 176, .46); color: #f4fbff; }
+.dog-edit-dialog :deep(.el-input__inner),
+.dog-edit-dialog :deep(.el-textarea__inner) { color: #f4fbff; }
+.dog-edit-dialog :deep(.el-input__inner::placeholder),
+.dog-edit-dialog :deep(.el-textarea__inner::placeholder) { color: #a5b8c7; }
 
 /* 测试页：上方任务合并为一个区块，下方地图与实时画面对半 */
 .dog-test-dialog .command-panel {

@@ -57,10 +57,13 @@
         </el-select>
       </div>
       <div class="filter-field">
-        <el-select v-model="sortBy" placeholder="排序方式" class="sort-select">
-          <el-option label="最近创建" value="created" />
-          <el-option label="文件名称" value="name" />
-          <el-option label="文件大小" value="size" />
+        <el-select v-model="sortBy" placeholder="排序方式" class="sort-select" @change="handleSortChange">
+          <el-option
+            v-for="option in sortOptions"
+            :key="option.value"
+            :label="option.label"
+            :value="option.value"
+          />
         </el-select>
       </div>
       <div class="filter-field search-field">
@@ -83,10 +86,6 @@
             导入知识
           </el-button>
         </el-upload>
-        <el-button class="refresh-button" :loading="loadingDocuments" @click="loadAll">
-          <el-icon><Refresh /></el-icon>
-          刷新
-        </el-button>
       </div>
     </div>
 
@@ -154,7 +153,12 @@
             >
               编辑
             </el-button>
-            <el-button class="action-button download-button" size="small" @click="downloadDocument(doc)">
+            <el-button
+              class="action-button download-button"
+              size="small"
+              :disabled="isPdfDocument(doc)"
+              @click="downloadDocument(doc)"
+            >
               下载 Word
             </el-button>
             <el-button
@@ -189,7 +193,7 @@
       </div>
     </section>
 
-    <el-dialog
+    <AppDialog
       v-model="previewDialogVisible"
       class="knowledge-preview-dialog"
       fullscreen
@@ -221,7 +225,7 @@
           </div>
         </template>
       </div>
-    </el-dialog>
+    </AppDialog>
   </div>
 </template>
 
@@ -234,7 +238,6 @@ import {
   Collection,
   Document,
   Files,
-  Refresh,
   Search,
   Upload,
 } from '@element-plus/icons-vue'
@@ -253,6 +256,12 @@ const loadingDocuments = ref(false)
 const uploading = ref(false)
 const currentPage = ref(1)
 const pageSize = 8
+
+const sortOptions = [
+  { value: 'created', label: '最近创建', order: 'desc' },
+  { value: 'name', label: '文档名称', order: 'asc' },
+  { value: 'size', label: '文档大小', order: 'desc' },
+]
 
 const previewDialogVisible = ref(false)
 const previewLoading = ref(false)
@@ -291,7 +300,7 @@ const filteredDocuments = computed(() => {
   }
   rows.sort((a, b) => {
     const direction = sortOrder.value === 'asc' ? 1 : -1
-    if (sortBy.value === 'name') return String(a.title || '').localeCompare(String(b.title || '')) * direction
+    if (sortBy.value === 'name') return documentName(a).localeCompare(documentName(b), 'zh-CN') * direction
     if (sortBy.value === 'size') return (Number(a.file_size || 0) - Number(b.file_size || 0)) * direction
     if (sortBy.value === 'created') return (dateValue(a.create_time) - dateValue(b.create_time)) * direction
     return 0
@@ -459,7 +468,17 @@ function supportsEditing(document) {
   return editingExtensions.has(String(document?.file_type || '').toLowerCase())
 }
 
+function isPdfDocument(document) {
+  const fileType = String(document?.file_type || '').trim().toLowerCase().replace(/^\./, '')
+  if (fileType) return fileType === 'pdf'
+  return /\.pdf$/i.test(String(document?.filename || document?.title || '').trim())
+}
+
 async function downloadDocument(row) {
+  if (isPdfDocument(row)) {
+    ElMessage.warning('PDF 文档不支持下载 Word 文件')
+    return
+  }
   const link = document.createElement('a')
   link.href = `/api/v1/knowledge/documents/${row.id}/file`
   link.download = row.filename || row.title || 'knowledge-document'
@@ -504,6 +523,7 @@ async function deleteDocument(row) {
     type: 'warning',
     confirmButtonText: '删除',
     cancelButtonText: '取消',
+    customClass: 'delete-confirm-box',
   })
   await request.delete(`/v1/knowledge/documents/${row.id}`)
   ElMessage.success('知识文档已删除')
@@ -569,6 +589,10 @@ function formatTokens(value) {
   return String(count)
 }
 
+function documentName(document) {
+  return String(document?.title || document?.filename || '').trim()
+}
+
 function dateValue(value) {
   if (!value) return 0
   const date = new Date(String(value).replace('T', ' '))
@@ -589,6 +613,10 @@ function toggleSort(field) {
   sortOrder.value = ''
 }
 
+function handleSortChange(value) {
+  sortOrder.value = sortOptions.find((option) => option.value === value)?.order || 'desc'
+}
+
 function sortClass(field) {
   if (sortBy.value !== field) return ''
   return sortOrder.value === 'asc' ? 'ascending' : 'descending'
@@ -598,7 +626,7 @@ function sortClass(field) {
 <style scoped>
 .knowledge-base {
   min-height: 100%;
-  padding: 22px;
+  padding: clamp(16px, 1.35vw, 26px) clamp(16px, 1.6vw, 32px) 28px;
   color: #d9e8f8;
   background: #071422;
 }
@@ -670,26 +698,28 @@ function sortClass(field) {
 }
 
 .filter-section {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(230px, 1.25fr) minmax(140px, .72fr) minmax(140px, .72fr) minmax(320px, 3fr) auto;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 18px;
-  padding: 14px;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 12px;
   border: 1px solid rgba(104, 161, 200, .22);
-  border-radius: 8px;
-  background: #0b1d30;
+  border-radius: 10px;
+  background: rgba(11, 29, 48, .86);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .12);
 }
 
 .filter-field {
   display: flex;
-  flex: 0 0 auto;
+  min-width: 0;
+  width: 100%;
 }
 
-.base-select { width: 240px; }
+.base-select,
 .type-select,
-.sort-select { width: 150px; }
-.search-field { flex: 1 1 420px; min-width: 260px; }
+.sort-select { width: 100%; }
+.search-field { min-width: 0; }
 .search-input { width: 100%; }
 
 .filter-section :deep(.el-select),
@@ -702,9 +732,9 @@ function sortClass(field) {
 .filter-section :deep(.el-input__wrapper),
 .filter-section :deep(.el-select__wrapper) {
   min-height: 44px;
-  border-radius: 6px;
+  border-radius: 8px;
   background: rgba(6, 25, 42, .82);
-  box-shadow: inset 0 0 0 1px rgba(60, 150, 214, .46) !important;
+  box-shadow: inset 0 0 0 1px rgba(60, 150, 214, .38) !important;
 }
 
 .filter-section :deep(.el-input__wrapper:hover),
@@ -738,12 +768,19 @@ function sortClass(field) {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 12px;
+  justify-content: flex-end;
+  gap: 8px;
   white-space: nowrap;
+}
+
+.filter-actions :deep(.el-upload) {
+  display: flex;
 }
 
 .upload-button {
   height: 44px;
+  min-width: 116px;
+  border-radius: 8px;
   border-color: rgba(82, 181, 244, .72);
   color: #fff;
   background: #3d8ed8;
@@ -755,19 +792,13 @@ function sortClass(field) {
   background: #4aa0ed;
 }
 
-.refresh-button {
-  height: 44px;
-  border-color: rgba(72, 216, 255, .32);
-  color: #c8f0ff;
-  background: rgba(72, 216, 255, .08);
-}
-
 .document-table-panel {
   margin-top: 18px;
   overflow: hidden;
   border: 1px solid rgba(104, 161, 200, .18);
   border-radius: 8px;
   background: rgba(11, 29, 48, .72);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, .1);
 }
 
 .document-table-panel.is-empty {
@@ -794,6 +825,10 @@ function sortClass(field) {
   grid-template-columns: 46px minmax(150px, 1.5fr) minmax(64px, .7fr) minmax(72px, .8fr) minmax(52px, .6fr) minmax(56px, .6fr) minmax(64px, .7fr) minmax(122px, 1.2fr) minmax(64px, .7fr) minmax(330px, 1.4fr);
   align-items: center;
   gap: 12px;
+}
+
+.document-list {
+  width: 100%;
 }
 
 .document-header {
@@ -1036,6 +1071,13 @@ function sortClass(field) {
   white-space: nowrap;
 }
 
+.action-button:disabled {
+  border-color: rgba(127, 178, 221, .16);
+  color: #6e8799;
+  background: rgba(37, 70, 106, .18);
+  opacity: .72;
+}
+
 .download-button { color: #c8f0ff; }
 .download-pdf-button { color: #ffd9a8; border-color: rgba(255, 179, 92, .34); background: rgba(166, 92, 7, .18); }
 .preview-button { color: #35e5f2; border-color: rgba(53, 229, 242, .34); background: rgba(7, 148, 166, .18); }
@@ -1232,6 +1274,21 @@ function sortClass(field) {
   }
 }
 
+@media (max-width: 1100px) {
+  .filter-section {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .search-field,
+  .filter-actions {
+    grid-column: 1 / -1;
+  }
+
+  .filter-actions {
+    justify-content: flex-start;
+  }
+}
+
 @media (max-width: 900px) {
   .document-header {
     display: none;
@@ -1267,8 +1324,13 @@ function sortClass(field) {
   }
 
   .filter-section {
-    flex-direction: column;
+    grid-template-columns: 1fr;
     align-items: stretch;
+  }
+
+  .search-field,
+  .filter-actions {
+    grid-column: auto;
   }
 
   .base-select,
@@ -1278,8 +1340,14 @@ function sortClass(field) {
   }
 
   .filter-actions {
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
     align-items: stretch;
+  }
+
+  .filter-actions :deep(.el-upload),
+  .upload-button {
+    width: 100%;
   }
 }
 </style>

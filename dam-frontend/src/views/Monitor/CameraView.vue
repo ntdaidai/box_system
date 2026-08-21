@@ -64,32 +64,42 @@
           </section>
 
           <section class="camera-point-actions">
-            <button type="button" class="map-nav-entry" @click="mapDialogVisible = true">
-              <el-icon><Aim /></el-icon>
-              <strong>查看点位图</strong>
-            </button>
+            <div class="camera-actions-heading">
+              <span>快捷操作</span>
+              <small>{{ currentCamera?.name || '当前监测点' }}</small>
+            </div>
 
-            <el-tooltip
-              :disabled="!broadcastUnavailableReason"
-              :content="broadcastUnavailableReason"
-              placement="right"
-            >
-              <div class="talk-action-wrap">
-                <button
-                  type="button"
-                  class="primary-talk-button"
-                  :disabled="Boolean(broadcastUnavailableReason)"
-                  @click="openEmergencyBroadcast"
-                >
-                  <el-icon><Microphone /></el-icon>
-                  <span>一键喊话</span>
-                </button>
-              </div>
-            </el-tooltip>
+            <div class="camera-action-grid">
+              <button type="button" class="map-nav-entry" @click="mapDialogVisible = true">
+                <el-icon><Aim /></el-icon>
+                <strong>点位图</strong>
+              </button>
+
+              <el-tooltip
+                :disabled="!broadcastUnavailableReason"
+                :content="broadcastUnavailableReason"
+                placement="right"
+              >
+                <div class="talk-action-wrap">
+                  <button
+                    type="button"
+                    class="primary-talk-button"
+                    :disabled="Boolean(broadcastUnavailableReason)"
+                    @click="openEmergencyBroadcast"
+                  >
+                    <el-icon><Microphone /></el-icon>
+                    <span>一键喊话</span>
+                  </button>
+                </div>
+              </el-tooltip>
+            </div>
 
             <div class="assist-setting">
               <div class="assist-setting-row">
-                <strong>显示辅助框</strong>
+                <div class="assist-setting-copy">
+                  <strong>显示检测区域</strong>
+                  <span>{{ assistZoneOptions.length ? `${assistZoneOptions.length} 个区域可选` : '当前监测点未配置区域' }}</span>
+                </div>
                 <el-switch
                   :model-value="assistOverlayVisible"
                   size="small"
@@ -101,7 +111,7 @@
                 v-model="assistZoneId"
                 class="assist-zone-select"
                 :disabled="!assistZoneOptions.length"
-                :placeholder="assistZoneOptions.length ? '请选择辅助框' : '当前摄像头未配置辅助框'"
+                :placeholder="assistZoneOptions.length ? '请选择检测区域' : '当前摄像头未配置检测区域'"
                 popper-class="vision-select-popper"
               >
                 <el-option
@@ -717,7 +727,7 @@
 
     </section>
 
-    <el-dialog
+    <AppDialog
       v-model="mapDialogVisible"
       class="camera-map-dialog"
       title="摄像头点位图"
@@ -781,7 +791,7 @@
           <span>{{ point.no }}</span>
         </button>
       </div>
-    </el-dialog>
+    </AppDialog>
 
     <BroadcastDialog
       v-model="broadcastDialogVisible"
@@ -1013,7 +1023,7 @@ const editableZoneOverlayVisible = computed(() => (
   || zoneDrawing.value
   || streamZoneOverlayVisible.value
 ))
-const assistOverlayLabel = computed(() => assistOverlayVisible.value ? '隐藏区域辅助框' : '显示区域辅助框')
+const assistOverlayLabel = computed(() => assistOverlayVisible.value ? '隐藏检测区域' : '显示检测区域')
 const selectedZone = computed(() => detectionZones.value.find((zone) => zone.id === selectedZoneId.value) || null)
 const zoneVertexAnchorRadius = computed(() => Math.max(6, Math.min(24, overlayWidth.value * 0.006)))
 const zoneVertexFontSize = computed(() => Math.max(12, Math.min(34, overlayWidth.value * 0.014)))
@@ -1538,9 +1548,9 @@ async function selectPointFromPanel(pointNo) {
     ElMessage.info(`${pointNo}号监测点暂未接入摄像头`)
     return
   }
-  currentCameraId.value = slot.camera.id
-  currentCamera.value = slot.camera
   if (isMultiCameraMode.value) {
+    currentCameraId.value = slot.camera.id
+    currentCamera.value = slot.camera
     await setGridSlotCamera(activeGridSlotIndex.value, slot.camera.id)
     return
   }
@@ -3487,15 +3497,45 @@ h1, h2, h3, p { margin-top: 0; }
 .camera-point-actions {
   flex: 0 0 auto;
   display: grid;
-  gap: 12px;
-  padding: 0;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(137, 174, 184, 0.14);
+  border-radius: 10px;
+  background: rgba(5, 24, 34, 0.72);
+}
+.camera-actions-heading {
+  min-height: 20px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 2px;
+}
+.camera-actions-heading span {
+  color: #dceef5;
+  font-size: 13px;
+  font-weight: 900;
+}
+.camera-actions-heading small {
+  min-width: 0;
+  overflow: hidden;
+  color: #71909d;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.camera-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 .talk-action-wrap {
   width: 100%;
+  height: 100%;
 }
 .primary-talk-button {
   width: 100%;
-  min-height: 58px;
+  height: 58px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3527,29 +3567,44 @@ h1, h2, h3, p { margin-top: 0; }
   font-size: 20px;
 }
 .assist-setting-row {
-  min-height: 56px;
+  min-height: 50px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 0 14px;
-  border: 1px solid rgba(137, 174, 184, 0.16);
-  border-radius: 8px;
-  background: rgba(4, 20, 28, 0.62);
+  padding: 0 2px;
 }
-.assist-setting-row strong {
+.assist-setting {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border: 1px solid rgba(137, 174, 184, 0.14);
+  border-radius: 8px;
+  background: rgba(4, 20, 28, 0.58);
+}
+.assist-setting-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.assist-setting-copy strong {
   display: block;
   color: #c6dce6;
   font-size: 14px;
   font-weight: 800;
 }
+.assist-setting-copy span {
+  overflow: hidden;
+  color: #7594a2;
+  font-size: 11px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .assist-setting-row :deep(.el-switch__core) {
   min-width: 42px;
   height: 22px;
-}
-.assist-setting {
-  display: grid;
-  gap: 8px;
 }
 .assist-zone-select {
   width: 100%;
@@ -3570,12 +3625,12 @@ h1, h2, h3, p { margin-top: 0; }
 }
 .map-nav-entry {
   width: 100%;
-  min-height: 88px;
+  height: 58px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  padding: 18px 18px;
+  gap: 8px;
+  padding: 10px 12px;
   border: 1px solid rgba(72, 216, 255, 0.26);
   border-radius: 8px;
   color: #d7edf6;
@@ -3598,18 +3653,18 @@ h1, h2, h3, p { margin-top: 0; }
 }
 .map-nav-entry .el-icon {
   flex: 0 0 auto;
-  width: 34px;
-  height: 34px;
+  width: 26px;
+  height: 26px;
   display: inline-grid;
   place-items: center;
   border-radius: 8px;
   color: #48d8ff;
   background: rgba(72, 216, 255, .12);
-  font-size: 18px;
+  font-size: 15px;
 }
 .map-nav-entry strong {
   color: #e9f7ff;
-  font-size: 21px;
+  font-size: 14px;
   line-height: 1.2;
   white-space: nowrap;
 }

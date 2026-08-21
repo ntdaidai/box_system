@@ -58,6 +58,17 @@
               >
                 <path d="M1.5,2 L11,6 L1.5,10 L4.2,6 Z" fill="#6f8292" />
               </marker>
+              <marker
+                id="arrow-checking"
+                markerWidth="12"
+                markerHeight="12"
+                refX="11"
+                refY="6"
+                orient="auto"
+                markerUnits="strokeWidth"
+              >
+                <path d="M1.5,2 L11,6 L1.5,10 L4.2,6 Z" fill="#61c8d8" />
+              </marker>
               <filter id="node-glow" x="-35%" y="-35%" width="170%" height="170%">
                 <feGaussianBlur stdDeviation="4" result="blur" />
                 <feColorMatrix
@@ -208,7 +219,7 @@
               <span>{{ item.label }}</span>
               <strong>{{ item.value }}</strong>
               <small>{{ item.detail }}</small>
-              <i v-if="item.percent !== null"><b :style="{ width: `${item.percent}%` }" /></i>
+              <i v-if="item.percent !== null || item.tone === 'checking'"><b :style="{ width: `${item.percent ?? 34}%` }" /></i>
             </div>
           </div>
         </article>
@@ -216,7 +227,7 @@
         <article class="dependency-card">
           <header class="dependency-head">
             <strong>依赖服务</strong>
-            <b>核心链路正常</b>
+            <b :class="{ checking: initialChecking }">{{ initialChecking ? '状态同步中' : '核心链路正常' }}</b>
           </header>
 
           <div class="dependency-categories">
@@ -281,6 +292,7 @@ import { getDeviceStatus } from '@/api/sensor'
 import { getCameraList, getModelStatus } from '@/api/camera'
 
 const loading = ref(false)
+const hasLoaded = ref(false)
 const systemInfo = ref({})
 const deviceStatus = ref({})
 const cameraSummary = ref({ online: 0, total: 0 })
@@ -354,6 +366,7 @@ const nodePositions = ref(Object.fromEntries(
 ))
 
 const systemReachable = computed(() => Object.keys(systemInfo.value || {}).length > 0)
+const initialChecking = computed(() => loading.value && !hasLoaded.value)
 const collectorRunning = computed(() => Boolean(systemInfo.value.sensor_collector_running))
 const sensorsOnline = computed(() => {
   const values = Object.values(deviceStatus.value || {})
@@ -385,7 +398,7 @@ function aiModelLabel(value) {
 }
 
 function toneRank(tone) {
-  return ({ danger: 4, blocked: 4, warn: 3, neutral: 2, ok: 1 })[tone] || 2
+  return ({ danger: 4, blocked: 4, warn: 3, checking: 2.5, neutral: 2, ok: 1 })[tone] || 2
 }
 
 function worstTone(tones) {
@@ -393,6 +406,7 @@ function worstTone(tones) {
 }
 
 function riskTone(percentValue) {
+  if (initialChecking.value) return 'checking'
   if (!systemReachable.value) return 'neutral'
   if (percentValue >= 94) return 'danger'
   if (percentValue >= 84) return 'warn'
@@ -405,6 +419,10 @@ function severityLabel(tone) {
 
 function nodeStatus(id) {
   const resourceTone = resourceOverallTone.value
+
+  if (initialChecking.value) {
+    return { tone: 'checking', text: ['camera', 'sensor'].includes(id) ? '读取中' : '检测中' }
+  }
 
   if (!systemReachable.value && !['camera', 'sensor'].includes(id)) {
     return { tone: 'neutral', text: '待确认' }
@@ -563,42 +581,42 @@ const runtimeStatusCards = computed(() => {
     {
       key: 'uptime',
       label: '系统运行时间',
-      value: uptimeText.value,
-      detail: '边缘节点连续运行',
-      tone: systemReachable.value ? 'ok' : 'neutral',
+      value: initialChecking.value ? '同步中' : uptimeText.value,
+      detail: initialChecking.value ? '正在读取系统信息' : '边缘节点连续运行',
+      tone: initialChecking.value ? 'checking' : systemReachable.value ? 'ok' : 'neutral',
       percent: null,
     },
     {
       key: 'cpu',
       label: 'CPU 负载',
-      value: cpu.display || '--',
-      detail: systemReachable.value ? '处理器占用' : '系统信息待返回',
-      tone: cpu.tone || 'neutral',
-      percent: Number.isFinite(cpu.value) ? cpu.value : null,
+      value: initialChecking.value ? '同步中' : cpu.display || '--',
+      detail: initialChecking.value ? '正在读取系统信息' : systemReachable.value ? '处理器占用' : '系统信息待返回',
+      tone: initialChecking.value ? 'checking' : cpu.tone || 'neutral',
+      percent: initialChecking.value ? null : Number.isFinite(cpu.value) ? cpu.value : null,
     },
     {
       key: 'gpu',
       label: 'GPU 状态',
-      value: gpu.display || '待确认',
-      detail: gpu.detail || 'GPU 信息待确认',
-      tone: gpu.tone || 'neutral',
-      percent: Number.isFinite(gpu.value) ? gpu.value : null,
+      value: initialChecking.value ? '同步中' : gpu.display || '待确认',
+      detail: initialChecking.value ? '正在读取系统信息' : gpu.detail || 'GPU 信息待确认',
+      tone: initialChecking.value ? 'checking' : gpu.tone || 'neutral',
+      percent: initialChecking.value ? null : Number.isFinite(gpu.value) ? gpu.value : null,
     },
     {
       key: 'memory',
       label: '内存占用',
-      value: memory.display || '--',
-      detail: memory.detail || '内存信息待返回',
-      tone: memory.tone || 'neutral',
-      percent: Number.isFinite(memory.value) ? memory.value : null,
+      value: initialChecking.value ? '同步中' : memory.display || '--',
+      detail: initialChecking.value ? '正在读取系统信息' : memory.detail || '内存信息待返回',
+      tone: initialChecking.value ? 'checking' : memory.tone || 'neutral',
+      percent: initialChecking.value ? null : Number.isFinite(memory.value) ? memory.value : null,
     },
     {
       key: 'disk',
       label: '磁盘占用',
-      value: disk.display || '--',
-      detail: disk.detail || '磁盘信息待返回',
-      tone: disk.tone || 'neutral',
-      percent: Number.isFinite(disk.value) ? disk.value : null,
+      value: initialChecking.value ? '同步中' : disk.display || '--',
+      detail: initialChecking.value ? '正在读取系统信息' : disk.detail || '磁盘信息待返回',
+      tone: initialChecking.value ? 'checking' : disk.tone || 'neutral',
+      percent: initialChecking.value ? null : Number.isFinite(disk.value) ? disk.value : null,
     },
   ]
 })
@@ -635,6 +653,7 @@ const topologyNodes = computed(() => {
 const topologyNodeMap = computed(() => Object.fromEntries(topologyNodes.value.map((node) => [node.id, node])))
 
 function isEdgeBlocked(edge, from, to) {
+  if (initialChecking.value) return false
   if (!systemReachable.value && !['camera-rule', 'sensor-rule'].includes(edge.id)) return true
   if (edge.id === 'camera-rule') return cameraSummary.value.total > 0 && cameraSummary.value.online === 0 && !systemReachable.value
   if (edge.id === 'sensor-rule') return !collectorRunning.value && !systemReachable.value
@@ -681,7 +700,7 @@ function edgePath(edge, from, to) {
 
 function edgeMarkerTone(tone) {
   if (tone === 'blocked') return 'danger'
-  return ['ok', 'warn', 'danger'].includes(tone) ? tone : 'neutral'
+  return ['ok', 'warn', 'danger', 'checking'].includes(tone) ? tone : 'neutral'
 }
 
 function edgeBreakPoint(path) {
@@ -1149,7 +1168,9 @@ const serviceItems = computed(() => [
     nodeId: 'edge-box',
     description: '文档预览与编辑服务。',
   },
-])
+].map((service) => initialChecking.value
+  ? { ...service, status: 'checking', tone: 'checking' }
+  : service))
 
 const visibleDependencyServices = computed(() => serviceItems.value
   .map((service) => ({
@@ -1175,11 +1196,16 @@ const dependencyGroups = computed(() => dependencyGroupMeta
     const items = visibleDependencyServices.value.filter((service) => service.group === meta.key)
     const tone = worstTone(items.map((item) => item.tone))
     const abnormal = items.filter((item) => item.tone === 'danger' || item.tone === 'warn').length
+    const checking = items.filter((item) => item.tone === 'checking').length
     return {
       ...meta,
       items,
       tone,
-      summary: abnormal ? `${abnormal}/${items.length} 关注` : `${items.length} 项正常`,
+      summary: abnormal
+        ? `${abnormal}/${items.length} 关注`
+        : checking
+          ? `${checking} 项检测中`
+          : `${items.length} 项正常`,
     }
   })
   .filter((group) => group.items.length))
@@ -1212,7 +1238,8 @@ const dependencyCategories = computed(() => dependencyCategoryMeta.map((category
   const items = groups.flatMap((group) => group.items)
   const danger = items.filter((item) => item.tone === 'danger').length
   const warn = items.filter((item) => item.tone === 'warn').length
-  const tone = danger ? 'danger' : warn ? 'warn' : 'ok'
+  const checking = items.filter((item) => item.tone === 'checking').length
+  const tone = danger ? 'danger' : warn ? 'warn' : checking ? 'checking' : 'ok'
   return {
     ...category,
     groups,
@@ -1222,19 +1249,22 @@ const dependencyCategories = computed(() => dependencyCategoryMeta.map((category
       ? `${danger} 项不可用`
       : warn
         ? `${warn} 项关注`
-        : '全部正常',
+        : checking
+          ? '状态同步中'
+          : '全部正常',
   }
 }))
 
 function serviceStatusText(status, tone) {
   if (tone === 'danger') return '不可用'
   if (tone === 'warn') return '关注'
+  if (tone === 'checking') return '检测中'
   if (['loaded', 'configured', 'standby', 'online'].includes(status)) return '正常'
   return '正常'
 }
 
 function dependencyToneRank(tone) {
-  return ({ danger: 0, warn: 1, neutral: 2, ok: 3 })[tone] ?? 2
+  return ({ danger: 0, warn: 1, checking: 2, neutral: 3, ok: 4 })[tone] ?? 3
 }
 
 function toggleDependencyCategory(key) {
@@ -1334,6 +1364,7 @@ async function loadAll() {
     pushResourceSample()
   } finally {
     loading.value = false
+    hasLoaded.value = true
   }
 }
 
@@ -1450,6 +1481,12 @@ onUnmounted(() => {
   stroke: rgba(111, 130, 146, 0.48);
 }
 
+.edge-group.checking .edge-path {
+  stroke: rgba(97, 200, 216, 0.62);
+  stroke-dasharray: 8 9;
+  animation: checkingFlow 1.5s linear infinite;
+}
+
 .edge-group.highlighted .edge-path {
   stroke-width: 3;
   filter: url(#node-glow);
@@ -1478,6 +1515,11 @@ onUnmounted(() => {
 .edge-group.neutral .flow-dot {
   fill: #8aa0ad;
   opacity: 0.32;
+}
+
+.edge-group.checking .flow-dot {
+  fill: #9ce9ee;
+  opacity: 0.78;
 }
 
 .edge-break line {
@@ -1521,6 +1563,11 @@ onUnmounted(() => {
   stroke: rgba(113, 132, 147, 0.42);
 }
 
+.runtime-node.checking .node-body {
+  stroke: rgba(97, 200, 216, 0.72);
+  fill: rgba(13, 39, 53, 0.96);
+}
+
 .runtime-node.selected .node-body,
 .runtime-node.highlighted .node-body {
   stroke-width: 3;
@@ -1539,6 +1586,7 @@ onUnmounted(() => {
 .runtime-node.warn .node-led { fill: #ef7e8a; }
 .runtime-node.danger .node-led,
 .runtime-node.blocked .node-led { fill: #ef7e8a; }
+.runtime-node.checking .node-led { fill: #61c8d8; animation: ledBlink 1.2s ease-in-out infinite; }
 
 .node-title {
   fill: #edf6f7;
@@ -1588,6 +1636,7 @@ onUnmounted(() => {
 .runtime-node.warn .node-status { fill: #ef7e8a; }
 .runtime-node.danger .node-status,
 .runtime-node.blocked .node-status { fill: #ef7e8a; }
+.runtime-node.checking .node-status { fill: #8edbe3; }
 
 .node-pulse {
   fill: rgba(105, 215, 189, 0.08);
@@ -1601,6 +1650,15 @@ onUnmounted(() => {
 .runtime-node.blocked .node-pulse {
   fill: rgba(239, 126, 138, 0.08);
   stroke: rgba(239, 126, 138, 0.22);
+}
+
+.runtime-node.checking .node-pulse {
+  fill: rgba(97, 200, 216, 0.09);
+  stroke: rgba(97, 200, 216, 0.28);
+}
+
+.runtime-node.checking .node-child-status {
+  fill: #8edbe3;
 }
 
 .runtime-status-card,
@@ -1712,6 +1770,16 @@ onUnmounted(() => {
 .runtime-status-item.warn b { background: rgba(223, 184, 99, 0.9); }
 .runtime-status-item.danger b { background: rgba(239, 126, 138, 0.92); }
 .runtime-status-item.neutral b { background: rgba(111, 130, 146, 0.74); }
+.runtime-status-item.checking {
+  border-color: rgba(97, 200, 216, 0.24);
+  background: rgba(13, 39, 53, 0.72);
+}
+.runtime-status-item.checking strong { color: #8edbe3; }
+.runtime-status-item.checking i {
+  background: linear-gradient(90deg, rgba(97, 200, 216, 0.08), rgba(97, 200, 216, 0.36), rgba(97, 200, 216, 0.08));
+  background-size: 200% 100%;
+  animation: checkingBar 1.4s ease-in-out infinite;
+}
 .runtime-status-item.warn strong { color: #dfb863; }
 .runtime-status-item.danger strong { color: #ef7e8a; }
 
@@ -2045,6 +2113,10 @@ onUnmounted(() => {
   line-height: 1.25;
 }
 
+.dependency-head b.checking {
+  color: #8edbe3;
+}
+
 .dependency-node i {
   width: 7px;
   height: 7px;
@@ -2105,6 +2177,12 @@ onUnmounted(() => {
   box-shadow: 0 0 0 5px rgba(113, 137, 151, 0.08);
 }
 
+.dependency-category.checking .category-status {
+  background: #61c8d8;
+  box-shadow: 0 0 0 5px rgba(97, 200, 216, 0.08);
+  animation: ledBlink 1.2s ease-in-out infinite;
+}
+
 .category-summary > span {
   display: grid;
   grid-template-columns: minmax(120px, 0.42fr) minmax(180px, 0.58fr);
@@ -2146,6 +2224,7 @@ onUnmounted(() => {
 .dependency-category.warn .category-summary > em { color: #dfb863; }
 .dependency-category.danger .category-summary > em { color: #ef7e8a; }
 .dependency-category.neutral .category-summary > em { color: #93a8b3; }
+.dependency-category.checking .category-summary > em { color: #8edbe3; }
 
 .category-summary > u {
   position: relative;
@@ -2247,6 +2326,7 @@ onUnmounted(() => {
 .dependency-node:hover { background: transparent; }
 .dependency-node i { background: #69d7bd; }
 .dependency-node.neutral i { background: #718997; }
+.dependency-node.checking i { background: #61c8d8; animation: ledBlink 1.2s ease-in-out infinite; }
 
 .dependency-node span {
   overflow: hidden;
@@ -2270,6 +2350,10 @@ onUnmounted(() => {
   color: #ef7e8a;
 }
 
+.dependency-node.checking strong {
+  color: #8edbe3;
+}
+
 
 @keyframes nodePulse {
   0% {
@@ -2284,6 +2368,20 @@ onUnmounted(() => {
     transform: scale(0.86);
     opacity: 0.2;
   }
+}
+
+@keyframes checkingFlow {
+  to { stroke-dashoffset: -34px; }
+}
+
+@keyframes ledBlink {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+@keyframes checkingBar {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
 }
 
 @media (max-width: 1680px) {

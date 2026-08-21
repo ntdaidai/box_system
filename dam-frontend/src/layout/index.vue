@@ -128,7 +128,7 @@ const menuMap = {
       icon: RealtimeMonitorIcon,
     },
     {
-      name: '传感器监测',
+      name: '传感监测',
       path: '/monitor/sensors',
       icon: SensorChipIcon,
     },
@@ -155,13 +155,13 @@ const menuMap = {
       icon: DocumentSheetIcon,
     },
     {
-      name: '知识库',
+      name: '知识管理',
       path: '/workspace/knowledge',
       icon: DataAnalysis,
     },
   ],
   '/system': [
-    { name: '感知源管理', path: '/system/devices', icon: Setting },
+    { name: '感知管理', path: '/system/devices', icon: Setting },
     {
       name: '规则管理',
       icon: DataAnalysis,

@@ -1,6 +1,6 @@
 <template>
   <div class="model-page">
-    <header class="page-head">
+    <header class="page-head system-page-header">
       <div>
         <h2>模型管理</h2>
         <p>模型服务运行控制与能力归类。</p>
@@ -345,10 +345,11 @@
       </div>
     </el-drawer>
 
-    <el-dialog
+    <AppDialog
       v-model="deleteConfirmVisible"
       class="model-delete-dialog"
       width="460px"
+      align-center
       :show-close="false"
       :close-on-click-modal="false"
       :close-on-press-escape="false"
@@ -380,13 +381,21 @@
       </div>
       <template #footer>
         <div class="delete-dialog-actions">
-          <el-button @click="cancelDelete">取消</el-button>
-          <el-button type="danger" :loading="isActioning(deleteCandidate, 'delete')" @click="confirmDeleteModel">
-            确认删除
-          </el-button>
+          <button type="button" class="delete-dialog-cancel" :disabled="isActioning(deleteCandidate, 'delete')" @click="cancelDelete">
+            取消
+          </button>
+          <button
+            type="button"
+            class="delete-dialog-confirm"
+            :disabled="isActioning(deleteCandidate, 'delete')"
+            @click="confirmDeleteModel"
+          >
+            <span v-if="isActioning(deleteCandidate, 'delete')" class="delete-dialog-spinner" aria-hidden="true"></span>
+            {{ isActioning(deleteCandidate, 'delete') ? '删除中…' : '确认删除' }}
+          </button>
         </div>
       </template>
-    </el-dialog>
+    </AppDialog>
 
     <input
       ref="folderInput"
@@ -1878,7 +1887,10 @@ onMounted(loadModels)
 }
 
 .model-meta-row.is-business > span:not(.model-meta-label) {
-  flex: 1 1 auto;
+  /* 标签按内容收缩；单标签不再被拉伸成整行的空框。 */
+  flex: 0 1 max-content;
+  width: fit-content;
+  max-width: 160px;
   min-width: 0;
   min-height: 24px;
   padding: 2px 8px;
@@ -3269,10 +3281,10 @@ onMounted(loadModels)
 :deep(.model-delete-dialog.el-dialog) {
   overflow: hidden;
   padding: 0;
-  border: 1px solid rgba(255, 142, 153, 0.28);
-  border-radius: 18px;
-  background: linear-gradient(145deg, #102c3f, #081824);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.48), 0 0 26px rgba(255, 89, 108, 0.08);
+  border: 1px solid #30495e;
+  border-radius: 10px;
+  background: #0b2033;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.46);
 }
 
 :deep(.model-delete-dialog .el-dialog__header) {
@@ -3281,39 +3293,68 @@ onMounted(loadModels)
 }
 
 :deep(.model-delete-dialog .el-dialog__body) {
-  padding: 0 22px 20px;
+  padding: 0 !important;
 }
 
 :deep(.model-delete-dialog .el-dialog__footer) {
-  padding: 0 22px 20px;
+  padding: 0 !important;
 }
 
 :global(.model-delete-dialog.el-dialog) {
-  border-color: rgba(72, 216, 255, 0.24) !important;
-  background: #0b1c2b !important;
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.52), 0 0 26px rgba(72, 216, 255, 0.06) !important;
+  border-color: #30495e !important;
+  background: #0b2033 !important;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.46) !important;
   color: #eaf8ff !important;
+}
+
+/* 删除弹窗现在由 AppDialog 承载，清掉通用弹窗的内边距，沿用区域页的危险操作层级。 */
+:global(.model-delete-dialog.app-dialog-panel) {
+  --dialog-border: #30495e;
+  overflow: hidden;
+  border-radius: 10px;
+  background: #0b2033;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .46);
+}
+
+:global(.model-delete-dialog .app-dialog__header) {
+  min-height: 0;
+  padding: 0;
+  border-bottom: 0;
+  background: #10283d;
+}
+
+:global(.model-delete-dialog .app-dialog__body) {
+  padding: 0;
+  background: #0b2033;
+}
+
+:global(.model-delete-dialog .app-dialog__footer) {
+  min-height: 0;
+  padding: 0;
+  border-top: 0;
+  background: #091b2b;
 }
 
 .delete-dialog-header {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 20px 22px 16px;
-  border-bottom: 1px solid rgba(84, 175, 222, 0.14);
+  padding: 22px 26px 18px;
+  border-bottom: 1px solid #20394d;
+  background: #10283d;
 }
 
 .delete-dialog-icon {
-  width: 40px;
-  height: 40px;
+  width: 38px;
+  height: 38px;
   display: grid;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid rgba(240, 199, 93, 0.38);
-  border-radius: 12px;
-  color: #f0c75d;
-  background: rgba(150, 111, 35, 0.18);
-  font-size: 19px;
+  border: 1px solid #d9a65d;
+  border-radius: 50%;
+  color: #142435;
+  background: #f3b65e;
+  font-size: 18px;
 }
 
 .delete-dialog-title {
@@ -3322,17 +3363,17 @@ onMounted(loadModels)
 }
 
 .delete-dialog-title > span {
-  color: #f0c75d;
+  color: #f07b89;
   font-size: 11px;
   font-weight: 800;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.12em;
 }
 
 .delete-dialog-title h3 {
-  margin: 4px 0 0;
-  color: #f0faff;
-  font-size: 19px;
-  font-weight: 760;
+  margin: 7px 0 0;
+  color: #f3f8fd;
+  font-size: 24px;
+  font-weight: 900;
 }
 
 .delete-dialog-close {
@@ -3341,39 +3382,39 @@ onMounted(loadModels)
   display: grid;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid rgba(84, 175, 222, 0.2);
-  border-radius: 9px;
-  color: #9bb7c8;
-  background: rgba(16, 63, 94, 0.36);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #89a5b8;
+  background: transparent;
   cursor: pointer;
 }
 
 .delete-dialog-close:hover {
-  border-color: rgba(72, 216, 255, 0.5);
+  border-color: #456176;
   color: #effaff;
-  background: rgba(20, 89, 126, 0.56);
+  background: #112e45;
 }
 
 .delete-dialog-body {
-  padding-top: 18px;
+  padding: 24px 26px 26px;
 }
 
 .delete-dialog-body > p {
-  margin: 0 0 14px;
+  margin: 0 0 12px;
   color: #e5f5fc;
-  font-size: 15px;
-  font-weight: 650;
+  font-size: 17px;
+  font-weight: 800;
 }
 
 .delete-dialog-warning {
   display: flex;
   align-items: flex-start;
   gap: 9px;
-  padding: 11px 12px;
-  border: 1px solid rgba(240, 199, 93, 0.26);
-  border-radius: 11px;
-  color: #f1d992;
-  background: rgba(126, 92, 28, 0.16);
+  padding: 9px 10px;
+  border: 1px solid #345067;
+  border-radius: 5px;
+  color: #a8bac6;
+  background: #102b40;
   font-size: 13px;
   line-height: 1.5;
 }
@@ -3381,12 +3422,13 @@ onMounted(loadModels)
 .delete-dialog-warning .el-icon {
   margin-top: 1px;
   flex: 0 0 auto;
+  color: #d9a65d;
 }
 
 .delete-dialog-list {
   display: grid;
   gap: 7px;
-  margin: 14px 0 0;
+  margin: 12px 0 0;
   padding: 0;
   list-style: none;
 }
@@ -3394,7 +3436,7 @@ onMounted(loadModels)
 .delete-dialog-list li {
   position: relative;
   padding-left: 16px;
-  color: #a9c9d9;
+  color: #829eaf;
   font-size: 13px;
   line-height: 1.45;
 }
@@ -3403,11 +3445,10 @@ onMounted(loadModels)
   position: absolute;
   top: 0.55em;
   left: 1px;
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
-  background: #58d8ef;
-  box-shadow: 0 0 8px rgba(88, 216, 239, 0.36);
+  background: #6b8799;
   content: "";
 }
 
@@ -3415,24 +3456,77 @@ onMounted(loadModels)
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+  padding: 15px 26px 20px;
+  border-top: 1px solid #20394d;
+  background: #091b2b;
 }
 
-.delete-dialog-actions .el-button {
-  min-width: 92px;
-  min-height: 38px;
+.delete-dialog-actions button {
+  min-width: 96px;
+  height: 40px;
   margin-left: 0;
-  border-radius: 10px;
-  font-weight: 700;
+  padding: 0 18px;
+  border: 1px solid;
+  border-radius: 6px;
+  color: #b5cbd8;
+  background: #112e45;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 900;
+  cursor: pointer;
+  transition: border-color .2s ease, color .2s ease, background .2s ease, transform .2s ease;
 }
 
-.delete-dialog-actions .el-button--danger {
-  border-color: rgba(255, 117, 132, 0.52);
-  background: linear-gradient(135deg, #a44758, #7e3042);
+.delete-dialog-actions button:not(:disabled):active {
+  transform: translateY(1px);
 }
 
-.delete-dialog-actions .el-button--danger:hover {
-  border-color: rgba(255, 176, 184, 0.76);
-  background: linear-gradient(135deg, #bd5666, #963b4e);
+.delete-dialog-actions button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.delete-dialog-cancel {
+  border-color: #456176;
+}
+
+.delete-dialog-cancel:hover:not(:disabled),
+.delete-dialog-cancel:focus-visible {
+  border-color: #6c92aa;
+  color: #e8f8ff;
+  background: #183b56;
+  outline: none;
+}
+
+.delete-dialog-confirm {
+  border-color: #b84c61 !important;
+  color: #fff1f3 !important;
+  background: #8f304b !important;
+  box-shadow: none;
+}
+
+.delete-dialog-confirm:hover:not(:disabled),
+.delete-dialog-confirm:focus-visible {
+  border-color: #d06a7a !important;
+  color: #fff1f3 !important;
+  background: #a33a55 !important;
+  outline: none;
+}
+
+.delete-dialog-spinner {
+  width: 13px;
+  height: 13px;
+  display: inline-block;
+  margin-right: 7px;
+  border: 2px solid rgba(255, 241, 243, .36);
+  border-top-color: #fff1f3;
+  border-radius: 50%;
+  vertical-align: -2px;
+  animation: model-delete-spin .7s linear infinite;
+}
+
+@keyframes model-delete-spin {
+  to { transform: rotate(360deg); }
 }
 
 @media (max-width: 1500px) {
